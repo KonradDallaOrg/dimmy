@@ -3,12 +3,14 @@ import AppKit
 
 /// 2-step ChatGPT (Codex) subscription setup wizard, modal sheet.
 /// Mac mirror of `Views/CodexConnectDialog.xaml` on Windows, and a
-/// trimmed `ClaudeConnectSheet` — there is NO Node.js step because the
-/// Codex CLI is a native binary.
+/// trimmed `ClaudeConnectSheet`. There is NO Node.js step because the
+/// Codex CLI ships as a native standalone binary, installed via a
+/// one-line shell command.
 ///
 /// Flow:
-///   Step 1 — Detect / install the Codex CLI (npm or native installer).
-///   Step 2 — Sign in (browser flow via `codex login`) + auto-fire test
+///   Step 1 - Install the Codex CLI via `curl ... | sh` + detect the
+///            `codex` binary.
+///   Step 2 - Sign in (browser flow via `codex login`) + auto-fire test
 ///            ping.
 ///
 /// Smart-skip: on appearance we probe the binary + login state once and
@@ -19,7 +21,7 @@ import AppKit
 /// test ping returned positive. The caller (MacIntegrationsPage) then
 /// flips the Output subscription routing so the integration is live.
 ///
-/// Reuses the existing dimmy_codex_* FFI — no new native surface.
+/// Reuses the existing dimmy_codex_* FFI. No new native surface.
 struct CodexConnectSheet: View {
     @ObservedObject var appState: AppState
     let onClose: () -> Void
@@ -37,7 +39,7 @@ struct CodexConnectSheet: View {
     @State private var testResult: DimmyCore.ClaudeCodePingResult? = nil
     @State private var copiedFlash: Bool = false
 
-    private let installCommand = "npm install -g @openai/codex"
+    private let installCommand = "curl -fsSL https://chatgpt.com/codex/install.sh | sh"
 
     var body: some View {
         VStack(spacing: 16) {
@@ -150,9 +152,9 @@ struct CodexConnectSheet: View {
 
     private var stepOne: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("1 — Install the Codex CLI")
+            Text("1 - Install Codex")
                 .font(.system(size: 18, weight: .semibold))
-            Text("Codex is OpenAI's command-line tool. Open a terminal, paste the command below, press return. If you have Node.js it installs via npm; otherwise grab the native binary from the link below. No Node.js is required for the native installer.")
+            Text("Open Terminal, paste this command, and press Enter. It installs the Codex CLI. No Node.js needed.")
                 .font(.system(size: 13))
                 .foregroundColor(.secondary)
 
@@ -160,13 +162,15 @@ struct CodexConnectSheet: View {
 
             if codexStatus == .notInstalled {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text(installCommand)
-                        .font(.system(.body, design: .monospaced))
-                        .textSelection(.enabled)
-                        .padding(10)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color.gray.opacity(0.12))
-                        .cornerRadius(4)
+                    HStack {
+                        Text(installCommand)
+                            .font(.system(.body, design: .monospaced))
+                            .textSelection(.enabled)
+                            .padding(10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.gray.opacity(0.12))
+                            .cornerRadius(4)
+                    }
                     HStack(spacing: 8) {
                         Button(action: copyInstallCommand) {
                             Label(copiedFlash ? "Copied!" : "Copy command",
@@ -180,9 +184,6 @@ struct CodexConnectSheet: View {
                             Label("Recheck", systemImage: "arrow.clockwise")
                         }
                     }
-                    Link("No Node.js? Get the native installer →",
-                         destination: URL(string: "https://developers.openai.com/codex/cli")!)
-                        .font(.system(size: 12))
                     Text("After installing, you may need to restart Dimmy so the new PATH is picked up.")
                         .font(.system(size: 12))
                         .foregroundColor(.secondary)
@@ -202,7 +203,7 @@ struct CodexConnectSheet: View {
                 }
             } else {
                 Image(systemName: "xmark.circle.fill").foregroundColor(.red).font(.title2)
-                Text("Codex CLI not installed. Run the command below in a terminal.")
+                Text("Codex CLI not installed. Run the command below in Terminal.")
             }
             Spacer()
         }
@@ -236,9 +237,9 @@ struct CodexConnectSheet: View {
 
     private var stepTwo: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("2 — Sign in with ChatGPT")
+            Text("2 - Sign in with ChatGPT")
                 .font(.system(size: 18, weight: .semibold))
-            Text("Click Sign in to open a Terminal window with the Codex sign-in. Log in with your ChatGPT Plus, Pro, Team, Business, or Enterprise plan — Dimmy detects the login and runs a quick test. A free ChatGPT account won't work for Codex.")
+            Text("Click Sign in to open a Terminal window with the Codex sign-in. Log in with your ChatGPT Plus, Pro, Team, Business, or Enterprise plan. Dimmy detects the login and runs a quick test. A free ChatGPT account won't work for Codex.")
                 .font(.system(size: 13))
                 .foregroundColor(.secondary)
 
@@ -294,7 +295,7 @@ struct CodexConnectSheet: View {
                 }
             } else {
                 Image(systemName: "xmark.circle.fill").foregroundColor(.red)
-                Text("Codex CLI missing — go back to Step 1.")
+                Text("Codex CLI missing. Go back to Step 1.")
             }
             Spacer()
         }

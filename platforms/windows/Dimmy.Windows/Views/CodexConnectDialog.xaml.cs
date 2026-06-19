@@ -13,12 +13,12 @@ namespace Dimmy.Windows.Views;
 
 /// <summary>
 /// 2-step ChatGPT (Codex) subscription setup wizard. Linear, modal,
-/// re-runnable. Same shape as <see cref="ClaudeConnectDialog"/> minus
-/// the Node.js step — the Codex CLI is a native binary, so there is no
-/// runtime prerequisite to detect.
+/// re-runnable. Same shape as <see cref="ClaudeConnectDialog"/>: the
+/// Codex CLI ships as a native standalone binary now (no Node.js),
+/// installed via a one-line PowerShell command.
 ///
 /// Steps:
-///   1. Detect / install the Codex CLI (npm or native installer).
+///   1. Detect / install Codex (irm install.ps1 | iex).
 ///   2. Sign in (browser flow via `codex login`) + auto-test a tiny
 ///      ping prompt.
 ///
@@ -165,7 +165,7 @@ public sealed partial class CodexConnectDialog : ContentDialog
     private void CopyInstallCommand_Click(object sender, RoutedEventArgs e)
     {
         var pkg = new DataPackage();
-        pkg.SetText("npm install -g @openai/codex");
+        pkg.SetText("irm https://chatgpt.com/codex/install.ps1 | iex");
         Clipboard.SetContent(pkg);
         CopyCmdBtn.Content = "Copied!";
         var dq = DispatcherQueue.GetForCurrentThread();

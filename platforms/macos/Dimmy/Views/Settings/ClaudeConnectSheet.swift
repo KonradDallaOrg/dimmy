@@ -1,21 +1,24 @@
 import SwiftUI
 import AppKit
 
-/// 3-step Claude Code subscription setup wizard, modal sheet.
+/// 2-step Claude Code subscription setup wizard, modal sheet.
 /// Mac mirror of `Views/ClaudeConnectDialog.xaml` on Windows.
 ///
+/// Claude Code ships as a native standalone binary now (no Node.js),
+/// installed via a one-line shell command.
+///
 /// Flow:
-///   Step 1 — Detect / install Node.js (≥ 18 required).
-///   Step 2 — Detect / install Claude CLI via `npm install -g`.
-///   Step 3 — Sign in (browser OAuth via `claude /login`) +
+///   Step 1 - Install Claude Code via `curl ... | bash` + detect the
+///            `claude` binary.
+///   Step 2 - Sign in (browser OAuth via `claude /login`) +
 ///            auto-fire test ping.
 ///
 /// Smart-skip: on appearance we probe each precondition once and
 /// jump to the first incomplete step. A machine where everything is
-/// already set lands on Step 3 with test-ready state.
+/// already set lands on Step 2 with test-ready state.
 ///
 /// Completion contract: `onComplete` is called with the wizard
-/// outcome — `true` iff Step 3's test ping returned positive. The
+/// outcome - `true` iff Step 2's test ping returned positive. The
 /// caller (MacIntegrationsPage) then flips
 /// `llm_auth_method=subscription` so the integration is live without
 /// a second click.
@@ -24,10 +27,9 @@ struct ClaudeConnectSheet: View {
     let onClose: () -> Void
     let onComplete: (Bool) -> Void
 
-    private enum WizardStep: Int { case node = 1, claudeCli = 2, signIn = 3 }
+    private enum WizardStep: Int { case install = 1, signIn = 2 }
 
-    @State private var currentStep: WizardStep = .node
-    @State private var nodeStatus: DimmyCore.NodeStatus = .missing
+    @State private var currentStep: WizardStep = .install
     @State private var claudeStatus: DimmyCore.ClaudeCodeStatus = .notInstalled
     @State private var binaryPath: String? = nil
 
@@ -37,7 +39,7 @@ struct ClaudeConnectSheet: View {
     @State private var testResult: DimmyCore.ClaudeCodePingResult? = nil
     @State private var copiedFlash: Bool = false
 
-    private let npmCommand = "npm install -g @anthropic-ai/claude-code"
+    private let installCommand = "curl -fsSL https://claude.ai/install.sh | bash"
 
     var body: some View {
         VStack(spacing: 16) {
@@ -48,9 +50,8 @@ struct ClaudeConnectSheet: View {
             ScrollView {
                 Group {
                     switch currentStep {
-                    case .node: stepOne
-                    case .claudeCli: stepTwo
-                    case .signIn: stepThree
+                    case .install: stepOne
+                    case .signIn: stepTwo
                     }
                 }
                 .padding(.vertical, 4)
@@ -80,7 +81,7 @@ struct ClaudeConnectSheet: View {
 
     private var progressDots: some View {
         HStack(spacing: 8) {
-            ForEach([WizardStep.node, .claudeCli, .signIn], id: \.rawValue) { step in
+            ForEach([WizardStep.install, .signIn], id: \.rawValue) { step in
                 Circle()
                     .fill(step.rawValue <= currentStep.rawValue ? Color.accentColor : Color.gray.opacity(0.3))
                     .frame(width: 8, height: 8)
@@ -94,7 +95,7 @@ struct ClaudeConnectSheet: View {
             Button("Cancel") { onClose() }
                 .keyboardShortcut(.cancelAction)
             Spacer()
-            if currentStep != .node {
+            if currentStep != .install {
                 Button("Back") { goBack() }
             }
             Button(primaryButtonLabel) { handlePrimary() }
@@ -105,7 +106,7 @@ struct ClaudeConnectSheet: View {
 
     private var primaryButtonLabel: String {
         switch currentStep {
-        case .node, .claudeCli: return "Next"
+        case .install: return "Next"
         case .signIn:
             if let r = testResult, case .ok = r { return "Close & enable" }
             if claudeStatus == .ready { return "Test connection" }
@@ -115,8 +116,7 @@ struct ClaudeConnectSheet: View {
 
     private var primaryButtonEnabled: Bool {
         switch currentStep {
-        case .node: return nodeStatus.found && nodeStatus.meetsMinimum
-        case .claudeCli: return claudeStatus != .notInstalled
+        case .install: return claudeStatus != .notInstalled
         case .signIn:
             if let r = testResult, case .ok = r { return true }
             return claudeStatus == .ready && !testRunning
@@ -125,10 +125,7 @@ struct ClaudeConnectSheet: View {
 
     private func handlePrimary() {
         switch currentStep {
-        case .node:
-            currentStep = .claudeCli
-            probeClaude()
-        case .claudeCli:
+        case .install:
             currentStep = .signIn
             probeClaude()
             if claudeStatus == .ready && testResult == nil { runTest() }
@@ -144,79 +141,18 @@ struct ClaudeConnectSheet: View {
 
     private func goBack() {
         switch currentStep {
-        case .claudeCli: currentStep = .node; probeNode()
-        case .signIn: currentStep = .claudeCli; probeClaude()
+        case .signIn: currentStep = .install; probeClaude()
         default: break
         }
     }
 
-    // MARK: - Step 1: Node.js
+    // MARK: - Step 1: Install Claude Code
 
     private var stepOne: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("1 — Install Node.js")
+            Text("1 - Install Claude Code")
                 .font(.system(size: 18, weight: .semibold))
-            Text("Claude Code is a Node.js CLI. We need Node 18 or newer before installing it. The official installer adds Node to your PATH automatically.")
-                .font(.system(size: 13))
-                .foregroundColor(.secondary)
-
-            nodeStatusBadge
-
-            if !(nodeStatus.found && nodeStatus.meetsMinimum) {
-                HStack(spacing: 8) {
-                    Button(action: openNodejs) {
-                        Label("Open nodejs.org", systemImage: "arrow.up.right.square.fill")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    Button(action: recheckNode) {
-                        Label("Recheck", systemImage: "arrow.clockwise")
-                    }
-                }
-                Text("After installing, you may need to restart Dimmy so the new PATH is picked up.")
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary)
-            }
-        }
-    }
-
-    private var nodeStatusBadge: some View {
-        HStack(spacing: 10) {
-            if nodeStatus.found && nodeStatus.meetsMinimum {
-                Image(systemName: "checkmark.circle.fill").foregroundColor(.green).font(.title2)
-                Text(nodeStatus.version.map { "Node.js v\($0) detected" } ?? "Node.js detected")
-            } else if nodeStatus.found {
-                Image(systemName: "exclamationmark.triangle.fill").foregroundColor(.orange).font(.title2)
-                Text(nodeStatus.version.map { "Node.js v\($0) found, but Claude needs v18 or newer." }
-                     ?? "Node.js found but version too old (need v18+).")
-            } else {
-                Image(systemName: "xmark.circle.fill").foregroundColor(.red).font(.title2)
-                Text("Node.js not found. Click below to install.")
-            }
-            Spacer()
-        }
-        .padding(12)
-        .background(Color.gray.opacity(0.08))
-        .cornerRadius(6)
-    }
-
-    private func openNodejs() {
-        if let url = URL(string: "https://nodejs.org/en/download/") {
-            NSWorkspace.shared.open(url)
-        }
-    }
-
-    private func recheckNode() {
-        DimmyCore.shared.recheckClaudeCode()
-        nodeStatus = DimmyCore.shared.nodeStatus()
-    }
-
-    // MARK: - Step 2: Claude CLI
-
-    private var stepTwo: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("2 — Install Claude CLI")
-                .font(.system(size: 18, weight: .semibold))
-            Text("The CLI ships via npm. Open a terminal, paste the command below, press return — npm downloads and installs claude-code globally.")
+            Text("Open Terminal, paste this command, and press Enter. It installs the Claude Code CLI. No Node.js needed.")
                 .font(.system(size: 13))
                 .foregroundColor(.secondary)
 
@@ -225,7 +161,7 @@ struct ClaudeConnectSheet: View {
             if claudeStatus == .notInstalled {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {
-                        Text(npmCommand)
+                        Text(installCommand)
                             .font(.system(.body, design: .monospaced))
                             .textSelection(.enabled)
                             .padding(10)
@@ -234,7 +170,7 @@ struct ClaudeConnectSheet: View {
                             .cornerRadius(4)
                     }
                     HStack(spacing: 8) {
-                        Button(action: copyNpmCommand) {
+                        Button(action: copyInstallCommand) {
                             Label(copiedFlash ? "Copied!" : "Copy command",
                                   systemImage: "doc.on.doc")
                         }
@@ -246,7 +182,7 @@ struct ClaudeConnectSheet: View {
                             Label("Recheck", systemImage: "arrow.clockwise")
                         }
                     }
-                    Text("If npm reports a permission error, run with a per-user prefix: `npm config set prefix ~/.npm-global` then add `~/.npm-global/bin` to your PATH.")
+                    Text("After installing, you may need to restart Dimmy so the new PATH is picked up.")
                         .font(.system(size: 12))
                         .foregroundColor(.secondary)
                 }
@@ -259,13 +195,13 @@ struct ClaudeConnectSheet: View {
             if claudeStatus != .notInstalled {
                 Image(systemName: "checkmark.circle.fill").foregroundColor(.green).font(.title2)
                 if let p = binaryPath {
-                    Text("Claude CLI detected at \(p)")
+                    Text("Claude Code detected at \(p)")
                 } else {
-                    Text("Claude CLI detected")
+                    Text("Claude Code detected")
                 }
             } else {
                 Image(systemName: "xmark.circle.fill").foregroundColor(.red).font(.title2)
-                Text("Claude CLI not installed. Run the command below in a terminal.")
+                Text("Claude Code not installed. Run the command below in Terminal.")
             }
             Spacer()
         }
@@ -274,10 +210,10 @@ struct ClaudeConnectSheet: View {
         .cornerRadius(6)
     }
 
-    private func copyNpmCommand() {
+    private func copyInstallCommand() {
         let pb = NSPasteboard.general
         pb.clearContents()
-        pb.setString(npmCommand, forType: .string)
+        pb.setString(installCommand, forType: .string)
         copiedFlash = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copiedFlash = false }
     }
@@ -285,8 +221,8 @@ struct ClaudeConnectSheet: View {
     private func openTerminal() {
         // Open a new Terminal window at the user's home dir. The
         // shell prompt is ready for paste. (We deliberately don't
-        // auto-execute the npm command — the user controls when it
-        // runs.)
+        // auto-execute the install command - the user controls when
+        // it runs.)
         let script = "tell application \"Terminal\" to do script \"cd ~ && clear\""
         var error: NSDictionary? = nil
         NSAppleScript(source: script)?.executeAndReturnError(&error)
@@ -299,13 +235,13 @@ struct ClaudeConnectSheet: View {
         binaryPath = DimmyCore.shared.claudeCodeBinaryPath
     }
 
-    // MARK: - Step 3: Sign in + test
+    // MARK: - Step 2: Sign in + test
 
-    private var stepThree: some View {
+    private var stepTwo: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("3 — Sign in to Claude")
+            Text("2 - Sign in to Claude")
                 .font(.system(size: 18, weight: .semibold))
-            Text("Click Sign in to open a Terminal window with the Claude CLI's browser-based OAuth flow. Complete it in your browser — Dimmy detects the login and runs a quick test.")
+            Text("Click Sign in to open a Terminal window with the Claude CLI's browser-based OAuth flow. Complete it in your browser. Dimmy detects the login and runs a quick test.")
                 .font(.system(size: 13))
                 .foregroundColor(.secondary)
 
@@ -354,14 +290,14 @@ struct ClaudeConnectSheet: View {
             } else if claudeStatus == .notLoggedIn {
                 if signInRunning {
                     ProgressView().controlSize(.small).scaleEffect(0.7)
-                    Text("Complete the browser flow. Dimmy will detect when you're signed in…")
+                    Text("Complete the browser flow. Dimmy will detect when you're signed in.")
                 } else {
                     Image(systemName: "exclamationmark.circle.fill").foregroundColor(.orange)
                     Text("Not signed in. Click Sign in to open the browser flow.")
                 }
             } else {
                 Image(systemName: "xmark.circle.fill").foregroundColor(.red)
-                Text("Claude CLI missing — go back to Step 2.")
+                Text("Claude Code missing. Go back to Step 1.")
             }
             Spacer()
         }
@@ -373,7 +309,7 @@ struct ClaudeConnectSheet: View {
         HStack(spacing: 10) {
             if testRunning {
                 ProgressView().controlSize(.small).scaleEffect(0.7)
-                Text("Test connection: pinging Claude…")
+                Text("Test connection: pinging Claude.")
             } else if let r = testResult {
                 switch r {
                 case .ok(let ms):
@@ -392,7 +328,7 @@ struct ClaudeConnectSheet: View {
     private func describeTestResult(_ r: DimmyCore.ClaudeCodePingResult) -> String {
         switch r {
         case .ok: return ""
-        case .notInstalled: return "Claude CLI not installed"
+        case .notInstalled: return "Claude Code not installed"
         case .notLoggedIn: return "Not signed in"
         case .spawnFailed: return "Couldn't spawn the CLI subprocess"
         case .timeout: return "Timed out (15 s)"
@@ -458,24 +394,16 @@ struct ClaudeConnectSheet: View {
     // MARK: - Probes / smart-skip
 
     private func probeAllAndSkip() {
-        nodeStatus = DimmyCore.shared.nodeStatus()
         claudeStatus = DimmyCore.shared.claudeCodeStatus
         binaryPath = DimmyCore.shared.claudeCodeBinaryPath
 
-        let nodeOk = nodeStatus.found && nodeStatus.meetsMinimum
         let claudeOk = claudeStatus != .notInstalled
-        if !nodeOk {
-            currentStep = .node
-        } else if !claudeOk {
-            currentStep = .claudeCli
+        if !claudeOk {
+            currentStep = .install
         } else {
             currentStep = .signIn
             if claudeStatus == .ready { runTest() }
         }
-    }
-
-    private func probeNode() {
-        nodeStatus = DimmyCore.shared.nodeStatus()
     }
 
     private func probeClaude() {

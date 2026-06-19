@@ -2,19 +2,20 @@
 <!--
   ChatGPT (Codex) subscription setup wizard.
 
-  Two linear steps, one ContentDialog. Simpler than
-  ClaudeConnectDialog because the Codex CLI is a native binary —
-  there is NO Node.js prerequisite, so the Node step is gone.
+  Two linear steps, one ContentDialog. Same shape as
+  ClaudeConnectDialog: the Codex CLI ships as a native standalone
+  binary now (no Node.js), installed via a one-line PowerShell
+  command.
 
   Smart-skip on entry: we probe the codex binary + login state once
   and start on the FIRST step whose precondition is missing. A
   machine where the CLI is already installed lands on Step 2.
 
   Flow:
-    Step 1 — Install Codex CLI → copy install command + open
-                                 terminal + recheck
-    Step 2 — Sign in + test    → spawn `codex login`, poll
-                                 credentials, auto-fire test ping
+    Step 1 - Install Codex -> copy install command + open
+                              terminal + recheck
+    Step 2 - Sign in + test -> spawn `codex login`, poll
+                               credentials, auto-fire test ping
 -->
 <ContentDialog
     x:Class="Dimmy.Windows.Views.CodexConnectDialog"
@@ -51,13 +52,13 @@
 
     <Grid Grid.Row="1">
 
-      <!-- Step 1 — Install Codex CLI -->
+      <!-- Step 1 - Install Codex -->
       <StackPanel x:Name="Step1Panel" Spacing="12" Visibility="Visible">
-        <TextBlock Text="1 — Install the Codex CLI"
+        <TextBlock Text="1 - Install Codex"
                    FontSize="18" FontWeight="SemiBold"/>
         <TextBlock TextWrapping="Wrap" FontSize="13"
                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                   Text="Codex is OpenAI's command-line tool. Open a terminal, paste the command below, press Enter. If you have Node.js it installs via npm; otherwise grab the native binary from the link below. No Node.js is required for the native installer."/>
+                   Text="Open a terminal, paste this command, and press Enter. It installs the Codex CLI. No Node.js needed."/>
 
         <Border x:Name="CodexStatusBorder"
                 Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
@@ -78,7 +79,7 @@
           <Border Background="{ThemeResource ControlAltFillColorTertiaryBrush}"
                   CornerRadius="4" Padding="12,8,12,8">
             <TextBlock x:Name="InstallCommandText"
-                       Text="npm install -g @openai/codex"
+                       Text="irm https://chatgpt.com/codex/install.ps1 | iex"
                        FontFamily="Consolas, Menlo, monospace"
                        FontSize="13" TextWrapping="NoWrap"
                        IsTextSelectionEnabled="True"/>
@@ -92,9 +93,6 @@
             <Button x:Name="RecheckCodexBtn" Content="Recheck"
                     Click="RecheckCodex_Click"/>
           </StackPanel>
-          <HyperlinkButton Content="No Node.js? Get the native installer →"
-                           Padding="0" FontSize="12"
-                           NavigateUri="https://developers.openai.com/codex/cli"/>
         </StackPanel>
 
         <TextBlock x:Name="CodexHelpText" TextWrapping="Wrap" FontSize="12"
@@ -103,13 +101,13 @@
                    Visibility="Collapsed"/>
       </StackPanel>
 
-      <!-- Step 2 — Sign in + Test -->
+      <!-- Step 2 - Sign in + Test -->
       <StackPanel x:Name="Step2Panel" Spacing="12" Visibility="Collapsed">
-        <TextBlock Text="2 — Sign in with ChatGPT"
+        <TextBlock Text="2 - Sign in with ChatGPT"
                    FontSize="18" FontWeight="SemiBold"/>
         <TextBlock TextWrapping="Wrap" FontSize="13"
                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                   Text="Click Sign in to open a terminal window with the Codex browser sign-in. Log in with your ChatGPT Plus, Pro, Team, Business, or Enterprise plan, then come back — Dimmy detects the login and runs a quick test. (A free ChatGPT account won't work for Codex.)"/>
+                   Text="Click Sign in to open a terminal window with the Codex browser sign-in. Log in with your ChatGPT Plus, Pro, Team, Business, or Enterprise plan, then come back. Dimmy detects the login and runs a quick test. (A free ChatGPT account won't work for Codex.)"/>
 
         <Border x:Name="SignInStatusBorder"
                 Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"

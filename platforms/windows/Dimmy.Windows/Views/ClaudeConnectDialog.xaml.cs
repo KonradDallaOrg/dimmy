@@ -12,25 +12,28 @@ using Dimmy.Windows.Interop;
 namespace Dimmy.Windows.Views;
 
 /// <summary>
-/// 3-step Claude Code subscription setup wizard. Linear, modal,
+/// 2-step Claude Code subscription setup wizard. Linear, modal,
 /// re-runnable. Same shape as <see cref="NotionConnectDialog"/>:
 /// internal state machine flips StepNPanel visibility + relabels
 /// the ContentDialog buttons per step.
 ///
+/// Claude Code ships as a native standalone binary now (no
+/// Node.js), installed via a one-line PowerShell command.
+///
 /// Steps:
-///   1. Detect / install Node.js (≥ 18 required).
-///   2. Detect / install Claude CLI (npm install -g).
-///   3. Sign in (browser OAuth via `claude /login`) + auto-test
+///   1. Detect / install Claude Code (irm install.ps1 | iex).
+///   2. Sign in (browser OAuth via `claude /login`) + auto-test
 ///      a tiny ping prompt.
 ///
 /// Smart-skip: on Open we probe every precondition once and start
 /// at the FIRST incomplete step. A machine where everything's
-/// already set lands on Step 3 with test-ready state + the
-/// "Close &amp; enable" button armed.
+/// already set lands on the sign-in step with test-ready state +
+/// the "Close &amp; enable" button armed.
 ///
 /// Completion contract: <see cref="Completed"/> is true iff the
-/// user reached Step 3 with a green test. The SettingsWindow
-/// caller then sets <c>llm_auth_method=subscription</c> via FFI.
+/// user reached the sign-in step with a green test. The
+/// SettingsWindow caller then sets
+/// <c>llm_auth_method=subscription</c> via FFI.
 /// </summary>
 public sealed partial class ClaudeConnectDialog : ContentDialog
 {
@@ -38,15 +41,16 @@ public sealed partial class ClaudeConnectDialog : ContentDialog
     public bool Completed { get; private set; }
 
     /// <summary>
-    /// When true, bypass the smart-skip and start at Step 1 regardless
-    /// of current detection state. Caller uses this for "Re-run setup"
-    /// (e.g. user wants to walk through the wizard again to inspect /
-    /// re-validate their install) — without it the smart-skip would
-    /// jump straight to Step 3 on an already-configured machine.
+    /// When true, bypass the smart-skip and start at the install step
+    /// regardless of current detection state. Caller uses this for
+    /// "Re-run setup" (e.g. user wants to walk through the wizard again
+    /// to inspect / re-validate their install). Without it the smart-skip
+    /// would jump straight to the sign-in step on an already-configured
+    /// machine.
     /// </summary>
     public bool ForceStartAtStep1 { get; set; }
 
-    private enum Step { Node = 1, ClaudeCli = 2, SignIn = 3 }
+    private enum Step { ClaudeCli = 1, SignIn = 2 }
 
     // Segoe Fluent Icons codepoints. Using compile-time consts so
     // a source-encoding hiccup can't strip the literals (which would
@@ -58,8 +62,7 @@ public sealed partial class ClaudeConnectDialog : ContentDialog
     private const string GlyphPending = "";   // Globe / placeholder
     private const string GlyphInfo = "";      // Info
 
-    private Step _currentStep = Step.Node;
-    private bool _nodeOk;
+    private Step _currentStep = Step.ClaudeCli;
     private bool _claudeOk;
     private bool _signInOk;
     private bool _testOk;
@@ -82,12 +85,8 @@ public sealed partial class ClaudeConnectDialog : ContentDialog
         // step. The recheck buttons inside each step do their own per-
         // step probe so the state stays fresh as the user progresses.
         ProbeAllStates();
-        var startAt = Step.Node;
-        if (!ForceStartAtStep1)
-        {
-            if (_nodeOk) startAt = Step.ClaudeCli;
-            if (_nodeOk && _claudeOk) startAt = Step.SignIn;
-        }
+        var startAt = Step.ClaudeCli;
+        if (!ForceStartAtStep1 && _claudeOk) startAt = Step.SignIn;
         EnterStep(startAt);
     }
 
@@ -101,17 +100,6 @@ public sealed partial class ClaudeConnectDialog : ContentDialog
 
     private void ProbeAllStates()
     {
-        try
-        {
-            var node = DimmyNative.GetNodeStatus();
-            _nodeOk = node.Found && node.MeetsMinimum;
-            UpdateNodeUi(node);
-        }
-        catch (Exception ex)
-        {
-            App.Log($"ClaudeWizard: node probe exc {ex.Message}", "Wizard");
-            _nodeOk = false;
-        }
         try
         {
             var s = DimmyNative.GetClaudeCodeStatus();
@@ -133,24 +121,18 @@ public sealed partial class ClaudeConnectDialog : ContentDialog
     private void EnterStep(Step step)
     {
         _currentStep = step;
-        Step1Panel.Visibility = step == Step.Node ? Visibility.Visible : Visibility.Collapsed;
         Step2Panel.Visibility = step == Step.ClaudeCli ? Visibility.Visible : Visibility.Collapsed;
         Step3Panel.Visibility = step == Step.SignIn ? Visibility.Visible : Visibility.Collapsed;
 
         var accent = (Brush)Application.Current.Resources["AccentFillColorDefaultBrush"];
         var inactive = (Brush)Application.Current.Resources["ControlStrokeColorDefaultBrush"];
-        Dot1.Fill = step >= Step.Node ? accent : inactive;
-        Dot2.Fill = step >= Step.ClaudeCli ? accent : inactive;
-        Dot3.Fill = step >= Step.SignIn ? accent : inactive;
+        Dot1.Fill = step >= Step.ClaudeCli ? accent : inactive;
+        Dot2.Fill = step >= Step.SignIn ? accent : inactive;
 
         // Button visibility / labels per step.
-        SecondaryButtonText = step == Step.Node ? "" : "Back";
+        SecondaryButtonText = step == Step.ClaudeCli ? "" : "Back";
         switch (step)
         {
-            case Step.Node:
-                PrimaryButtonText = "Next";
-                IsPrimaryButtonEnabled = _nodeOk;
-                break;
             case Step.ClaudeCli:
                 PrimaryButtonText = "Next";
                 IsPrimaryButtonEnabled = _claudeOk;
@@ -165,63 +147,7 @@ public sealed partial class ClaudeConnectDialog : ContentDialog
         }
     }
 
-    // ── Step 1 — Node.js ──────────────────────────────────────────────
-
-    private void UpdateNodeUi(DimmyNative.NodeStatus node)
-    {
-        var brushSuccess = (Brush)Application.Current.Resources["SystemFillColorSuccessBrush"];
-        var brushCaution = (Brush)Application.Current.Resources["SystemFillColorCautionBrush"];
-        var brushCritical = (Brush)Application.Current.Resources["SystemFillColorCriticalBrush"];
-
-        if (node.Found && node.MeetsMinimum)
-        {
-            NodeStatusGlyph.Glyph = "";
-            NodeStatusGlyph.Foreground = brushSuccess;
-            NodeStatusText.Text = node.Version != null
-                ? $"Node.js v{node.Version} detected"
-                : "Node.js detected";
-            NodeActionPanel.Visibility = Visibility.Collapsed;
-            NodeHelpText.Visibility = Visibility.Collapsed;
-        }
-        else if (node.Found && !node.MeetsMinimum)
-        {
-            NodeStatusGlyph.Glyph = "";
-            NodeStatusGlyph.Foreground = brushCaution;
-            NodeStatusText.Text = node.Version != null
-                ? $"Node.js v{node.Version} found, but Claude needs v18 or newer. Please upgrade."
-                : "Node.js found but version too old (need v18+).";
-            NodeActionPanel.Visibility = Visibility.Visible;
-            NodeHelpText.Visibility = Visibility.Visible;
-        }
-        else
-        {
-            NodeStatusGlyph.Glyph = "";
-            NodeStatusGlyph.Foreground = brushCritical;
-            NodeStatusText.Text = "Node.js not found. Click below to install.";
-            NodeActionPanel.Visibility = Visibility.Visible;
-            NodeHelpText.Visibility = Visibility.Visible;
-        }
-        IsPrimaryButtonEnabled = _currentStep == Step.Node ? _nodeOk : IsPrimaryButtonEnabled;
-    }
-
-    private void OpenNodeJs_Click(object sender, RoutedEventArgs e)
-    {
-        // Latest LTS landing page — auto-detects OS + offers the right
-        // installer. Better UX than hard-coding the .msi URL (which
-        // bakes in a version and goes stale).
-        OpenUrl("https://nodejs.org/en/download/");
-    }
-
-    private void RecheckNode_Click(object sender, RoutedEventArgs e)
-    {
-        DimmyNative.RecheckClaudeCode(); // clears node + claude caches
-        var node = DimmyNative.GetNodeStatus();
-        _nodeOk = node.Found && node.MeetsMinimum;
-        UpdateNodeUi(node);
-        IsPrimaryButtonEnabled = _nodeOk;
-    }
-
-    // ── Step 2 — Claude CLI ───────────────────────────────────────────
+    // -- Step 1 - Install Claude Code --------------------------------
 
     private void UpdateClaudeUi(DimmyNative.ClaudeCodeStatus status)
     {
@@ -250,10 +176,10 @@ public sealed partial class ClaudeConnectDialog : ContentDialog
         IsPrimaryButtonEnabled = _currentStep == Step.ClaudeCli ? _claudeOk : IsPrimaryButtonEnabled;
     }
 
-    private void CopyNpmCommand_Click(object sender, RoutedEventArgs e)
+    private void CopyInstallCommand_Click(object sender, RoutedEventArgs e)
     {
         var pkg = new DataPackage();
-        pkg.SetText("npm install -g @anthropic-ai/claude-code");
+        pkg.SetText("irm https://claude.ai/install.ps1 | iex");
         Clipboard.SetContent(pkg);
         CopyCmdBtn.Content = "Copied!";
         // Restore label after 1.5 s so the user doesn't see "Copied!"
@@ -470,11 +396,6 @@ public sealed partial class ClaudeConnectDialog : ContentDialog
     {
         switch (_currentStep)
         {
-            case Step.Node:
-                if (!_nodeOk) { args.Cancel = true; return; }
-                args.Cancel = true;
-                EnterStep(Step.ClaudeCli);
-                break;
             case Step.ClaudeCli:
                 if (!_claudeOk) { args.Cancel = true; return; }
                 args.Cancel = true;
@@ -506,9 +427,8 @@ public sealed partial class ClaudeConnectDialog : ContentDialog
         args.Cancel = true;
         var prev = _currentStep switch
         {
-            Step.ClaudeCli => Step.Node,
             Step.SignIn => Step.ClaudeCli,
-            _ => Step.Node,
+            _ => Step.ClaudeCli,
         };
         EnterStep(prev);
     }
@@ -519,21 +439,4 @@ public sealed partial class ClaudeConnectDialog : ContentDialog
         // whether to flip llm_auth_method=subscription based on the flag.
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────
-
-    private static void OpenUrl(string url)
-    {
-        try
-        {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = url,
-                UseShellExecute = true,
-            });
-        }
-        catch (Exception ex)
-        {
-            App.Log($"ClaudeWizard: OpenUrl failed for {url}: {ex.Message}", "Wizard");
-        }
-    }
 }

@@ -2,22 +2,24 @@
 <!--
   Claude Code subscription setup wizard.
 
-  Three linear steps, one ContentDialog. Same shape as
+  Two linear steps, one ContentDialog. Same shape as
   NotionConnectDialog: state machine in code-behind toggles
-  Step1Panel / Step2Panel / Step3Panel visibility, the dialog
-  buttons (Primary/Secondary/Close) get relabeled per step.
+  Step2Panel / Step3Panel visibility, the dialog buttons
+  (Primary/Secondary/Close) get relabeled per step.
 
-  Smart-skip on entry: when the dialog opens we probe node +
-  claude + credentials state once and start on the FIRST step
-  whose precondition is missing. Anyone already past a step
-  doesn't see it.
+  Claude Code ships as a native standalone binary now (no
+  Node.js), installed via a one-line PowerShell command.
+
+  Smart-skip on entry: when the dialog opens we probe claude +
+  credentials state once and start on the FIRST step whose
+  precondition is missing. Anyone already past a step doesn't
+  see it.
 
   Flow:
-    Step 1 — Install Node.js  → opens nodejs.org + recheck
-    Step 2 — Install Claude CLI → copy npm command + open
-                                  terminal + recheck
-    Step 3 — Sign in + test    → spawn `claude /login`, poll
-                                  credentials, auto-fire test ping
+    Step 1 - Install Claude Code -> copy install command + open
+                                    terminal + recheck
+    Step 2 - Sign in + test      -> spawn `claude /login`, poll
+                                    credentials, auto-fire test ping
 -->
 <ContentDialog
     x:Class="Dimmy.Windows.Views.ClaudeConnectDialog"
@@ -50,57 +52,17 @@
                Fill="{ThemeResource AccentFillColorDefaultBrush}"/>
       <Ellipse x:Name="Dot2" Width="10" Height="10"
                Fill="{ThemeResource ControlStrokeColorDefaultBrush}"/>
-      <Ellipse x:Name="Dot3" Width="10" Height="10"
-               Fill="{ThemeResource ControlStrokeColorDefaultBrush}"/>
     </StackPanel>
 
     <Grid Grid.Row="1">
 
-      <!-- ════ Step 1 — Node.js ════ -->
-      <StackPanel x:Name="Step1Panel" Spacing="12" Visibility="Visible">
-        <TextBlock Text="1 — Install Node.js"
+      <!-- ════ Step 1 - Install Claude Code ════ -->
+      <StackPanel x:Name="Step2Panel" Spacing="12" Visibility="Visible">
+        <TextBlock Text="1 - Install Claude Code"
                    FontSize="18" FontWeight="SemiBold"/>
         <TextBlock TextWrapping="Wrap" FontSize="13"
                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                   Text="Claude Code is a Node.js CLI. We need Node 18 or newer before installing it. The official installer adds Node to your PATH automatically."/>
-
-        <Border x:Name="NodeStatusBorder"
-                Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                BorderThickness="1" CornerRadius="6" Padding="14">
-          <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
-            <FontIcon x:Name="NodeStatusGlyph" FontSize="20"
-                      FontFamily="Segoe Fluent Icons"
-                      Glyph="&#xE9F5;"
-                      Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-            <TextBlock x:Name="NodeStatusText" VerticalAlignment="Center"
-                       FontSize="13" TextWrapping="Wrap"
-                       Text="Checking for Node.js…"/>
-          </StackPanel>
-        </Border>
-
-        <StackPanel x:Name="NodeActionPanel" Orientation="Horizontal" Spacing="10"
-                    Visibility="Collapsed">
-          <Button x:Name="OpenNodeJsBtn" Content="Open nodejs.org"
-                  Click="OpenNodeJs_Click"
-                  Style="{ThemeResource AccentButtonStyle}"/>
-          <Button x:Name="RecheckNodeBtn" Content="Recheck"
-                  Click="RecheckNode_Click"/>
-        </StackPanel>
-
-        <TextBlock x:Name="NodeHelpText" TextWrapping="Wrap" FontSize="12"
-                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                   Text="After installing, you may need to restart Dimmy so the new PATH is picked up. If Recheck still shows 'not found' after install, close Dimmy completely and reopen."
-                   Visibility="Collapsed"/>
-      </StackPanel>
-
-      <!-- ════ Step 2 — Claude CLI ════ -->
-      <StackPanel x:Name="Step2Panel" Spacing="12" Visibility="Collapsed">
-        <TextBlock Text="2 — Install Claude CLI"
-                   FontSize="18" FontWeight="SemiBold"/>
-        <TextBlock TextWrapping="Wrap" FontSize="13"
-                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                   Text="The CLI ships via npm. Open a terminal, paste the command below, press Enter — npm downloads and installs claude-code globally."/>
+                   Text="Open a terminal, paste this command, and press Enter. It installs the Claude Code CLI. No Node.js needed."/>
 
         <Border x:Name="ClaudeStatusBorder"
                 Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
@@ -121,14 +83,14 @@
           <Border Background="{ThemeResource ControlAltFillColorTertiaryBrush}"
                   CornerRadius="4" Padding="12,8,12,8">
             <TextBlock x:Name="NpmCommandText"
-                       Text="npm install -g @anthropic-ai/claude-code"
+                       Text="irm https://claude.ai/install.ps1 | iex"
                        FontFamily="Consolas, Menlo, monospace"
                        FontSize="13" TextWrapping="NoWrap"
                        IsTextSelectionEnabled="True"/>
           </Border>
           <StackPanel Orientation="Horizontal" Spacing="10">
             <Button x:Name="CopyCmdBtn" Content="Copy command"
-                    Click="CopyNpmCommand_Click"
+                    Click="CopyInstallCommand_Click"
                     Style="{ThemeResource AccentButtonStyle}"/>
             <Button x:Name="OpenTerminalBtn" Content="Open PowerShell"
                     Click="OpenTerminal_Click"/>
@@ -139,17 +101,17 @@
 
         <TextBlock x:Name="ClaudeHelpText" TextWrapping="Wrap" FontSize="12"
                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                   Text="If npm reports a permission error, run PowerShell as administrator or set a per-user prefix: npm config set prefix %APPDATA%\npm"
+                   Text="After it finishes installing, click Recheck. You may need to reopen Dimmy so the new PATH is seen."
                    Visibility="Collapsed"/>
       </StackPanel>
 
-      <!-- ════ Step 3 — Sign in + Test ════ -->
+      <!-- ════ Step 2 - Sign in + Test ════ -->
       <StackPanel x:Name="Step3Panel" Spacing="12" Visibility="Collapsed">
-        <TextBlock Text="3 — Sign in to Claude"
+        <TextBlock Text="2 - Sign in to Claude"
                    FontSize="18" FontWeight="SemiBold"/>
         <TextBlock TextWrapping="Wrap" FontSize="13"
                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                   Text="Click Sign in to open a terminal window with the Claude CLI's browser-based OAuth flow. Complete it in your browser, then come back — Dimmy will detect the login and run a quick test."/>
+                   Text="Click Sign in to open a terminal window with the Claude CLI's browser-based OAuth flow. Complete it in your browser, then come back, Dimmy will detect the login and run a quick test."/>
 
         <Border x:Name="SignInStatusBorder"
                 Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
