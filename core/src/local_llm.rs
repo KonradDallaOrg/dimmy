@@ -226,11 +226,23 @@ where
     // URLs are pinned on HuggingFace, which serves `Accept-Ranges: bytes`, so the
     // bytes are stable and appending is safe.
     let part_path = dir.join(format!("{}.part", filename));
+    // Sidecar holding the ETag (= HF LFS SHA-256) captured when the download first
+    // started, so a later resume can send If-Range and we know the expected hash.
+    let meta_path = dir.join(format!("{}.part.etag", filename));
     let resume_from: u64 = std::fs::metadata(&part_path).map(|m| m.len()).unwrap_or(0);
+    let prior_etag = std::fs::read_to_string(&meta_path)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
 
     let mut req = client.get(&url);
     if resume_from > 0 {
         req = req.header(reqwest::header::RANGE, format!("bytes={}-", resume_from));
+        // If-Range: the server sends 206 only if the file is byte-identical to when
+        // we started; if it changed it sends 200 (full) and we restart cleanly.
+        if let Some(etag) = &prior_etag {
+            req = req.header(reqwest::header::IF_RANGE, etag.clone());
+        }
         crate::log(&format!(
             "[LocalLLM] Resuming {} from {} bytes",
             filename, resume_from
@@ -259,6 +271,23 @@ where
             code, body_trunc
         )));
     }
+
+    // HuggingFace LFS serves the file's SHA-256 as the (X-Linked-)ETag. Capture it
+    // as the expected hash for the post-download integrity check, and persist it so
+    // a later resume can send If-Range.
+    let raw_etag = resp
+        .headers()
+        .get("x-linked-etag")
+        .or_else(|| resp.headers().get(reqwest::header::ETAG))
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    if let Some(raw) = &raw_etag {
+        let _ = std::fs::write(&meta_path, raw.trim());
+    }
+    let expected_sha = raw_etag
+        .as_deref()
+        .map(normalize_etag)
+        .filter(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()));
 
     // 206 Partial Content = server honored the Range → APPEND. 200 OK = server
     // ignored the Range (or none sent) → start over from byte 0 (truncate) so we
@@ -307,9 +336,9 @@ where
 
     drop(file); // flush & close before rename
 
-    // INTEGRITY: never rename a short file. If the stream ended early (network
-    // blip), keep the `.part` so the next attempt resumes from here instead of
-    // shipping a truncated model that would fail to load.
+    // INTEGRITY (size): never rename a short file. If the stream ended early
+    // (network blip), keep the `.part` so the next attempt resumes from here
+    // instead of shipping a truncated model that would fail to load.
     if total_bytes > 0 && downloaded < total_bytes {
         return Err(LlmError::LocalModel(format!(
             "download incomplete: {} of {} bytes — retry to resume",
@@ -317,7 +346,20 @@ where
         )));
     }
 
-    // Atomic rename: .part → final
+    // INTEGRITY (content): a GGUF must start with the "GGUF" magic, and — when the
+    // server gave us its SHA-256 (HF LFS ETag) — the whole file must hash to it.
+    // This catches a CORRUPT partial (resumed onto bad bytes) or a garbage/HTML
+    // body that still reached full size. On failure DELETE the `.part` so the retry
+    // restarts clean instead of resuming corruption forever.
+    if let Err(e) = verify_downloaded_model(&part_path, expected_sha.as_deref()) {
+        let _ = std::fs::remove_file(&part_path);
+        let _ = std::fs::remove_file(&meta_path);
+        return Err(LlmError::LocalModel(format!(
+            "model failed integrity check ({e}) — deleted, retry to re-download"
+        )));
+    }
+
+    // Atomic rename: .part → final, then drop the etag sidecar.
     std::fs::rename(&part_path, &dest).map_err(|e| {
         LlmError::LocalModel(format!(
             "rename {} → {} failed: {}",
@@ -326,6 +368,7 @@ where
             e
         ))
     })?;
+    let _ = std::fs::remove_file(&meta_path);
 
     crate::log(&format!(
         "[LocalLLM] Download complete: {} ({} bytes)",
@@ -335,6 +378,104 @@ where
     assert!(dest.is_file(), "LLM model file must exist after download");
 
     Ok(dest)
+}
+
+/// Normalize an HTTP ETag into a bare lowercase hex hash: strip the weak-validator
+/// `W/` prefix, surrounding quotes, and any `sha256:` prefix. HuggingFace LFS
+/// ETags ARE the file's SHA-256.
+#[cfg_attr(not(feature = "local-llm"), allow(dead_code))]
+fn normalize_etag(raw: &str) -> String {
+    raw.trim()
+        .trim_start_matches("W/")
+        .trim_matches('"')
+        .trim_start_matches("sha256:")
+        .trim_matches('"')
+        .to_ascii_lowercase()
+}
+
+#[cfg_attr(not(feature = "local-llm"), allow(dead_code))]
+fn hex_lower(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(s, "{:02x}", b);
+    }
+    s
+}
+
+/// Validate a finished `.part`: GGUF magic bytes + (when the server gave us a
+/// SHA-256) the whole-file hash. Streams the file in 1 MiB chunks so a multi-GB
+/// model is never buffered whole. Returns `Err(reason)` on any mismatch.
+#[cfg_attr(not(feature = "local-llm"), allow(dead_code))]
+fn verify_downloaded_model(
+    path: &std::path::Path,
+    expected_sha: Option<&str>,
+) -> Result<(), String> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).map_err(|e| format!("open: {e}"))?;
+    let mut magic = [0u8; 4];
+    f.read_exact(&mut magic)
+        .map_err(|e| format!("read magic: {e}"))?;
+    if &magic != b"GGUF" {
+        return Err(format!("not a GGUF file (magic {:02x?})", magic));
+    }
+    let Some(expected) = expected_sha else {
+        return Ok(()); // magic-only when the server gave no usable hash
+    };
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(magic); // the 4 bytes already consumed
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = f.read(&mut buf).map_err(|e| format!("read: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    let got = hex_lower(&hasher.finalize());
+    if got != expected {
+        return Err(format!(
+            "sha256 mismatch (got {}…, want {}…)",
+            &got[..8.min(got.len())],
+            &expected[..8.min(expected.len())]
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod download_verify_tests {
+    use super::*;
+
+    #[test]
+    fn normalize_etag_strips_quotes_and_prefixes() {
+        assert_eq!(normalize_etag("\"abc123\""), "abc123");
+        assert_eq!(normalize_etag("W/\"ABC\""), "abc");
+        assert_eq!(normalize_etag("sha256:DEADbeef"), "deadbeef");
+    }
+
+    #[test]
+    fn verify_checks_magic_and_sha() {
+        let dir = std::env::temp_dir();
+        let bad = dir.join("dimmy_verify_bad.part");
+        std::fs::write(&bad, b"NOPEnot a gguf").unwrap();
+        assert!(verify_downloaded_model(&bad, None).is_err());
+        let _ = std::fs::remove_file(&bad);
+
+        let good = dir.join("dimmy_verify_good.part");
+        std::fs::write(&good, b"GGUFpayload").unwrap();
+        assert!(verify_downloaded_model(&good, None).is_ok()); // magic-only
+        use sha2::{Digest, Sha256};
+        let want = {
+            let mut h = Sha256::new();
+            h.update(b"GGUFpayload");
+            hex_lower(&h.finalize())
+        };
+        assert!(verify_downloaded_model(&good, Some(&want)).is_ok());
+        assert!(verify_downloaded_model(&good, Some("deadbeef")).is_err());
+        let _ = std::fs::remove_file(&good);
+    }
 }
 
 // ── Prompt formatting ────────────────────────────────────────────

@@ -133,11 +133,11 @@ smoke-test = ["dep:libloading"]
 telemetry-sentry = ["dep:sentry"]
 # license-cli: gates the license_cli binary. Lighter than the server (no
 # axum/sqlx) but still pulls clap + reqwest + ed25519-dalek for verification.
-license-cli = ["dep:clap", "dep:ed25519-dalek", "dep:sha2"]
+license-cli = ["dep:clap", "dep:ed25519-dalek"]
 # license-client: pulls in the Ed25519 verification + license.rs file I/O
 # for the production cdylib. Default ON so the released app can verify
 # tokens. Without it license.rs is a no-op stub returning Unrestricted.
-license-client = ["dep:ed25519-dalek", "dep:sha2"]
+license-client = ["dep:ed25519-dalek"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -265,8 +265,10 @@ auto-launch = "0.5"
 # offline against the build-time–embedded public key. Server-side signing
 # is done in the Cloudflare Worker (TypeScript) — no Rust signer ships.
 ed25519-dalek = { version = "2", optional = true, features = ["rand_core"] }
-# Hash function for email_hash. SHA-256 only — keep dep minimal.
-sha2 = { version = "0.10", optional = true }
+# SHA-256: email_hash (license) + downloaded-model integrity verification.
+# Non-optional so the integrity check works in every build (incl. the frozen
+# Windows feature set that has no license-client).
+sha2 = { version = "0.10" }
 # CLI client.
 clap = { version = "4", features = ["derive"], optional = true }
 
