@@ -758,6 +758,112 @@ fn command_security() {
     run_cloud("COMMAND · SECURITY/INJECTION", cases_cmd_security());
 }
 
+// ── Catalog-wide sweep: EVERY llm-capable model in model-catalog.json, ───────
+//    ordered most-powerful→down (tier top→balanced→fast→fastest), two probes
+//    each (translate it→en + command generate). Surfaces dead model ids (404 →
+//    WARN "API err"), which models actually translate, and which leak. The
+//    answer to "test ALL the models, top-down" — also validates the catalog
+//    against each provider's live API before a release.
+#[test]
+#[ignore = "live: sweeps EVERY cloud model in model-catalog.json (heavy)"]
+fn all_catalog_models() {
+    let raw = std::fs::read_to_string(repo_root().join("assets/model-catalog.json"))
+        .expect("read model-catalog.json");
+    let cat: serde_json::Value = serde_json::from_str(&raw).expect("parse catalog");
+    let keys = load_keys();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let mut s = Summary::default();
+
+    let tier_rank = |t: Option<&str>| match t {
+        Some("top") => 0,
+        Some("balanced") => 1,
+        Some("fast") => 2,
+        Some("fastest") => 3,
+        _ => 4,
+    };
+    let it =
+        "Ti scrivo per confermare l'appuntamento di giovedì pomeriggio alle quindici in ufficio.";
+    let gen_instr = "write three short email subject lines for a product launch";
+    let empty: Vec<serde_json::Value> = vec![];
+
+    for prov in cat["providers"].as_array().unwrap_or(&empty) {
+        let pid = prov["id"].as_str().unwrap_or("");
+        let url = prov["llm_url"].as_str().unwrap_or("");
+        if url.is_empty() {
+            continue; // STT-only / local provider
+        }
+        let Some(key) = key_for(pid, &keys) else {
+            s.warn(pid, "*", "no API key — skipped", "");
+            continue;
+        };
+        // llm-capable models, sorted most-powerful first.
+        let mut models: Vec<(String, Option<String>)> = prov["models"]
+            .as_array()
+            .unwrap_or(&empty)
+            .iter()
+            .filter(|m| {
+                m["tasks"]
+                    .as_array()
+                    .map(|t| t.iter().any(|x| x.as_str() == Some("llm")))
+                    .unwrap_or(false)
+            })
+            .map(|m| {
+                (
+                    m["id"].as_str().unwrap_or("").to_string(),
+                    m["tier"].as_str().map(|x| x.to_string()),
+                )
+            })
+            .collect();
+        models.sort_by_key(|(_, t)| tier_rank(t.as_deref()));
+
+        for (mid, tier) in models {
+            let label = format!("{pid}/{mid} [{}]", tier.as_deref().unwrap_or("-"));
+            // probe 1 — translate it→en (dictation enhancement)
+            match rt.block_on(process_text(
+                url,
+                &mid,
+                &key,
+                it,
+                LlmStyle::Off,
+                LlmTone::None,
+                "",
+                "en",
+                "api_key",
+            )) {
+                Ok(out) => {
+                    let c = Case {
+                        name: "translate it→en",
+                        input: it,
+                        flow: en(LlmStyle::Off, "en"),
+                        expect_lang: Some("en"),
+                        must_change: true,
+                        forbid: NONE,
+                    };
+                    check(&mut s, &label, &c, &out);
+                }
+                Err(e) => s.warn(&label, "translate it→en", &format!("API err: {e}"), ""),
+            }
+            // probe 2 — command generate (English)
+            let gp = build_command_generate_prompt(gen_instr);
+            match rt.block_on(process_raw_prompt(url, &mid, &key, &gp, 1024, "api_key")) {
+                Ok(out) => {
+                    let c = Case {
+                        name: "cmd generate",
+                        input: gen_instr,
+                        flow: Flow::Generate,
+                        expect_lang: Some("en"),
+                        must_change: true,
+                        forbid: NONE,
+                    };
+                    check(&mut s, &label, &c, &out);
+                }
+                Err(e) => s.warn(&label, "cmd generate", &format!("API err: {e}"), ""),
+            }
+        }
+    }
+    s.print_and_assert("CATALOG-WIDE MODEL SWEEP (top→down)");
+}
+
 // ── Local GGUF: representative subset (slow on CPU; no network) ───────────
 
 #[test]
