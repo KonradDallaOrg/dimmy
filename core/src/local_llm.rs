@@ -243,36 +243,78 @@ where
         .build()
         .map_err(|e| LlmError::LocalModel(format!("HTTP client error: {}", e)))?;
 
-    let resp = client
-        .get(&url)
+    // RESUME: if a `.part` already exists, continue from its current size via an
+    // HTTP Range request instead of restarting the (multi-GB) download. The model
+    // URLs are pinned on HuggingFace, which serves `Accept-Ranges: bytes`, so the
+    // bytes are stable and appending is safe.
+    let part_path = dir.join(format!("{}.part", filename));
+    let resume_from: u64 = std::fs::metadata(&part_path).map(|m| m.len()).unwrap_or(0);
+
+    let mut req = client.get(&url);
+    if resume_from > 0 {
+        req = req.header(reqwest::header::RANGE, format!("bytes={}-", resume_from));
+        crate::log(&format!(
+            "[LocalLLM] Resuming {} from {} bytes",
+            filename, resume_from
+        ));
+    }
+    let resp = req
         .send()
         .await
         .map_err(|e| LlmError::LocalModel(format!("download request failed: {}", e)))?;
 
-    if !resp.status().is_success() {
-        let status = resp.status().as_u16();
+    let status = resp.status();
+    if !status.is_success() {
+        // 416 = our partial is already >= the file (stale/corrupt) — drop it so a
+        // retry restarts cleanly instead of looping.
+        if status.as_u16() == 416 && resume_from > 0 {
+            let _ = std::fs::remove_file(&part_path);
+            return Err(LlmError::LocalModel(
+                "stale partial download discarded — retry to start fresh".into(),
+            ));
+        }
+        let code = status.as_u16();
         let body = resp.text().await.unwrap_or_default();
         let body_trunc = crate::truncate_utf8(&body, 200);
         return Err(LlmError::LocalModel(format!(
             "download failed: HTTP {} — {}",
-            status, body_trunc
+            code, body_trunc
         )));
     }
 
-    let total_bytes = resp.content_length().unwrap_or(0);
-    let part_path = dir.join(format!("{}.part", filename));
-
-    let mut file = std::fs::File::create(&part_path).map_err(|e| {
-        LlmError::LocalModel(format!(
-            "cannot create temp file {}: {}",
-            part_path.display(),
-            e
-        ))
-    })?;
-
-    let mut downloaded: u64 = 0;
+    // 206 Partial Content = server honored the Range → APPEND. 200 OK = server
+    // ignored the Range (or none sent) → start over from byte 0 (truncate) so we
+    // never splice mismatched bytes onto an old partial.
+    let resuming = status.as_u16() == 206 && resume_from > 0;
+    let start_at = if resuming { resume_from } else { 0 };
+    // With a Range the body length is the REMAINING bytes; the true total is
+    // start + remaining.
+    let total_bytes = resp.content_length().unwrap_or(0) + start_at;
 
     use std::io::Write;
+    let mut file = if resuming {
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&part_path)
+            .map_err(|e| {
+                LlmError::LocalModel(format!(
+                    "cannot open temp file {} for resume: {}",
+                    part_path.display(),
+                    e
+                ))
+            })?
+    } else {
+        std::fs::File::create(&part_path).map_err(|e| {
+            LlmError::LocalModel(format!(
+                "cannot create temp file {}: {}",
+                part_path.display(),
+                e
+            ))
+        })?
+    };
+
+    let mut downloaded: u64 = start_at;
+
     let mut resp = resp;
     while let Some(chunk) = resp
         .chunk()
@@ -286,6 +328,16 @@ where
     }
 
     drop(file); // flush & close before rename
+
+    // INTEGRITY: never rename a short file. If the stream ended early (network
+    // blip), keep the `.part` so the next attempt resumes from here instead of
+    // shipping a truncated model that would fail to load.
+    if total_bytes > 0 && downloaded < total_bytes {
+        return Err(LlmError::LocalModel(format!(
+            "download incomplete: {} of {} bytes — retry to resume",
+            downloaded, total_bytes
+        )));
+    }
 
     // Atomic rename: .part → final
     std::fs::rename(&part_path, &dest).map_err(|e| {
