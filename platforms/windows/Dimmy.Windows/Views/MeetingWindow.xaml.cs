@@ -2320,6 +2320,17 @@ public sealed partial class MeetingWindow : Window
             $"4. Call `dimmy_save_recap` with id `{meetingId}` and your recap markdown to persist it back into Dimmy.\n" +
             "5. Confirm to me once saved.";
         var deeplink = $"claude://claude.ai/new?q={System.Uri.EscapeDataString(prompt)}";
+
+        // Always put the prompt on the clipboard first, so it's there no
+        // matter how the deeplink below goes.
+        try
+        {
+            var pkg = new global::Windows.ApplicationModel.DataTransfer.DataPackage();
+            pkg.SetText(prompt);
+            global::Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(pkg);
+        }
+        catch { }
+
         try
         {
             App.Log($"RecapWithClaude: opening deeplink for meeting={meetingId}", "ClaudeDesktop");
@@ -2327,20 +2338,14 @@ public sealed partial class MeetingWindow : Window
             {
                 UseShellExecute = true,
             });
+            ShowToast("Opening Claude Desktop. The prompt is on your clipboard too.");
         }
         catch (Exception ex)
         {
             App.Log($"RecapWithClaude exc: {ex.Message}", "ClaudeDesktop");
-            // Fallback: copy the prompt to the clipboard and tell
-            // the user — the deeplink can fail if Claude Desktop is
-            // not installed or its URI handler is misregistered.
-            try
-            {
-                var pkg = new global::Windows.ApplicationModel.DataTransfer.DataPackage();
-                pkg.SetText(prompt);
-                global::Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(pkg);
-            }
-            catch { }
+            // Deeplink failed: Claude Desktop not installed, or its URI
+            // handler isn't registered. The prompt is already copied.
+            ShowToast("Couldn't open Claude Desktop. Prompt copied, open Claude and paste it.");
         }
         await System.Threading.Tasks.Task.CompletedTask;
     }

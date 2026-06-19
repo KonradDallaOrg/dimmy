@@ -381,20 +381,44 @@ struct MeetingDoneView: View {
             "4. Call `dimmy_save_recap` with id `\(meetingId)` and your recap markdown to persist it back into Dimmy.\n" +
             "5. Confirm to me once saved."
 
+        // Always put the prompt on the clipboard first, so it's there
+        // no matter how the open below goes.
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(prompt, forType: .string)
+
         var comps = URLComponents()
         comps.scheme = "claude"
         comps.host = "claude.ai"
         comps.path = "/new"
         comps.queryItems = [URLQueryItem(name: "q", value: prompt)]
-        guard let url = comps.url else { return }
-        if !NSWorkspace.shared.open(url) {
-            // Fallback: copy the prompt so the user can paste it
-            // manually into a fresh Claude chat. The URI handler may
-            // not be registered yet on a brand-new install.
-            let pb = NSPasteboard.general
-            pb.clearContents()
-            pb.setString(prompt, forType: .string)
+        if let url = comps.url, NSWorkspace.shared.open(url) {
+            return  // deeplink handled, Claude Desktop is opening the chat
         }
+
+        // Deeplink not handled — the URI scheme may not be registered yet
+        // (fresh install, or right after a macOS upgrade where Launch
+        // Services hasn't re-indexed Claude Desktop until it's opened
+        // once). Open the app directly so it comes to the front, then
+        // tell the user the prompt is on the clipboard.
+        let appPaths = ["/Applications/Claude.app", NSHomeDirectory() + "/Applications/Claude.app"]
+        if let appPath = appPaths.first(where: { FileManager.default.fileExists(atPath: $0) }) {
+            NSWorkspace.shared.openApplication(
+                at: URL(fileURLWithPath: appPath),
+                configuration: NSWorkspace.OpenConfiguration()
+            )
+        }
+        Task { await showClaudeFallbackAlert() }
+    }
+
+    @MainActor
+    private func showClaudeFallbackAlert() async {
+        let alert = NSAlert()
+        alert.messageText = "Recap prompt copied"
+        alert.informativeText = "Couldn't open a new Claude Desktop chat automatically. The prompt is on your clipboard, so paste it into a new chat (Cmd+V) and send."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Close")
+        alert.runModal()
     }
 
     private func toolbarButton(assetImage: String, help: String, action: @escaping () -> Void) -> some View {
