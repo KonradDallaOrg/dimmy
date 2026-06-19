@@ -87,7 +87,7 @@ public sealed partial class CodexConnectDialog : ContentDialog
         Page3Panel.Visibility = page == Page.Finish ? Visibility.Visible : Visibility.Collapsed;
 
         var accent = (Brush)Application.Current.Resources["AccentFillColorDefaultBrush"];
-        var inactive = (Brush)Application.Current.Resources["ControlStrokeColorDefaultBrush"];
+        var inactive = (Brush)Application.Current.Resources["TextFillColorTertiaryBrush"];
         Dot1.Fill = page >= Page.Install ? accent : inactive;
         Dot2.Fill = page >= Page.Run ? accent : inactive;
         Dot3.Fill = page >= Page.Finish ? accent : inactive;

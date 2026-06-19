@@ -46,9 +46,9 @@
       <Ellipse x:Name="Dot1" Width="10" Height="10"
                Fill="{ThemeResource AccentFillColorDefaultBrush}"/>
       <Ellipse x:Name="Dot2" Width="10" Height="10"
-               Fill="{ThemeResource ControlStrokeColorDefaultBrush}"/>
+               Fill="{ThemeResource TextFillColorTertiaryBrush}"/>
       <Ellipse x:Name="Dot3" Width="10" Height="10"
-               Fill="{ThemeResource ControlStrokeColorDefaultBrush}"/>
+               Fill="{ThemeResource TextFillColorTertiaryBrush}"/>
     </StackPanel>
 
     <Grid Grid.Row="1">
@@ -89,6 +89,10 @@
                      FontSize="13" TextWrapping="Wrap"
                      IsTextSelectionEnabled="True"/>
         </Border>
+
+        <HyperlinkButton Content="See OpenAI's official install page"
+                         NavigateUri="https://github.com/openai/codex"
+                         FontSize="12" Padding="0"/>
 
         <Button x:Name="CopyCmdBtn" Content="Copy command and continue"
                 Click="CopyCommand_Click"
