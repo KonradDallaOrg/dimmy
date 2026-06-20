@@ -257,7 +257,17 @@ struct LlmPreset: Identifiable, Hashable {
         // Claude Code subscription — synthetic provider using the user's
         // Pro/Team/Max plan via the local `claude` CLI. No API key; auth via
         // `claude login`. Not an API model, so kept in code.
-        list.append(LlmPreset(id: "claude-code", displayName: "Claude Code (subscription, Pro/Team/Max)", apiUrl: "claude-code://default", model: "claude-opus-4-8"))
+        // Synthetic `claude-code` and `openai-codex` presets were
+        // removed 2026-06-20. They duplicated the Anthropic / OpenAI
+        // provider rows with a fake "subscription" model and forced
+        // the user's model choice to jump to a different label every
+        // time they flipped the Authentication picker. The
+        // subscription path is now signaled purely by
+        // `llm_auth_method == "subscription"` — the user keeps
+        // picking `Anthropic · <their model>` and the Authentication
+        // picker chooses CLI vs API on top. Legacy URLs
+        // (`claude-code://default`, `codex://default`) are migrated to
+        // the real vendor URL on load in `loadFromRustConfig`.
         list.append(LlmPreset(id: "custom", displayName: "Custom endpoint", apiUrl: "", model: ""))
         return list
     }
@@ -1020,6 +1030,13 @@ final class AppState: ObservableObject {
     /// redraw.
     @Published var claudeCodeReady: Bool = false
 
+    /// Same shape as `claudeCodeReady` but for the OpenAI / ChatGPT
+    /// subscription via the local `codex` CLI. Gates the Codex branch
+    /// of the LLM Authentication picker on the Output page — parity
+    /// with Win where the API-key / Subscription toggle is offered for
+    /// both Anthropic AND OpenAI when the matching CLI is signed in.
+    @Published var codexReady: Bool = false
+
     /// Re-probe Claude Code install + credential state. Cheap (a file
     /// stat + a Keychain query); safe to call from view onAppear /
     /// auth picker change. Updates `claudeCodeReady`.
@@ -1039,6 +1056,23 @@ final class AppState: ObservableObject {
             let ready = (DimmyCore.shared.claudeCodeStatus == .ready)
             DispatchQueue.main.async {
                 self.claudeCodeReady = ready
+            }
+        }
+    }
+
+    /// Re-probe Codex install + ChatGPT sign-in state. Same dispatch
+    /// pattern as `refreshClaudeCodeStatus` (the `codex` CLI also
+    /// stores its OAuth token where a file-stat probe is enough).
+    /// Drives the OpenAI / Codex branch of the LLM auth picker.
+    func refreshCodexStatus() {
+        guard DimmyCore.shared.isInitialized else {
+            codexReady = false
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let ready = (DimmyCore.shared.codexStatus == .ready)
+            DispatchQueue.main.async {
+                self.codexReady = ready
             }
         }
     }
@@ -1339,12 +1373,28 @@ final class AppState: ObservableObject {
         if let ll = config["llm_log_enabled"] as? Bool { llmLogEnabled = ll }
         if let am = config["llm_auth_method"] as? String { llmAuthMethod = am }
         if let ram = config["recap_auth_method"] as? String { recapAuthMethod = ram }
-        // Back-compat: configs from the first Claude Code iteration used
-        // a synthetic `claude-code://` URL with no auth_method field.
-        // Treat that URL as a "subscription" signal so the new UI picks
-        // up the right radio without forcing the user to re-toggle.
-        if llmApiUrl.hasPrefix("claude-code://") && config["llm_auth_method"] == nil {
+        // Back-compat: migrate the legacy synthetic LLM URLs to the
+        // real vendor URL + `llm_auth_method=subscription`. Old configs
+        // (pre 2026-06-20) used `claude-code://default` and
+        // `codex://default` as "CLI-routed" sentinels; the LLM
+        // dropdown then needed two synthetic preset entries to render
+        // them, which forced the user's model choice to jump every
+        // time they flipped the Authentication picker. The new model:
+        // URL stays on the real vendor endpoint, `auth_method` is the
+        // sole subscription signal. Rust dispatcher already accepts
+        // `(anthropic_url, "subscription")` → claude CLI and
+        // `(openai_url, "subscription")` → codex CLI
+        // (`llm.rs::process_text` lines 564-615), so this migration is
+        // purely a UI-side cleanup.
+        if llmApiUrl.hasPrefix("claude-code://") {
             llmAuthMethod = "subscription"
+            llmApiUrl = "https://api.anthropic.com/v1/messages"
+            if llmApiModel.isEmpty { llmApiModel = "claude-opus-4-7" }
+        }
+        if llmApiUrl.hasPrefix("codex://") {
+            llmAuthMethod = "subscription"
+            llmApiUrl = "https://api.openai.com/v1/chat/completions"
+            if llmApiModel.isEmpty { llmApiModel = "gpt-5" }
         }
 
         // Audio
@@ -1504,29 +1554,72 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// STT presets shown in the Voice picker — the FULL catalog, never
-    /// filtered by which keys are saved. Picking a provider without a key
-    /// reveals its inline key field, so the user chooses the provider first
-    /// and adds the key second (a provider is no longer hidden until keyed).
-    /// Win parity: PopulateSttProviderPicker (no key filter).
+    /// STT presets the user can actually use right now — those whose
+    /// provider has a key saved in ANY scope (STT, LLM or Recap) plus
+    /// `.custom` (always shown so the user can paste URL + key inline)
+    /// and `.local` (no key needed). Mac diverges from Win here: Win
+    /// shows the full catalog with an inline key field that materializes
+    /// on selection; on Mac the user adds keys on the Providers page
+    /// first, then comes here to route — so listing keyless providers
+    /// just clutters the picker.
     func availableSttPresets() -> [SttPreset] {
-        SttPreset.presets
+        SttPreset.presets.filter { preset in
+            if preset.provider == .custom { return true }
+            return hasAnyKeyForProvider(preset.provider.rawValue)
+        }
     }
 
-    /// LLM presets shown in the Output picker — the FULL catalog, never
-    /// filtered by saved keys (same rationale as `availableSttPresets`).
-    /// Win parity: PopulateLlmProviderPicker (no key filter).
+    /// LLM presets the user can actually use right now. Always includes
+    /// `custom` (URL + key inline) and `claude-code` (subscription via
+    /// local `claude` CLI, no API key). Other presets accept ANY scope:
+    /// a key saved for STT counts for LLM too — same provider key works
+    /// on both audio and chat endpoints. Mac-only filter — see
+    /// `availableSttPresets` for the rationale.
     func availableLlmPresets() -> [LlmPreset] {
-        LlmPreset.presets
+        LlmPreset.presets.filter { preset in
+            if preset.id == "custom" { return true }
+            let vendor = llmProviderTag(forUrl: preset.apiUrl)
+            // No API key required when the matching subscription CLI
+            // is ready — the user can pick the provider and switch the
+            // Authentication picker to Subscription. Without this,
+            // a fresh install with Claude Code signed in but no
+            // Anthropic API key would hide Anthropic from the dropdown
+            // entirely, and the user would have nowhere to enable the
+            // subscription path (the old `claude-code` synthetic
+            // preset used to be that discovery affordance).
+            if vendor == "anthropic" && claudeCodeReady { return true }
+            if vendor == "openai" && codexReady { return true }
+            return hasAnyKeyForProvider(vendor)
+        }
     }
 
-    /// Recap-model curated options — the FULL curated list, never filtered
-    /// by saved keys. Auto / Custom / local / every cloud model are always
-    /// offered; a recap that resolves to a vendor with no key surfaces an
-    /// error rather than being hidden up front. Win parity:
-    /// PopulateRecapModelPicker (no key filter).
+    /// Recap-model curated options the user can actually use right now.
+    /// `local` always survives (bundled Gemma, no key); `custom` always
+    /// survives (user-supplied id). `auto` survives only when at least
+    /// one LLM-capable provider is connected — otherwise Auto would
+    /// silently resolve to nothing and the recap call would fail. When
+    /// Auto is filtered out, the picker shows a "Select model" prompt
+    /// in its place (see `recapPickerNeedsSelectPrompt`). Mac-only
+    /// filter — see `availableSttPresets` for the rationale.
     func availableRecapModels() -> [RecapModelOption] {
-        RecapModelOption.curated
+        RecapModelOption.curated.filter { opt in
+            switch opt.provider {
+            case .auto: return hasAnyLlmCapableKey
+            case .local, .custom: return true
+            case .anthropic:
+                return recapKeyByVendor["anthropic"] == true
+                    || llmKeyByVendor["anthropic"] == true
+                    || claudeCodeReady
+            case .gemini:
+                return recapKeyByVendor["gemini"] == true
+                    || llmKeyByVendor["gemini"] == true
+                    || hasGeminiKey
+            case .openai:
+                return recapKeyByVendor["openai"] == true
+                    || llmKeyByVendor["openai"] == true
+                    || hasOpenaiKey
+            }
+        }
     }
 
     /// True when at least one provider that can run an LLM recap is
@@ -1562,11 +1655,8 @@ final class AppState: ObservableObject {
 
     private func llmProviderTag(forUrl url: String) -> String {
         if url.isEmpty { return "groq" }
-        if url.contains("groq.com") { return "groq" }
-        if url.contains("openai.com") { return "openai" }
-        if url.contains("openrouter.ai") { return "openrouter" }
-        if url.contains("googleapis.com") { return "gemini" }
-        if url.contains("anthropic.com") { return "anthropic" }
+        let tag = ProviderTagging.providerTag(forUrl: url)
+        if !tag.isEmpty { return tag }
         return "custom"
     }
 
