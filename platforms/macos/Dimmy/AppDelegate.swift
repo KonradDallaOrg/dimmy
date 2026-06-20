@@ -547,6 +547,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // and own enable/disable explicitly via isEnabled below.
         menu.autoenablesItems = false
 
+        // Settings entry — same surface as the pill right-click
+        // (PillWindowController:171) and the menubar app menu. Cmd+,
+        // is the AppKit standard preferences shortcut and is shown
+        // next to the title automatically. Without this, users who
+        // hide the pill have no Dock affordance to reach Settings.
+        let settingsItem = NSMenuItem(title: "Settings…",
+                                      action: #selector(openSettingsFromDock),
+                                      keyEquivalent: ",")
+        settingsItem.target = self
+        settingsItem.isEnabled = true
+        menu.addItem(settingsItem)
+
+        menu.addItem(NSMenuItem.separator())
+
         let translateLabel = appState.llmTranslateTo.isEmpty || appState.llmTranslateTo == "none"
             ? "(none)"
             : appState.llmTranslateTo
@@ -606,6 +620,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc func openMeetingFromDock() {
         openMeetingWindow()
+    }
+
+    @objc func openSettingsFromDock() {
+        openSettings()
     }
 
     @objc func toggleDockCommandMode() {

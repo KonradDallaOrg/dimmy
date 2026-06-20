@@ -86,13 +86,11 @@ enum SelfTests {
         for preset in LlmPreset.presets where preset.id != "custom" {
             assert(!preset.apiUrl.isEmpty, "LLM preset '\(preset.id)' must have URL")
             assert(!preset.model.isEmpty, "LLM preset '\(preset.id)' must have model")
-            // `claude-code://` is the synthetic URL for the Claude Code
-            // subscription preset — the Rust dispatcher recognises it
-            // as "route via local CLI, no HTTP key needed". Exempt it
-            // from the HTTPS-only check that guards the real cloud
-            // endpoints.
-            let isSynthetic = preset.apiUrl.hasPrefix("claude-code://")
-            assert(isSynthetic || preset.apiUrl.hasPrefix("https://"),
+            // All LLM presets are real cloud endpoints since
+            // 2026-06-20 — the legacy synthetic `claude-code://` and
+            // `codex://` presets were removed in favour of the
+            // Authentication picker on top of the real vendor URL.
+            assert(preset.apiUrl.hasPrefix("https://"),
                    "LLM preset '\(preset.id)' URL must be HTTPS")
         }
 

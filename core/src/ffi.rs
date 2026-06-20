@@ -76,6 +76,75 @@ fn emit_meeting_state_event(active: bool, paused: bool) {
 
 // ── Helper: write string into caller-provided buffer ────────────────
 
+/// Is a key for `provider` saved under ANY of the dispatch-relevant
+/// scopes (STT, LLM, Recap)? Used by the `has_*_key` config flags so
+/// the UI's "Connected" indicator is consistent with the dispatcher's
+/// cross-scope fallback (see `dimmy_process_with_llm` and the STT
+/// fallback in `dimmy_init_inner`). Returns true if any of the three
+/// scopes the provider supports has a non-empty key.
+fn has_any_scope_key(store: &crate::keystore::KeyStore, provider: Provider, use_kr: bool) -> bool {
+    if provider.supports_stt() && store.has_key(KeyringScope::Stt(provider), use_kr) {
+        return true;
+    }
+    if provider.default_llm_url().is_some() {
+        if store.has_key(KeyringScope::Llm(provider), use_kr) {
+            return true;
+        }
+        if store.has_key(KeyringScope::Recap(provider), use_kr) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Try to load a key for `provider` from the dispatch-relevant scopes
+/// in priority order: first `primary`, then the other two as fallback.
+/// Returns the first non-empty key. Mirrors the cross-scope semantics of
+/// `has_any_scope_key` for the runtime path so a user with a key saved
+/// in only LLM scope can still drive STT (and vice versa). Unsupported
+/// scopes (e.g. LLM-scope for Deepgram) are silently skipped.
+fn load_key_any_scope(
+    store: &crate::keystore::KeyStore,
+    provider: Provider,
+    primary: KeyringScope,
+    use_kr: bool,
+) -> Option<String> {
+    let try_load = |scope: KeyringScope| -> Option<String> {
+        crate::load_key_with_store(store, scope, use_kr).filter(|s| !s.is_empty())
+    };
+    if let Some(k) = try_load(primary) {
+        return Some(k);
+    }
+    let llm_capable = provider.default_llm_url().is_some();
+    let stt_capable = provider.supports_stt();
+    let scopes = [
+        if stt_capable {
+            Some(KeyringScope::Stt(provider))
+        } else {
+            None
+        },
+        if llm_capable {
+            Some(KeyringScope::Llm(provider))
+        } else {
+            None
+        },
+        if llm_capable {
+            Some(KeyringScope::Recap(provider))
+        } else {
+            None
+        },
+    ];
+    for scope in scopes.into_iter().flatten() {
+        if scope == primary {
+            continue;
+        }
+        if let Some(k) = try_load(scope) {
+            return Some(k);
+        }
+    }
+    None
+}
+
 fn write_to_buf(s: &str, buf: *mut c_char, buf_len: c_int) -> c_int {
     if buf.is_null() || buf_len <= 0 {
         return -1;
@@ -238,16 +307,25 @@ fn dimmy_init_inner() -> c_int {
         use_kr,
     );
 
-    // Load API keys
+    // Load API keys — cross-scope fallback for both (STT → LLM → Recap,
+    // LLM → STT → Recap) so a partial keystore where the user saved the
+    // vendor key in just one scope still drives every dispatch path. See
+    // `has_any_scope_key`. Returns `Option<String>` exactly like the
+    // single-scope loader so the rest of init is unchanged.
     let transcription_provider = Provider::from_url(&file_cfg.api_url);
     let llm_provider = Provider::from_url(&file_cfg.llm_api_url);
-    let stored_key = crate::load_key_with_store(
+    let stored_key = load_key_any_scope(
         &key_store,
+        transcription_provider,
         KeyringScope::Stt(transcription_provider),
         use_kr,
     );
-    let stored_llm_key =
-        crate::load_key_with_store(&key_store, KeyringScope::Llm(llm_provider), use_kr);
+    let stored_llm_key = load_key_any_scope(
+        &key_store,
+        llm_provider,
+        KeyringScope::Llm(llm_provider),
+        use_kr,
+    );
 
     log(&format!(
         "FFI init: provider={}, has_key={}, llm_provider={}, llm_enabled={}",
@@ -1502,17 +1580,25 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         "audio_source": st.audio_source.lock().map(|s| s.clone()).unwrap_or_else(|_| "mic".to_string()),
         "stats_total_words": *st.stats_total_words.lock().unwrap_or_else(|e| e.into_inner()),
         "stats_total_speaking_secs": *st.stats_total_speaking_secs.lock().unwrap_or_else(|e| e.into_inner()),
-        // Per-provider key flags — STT. Covers every Provider enum variant
-        // that can offer STT (Anthropic is skipped — it doesn't have a
-        // dictation endpoint). Keep this list in sync with the Provider
-        // enum in provider.rs; the UI relies on the green-check per-row.
-        "has_groq_key": st.key_store.has_key(KeyringScope::Stt(Provider::Groq), use_kr),
-        "has_openai_key": st.key_store.has_key(KeyringScope::Stt(Provider::OpenAI), use_kr),
-        "has_openrouter_key": st.key_store.has_key(KeyringScope::Stt(Provider::OpenRouter), use_kr),
-        "has_gemini_key": st.key_store.has_key(KeyringScope::Stt(Provider::Gemini), use_kr),
+        // Per-provider key flags — historically STT-scope only but now
+        // OR'd across every applicable scope (STT + LLM + Recap) for the
+        // vendor. Rationale: the Providers card writes one key per
+        // vendor into ALL scopes at once (since PR-99), and the
+        // dispatchers fall back across scopes for the same vendor
+        // (`dimmy_process_with_llm` LLM→STT, see below for STT→LLM/Recap)
+        // — so "any scope has a key" is the only consistent answer to
+        // "is this provider connected?". Without this, a user whose
+        // partial keystore state has Gemini only in LLM scope saw
+        // Providers say "Connected" (which OR's) but Voice say "Not
+        // connected" (which checked STT alone), reported 2026-06-20.
+        // Deepgram is STT-only (no LLM URL), so its flag is unchanged.
+        "has_groq_key": has_any_scope_key(&st.key_store, Provider::Groq, use_kr),
+        "has_openai_key": has_any_scope_key(&st.key_store, Provider::OpenAI, use_kr),
+        "has_openrouter_key": has_any_scope_key(&st.key_store, Provider::OpenRouter, use_kr),
+        "has_gemini_key": has_any_scope_key(&st.key_store, Provider::Gemini, use_kr),
         "has_deepgram_key": st.key_store.has_key(KeyringScope::Stt(Provider::Deepgram), use_kr),
-        "has_fireworks_key": st.key_store.has_key(KeyringScope::Stt(Provider::Fireworks), use_kr),
-        "has_together_key": st.key_store.has_key(KeyringScope::Stt(Provider::Together), use_kr),
+        "has_fireworks_key": has_any_scope_key(&st.key_store, Provider::Fireworks, use_kr),
+        "has_together_key": has_any_scope_key(&st.key_store, Provider::Together, use_kr),
         "has_custom_key": st.key_store.has_key(KeyringScope::Stt(Provider::Custom), use_kr),
         // Per-LLM-provider key flags. Mirror of the STT block above so
         // the UI can refresh the green-check on a provider dropdown
@@ -1742,12 +1828,16 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
         }
     }
 
-    // If api_url changed but no new key was provided, reload key from keystore
+    // If api_url changed but no new key was provided, reload key from keystore.
+    // Falls back across scopes (STT → LLM → Recap) for the same vendor so a
+    // user whose Providers-save left the key only in LLM scope (legacy partial
+    // state) still drives STT correctly — matches `has_any_scope_key` UI
+    // semantics. See has_any_scope_key for rationale (2026-06-20).
     if v["api_url"].as_str().is_some() && v["api_key"].as_str().is_none() {
         let url = st.api_url.lock().map(|u| u.clone()).unwrap_or_default();
         let provider = Provider::from_url(&url);
         let reloaded =
-            crate::load_key_with_store(&st.key_store, KeyringScope::Stt(provider), use_kr);
+            load_key_any_scope(&st.key_store, provider, KeyringScope::Stt(provider), use_kr);
         if let Ok(mut k) = st.api_key.lock() {
             *k = reloaded;
         }

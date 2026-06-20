@@ -13,7 +13,9 @@ struct MacIntegrationsPage: View {
     @State private var statusIsError: Bool = false
     @State private var showDisconnectConfirm: Bool = false
     @State private var showClaudeWizard: Bool = false
+    @State private var forceClaudeWizardAtStep1: Bool = false
     @State private var showCodexWizard: Bool = false
+    @State private var forceCodexWizardAtStep1: Bool = false
     @State private var showMcpWizard: Bool = false
     @State private var mcpStatus: DimmyCore.ClaudeDesktopStatus = .empty
     @State private var mcpRefreshTimer: Timer? = nil
@@ -31,7 +33,10 @@ struct MacIntegrationsPage: View {
             // token directly; only probes existence.
             MacClaudeCodeCard(
                 appState: appState,
-                onWizardRequested: { showClaudeWizard = true }
+                onWizardRequested: {
+                    forceClaudeWizardAtStep1 = true
+                    showClaudeWizard = true
+                }
             )
             MacGroupFooter(text: "OAuth token stays with the `claude` CLI in macOS Keychain (or ~/.claude/credentials.json). Dimmy only checks existence, never reads the token.")
 
@@ -42,7 +47,10 @@ struct MacIntegrationsPage: View {
             // ~/.codex/auth.json; the CLI owns the token.
             MacCodexCard(
                 appState: appState,
-                onWizardRequested: { showCodexWizard = true }
+                onWizardRequested: {
+                    forceCodexWizardAtStep1 = true
+                    showCodexWizard = true
+                }
             )
             MacGroupFooter(text: "Uses your ChatGPT plan through the `codex` CLI, no API key spent. The OAuth token stays with Codex in ~/.codex. Dimmy only checks that you're signed in.")
 
@@ -119,6 +127,7 @@ struct MacIntegrationsPage: View {
                 appState: appState,
                 onClose: {
                     showClaudeWizard = false
+                    forceClaudeWizardAtStep1 = false
                     DimmyCore.shared.recheckClaudeCode()
                     appState.refreshClaudeCodeStatus()
                 },
@@ -132,7 +141,8 @@ struct MacIntegrationsPage: View {
                         DimmyCore.shared.setConfig(appState.toRustConfig())
                         DimmyCore.shared.trackEvent("claude_code.wizard_completed")
                     }
-                }
+                },
+                forceStartAtStep1: forceClaudeWizardAtStep1
             )
         }
         .sheet(isPresented: $showCodexWizard) {
@@ -140,6 +150,7 @@ struct MacIntegrationsPage: View {
                 appState: appState,
                 onClose: {
                     showCodexWizard = false
+                    forceCodexWizardAtStep1 = false
                     _ = DimmyCore.shared.recheckCodex()
                 },
                 onComplete: { ok in
@@ -152,7 +163,8 @@ struct MacIntegrationsPage: View {
                         DimmyCore.shared.setConfig(appState.toRustConfig())
                         DimmyCore.shared.trackEvent("codex.wizard_completed")
                     }
-                }
+                },
+                forceStartAtStep1: forceCodexWizardAtStep1
             )
         }
         .confirmationDialog(
@@ -228,6 +240,11 @@ struct MacIntegrationsPage: View {
                             wizardInitialStep = 3
                             showWizard = true
                         }
+                        Button("Re-run wizard") {
+                            wizardInitialStep = 1
+                            showWizard = true
+                        }
+                        .help("Walk through the connect + destination steps again from scratch")
                         Button("Disconnect") { showDisconnectConfirm = true }
                     } else {
                         Button("Connect Notion") {

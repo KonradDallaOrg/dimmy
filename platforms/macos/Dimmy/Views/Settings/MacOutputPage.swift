@@ -53,26 +53,21 @@ struct MacOutputPage: View {
     private var sttProviderTag: String { ProviderTagging.providerTag(forUrl: appState.apiUrl) }
     private var llmProviderTag: String { ProviderTagging.providerTag(forUrl: appState.llmApiUrl) }
 
-    /// Anthropic is the only provider with a dual-auth path
-    /// (API key OR Claude Code subscription). We show the
-    /// Authentication picker only for Anthropic.
+    /// Anthropic dual-auth path: API key (api.anthropic.com) or
+    /// Claude Code subscription (claude-code://default).
     private var isAnthropicLlm: Bool {
         llmProviderTag == "anthropic"
     }
 
-    /// The "Use same key as STT" toggle is meaningful only when STT
-    /// and LLM share a vendor AND the LLM isn't using subscription
-    /// auth. Logic lives in `ProviderTagging.sameKeyShouldShow` so it
-    /// can be unit-tested.
-    private var sameKeyShouldShow: Bool {
-        // 2026-05-18: broadened from "STT and LLM must share a vendor" to
-        // "any scope has a key for the LLM vendor". Win parity:
-        // SettingsWindow.xaml.cs:RefreshAuthIntegrationStatus where the
-        // toggle visibility is gated on hasUpstreamKey = hasLlmScopeKey
-        // || hasSttScopeKey. Toggle hides when subscription is on (no
-        // key needed for the CLI path).
-        guard appState.llmAuthMethod != "subscription" else { return false }
-        return appState.hasUpstreamKey(forLlmUrl: appState.llmApiUrl)
+    /// OpenAI dual-auth path: API key (api.openai.com) or ChatGPT
+    /// (Codex) subscription (codex://default). Mirror of the Win
+    /// `LlmUseSubscriptionCard` which is shown for both Anthropic +
+    /// Claude CLI and OpenAI + Codex when the matching CLI is signed
+    /// in. Until 2026-06-20 Mac only handled this via the
+    /// `MacCodexCard` toggle on the Integrations page; the LLM
+    /// settings page now offers the same choice inline.
+    private var isOpenaiLlm: Bool {
+        llmProviderTag == "openai"
     }
 
     /// Human-readable label for the STT provider, used in the
@@ -98,19 +93,20 @@ struct MacOutputPage: View {
             : "Direct Anthropic API key, pay-as-you-go billing."
     }
 
-    /// Side-effects of flipping the auth-method radio: if the user
-    /// moves to API key while the URL is the magic `claude-code://`
-    /// (which Rust still routes through the subscription CLI), swap
-    /// it for the real Anthropic endpoint so the API-key path is
-    /// actually used. Going the other direction we keep the URL , 
-    /// Rust only checks `auth_method == "subscription"`.
-    private func normalizeLlmUrlForAuth(_ method: String) {
-        if method == "api_key" && appState.llmApiUrl.hasPrefix("claude-code://") {
-            appState.llmApiUrl = "https://api.anthropic.com/v1/messages"
-            if appState.llmApiModel.isEmpty {
-                appState.llmApiModel = "claude-opus-4-7"
-            }
-        }
+    /// Apply an Authentication-picker choice (`api_key` / `subscription`)
+    /// for the current LLM provider. Just flips `llm_auth_method` —
+    /// the URL and model selected by the user are PRESERVED. The Rust
+    /// dispatcher already routes by `(vendor_from_url, auth_method)`:
+    /// `auth_method=subscription` with an Anthropic URL → `claude` CLI,
+    /// with an OpenAI URL → `codex` CLI (see `llm.rs::process_text`
+    /// lines 566-573 + 608-615). Changing the URL or model here would
+    /// reset the user's choice in the LLM dropdown — the exact bug
+    /// reported 2026-06-20 ("perché cambi il menù del modello?!").
+    /// Win parity: `LlmUseSubscriptionCard` on Win also only flips the
+    /// flag, never touches the URL.
+    private func applyLlmAuthChoice(_ method: String) {
+        appState.llmAuthMethod = method
+        persistConfig()
     }
 
     var body: some View {
@@ -414,15 +410,23 @@ struct MacOutputPage: View {
         return m.isEmpty ? "your dictation LLM (not yet configured)" : m
     }
 
-    /// Description text shown under the Recap model row. Shifts wording
-    /// based on whether Auto is meaningful right now: with a connected
-    /// LLM provider we tell the user what Auto resolves to; with no key
-    /// at all we tell them WHY Auto is gone and what to do next.
+    /// Description text shown under the Recap model row. Mirrors the
+    /// CURRENT selection — not always the Auto behaviour. Burned
+    /// 2026-06-20: a user picked gpt-5 and the row kept reading "Auto
+    /// inherits claude-haiku" (the dictation LLM), which looked like
+    /// the picker was overriding their choice.
     private var recapPickerDescription: String {
         if appState.recapPickerNeedsSelectPrompt {
             return "Connect a provider on the Providers and keys page, or pick a model below."
         }
-        return "Auto inherits \(autoResolutionLabel)."
+        let override = appState.recapModelOverride.trimmingCharacters(in: .whitespaces)
+        if override.isEmpty {
+            return "Auto inherits \(autoResolutionLabel)."
+        }
+        if override.hasPrefix("local:") {
+            return "Runs offline with the bundled model."
+        }
+        return "Recap runs with \(override)."
     }
 
     /// Annotate the "Auto" row in the dropdown with the actual model id
@@ -511,33 +515,40 @@ struct MacOutputPage: View {
                 // recap call routes through the local `claude` CLI
                 // even when dictation stays on API key.
                 if recapSubscriptionAvailable {
+                    // Uniformed with the LLM "Authentication" picker in
+                    // the LLM section below — same two-way segmented
+                    // choice, same labels, same width. The previous
+                    // Toggle framed it as opt-in ("Use Anthropic
+                    // subscription for recap") which read inconsistently
+                    // next to the LLM picker. Recap auth is independent
+                    // of dictation since 2026-05-16; GET reads the
+                    // literal `recap_auth_method` (empty == api_key,
+                    // the default), SET writes an explicit value so
+                    // config.json stays grep-able in logs.
                     MacRow(
-                        "Use Anthropic subscription for recap",
+                        "Authentication",
+                        description: appState.recapAuthMethod == "subscription"
+                            ? "Claude Pro / Team / Max."
+                            : "Direct API key, pay-as-you-go.",
                         hint: "Sends the recap through your local Claude CLI instead of an API key. Dictation rewrite keeps its own auth method.",
                         hintURL: URL(string: "https://dimmy.app/help/integrations-claude-cli"),
                         showsDivider: recapKeyFieldShouldShow
                     ) {
-                        Toggle("", isOn: Binding(
-                            // Recap auth is independent of dictation
-                            // since 2026-05-16. GET reads the literal
-                            // recap_auth_method only, no inheritance.
-                            // Empty == api_key (default).
+                        Picker("", selection: Binding(
                             get: {
-                                appState.recapAuthMethod == "subscription"
+                                appState.recapAuthMethod == "subscription" ? "subscription" : "api_key"
                             },
-                            // SET writes an EXPLICIT choice. We still
-                            // write "api_key" for OFF (not "") so the
-                            // field is unambiguous in config.json , 
-                            // an empty string is also accepted by the
-                            // Rust core as api_key, but explicit values
-                            // are easier to grep in logs.
                             set: { newValue in
-                                appState.recapAuthMethod = newValue ? "subscription" : "api_key"
+                                appState.recapAuthMethod = newValue
                                 persistConfig()
                             }
-                        ))
-                        .toggleStyle(.switch)
+                        )) {
+                            Text("API key").tag("api_key")
+                            Text("Subscription").tag("subscription")
+                        }
+                        .pickerStyle(.segmented)
                         .labelsHidden()
+                        .frame(width: 220)
                     }
                 }
 
@@ -661,7 +672,7 @@ struct MacOutputPage: View {
                     // has connected no cloud API keys at all. Surface a
                     // jump-to-Providers row so they don't get stuck.
                     let hasOnlyAlwaysAvailable = availableLlmPresets.allSatisfy {
-                        $0.id == "custom" || $0.id == "claude-code"
+                        $0.id == "custom"
                     }
                     MacRow(
                         "Provider",
@@ -728,25 +739,40 @@ struct MacOutputPage: View {
                     // picker even if the connection probe goes red
                     // (e.g. user re-launched without logging back in)
                     // so they can switch back to API key explicitly.
-                    if isAnthropicLlm {
-                        let canSwitchToSubscription =
-                            appState.claudeCodeReady || appState.llmAuthMethod == "subscription"
+                    if isAnthropicLlm || isOpenaiLlm {
+                        // Anthropic (Claude Code subscription) and OpenAI
+                        // (Codex / ChatGPT subscription) both have a CLI
+                        // path that bypasses API-key billing. Same UI
+                        // shape for both — only the labels + the URL
+                        // swap target differ. Mirror of the Win
+                        // `LlmUseSubscriptionCard` which already covers
+                        // both providers (xaml.cs:1821-1826).
+                        let isSubscription = appState.llmAuthMethod == "subscription"
+                        let canSwitchToSubscription = isAnthropicLlm
+                            ? (appState.claudeCodeReady || isSubscription)
+                            : (appState.codexReady || isSubscription)
+                        let vendorName = isAnthropicLlm ? "Claude" : "ChatGPT"
+                        let subDescription = isAnthropicLlm
+                            ? "Claude Pro / Team / Max."
+                            : "ChatGPT Plus / Pro / Team."
+                        let cliName = isAnthropicLlm ? "claude" : "codex"
+                        let integrationHelp = isAnthropicLlm
+                            ? "https://dimmy.app/help/integrations-claude-cli"
+                            : "https://dimmy.app/help/integrations-codex"
                         if canSwitchToSubscription {
                             MacRow(
                                 "Authentication",
-                                description: appState.llmAuthMethod == "subscription"
-                                    ? "Claude Pro / Team / Max."
+                                description: isSubscription
+                                    ? subDescription
                                     : "Direct API key, pay-as-you-go.",
-                                hint: "Sends the rewrite through your local Claude CLI instead of an API key. A few seconds slower per call, but no credit is used.",
-                                hintURL: URL(string: "https://dimmy.app/help/integrations-claude-cli"),
-                                showsDivider: appState.llmAuthMethod == "subscription" || sameKeyShouldShow
+                                hint: "Sends the rewrite through your local `\(cliName)` CLI instead of an API key. A few seconds slower per call, but no credit is used.",
+                                hintURL: URL(string: integrationHelp),
+                                showsDivider: isSubscription
                             ) {
                                 Picker("", selection: Binding(
-                                    get: { appState.llmAuthMethod == "subscription" ? "subscription" : "api_key" },
+                                    get: { isSubscription ? "subscription" : "api_key" },
                                     set: { newValue in
-                                        appState.llmAuthMethod = newValue
-                                        normalizeLlmUrlForAuth(newValue)
-                                        persistConfig()
+                                        applyLlmAuthChoice(newValue)
                                     }
                                 )) {
                                     Text("API key").tag("api_key")
@@ -759,8 +785,8 @@ struct MacOutputPage: View {
                         } else {
                             MacRow(
                                 "Subscription auth not available",
-                                description: "Connect Claude Code in Settings → Integrations.",
-                                hint: "Anthropic Pro / Team / Max subscriptions route through the local `claude` CLI. Until that's signed in here, the LLM can only authenticate with a pay-as-you-go API key.",
+                                description: "Connect \(vendorName) in Settings → Integrations.",
+                                hint: "\(vendorName) subscription routes through the local `\(cliName)` CLI. Until that's signed in here, the LLM can only authenticate with a pay-as-you-go API key.",
                                 showsDivider: true
                             ) {
                                 EmptyView()
@@ -770,49 +796,47 @@ struct MacOutputPage: View {
 
                     // Subscription branch: the actual sign-in /
                     // connection card lives in Settings → Integrations
-                    // (Anthropic is a connection like Notion, not a
-                    // pure provider config). Here we just show a tiny
-                    // "Manage in Integrations" pointer so users see
-                    // the auth choice took effect.
-                    if appState.llmAuthMethod == "subscription" || appState.llmApiUrl.hasPrefix("claude-code://") {
+                    // (Anthropic + Codex are connections like Notion,
+                    // not pure provider configs). Here we just show a
+                    // tiny "Manage in Integrations" pointer so users
+                    // see the auth choice took effect.
+                    let onSubscription = appState.llmAuthMethod == "subscription"
+                        && (isAnthropicLlm || isOpenaiLlm)
+                    if onSubscription {
+                        let cliName = isAnthropicLlm ? "claude" : "codex"
+                        let isReady = isAnthropicLlm ? appState.claudeCodeReady : appState.codexReady
+                        let vendorLabel = isAnthropicLlm ? "Claude Code" : "Codex"
                         MacRow(
                             "Subscription connection",
-                            description: appState.claudeCodeReady
+                            description: isReady
                                 ? "✓ Connected via Settings → Integrations."
                                 : "⚠ Not connected, calls will fail.",
-                            hint: appState.claudeCodeReady
-                                ? "Sign-in and disconnect live in Settings → Integrations. The token is read on every LLM call via the local `claude` CLI; Dimmy never stores or sees its contents."
-                                : "Subscription is selected but Claude Code isn't signed in yet. Open Settings → Integrations to connect, otherwise every LLM call will return an error.",
+                            hint: isReady
+                                ? "Sign-in and disconnect live in Settings → Integrations. The token is read on every LLM call via the local `\(cliName)` CLI; Dimmy never stores or sees its contents."
+                                : "Subscription is selected but \(vendorLabel) isn't signed in yet. Open Settings → Integrations to connect, otherwise every LLM call will return an error.",
                             showsDivider: false
                         ) {
                             EmptyView()
                         }
                     } else {
-                        // API-key branch. The "Use same key as STT"
-                        // toggle is only meaningful when STT and LLM
-                        // share a vendor (and the key endpoint thus
-                        // accepts the same token). Different vendors →
-                        // we hide the toggle and force a dedicated key.
-                        if sameKeyShouldShow {
-                            MacRow(
-                                "Use my saved API key for this provider",
-                                hint: "When you already have a key for the LLM's vendor, reuse it. Turn off to enter a dedicated LLM key for the same vendor.",
-                                hintURL: URL(string: "https://dimmy.app/help/api-keys"),
-                                showsDivider: !appState.llmUseSameKey
-                            ) {
-                                Toggle("", isOn: Binding(
-                                    get: { appState.llmUseSameKey },
-                                    set: { newValue in
-                                        appState.llmUseSameKey = newValue
-                                        persistConfig()
-                                    }
-                                ))
-                                .toggleStyle(.switch)
-                                .labelsHidden()
-                            }
-                        }
-
-                        if !sameKeyShouldShow || !appState.llmUseSameKey {
+                        // API-key branch. The legacy "Use my saved API
+                        // key for this provider" toggle was removed —
+                        // it switched between two scopes (Llm vs Stt)
+                        // that always hold the same value post-PR-99
+                        // (the Providers card writes to ALL scopes for
+                        // a vendor at once), so the toggle had no
+                        // observable effect on the dispatch path. The
+                        // Rust dispatcher already falls back from
+                        // Llm-scope to Stt-scope for the same vendor
+                        // (see `ffi.rs::dimmy_process_with_llm`), so a
+                        // single saved key always wins. Same precedent
+                        // as the Recap "Use same key" toggle removed
+                        // earlier (see `recapKeyFieldShouldShow`).
+                        // The meaningful auth choice — API key vs
+                        // Claude Code subscription — is the
+                        // Authentication picker above, scoped to
+                        // Anthropic.
+                        do {
                             let currentLlmIsCustom = appState.llmApiUrl.isEmpty
                             if currentLlmIsCustom {
                                 MacRow(
@@ -940,6 +964,7 @@ struct MacOutputPage: View {
         .onAppear {
             refreshLocalLlmStatus()
             appState.refreshClaudeCodeStatus()
+            appState.refreshCodexStatus()
         }
     }
 

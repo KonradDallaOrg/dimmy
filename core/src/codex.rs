@@ -538,16 +538,8 @@ pub fn spawn_login() -> Result<(), CodexError> {
 
     #[cfg(target_os = "macos")]
     {
-        let script = format!(
-            "tell application \"Terminal\" to do script \"{} login\"",
-            binary.display()
-        );
-        let mut cmd = Command::new("osascript");
-        cmd.arg("-e").arg(&script);
-        cmd.stdin(Stdio::null());
-        cmd.stdout(Stdio::null());
-        cmd.stderr(Stdio::null());
-        cmd.spawn()
+        let command = format!("{} login", binary.display());
+        crate::run_in_new_terminal_window(&command, "codex-login")
             .map_err(|e| CodexError::Spawn(format!("{}", e)))?;
     }
 

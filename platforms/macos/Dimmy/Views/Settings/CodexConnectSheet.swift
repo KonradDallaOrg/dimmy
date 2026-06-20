@@ -265,20 +265,13 @@ struct CodexConnectSheet: View {
         startPoll()
     }
 
-    /// Auto-run the install: open Terminal.app and run the command there, so
-    /// the user neither pastes nor types. Mirrors the Windows auto-run.
+    /// Auto-run the install: write the command to a temp `.command` file
+    /// and hand it to LaunchServices. Terminal.app opens .command files
+    /// in a NEW window and auto-executes — no AppleScript, no TCC
+    /// Automation prompt, and a fresh window every time so the user
+    /// always sees the install start from scratch.
     private func runInTerminal(_ command: String) {
-        let escaped = command
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-        let script = """
-        tell application "Terminal"
-            activate
-            do script "\(escaped)"
-        end tell
-        """
-        var error: NSDictionary? = nil
-        NSAppleScript(source: script)?.executeAndReturnError(&error)
+        TerminalRunner.run(command, slug: "codex-\(commandSource.rawValue)")
     }
 
     // MARK: - Page 3: Finish

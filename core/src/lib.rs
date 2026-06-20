@@ -218,6 +218,79 @@ pub fn config_path() -> Option<std::path::PathBuf> {
     config_dir_path().map(|p| p.join("config.json"))
 }
 
+/// macOS: run `command` in a NEW Terminal.app window WITHOUT requiring
+/// the TCC Automation (AppleScript-controls-Terminal) permission.
+///
+/// The standard `tell application "Terminal" to do script` route fails
+/// silently if the user hasn't granted Automation control to Dimmy —
+/// the first attempt should surface a system prompt but in practice
+/// (stale TCC db, prior denial, headless contexts) it never does, and
+/// the script returns without executing. Terminal then comes forward
+/// to its existing window with no command run. We hit this in both the
+/// install flow (Codex / Claude CLI wizards) and the sign-in flow
+/// (`codex login`, `claude /login`).
+///
+/// Instead we write the command to
+/// `<config_dir>/installers/<slug>.command`, chmod 0755, and hand it
+/// to `/usr/bin/open`. Terminal is the LaunchServices handler for
+/// `.command` files: it always spawns a NEW window and auto-runs the
+/// file's contents. No AppleScript, no Automation prompt, fresh
+/// window each click.
+///
+/// `slug` is the filename stem (no extension) — e.g. `"codex-login"`,
+/// `"claude-login"`, `"install-codex-brew"`. Sticky filename so
+/// repeated invocations overwrite rather than accumulate.
+#[cfg(target_os = "macos")]
+pub fn run_in_new_terminal_window(command: &str, slug: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+
+    assert!(
+        !command.trim().is_empty(),
+        "run_in_new_terminal_window requires a non-empty command"
+    );
+    assert!(
+        !slug.is_empty(),
+        "run_in_new_terminal_window requires a slug"
+    );
+
+    let dir = config_dir_path()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "no config dir"))?
+        .join("installers");
+    std::fs::create_dir_all(&dir)?;
+
+    let safe_slug: String = slug
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let file = dir.join(format!("{}.command", safe_slug));
+
+    let script = format!(
+        "#!/bin/zsh\nset -e\n{}\necho\necho \"[Dimmy] Command finished. You can close this window.\"\n",
+        command
+    );
+    {
+        let mut f = std::fs::File::create(&file)?;
+        f.write_all(script.as_bytes())?;
+    }
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755))?;
+
+    std::process::Command::new("/usr/bin/open")
+        .arg(&file)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()?;
+
+    Ok(())
+}
+
 pub fn log_path() -> Option<std::path::PathBuf> {
     config_dir_path().map(|p| p.join("dimmy.log"))
 }

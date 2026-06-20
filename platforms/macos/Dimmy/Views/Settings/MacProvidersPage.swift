@@ -264,39 +264,49 @@ struct MacProvidersPage: View {
             }
             .padding(.vertical, 6)
 
-            VStack(spacing: 0) {
-                ForEach(Array(p.models.enumerated()), id: \.offset) { idx, model in
-                    if idx > 0 {
-                        Divider().background(Color.macRowDivider).opacity(0.5)
-                    }
-                    HStack(spacing: 8) {
-                        // Leading on-disk indicator. Only fires when
-                        // `localFilename` is set (i.e. the local card) and
-                        // the matching file is present. A subtle dot
-                        // placeholder keeps the rows aligned even when no
-                        // model is downloaded yet.
-                        if let file = model.localFilename {
-                            if isLocallyPresent(file) {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundStyle(.green)
-                                    .font(.system(size: 11))
-                            } else {
-                                Image(systemName: "circle.dotted")
-                                    .foregroundStyle(Color.macTextSecondary.opacity(0.4))
-                                    .font(.system(size: 11))
-                            }
+            // Fixed-height scroll for the models list. Without this every
+            // provider's models pushed the outer Settings ScrollView
+            // longer, so opening Together or Local (10+ models) bumped
+            // the page height by ~300pt and "moving down to read more"
+            // felt like the card was inflating. 200pt fits ~6 rows of
+            // 30pt + dividers and the rest scrolls inside the rounded
+            // background, exactly like Win.
+            ScrollView(.vertical, showsIndicators: true) {
+                VStack(spacing: 0) {
+                    ForEach(Array(p.models.enumerated()), id: \.offset) { idx, model in
+                        if idx > 0 {
+                            Divider().background(Color.macRowDivider).opacity(0.5)
                         }
-                        Text(model.name)
-                            .font(.system(size: 12))
-                        Spacer(minLength: 8)
-                        if model.stt { capabilityBadge("STT", color: Color(red: 0.18, green: 0.70, blue: 0.48)) }
-                        if model.llm { capabilityBadge("LLM", color: Color(red: 0.39, green: 0.45, blue: 1.00)) }
-                        if model.recap { capabilityBadge("Recap", color: Color(red: 0.78, green: 0.40, blue: 0.90)) }
+                        HStack(spacing: 8) {
+                            // Leading on-disk indicator. Only fires when
+                            // `localFilename` is set (i.e. the local card) and
+                            // the matching file is present. A subtle dot
+                            // placeholder keeps the rows aligned even when no
+                            // model is downloaded yet.
+                            if let file = model.localFilename {
+                                if isLocallyPresent(file) {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundStyle(.green)
+                                        .font(.system(size: 11))
+                                } else {
+                                    Image(systemName: "circle.dotted")
+                                        .foregroundStyle(Color.macTextSecondary.opacity(0.4))
+                                        .font(.system(size: 11))
+                                }
+                            }
+                            Text(model.name)
+                                .font(.system(size: 12))
+                            Spacer(minLength: 8)
+                            if model.stt { capabilityBadge("STT", color: Color(red: 0.18, green: 0.70, blue: 0.48)) }
+                            if model.llm { capabilityBadge("LLM", color: Color(red: 0.39, green: 0.45, blue: 1.00)) }
+                            if model.recap { capabilityBadge("Recap", color: Color(red: 0.78, green: 0.40, blue: 0.90)) }
+                        }
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 8)
                     }
-                    .padding(.vertical, 6)
-                    .padding(.horizontal, 8)
                 }
             }
+            .frame(maxHeight: 200)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(Color.primary.opacity(0.04))
