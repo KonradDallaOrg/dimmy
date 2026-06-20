@@ -75,19 +75,16 @@ public sealed partial class SettingsWindow
 
     /// <summary>A provider is "connected" when the encrypted keystore actually
     /// holds a key for it (any scope), wherever it was entered — that's the
-    /// truthful, connection-driven signal. The UiPreferences mirror is only a
-    /// transient fallback for the brief window after a Connect click, before the
-    /// VM re-reads the per-vendor key flags. On-device is always ready.</summary>
+    /// truthful, connection-driven signal. On-device is always ready.</summary>
     // Connected = a key exists in the LIVE keystore (FFI truth), via the same
-    // _sttKeyByProvider/_llmKeyByProvider cache the model-picker filter uses,
-    // so this page and the dropdowns never disagree. NOT ViewModel.HasAnyKey*
-    // (that's populated from config.json, which doesn't carry the has_*_key
-    // flags → all-false). The ConnectedProviders mirror stays as a transient
-    // fallback for the instant right after Connect.
+    // _sttKeyByProvider/_llmKeyByProvider cache the rest of the auth UI reads,
+    // so the badge can never claim "Connected" for a vendor whose key isn't
+    // really there. NOT a persisted UI mirror: RefreshKeyFlagsFromFfi() runs
+    // synchronously right after a Connect/Remove and before the cards rebuild,
+    // so the flag is already correct — a persisted list only went stale (it
+    // showed prod's connected vendors inside the staging install).
     private bool IsProviderConnected(string id) =>
-        id == "local"
-        || HasAnyKeyForVendor(id)
-        || UiPreferences.Load().ConnectedProviders.Contains(id);
+        id == "local" || HasAnyKeyForVendor(id);
 
     // ── Card construction ────────────────────────────────────────────────
 
@@ -360,7 +357,6 @@ public sealed partial class SettingsWindow
         if (scopes.Count > 0 && worst == 0)
         {
             box.Password = "";
-            MarkConnected(p.Id, true);
             App.Log($"[Providers] connected {p.Id}", "Providers");
         }
         else
@@ -376,7 +372,6 @@ public sealed partial class SettingsWindow
     {
         if (p.Stt) SaveProviderKey("stt", p.Id, "");
         if (p.Llm) { SaveProviderKey("llm", p.Id, ""); SaveProviderKey("recap", p.Id, ""); }
-        MarkConnected(p.Id, false);
         App.Log($"[Providers] removed {p.Id}", "Providers");
         RefreshKeyFlagsFromFfi();
         BuildProviderCards();
@@ -388,19 +383,6 @@ public sealed partial class SettingsWindow
         catch (Exception ex) { App.Log($"[Providers] save threw: {ex.Message}", "Providers"); return -1; }
     }
 
-    private static void MarkConnected(string id, bool connected)
-    {
-        var prefs = UiPreferences.Load();
-        if (connected)
-        {
-            if (!prefs.ConnectedProviders.Contains(id)) prefs.ConnectedProviders.Add(id);
-        }
-        else
-        {
-            prefs.ConnectedProviders.RemoveAll(x => x == id);
-        }
-        prefs.Save();
-    }
 
     // ── Small visual helpers ─────────────────────────────────────────────
 

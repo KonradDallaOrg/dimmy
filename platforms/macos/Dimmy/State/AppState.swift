@@ -1504,61 +1504,29 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// STT presets the user can actually use right now — those whose
-    /// provider has a key saved in ANY scope (STT, LLM or Recap) plus
-    /// `.custom` (always shown so the user can paste URL + key inline).
-    /// Uses `hasAnyKeyForProvider` instead of per-scope STT booleans so
-    /// a user who set up a provider for rewrite (LLM scope) also sees
-    /// it as a valid STT choice — same key works on the provider's
-    /// audio endpoint, the dispatcher reuses it. Win parity:
-    /// SettingsViewModel.HasAnyKeyForProvider.
+    /// STT presets shown in the Voice picker — the FULL catalog, never
+    /// filtered by which keys are saved. Picking a provider without a key
+    /// reveals its inline key field, so the user chooses the provider first
+    /// and adds the key second (a provider is no longer hidden until keyed).
+    /// Win parity: PopulateSttProviderPicker (no key filter).
     func availableSttPresets() -> [SttPreset] {
-        SttPreset.presets.filter { preset in
-            if preset.provider == .custom { return true }
-            return hasAnyKeyForProvider(preset.provider.rawValue)
-        }
+        SttPreset.presets
     }
 
-    /// LLM presets the user can actually use right now. Always includes
-    /// `custom` (URL + key inline) and `claude-code` (subscription via
-    /// local `claude` CLI, no API key). Other presets accept ANY scope:
-    /// a key saved for STT counts for LLM too — same provider key works
-    /// on both audio and chat endpoints. Win parity:
-    /// SettingsViewModel.HasAnyKeyForProvider.
+    /// LLM presets shown in the Output picker — the FULL catalog, never
+    /// filtered by saved keys (same rationale as `availableSttPresets`).
+    /// Win parity: PopulateLlmProviderPicker (no key filter).
     func availableLlmPresets() -> [LlmPreset] {
-        LlmPreset.presets.filter { preset in
-            if preset.id == "custom" { return true }
-            if preset.id == "claude-code" { return true }
-            return hasAnyKeyForProvider(llmProviderTag(forUrl: preset.apiUrl))
-        }
+        LlmPreset.presets
     }
 
-    /// Recap-model curated options the user can actually use right now.
-    /// `local` always survives (bundled Gemma, no key); `custom` always
-    /// survives (user-supplied id). `auto` survives only when at least
-    /// one LLM-capable provider is connected — otherwise Auto would
-    /// silently resolve to nothing and the recap call would fail. When
-    /// Auto is filtered out, the picker shows a "Select model" prompt
-    /// in its place (see `recapPickerNeedsSelectPrompt`).
+    /// Recap-model curated options — the FULL curated list, never filtered
+    /// by saved keys. Auto / Custom / local / every cloud model are always
+    /// offered; a recap that resolves to a vendor with no key surfaces an
+    /// error rather than being hidden up front. Win parity:
+    /// PopulateRecapModelPicker (no key filter).
     func availableRecapModels() -> [RecapModelOption] {
-        RecapModelOption.curated.filter { opt in
-            switch opt.provider {
-            case .auto: return hasAnyLlmCapableKey
-            case .local, .custom: return true
-            case .anthropic:
-                return recapKeyByVendor["anthropic"] == true
-                    || llmKeyByVendor["anthropic"] == true
-                    || claudeCodeReady
-            case .gemini:
-                return recapKeyByVendor["gemini"] == true
-                    || llmKeyByVendor["gemini"] == true
-                    || hasGeminiKey
-            case .openai:
-                return recapKeyByVendor["openai"] == true
-                    || llmKeyByVendor["openai"] == true
-                    || hasOpenaiKey
-            }
-        }
+        RecapModelOption.curated
     }
 
     /// True when at least one provider that can run an LLM recap is

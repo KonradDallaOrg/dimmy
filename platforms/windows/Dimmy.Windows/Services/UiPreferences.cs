@@ -67,14 +67,6 @@ public sealed class UiPreferences
     /// GithubSource.prerelease=true.</summary>
     public string UpdateChannel { get; set; } = "stable";
 
-    /// <summary>Provider ids the user has connected (saved a key for) via the
-    /// Providers &amp; keys page. UI-state mirror used to show the "connected"
-    /// badge on reload — the encrypted keystore is the source of truth for the
-    /// key itself, this just remembers which cards to light up. Seeded from the
-    /// current STT/LLM provider on first build so existing setups appear
-    /// connected. Win-only display state, hence here and not in config.json.</summary>
-    public System.Collections.Generic.List<string> ConnectedProviders { get; set; } = new();
-
     /// <summary>Global hotkey for "add selected text to user dictionary"
     /// (Wispr Flow-style). Same combo grammar as the main hotkey
     /// (ctrl/shift/alt/win + single letter). Default Ctrl+Shift+D.
@@ -109,16 +101,15 @@ public sealed class UiPreferences
     /// disabled. Win-only convenience, hence here and not in config.json.</summary>
     public string RecapExportFolder { get; set; } = "";
 
-    private static string PrefsPath
-    {
-        get
-        {
-            var dir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "dimmy");
-            return Path.Combine(dir, "ui_prefs.json");
-        }
-    }
+    // Namespace-aware: the config dir comes from the Rust core via
+    // BuildInfo.ConfigDirPath (dimmy_config_dir_name FFI). NEVER hardcode
+    // "dimmy" — a staging install (dimmy-staging) keeps its OWN prefs.
+    // Hardcoding "dimmy" leaked the prod install's prefs (ConnectedProviders,
+    // RecapExportFolder, UpdateChannel, DictHotkey) into the staging app —
+    // the Providers page showed prod's connected vendors while staging's
+    // keystore only had two (flavor != config dir, since 2026-05-16).
+    private static string PrefsPath =>
+        Path.Combine(BuildInfo.ConfigDirPath, "ui_prefs.json");
 
     public static UiPreferences Load()
     {
