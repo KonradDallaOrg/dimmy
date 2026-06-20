@@ -27,6 +27,11 @@ on:
         required: false
         default: 'Dimmy-win-Setup.exe'
         type: string
+      install_dir:
+        description: 'Velopack install folder name under %LOCALAPPDATA% — equals the packId. Prod = Dimmy (release.yml default); staging-auto-update.yml passes Dimmy-Staging.'
+        required: false
+        default: 'Dimmy'
+        type: string
   workflow_dispatch:
     inputs:
       tag:
@@ -38,6 +43,11 @@ on:
         description: 'gh release asset glob for the installer (e.g. Dimmy-win-Setup.exe or Dimmy-Staging-*Setup.exe)'
         required: false
         default: 'Dimmy-win-Setup.exe'
+        type: string
+      install_dir:
+        description: 'Velopack install folder name under %LOCALAPPDATA% (packId): Dimmy or Dimmy-Staging'
+        required: false
+        default: 'Dimmy'
         type: string
 
 permissions:
@@ -51,6 +61,7 @@ jobs:
     env:
       RELEASE_TAG: ${{ inputs.tag }}
       SETUP_PATTERN: ${{ inputs.setup_pattern }}
+      INSTALL_DIR: ${{ inputs.install_dir }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
@@ -102,11 +113,14 @@ jobs:
       - name: Verify install location + bundle integrity
         shell: pwsh
         run: |
-          $appDir = "$env:LOCALAPPDATA\Dimmy\current"
+          $pack = $env:INSTALL_DIR
+          if (-not $pack) { $pack = "Dimmy" }
+          $appRoot = "$env:LOCALAPPDATA\$pack"
+          $appDir = "$appRoot\current"
           if (-not (Test-Path $appDir)) {
             Write-Host "Install dir NOT found: $appDir" -ForegroundColor Red
-            Write-Host "Full LOCALAPPDATA\Dimmy tree:"
-            Get-ChildItem "$env:LOCALAPPDATA\Dimmy" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
+            Write-Host "Full $appRoot tree:"
+            Get-ChildItem $appRoot -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
             exit 1
           }
           $files = Get-ChildItem $appDir -Recurse -File
@@ -158,7 +172,9 @@ jobs:
       - name: Launch app and wait 15 seconds
         shell: pwsh
         run: |
-          $exe = "$env:LOCALAPPDATA\Dimmy\current\Dimmy.Windows.exe"
+          $pack = $env:INSTALL_DIR
+          if (-not $pack) { $pack = "Dimmy" }
+          $exe = "$env:LOCALAPPDATA\$pack\current\Dimmy.Windows.exe"
           Remove-Item "$env:TEMP\dimmy_startup.log" -ErrorAction SilentlyContinue
           # Also clear the dimmy_init early-init trace so we capture only
           # the markers from this launch. dimmy_init writes P0..P5 here
