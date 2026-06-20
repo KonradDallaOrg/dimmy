@@ -13,17 +13,23 @@ and `process_raw_prompt`).
 
 ## Model entitlement — the subscription gotcha
 
-**A ChatGPT-subscription Codex only grants its own account-default model.
-Every other model id is rejected with HTTP 400**, including the OpenAI
-*API* model ids the Output model picker offers (gpt-5-mini, gpt-4o, ...).
+**Observed on ONE live ChatGPT account (not generalized):** that account's
+Codex accepted only its account-default model (`gpt-5.5`); every other id
+was rejected with HTTP 400, including the OpenAI *API* model ids the
+Output picker offers (gpt-5-mini, gpt-4o, ...).
 
 ```
 ERROR 400 invalid_request_error:
 "The 'gpt-5-mini' model is not supported when using Codex with a ChatGPT account."
 ```
 
-Verified empirically against a live ChatGPT account (codex v0.140.0,
-2026-06-20):
+> Scope caveat: this was a single account (tier unknown). A higher Codex
+> tier (Pro / Team / Enterprise) MAY expose more models — untested. Do
+> not treat the single-model limit as universal; treat it as "the picked
+> model can be rejected by the subscription, so a rejected model must
+> fail gracefully / fall back to the account default."
+
+Verified empirically against that account (codex v0.140.0, 2026-06-20):
 
 | `codex exec -m <model>`      | result |
 |------------------------------|--------|
