@@ -1005,18 +1005,24 @@ mod tests {
 
     #[test]
     fn local_preamble_with_translation() {
+        // translate_to is an ISO code at runtime; lang_name resolves it to a
+        // language NAME (en -> English), which is what the prompt must contain.
         let prompt = build_local_system_prompt(
             crate::llm::LlmStyle::Correct,
             crate::llm::LlmTone::None,
             "",
-            "English",
+            "en",
         );
         assert!(
-            prompt.contains("Translate"),
+            prompt.to_lowercase().contains("translate"),
             "must contain translation instruction: {}",
             prompt
         );
-        assert!(prompt.contains("English"), "must contain target language");
+        assert!(
+            prompt.contains("English"),
+            "must contain target language: {}",
+            prompt
+        );
     }
 
     #[test]
