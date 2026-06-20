@@ -104,10 +104,22 @@ public static class ProviderCatalog
     private static IReadOnlyList<ProviderModel> LocalModels()
     {
         var list = new List<ProviderModel>();
-        list.AddRange(ParseLocalModels(Interop.DimmyNative.ListLocalModels(), stt: true));
+        list.AddRange(ParseLocalModels(SafeFfi(Interop.DimmyNative.ListLocalModels), stt: true));
         list.Add(P("Parakeet TDT v3 · 2.5 GB"));
-        list.AddRange(ParseLocalModels(Interop.DimmyNative.ListLocalLlmModels(), stt: false));
+        list.AddRange(ParseLocalModels(SafeFfi(Interop.DimmyNative.ListLocalLlmModels), stt: false));
         return list;
+    }
+
+    // The FFI must be guarded: in a DLL-less host (unit-test runner) the
+    // P/Invoke throws DllNotFoundException, and since LocalModels() runs from
+    // the static `All` initializer it would otherwise take down every test that
+    // merely touches the catalog. Degrade to an empty list — ParseLocalModels
+    // skips it — exactly as ModelCatalog does. In the real app the DLL is always
+    // loaded so this path is test/edge only.
+    private static string? SafeFfi(Func<string?> call)
+    {
+        try { return call(); }
+        catch (DllNotFoundException) { return null; }
     }
 
     private static IEnumerable<ProviderModel> ParseLocalModels(string? json, bool stt)
