@@ -129,6 +129,7 @@ Calls `dimmy_claude_code_ping()` which spawns `claude --print` with a fixed `"re
 
 ## What doesn't work / out of scope
 
+- **Model choice (this one DOES work).** On a live Max account (2026-06-20) `--model` accepted `opus` / `sonnet` / `haiku` and full ids like `claude-opus-4-8` (only `fable` is a special-access program). Contrast: on one tested ChatGPT account, Codex accepted only its account-default model — see [`codex-backend.md`](codex-backend.md).
 - **STT via subscription.** Not possible — Anthropic offers no audio API.
 - **Streaming.** `claude --print` is synchronous request/response. The HTTP path supports the same (no streaming UI yet).
 - **System-prompt isolation.** `claude --print` doesn't distinguish system vs user prompts; we glue them into a single prompt with a `---` separator. The model treats the leading block as instructions in practice.
