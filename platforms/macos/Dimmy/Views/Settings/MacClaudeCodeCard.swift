@@ -66,13 +66,29 @@ struct MacClaudeCodeCard: View {
                     if signInRunning || testRunning {
                         ProgressView().controlSize(.small).scaleEffect(0.7)
                     }
-                    if status == .notInstalled, onWizardRequested != nil {
-                        Button(action: { onWizardRequested?() }) {
-                            Label("Set up wizard", systemImage: "wand.and.stars")
+                    // Wizard entry — always visible so users can re-run
+                    // setup from any state (Win parity). Promoted to a
+                    // filled button only when the CLI is missing, where
+                    // the wizard is the guided fix; otherwise plain so
+                    // it doesn't compete with Sign in / Test for
+                    // attention. Same pattern as MacCodexCard.
+                    if let openWizard = onWizardRequested {
+                        if status == .notInstalled {
+                            Button(action: openWizard) {
+                                Label("Set up wizard", systemImage: "wand.and.stars")
+                            }
+                            .controlSize(.small)
+                            .buttonStyle(.borderedProminent)
+                            .help("Guided install + Anthropic sign-in walkthrough")
+                        } else {
+                            Button(action: openWizard) {
+                                Label("Re-run wizard", systemImage: "wand.and.stars")
+                            }
+                            .controlSize(.small)
+                            .help("Walk through install + sign-in steps again from scratch")
                         }
-                        .controlSize(.small)
-                        .buttonStyle(.borderedProminent)
-                    } else {
+                    }
+                    if status != .notInstalled {
                         Button(action: signIn) {
                             Label(signInLabel, systemImage: "person.badge.key.fill")
                         }

@@ -56,8 +56,9 @@ struct MacCodexCard: View {
                         if let openWizard = onWizardRequested {
                             // Promote the wizard when nothing is installed
                             // yet — it's the guided path past the missing
-                            // binary. (Two concrete buttons rather than a
-                            // type-erased style ternary.)
+                            // binary. Otherwise plain "Re-run wizard" so
+                            // it doesn't compete with Sign in / Test for
+                            // attention. Win parity.
                             if status == .notInstalled {
                                 Button(action: openWizard) {
                                     Label("Set up wizard", systemImage: "wand.and.stars")
@@ -67,10 +68,10 @@ struct MacCodexCard: View {
                                 .help("Guided install + ChatGPT sign-in walkthrough")
                             } else {
                                 Button(action: openWizard) {
-                                    Label("Set up wizard", systemImage: "wand.and.stars")
+                                    Label("Re-run wizard", systemImage: "wand.and.stars")
                                 }
                                 .controlSize(.small)
-                                .help("Guided install + ChatGPT sign-in walkthrough")
+                                .help("Walk through install + sign-in steps again from scratch")
                             }
                         }
                         Button(action: signIn) {
