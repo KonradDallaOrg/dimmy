@@ -596,8 +596,17 @@ impl KeyStore {
         _use_keyring: bool,
     ) -> Result<(), String> {
         let name = scope.entry_name();
-        // Always save to local encrypted file
         let mut cache = self.local_cache.lock().map_err(|e| e.to_string())?;
+        // An empty value means "remove this key": delete the entry instead of
+        // storing an empty string. Otherwise has_key() (presence-only) would
+        // still report the provider as connected and the "Remove key" button
+        // would be a silent no-op (the provider stays in the filtered pickers).
+        if key.is_empty() {
+            cache.remove(&name);
+            save_local_store(&self.machine_key, &cache)?;
+            crate::log(&format!("Key removed from local encrypted store: {}", name));
+            return Ok(());
+        }
         cache.insert(name.clone(), key.to_string());
         save_local_store(&self.machine_key, &cache)?;
         crate::log(&format!("Key saved to local encrypted store: {}", name));
@@ -629,9 +638,12 @@ impl KeyStore {
         None
     }
 
-    /// Check if a key exists in either backend.
+    /// Check if a NON-EMPTY key exists in either backend. A stored empty
+    /// string (legacy data from before empty-clears-the-entry) counts as
+    /// absent, so a cleared provider is never reported as connected.
     pub fn has_key(&self, scope: KeyringScope, use_keyring: bool) -> bool {
-        self.load_key(scope, use_keyring).is_some()
+        self.load_key(scope, use_keyring)
+            .is_some_and(|k| !k.is_empty())
     }
 
     /// Migrate all keys from one backend to the other.
@@ -772,6 +784,39 @@ mod tests {
         let encrypted = encrypt_value(&key, b"");
         let decrypted = decrypt_value(&key, &encrypted).unwrap();
         assert_eq!(decrypted, "");
+    }
+
+    #[test]
+    fn has_key_treats_empty_as_absent() {
+        // Regression: "Remove key" clears a provider by saving an empty value.
+        // has_key must then report the provider as having NO key, otherwise the
+        // filtered provider pickers keep showing it (remove looks like a no-op).
+        use crate::provider::Provider;
+        let name = KeyringScope::Stt(Provider::Groq).entry_name();
+
+        // A stored empty string (legacy cleared entry) reads as absent.
+        let mut empty = HashMap::new();
+        empty.insert(name.clone(), String::new());
+        let store = KeyStore {
+            machine_key: derive_machine_key(),
+            local_cache: Mutex::new(empty),
+        };
+        assert!(
+            !store.has_key(KeyringScope::Stt(Provider::Groq), false),
+            "empty stored value must count as no key"
+        );
+
+        // A real value reads as present.
+        let mut real = HashMap::new();
+        real.insert(name, "sk-real-key-123".to_string());
+        let store = KeyStore {
+            machine_key: derive_machine_key(),
+            local_cache: Mutex::new(real),
+        };
+        assert!(
+            store.has_key(KeyringScope::Stt(Provider::Groq), false),
+            "non-empty stored value must count as a key"
+        );
     }
 
     #[test]
