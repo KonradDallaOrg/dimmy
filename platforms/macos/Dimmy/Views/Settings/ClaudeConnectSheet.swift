@@ -214,22 +214,13 @@ struct ClaudeConnectSheet: View {
         }
     }
 
-    /// Auto-run: open Terminal.app and execute the selected install
-    /// command for the user, so they do not have to paste or type. The
-    /// command is also on the clipboard as a fallback (page 1 copied it).
+    /// Auto-run: write the selected install command to a temp `.command`
+    /// file and hand it to LaunchServices. Terminal.app opens .command
+    /// files in a NEW window and auto-executes — no AppleScript, no TCC
+    /// Automation prompt, and a fresh window every time so the user
+    /// always sees the install start from scratch.
     private func installNow() {
-        let cmd = selectedCommand
-        let escaped = cmd
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-        let script = """
-        tell application "Terminal"
-            do script "\(escaped)"
-            activate
-        end tell
-        """
-        var error: NSDictionary? = nil
-        NSAppleScript(source: script)?.executeAndReturnError(&error)
+        TerminalRunner.run(selectedCommand, slug: "claude-cli-\(commandSource.rawValue)")
         enterPage(.finish)
     }
 
