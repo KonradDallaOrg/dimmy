@@ -114,22 +114,42 @@ final class DimmyCore {
         return result
     }
 
-    /// Stop recording and return transcript. Blocking — call from background thread.
-    func stopRecording() -> String? {
+    /// Outcome of a stop-recording call. Mirrors Win's `TranscriptionResult`
+    /// (`IsSkipped` / `IsEmpty` / text): the core's concurrency guard returns
+    /// rc -9 when another stop is already running (mashed toggle, or toggle
+    /// hotkey + pill Stop), and that case MUST be a no-op in the host — the
+    /// winning call owns the transcript + its delivery.
+    enum StopOutcome {
+        /// Transcript text (may be empty for silent/empty audio).
+        case transcript(String)
+        /// rc -9 — a concurrent stop already owns this. Caller does NOTHING:
+        /// no state reset, no paste. The winner drives the UI to idle.
+        case skipped
+        /// Any other negative rc — a genuine failure.
+        case failed(Int32)
+    }
+
+    /// Stop recording and return the transcript. Blocking — call from a
+    /// background thread.
+    func stopRecording() -> StopOutcome {
         let bufLen = Self.transcriptBufferSize
         let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
         defer { buffer.deallocate() }
         buffer[0] = 0
 
         let written = dimmy_stop_recording(buffer, bufLen)
+        if written == -9 {
+            print("[DimmyCore] stopRecording: concurrent stop in progress (rc -9) — skipping")
+            return .skipped
+        }
         if written < 0 {
             print("[DimmyCore] ERROR: stopRecording failed with code \(written)")
-            return nil
+            return .failed(written)
         }
         if written == 0 {
-            return ""
+            return .transcript("")
         }
-        return String(cString: buffer)
+        return .transcript(String(cString: buffer))
     }
 
     /// Cancel recording without transcribing.
