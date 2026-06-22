@@ -12,11 +12,22 @@ struct MeetingProcessingView: View {
 
     var body: some View {
         VStack(spacing: 22) {
-            ProgressView()
-                .controlSize(.large)
-                .scaleEffect(1.4)
-            Text("Wrapping up...")
-                .font(.system(size: 20, weight: .semibold))
+            // During a meeting re-transcription the core emits per-chunk
+            // progress, so show a determinate bar + percent; the recap step
+            // (and the post-stop pipeline) have no progress events and fall
+            // back to the indeterminate spinner.
+            if let pct = vm.retranscribePercent {
+                ProgressView(value: pct, total: 100)
+                    .frame(width: 260)
+                Text("Transcribing audio… \(Int(pct))%")
+                    .font(.system(size: 20, weight: .semibold))
+            } else {
+                ProgressView()
+                    .controlSize(.large)
+                    .scaleEffect(1.4)
+                Text("Wrapping up...")
+                    .font(.system(size: 20, weight: .semibold))
+            }
             VStack(alignment: .leading, spacing: 10) {
                 step(title: "Saved audio + transcripts",
                      icon: stepIconName(.saving),

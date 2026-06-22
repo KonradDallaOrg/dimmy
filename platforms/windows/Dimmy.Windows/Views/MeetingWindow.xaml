@@ -611,6 +611,22 @@
                 </StackPanel>
               </Grid>
 
+              <!-- Regenerate progress. Determinate bar for transcript
+                   (driven by the file_transcribe_progress event the core
+                   already emits per chunk during dimmy_meeting_retranscribe);
+                   indeterminate for recap (a single opaque LLM call). Stays
+                   visible for the whole operation — replaces the old silent
+                   disabled-button + 3 s toast that left the user guessing. -->
+              <StackPanel x:Name="RegenProgressPanel" Visibility="Collapsed"
+                          Orientation="Horizontal" Spacing="10" Margin="0,2,0,0"
+                          VerticalAlignment="Center">
+                <ProgressBar x:Name="RegenProgressBar" Width="180" Height="4"
+                             VerticalAlignment="Center"/>
+                <TextBlock x:Name="RegenProgressText" FontSize="12"
+                           VerticalAlignment="Center"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+              </StackPanel>
+
               <!-- Tab content: only one panel is visible at a time.
                    Code-behind DoneTab_PointerPressed swaps Visibility. -->
 
