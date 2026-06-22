@@ -318,15 +318,24 @@ fn compute_gpu_backend_status() -> GpuBackendStatus {
                         return GpuBackendStatus::Available { device: d };
                     }
                 }
-                let device = discrete_gpu_idx.unwrap_or(0);
+                // Use ggml's device 0. ggml-vulkan REORDERS physical devices
+                // so the discrete GPU is index 0 when one exists (verified on
+                // an Optimus laptop: the raw vkEnumeratePhysicalDevices order
+                // had the discrete at index 1, but ggml exposed it at index 0
+                // and GGML_VK_DEVICE=0 selected it). The OLD code passed the
+                // discrete index from THIS raw probe straight to
+                // `gpu_device`, but whisper/ggml index in ggml's OWN order —
+                // a different coordinate space — so on dual-GPU machines it
+                // landed on the integrated GPU (slower, and more prone to the
+                // Vulkan stall). The raw probe now only answers "is Vulkan
+                // usable + is there a discrete GPU" (logging); the index is
+                // always ggml's 0. `GGML_VK_DEVICE` (handled above) is the
+                // escape hatch for the rare box where ggml's order differs.
+                let device: std::ffi::c_int = 0;
                 crate::log(&format!(
-                    "[GPU] Vulkan usable, selecting device {} ({})",
-                    device,
-                    if discrete_gpu_idx.is_some() {
-                        "auto-detected discrete GPU"
-                    } else {
-                        "no discrete GPU found, using device 0"
-                    }
+                    "[GPU] Vulkan usable, selecting ggml device 0 \
+                     (discrete-first; raw probe saw discrete_gpu_idx={:?})",
+                    discrete_gpu_idx
                 ));
                 GpuBackendStatus::Available { device }
             }
