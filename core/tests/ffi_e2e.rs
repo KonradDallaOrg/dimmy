@@ -257,6 +257,92 @@ fn short_clip_does_not_regress_to_empty_output() {
     );
 }
 
+#[test]
+#[serial]
+fn local_stt_reused_state_transcribes_independently_across_calls() {
+    // Regression for the whisper-state-reuse change (local_stt.rs): the
+    // inference state is now created ONCE per model load and reused for
+    // every chunk (was create_state() per chunk — the ~450 MB compute-buffer
+    // re-init that aborted GPU init mid-meeting). The reused state sets
+    // `no_context(true)` so chunk N must NOT inherit chunk N-1's token
+    // history. This test runs the SAME clip twice through the full
+    // stop_recording path (each reuses the cached state) and asserts the
+    // second pass is byte-identical to the first — proving both that reuse
+    // works at all and that there's no cross-call context bleed.
+    ensure_init();
+    ensure_tiny_model();
+
+    let config = serde_json::json!({
+        "stt_mode": "local",
+        "local_model": MODEL_FILENAME,
+        "language": "en",
+        "preprocessing_enabled": false,
+        "filler_removal_enabled": false,
+        "llm_enabled": false,
+    });
+    set_config(&config.to_string());
+
+    let wav = jfk_wav();
+    let (samples, sr) = load_wav_f32(&wav);
+
+    let first = transcribe_pcm(&samples, sr);
+    let second = transcribe_pcm(&samples, sr);
+    eprintln!("[test] reuse pass1: {:?}", first);
+    eprintln!("[test] reuse pass2: {:?}", second);
+
+    assert!(
+        first.to_lowercase().contains("ask not"),
+        "first pass should transcribe JFK, got: {:?}",
+        first
+    );
+    assert_eq!(
+        first, second,
+        "reused whisper state must transcribe the same clip identically \
+         across calls (no context bleed); got pass1={:?} pass2={:?}",
+        first, second
+    );
+}
+
+#[test]
+#[serial]
+fn concurrent_stop_returns_minus9_sentinel_not_empty() {
+    // Regression for the lost-dictation bug: two stop entry points (toggle
+    // hotkey + pill Stop, or a mashed toggle) could call dimmy_stop_recording
+    // concurrently. They share ONE audio_buffer — the first reads-and-clears
+    // it (real transcript), the second found it empty and returned ""/0, and
+    // whichever call the host awaited for paste could be the loser → the real
+    // transcript's paste silently dropped. The fix lets only ONE stop run; a
+    // concurrent caller gets rc -9, which the host treats as a no-op.
+    //
+    // Determinism: the guard is held for the whole call, which always begins
+    // with a ≤500 ms "wait for first samples" poll. Thread A (empty buffer)
+    // therefore holds the flag for ~500 ms; the main thread, calling ~100 ms
+    // later, is guaranteed to be inside that window and must get -9.
+    ensure_init();
+
+    let handle = std::thread::spawn(|| {
+        let mut buf: Vec<u8> = vec![0; 8192];
+        // Empty buffer → enters the full ~500 ms first-sample wait, holding
+        // STOP_IN_PROGRESS the entire time. Return value is irrelevant here.
+        dimmy_stop_recording(buf.as_mut_ptr() as *mut c_char, buf.len() as c_int)
+    });
+
+    // Let A acquire the guard and settle into the wait loop (100 ms ≪ 500 ms).
+    std::thread::sleep(Duration::from_millis(100));
+
+    let mut buf: Vec<u8> = vec![0; 8192];
+    let rc_concurrent = dimmy_stop_recording(buf.as_mut_ptr() as *mut c_char, buf.len() as c_int);
+
+    let rc_first = handle.join().expect("background stop thread panicked");
+    eprintln!("[test] concurrent stop rc={rc_concurrent}, first stop rc={rc_first}");
+
+    assert_eq!(
+        rc_concurrent, -9,
+        "a concurrent stop must return the -9 sentinel (host no-op), NOT an \
+         empty/error code that drops the winning call's paste; got {rc_concurrent}"
+    );
+}
+
 // ── Tests: cloud STT (wiremock) ───────────────────────────────────────
 
 #[test]
