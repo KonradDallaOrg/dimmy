@@ -1194,8 +1194,9 @@ public sealed partial class PillWindow : Window
     {
         // Pill Stop is the universal "end whatever recording is going"
         // affordance. Two paths converge here:
-        //   • dictation in flight  → end via TranscriptionService and
-        //     paste the transcript into the focused app.
+        //   • dictation in flight  → delegate to App.StopAndProcess (the
+        //     single stop pipeline) which transcribes, restores focus to the
+        //     target app, and pastes the transcript there.
         //   • meeting in flight    → end via dimmy_meeting_stop and
         //     hand off to MeetingWindow's post-process flow if open,
         //     otherwise just log and let the on-disk artefacts speak
@@ -1215,31 +1216,24 @@ public sealed partial class PillWindow : Window
                 return;
             }
 
-            // Flip the pill out of the red Recording dot immediately — whisper
-            // can take a couple seconds and a still-red pill is what makes the
-            // user re-press (the concurrent-stop race that drops the paste).
+            // Flip out of the red Recording dot IMMEDIATELY (before the
+            // seconds-long STT round-trip) so the user sees the stop landed
+            // and doesn't re-press → a still-"recording" pill is exactly what
+            // made the user click Stop twice. StopAndProcess below drives
+            // Completing→Idle, so this can't stick in Transcribing.
             if (_vm.CurrentState == AppState.Recording)
                 _vm.SetState(AppState.Transcribing);
 
-            var result = await Services.TranscriptionService.StopAndProcessAsync();
-            if (result.IsSkipped)
-            {
-                // A concurrent stop (toggle hotkey, or a second click) already
-                // owns the transcript + delivery via the Rust guard. Do
-                // nothing — the winner drives final state. NOT an error.
-                return;
-            }
-            if (result.IsSuccess)
-            {
-                // Streaming dictation already injected each segment at the
-                // cursor live — skip the final paste to avoid duplication.
-                if (!_vm.StreamingDictationActive)
-                    await TextInjectionService.PasteText(result.Text!, _vm.KeepInClipboard);
-            }
-            else if (result.IsTimeout)
-                _vm.SetError(result.Error!);
-            else
-                _vm.SetError("Empty transcription");
+            // Delegate to the SINGLE App pipeline instead of duplicating
+            // stop→transcribe→paste here. Critically this gives the pill the
+            // _targetContext foreground-restore: clicking the pill Stop steals
+            // focus from the app the user was dictating into, so a naive paste
+            // would land in the pill (or wherever focus drifted). App.StopAndProcess
+            // restores the recorded target before Ctrl+V — same as the hotkey path.
+            // It also shares the _stopInProgress guard + the rc -9 concurrent-stop
+            // no-op, so a mashed Stop / hotkey+pill race resolves cleanly.
+            if (App.Instance is { } app)
+                await app.StopAndProcess();
         }
         catch (Exception ex) { _vm.SetError(ex.Message); }
     }

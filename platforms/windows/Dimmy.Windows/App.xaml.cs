@@ -1614,7 +1614,13 @@ public partial class App : Application
         });
     }
 
-    private async Task StopAndProcess()
+    /// <summary>The single dictation stop→transcribe→paste pipeline. Callable
+    /// from the pill Stop button (<see cref="Views.PillWindow"/>) as well as
+    /// the hotkey paths so BOTH go through the same focus-restore
+    /// (<c>_targetContext</c>), the same <c>_stopInProgress</c> re-entry guard,
+    /// and the same Completing→Idle transition. The caller flips the UI to
+    /// Transcribing first (immediacy); this method owns everything after.</summary>
+    internal async Task StopAndProcess()
     {
         if (_stopInProgress)
         {
