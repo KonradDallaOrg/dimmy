@@ -310,33 +310,27 @@ fn compute_gpu_backend_status() -> GpuBackendStatus {
                 crate::gpu_diag::disable_vulkan_loader("probe_vulkan returned Unusable");
                 GpuBackendStatus::Unavailable
             }
-            VulkanProbe::Usable { discrete_gpu_idx } => {
-                // Explicit env override wins over auto-detect.
+            VulkanProbe::Usable {
+                discrete_gpu_idx,
+                discrete_name,
+            } => {
+                // Explicit env override always wins over auto-detect.
                 if let Ok(val) = std::env::var("GGML_VK_DEVICE") {
                     if let Ok(d) = val.parse::<std::ffi::c_int>() {
                         crate::log(&format!("[GPU] Device override from GGML_VK_DEVICE={}", d));
                         return GpuBackendStatus::Available { device: d };
                     }
                 }
-                // Use ggml's device 0. ggml-vulkan REORDERS physical devices
-                // so the discrete GPU is index 0 when one exists (verified on
-                // an Optimus laptop: the raw vkEnumeratePhysicalDevices order
-                // had the discrete at index 1, but ggml exposed it at index 0
-                // and GGML_VK_DEVICE=0 selected it). The OLD code passed the
-                // discrete index from THIS raw probe straight to
-                // `gpu_device`, but whisper/ggml index in ggml's OWN order —
-                // a different coordinate space — so on dual-GPU machines it
-                // landed on the integrated GPU (slower, and more prone to the
-                // Vulkan stall). The raw probe now only answers "is Vulkan
-                // usable + is there a discrete GPU" (logging); the index is
-                // always ggml's 0. `GGML_VK_DEVICE` (handled above) is the
-                // escape hatch for the rare box where ggml's order differs.
-                let device: std::ffi::c_int = 0;
-                crate::log(&format!(
-                    "[GPU] Vulkan usable, selecting ggml device 0 \
-                     (discrete-first; raw probe saw discrete_gpu_idx={:?})",
-                    discrete_gpu_idx
-                ));
+                // Pick the device in GGML'S OWN coordinate space — never a raw
+                // vkEnumeratePhysicalDevices index, never a hardcoded 0. The raw
+                // probe (above) tells us the NAME of the first discrete GPU (by
+                // VkPhysicalDeviceType); we then ask ggml-vulkan for its own
+                // device list and bridge by name. This is the only stable way
+                // across machines: a hardcoded index lands on whatever ggml put
+                // there (on a dual-GPU laptop that was the *integrated* GPU,
+                // whose tiny shared-memory budget OOM-crashed large models while
+                // the discrete card's VRAM sat idle).
+                let device = resolve_ggml_device(discrete_gpu_idx, discrete_name.as_deref());
                 GpuBackendStatus::Available { device }
             }
         }
@@ -345,13 +339,18 @@ fn compute_gpu_backend_status() -> GpuBackendStatus {
 
 #[cfg(not(target_os = "macos"))]
 #[cfg(any(feature = "local-stt", feature = "local-llm"))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 enum VulkanProbe {
     /// Vulkan loader / ICD / device enumeration failed — the backend cannot run.
     Unusable,
-    /// Vulkan initialized successfully; optional index of the first discrete GPU.
+    /// Vulkan initialized successfully. `discrete_gpu_idx` is the raw-probe
+    /// index of the first DISCRETE_GPU (for logging only); `discrete_name` is
+    /// that device's name — the STABLE key we bridge into ggml's own device
+    /// enumeration (raw-probe indices and ggml indices live in different
+    /// coordinate spaces, so we must match by name, never by index).
     Usable {
         discrete_gpu_idx: Option<std::ffi::c_int>,
+        discrete_name: Option<String>,
     },
 }
 
@@ -507,8 +506,10 @@ fn probe_vulkan() -> VulkanProbe {
                 return VulkanProbe::Unusable;
             }
 
-            // Find first discrete GPU
+            // Find first discrete GPU (index for logging + name for the
+            // ggml bridge).
             let mut result: Option<c_int> = None;
+            let mut discrete_name: Option<String> = None;
             for (i, &dev) in devices.iter().enumerate() {
                 let mut props = std::mem::zeroed::<VkPhysicalDeviceProperties>();
                 get_props(dev, &mut props);
@@ -528,6 +529,7 @@ fn probe_vulkan() -> VulkanProbe {
 
                 if props.device_type == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU && result.is_none() {
                     result = Some(i as c_int);
+                    discrete_name = Some(name.into_owned());
                 }
             }
 
@@ -535,6 +537,7 @@ fn probe_vulkan() -> VulkanProbe {
             FreeLibrary(module);
             VulkanProbe::Usable {
                 discrete_gpu_idx: result,
+                discrete_name,
             }
         }
 
@@ -617,6 +620,7 @@ fn probe_vulkan() -> VulkanProbe {
             }
 
             let mut result: Option<c_int> = None;
+            let mut discrete_name: Option<String> = None;
             for (i, &dev) in devices.iter().enumerate() {
                 let mut props = std::mem::zeroed::<VkPhysicalDeviceProperties>();
                 get_props(dev, &mut props);
@@ -636,6 +640,7 @@ fn probe_vulkan() -> VulkanProbe {
 
                 if props.device_type == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU && result.is_none() {
                     result = Some(i as c_int);
+                    discrete_name = Some(name.into_owned());
                 }
             }
 
@@ -643,11 +648,140 @@ fn probe_vulkan() -> VulkanProbe {
             dlclose(module);
             VulkanProbe::Usable {
                 discrete_gpu_idx: result,
+                discrete_name,
             }
         }
     });
 
     result.unwrap_or(VulkanProbe::Unusable)
+}
+
+/// ggml-vulkan's OWN device enumeration: (ggml_index, name, total_mb). The
+/// index is the coordinate space `WhisperContextParameters::gpu_device`
+/// expects — distinct from the raw `vkEnumeratePhysicalDevices` order. Linked
+/// only when whisper is built with the Vulkan backend; `catch_unwind` guards
+/// the FFI boundary so a probe failure degrades to "empty list" (→ device 0).
+#[cfg(not(target_os = "macos"))]
+#[cfg(any(feature = "local-stt", feature = "local-llm"))]
+#[cfg(feature = "local-stt-vulkan")]
+fn ggml_vulkan_devices() -> Vec<(std::ffi::c_int, String, u64)> {
+    use std::ffi::{c_char, c_int};
+    extern "C" {
+        fn ggml_backend_vk_get_device_count() -> c_int;
+        fn ggml_backend_vk_get_device_description(
+            device: c_int,
+            description: *mut c_char,
+            description_size: usize,
+        );
+        fn ggml_backend_vk_get_device_memory(device: c_int, free: *mut usize, total: *mut usize);
+    }
+    let probe = std::panic::catch_unwind(|| unsafe {
+        let count = ggml_backend_vk_get_device_count();
+        let mut out: Vec<(c_int, String, u64)> = Vec::new();
+        for i in 0..count {
+            let mut buf = [0u8; 256];
+            ggml_backend_vk_get_device_description(i, buf.as_mut_ptr() as *mut c_char, buf.len());
+            let name = std::ffi::CStr::from_ptr(buf.as_ptr() as *const c_char)
+                .to_string_lossy()
+                .trim()
+                .to_string();
+            let mut free: usize = 0;
+            let mut total: usize = 0;
+            ggml_backend_vk_get_device_memory(i, &mut free, &mut total);
+            out.push((i, name, (total / (1024 * 1024)) as u64));
+        }
+        out
+    });
+    probe.unwrap_or_default()
+}
+
+#[cfg(not(target_os = "macos"))]
+#[cfg(any(feature = "local-stt", feature = "local-llm"))]
+#[cfg(not(feature = "local-stt-vulkan"))]
+fn ggml_vulkan_devices() -> Vec<(std::ffi::c_int, String, u64)> {
+    Vec::new()
+}
+
+/// Pure name-bridge between the raw Vulkan probe (which knows, via
+/// `VkPhysicalDeviceType`, *which* device is discrete) and ggml's own device
+/// list (which owns the index whisper wants). Matching is tolerant — exact,
+/// then case-insensitive substring either direction — because both names come
+/// from the same driver string but may differ in trailing NUL/whitespace.
+/// Pure + hardware-free so it is unit-tested across GPU layouts.
+#[cfg(not(target_os = "macos"))]
+#[cfg(any(feature = "local-stt", feature = "local-llm"))]
+fn match_ggml_device_index(
+    discrete_name: &str,
+    ggml_devices: &[(std::ffi::c_int, String)],
+) -> Option<std::ffi::c_int> {
+    let want = discrete_name.trim();
+    if want.is_empty() {
+        return None;
+    }
+    for (idx, name) in ggml_devices {
+        if name.trim() == want {
+            return Some(*idx);
+        }
+    }
+    let wl = want.to_lowercase();
+    for (idx, name) in ggml_devices {
+        let nl = name.trim().to_lowercase();
+        if nl == wl || nl.contains(&wl) || wl.contains(&nl) {
+            return Some(*idx);
+        }
+    }
+    None
+}
+
+/// Decide which ggml-vulkan device index to hand to whisper. Prefers the
+/// discrete GPU (resolved by name in ggml's coordinate space); falls back to
+/// device 0 when there is no discrete GPU (integrated-only machine) or when
+/// ggml can't see the discrete one. Logs the full mapping so a future dual-GPU
+/// mis-selection is diagnosable straight from dimmy.log.
+#[cfg(not(target_os = "macos"))]
+#[cfg(any(feature = "local-stt", feature = "local-llm"))]
+fn resolve_ggml_device(
+    discrete_gpu_idx: Option<std::ffi::c_int>,
+    discrete_name: Option<&str>,
+) -> std::ffi::c_int {
+    let devices = ggml_vulkan_devices();
+    if devices.is_empty() {
+        crate::log(&format!(
+            "[GPU] ggml device list empty — using device 0 (raw-probe discrete_idx={:?}, name={:?})",
+            discrete_gpu_idx, discrete_name
+        ));
+        return 0;
+    }
+    for (idx, name, total_mb) in &devices {
+        crate::log(&format!(
+            "[GPU] ggml device {}: {} ({} MB total)",
+            idx, name, total_mb
+        ));
+    }
+    let pairs: Vec<(std::ffi::c_int, String)> =
+        devices.iter().map(|(i, n, _)| (*i, n.clone())).collect();
+    match discrete_name {
+        Some(name) => match match_ggml_device_index(name, &pairs) {
+            Some(idx) => {
+                crate::log(&format!(
+                    "[GPU] selected ggml device {} (discrete GPU '{}')",
+                    idx, name
+                ));
+                idx
+            }
+            None => {
+                crate::log(&format!(
+                    "[GPU] discrete GPU '{}' not in ggml list — using device 0 (integrated/fallback)",
+                    name
+                ));
+                0
+            }
+        },
+        None => {
+            crate::log("[GPU] no discrete GPU — using ggml device 0 (integrated/only)");
+            0
+        }
+    }
 }
 
 // ── WhisperContext cache ─────────────────────────────────────────
@@ -951,6 +1085,80 @@ mod tests {
     #[test]
     fn model_exists_false_for_missing() {
         assert!(!model_exists("nonexistent-model.bin"));
+    }
+
+    // ── ggml device name-bridge (the dual-GPU OOM fix) ──────────────
+    // These prove the discrete-GPU selection is correct across GPU layouts,
+    // not just the one laptop it was found on. The bridge maps the discrete
+    // device NAME (from the raw Vulkan probe, by VkPhysicalDeviceType) to
+    // ggml's OWN device index — the only stable cross-machine mapping.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn ggml_match_dual_gpu_picks_discrete_not_index_zero() {
+        // The exact failing case: ggml lists Intel at 0, NVIDIA at 1. A
+        // hardcoded `0` lands on the integrated GPU (the OOM bug); matching by
+        // name must return 1.
+        let ggml = vec![
+            (0, "Intel(R) UHD Graphics".to_string()),
+            (1, "NVIDIA T600 Laptop GPU".to_string()),
+        ];
+        assert_eq!(
+            match_ggml_device_index("NVIDIA T600 Laptop GPU", &ggml),
+            Some(1)
+        );
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn ggml_match_single_discrete_at_zero() {
+        // Single-GPU desktop: discrete is the only device.
+        let ggml = vec![(0, "NVIDIA GeForce RTX 4070".to_string())];
+        assert_eq!(
+            match_ggml_device_index("NVIDIA GeForce RTX 4070", &ggml),
+            Some(0)
+        );
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn ggml_match_tolerant_to_whitespace_and_case() {
+        let ggml = vec![
+            (0, "Intel(R) UHD Graphics".to_string()),
+            (1, "  AMD Radeon RX 7900 XTX  ".to_string()),
+        ];
+        assert_eq!(
+            match_ggml_device_index("AMD Radeon RX 7900 XTX", &ggml),
+            Some(1)
+        );
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn ggml_match_none_when_discrete_absent_from_ggml() {
+        // Discrete exists in the raw probe but ggml can't see it (driver
+        // exposes only the iGPU to Vulkan) → no match → caller falls back to 0.
+        let ggml = vec![(0, "Intel(R) UHD Graphics".to_string())];
+        assert_eq!(
+            match_ggml_device_index("NVIDIA T600 Laptop GPU", &ggml),
+            None
+        );
+        assert_eq!(match_ggml_device_index("", &ggml), None);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn ggml_match_multi_discrete_picks_named_one() {
+        // Two discretes: the probe names the first one; bridge returns its
+        // exact ggml index regardless of position.
+        let ggml = vec![
+            (0, "Intel(R) UHD Graphics".to_string()),
+            (1, "NVIDIA RTX A2000".to_string()),
+            (2, "NVIDIA T600 Laptop GPU".to_string()),
+        ];
+        assert_eq!(
+            match_ggml_device_index("NVIDIA T600 Laptop GPU", &ggml),
+            Some(2)
+        );
     }
 
     #[test]
