@@ -1215,7 +1215,20 @@ public sealed partial class PillWindow : Window
                 return;
             }
 
+            // Flip the pill out of the red Recording dot immediately — whisper
+            // can take a couple seconds and a still-red pill is what makes the
+            // user re-press (the concurrent-stop race that drops the paste).
+            if (_vm.CurrentState == AppState.Recording)
+                _vm.SetState(AppState.Transcribing);
+
             var result = await Services.TranscriptionService.StopAndProcessAsync();
+            if (result.IsSkipped)
+            {
+                // A concurrent stop (toggle hotkey, or a second click) already
+                // owns the transcript + delivery via the Rust guard. Do
+                // nothing — the winner drives final state. NOT an error.
+                return;
+            }
             if (result.IsSuccess)
             {
                 // Streaming dictation already injected each segment at the

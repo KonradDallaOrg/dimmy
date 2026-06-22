@@ -892,6 +892,30 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
         return -1;
     }
 
+    // Concurrency guard. Multiple stop entry points (toggle hotkey + pill
+    // Stop button, or a mashed toggle while whisper is still running) can
+    // call this concurrently. They share ONE `audio_buffer`: the first call
+    // reads-and-clears it (→ real transcript, saved to History), a second
+    // finds it empty and returns "" — and the host's delivery (paste +
+    // clipboard) attaches to whichever call it awaited, so a losing empty
+    // return silently drops the real transcript's paste. Let only ONE stop
+    // run; a concurrent caller gets rc -9 ("stop already in progress"),
+    // which the host treats as a silent no-op. The RAII guard clears the
+    // flag on every return path.
+    static STOP_IN_PROGRESS: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+    if STOP_IN_PROGRESS.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        log("[StopRec] stop already in progress — ignoring concurrent call (rc=-9)");
+        return -9;
+    }
+    struct StopGuard;
+    impl Drop for StopGuard {
+        fn drop(&mut self) {
+            STOP_IN_PROGRESS.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    let _stop_guard = StopGuard;
+
     let st = state();
 
     // Wait briefly for audio samples to arrive if the stream just started.

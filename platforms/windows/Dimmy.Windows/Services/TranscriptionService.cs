@@ -28,14 +28,20 @@ public static class TranscriptionService
         {
             var buf = new byte[BufSize];
             int len = DimmyNative.dimmy_stop_recording(buf, buf.Length);
-            return len > 0 ? Encoding.UTF8.GetString(buf, 0, len) : null;
+            return (len, len > 0 ? Encoding.UTF8.GetString(buf, 0, len) : null);
         });
 
         var completed = await Task.WhenAny(transcribeTask, Task.Delay(TranscribeTimeout));
         if (completed != transcribeTask)
             return TranscriptionResult.Timeout("Transcription timed out (30s)");
 
-        var transcript = await transcribeTask;
+        var (rc, transcript) = await transcribeTask;
+        // rc -9 = a concurrent stop is already running (mashed toggle, or
+        // hotkey + pill Stop). That other call owns the transcript + its
+        // delivery; this one must do NOTHING — no state reset, no "empty"
+        // toast — or it tears down the UI out from under the real one.
+        if (rc == -9)
+            return TranscriptionResult.Skipped();
         if (string.IsNullOrEmpty(transcript))
             return TranscriptionResult.Empty();
 
@@ -220,12 +226,19 @@ public sealed class TranscriptionResult
 {
     public string? Text { get; private init; }
     public string? Error { get; private init; }
+
+    /// <summary>True when this stop was a no-op because another stop call
+    /// (mashed toggle, or hotkey + pill Stop) is already handling the
+    /// transcript. Callers must do nothing — NOT reset state or toast.</summary>
+    public bool IsSkipped { get; private init; }
+
     public bool IsSuccess => Text != null && Error == null;
-    public bool IsEmpty => Text == null && Error == null;
+    public bool IsEmpty => Text == null && Error == null && !IsSkipped;
     public bool IsTimeout => Error != null;
 
     public static TranscriptionResult Success(string text) => new() { Text = text };
     public static TranscriptionResult Empty() => new();
+    public static TranscriptionResult Skipped() => new() { IsSkipped = true };
     public static TranscriptionResult Timeout(string message) => new() { Error = message };
 }
 

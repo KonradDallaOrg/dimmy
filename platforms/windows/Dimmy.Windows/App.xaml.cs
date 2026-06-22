@@ -1530,9 +1530,29 @@ public partial class App : Application
                 }
                 _lastToggleMs = now;
 
-                if (_appViewModel.IsRecording && !_stopInProgress)
+                if (_stopInProgress)
+                {
+                    // A stop is already running (whisper still processing a
+                    // long dictation). Without this explicit arm the press
+                    // falls through BOTH branches below — IsRecording can
+                    // still be true while _stopInProgress is true — and is
+                    // silently lost, so the user mashes the key and spawns
+                    // concurrent stops (the race that drops the paste). Ack
+                    // + no-op; the in-flight stop owns delivery.
+                    PttLog("Toggle ignored: stop already in progress");
+                    return;
+                }
+                if (_appViewModel.IsRecording)
+                {
+                    // Flip to Transcribing IMMEDIATELY so the pill leaves the
+                    // red Recording dot the instant the user stops. whisper can
+                    // take a couple seconds; a still-red pill is exactly what
+                    // makes the user re-press (→ the concurrent-stop race that
+                    // loses the paste). SetState also clears IsRecording.
+                    _appViewModel.SetState(AppState.Transcribing);
                     await StopAndProcess();
-                else if (!_appViewModel.IsBusy && !_stopInProgress)
+                }
+                else if (!_appViewModel.IsBusy)
                 {
                     CaptureAndPushAppContext();
                     _appViewModel.SuppressRecordingStarted = false; // ensure Rust event is accepted
@@ -1617,7 +1637,16 @@ public partial class App : Application
 
             PttLog("StopAndProcess: calling dimmy_stop_recording...");
             var result = await Services.TranscriptionService.StopAndProcessAsync();
-            PttLog($"StopAndProcess: IsSuccess={result.IsSuccess}, IsEmpty={result.IsEmpty}, IsTimeout={result.IsTimeout}, Text={result.Text?.Length ?? 0} chars, Error={result.Error}");
+            PttLog($"StopAndProcess: IsSuccess={result.IsSuccess}, IsEmpty={result.IsEmpty}, IsSkipped={result.IsSkipped}, IsTimeout={result.IsTimeout}, Text={result.Text?.Length ?? 0} chars, Error={result.Error}");
+            if (result.IsSkipped)
+            {
+                // A concurrent stop (pill Stop, or a mashed toggle) won the
+                // Rust guard and owns the transcript + delivery. Do NOTHING:
+                // don't paste, don't touch state — the winner drives the UI to
+                // Completing/Idle. The finally releases our _stopInProgress.
+                PttLog("StopAndProcess: concurrent stop already handling (rc -9) — no-op");
+                return;
+            }
             if (result.IsSuccess)
             {
                 // Focus drift diagnostic: did the foreground window
