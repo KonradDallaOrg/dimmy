@@ -654,7 +654,21 @@ mod whisper_cache {
     use whisper_rs::{WhisperContext, WhisperContextParameters};
 
     struct CachedModel {
+        // Retained for the lifetime of the cache entry so the loaded model
+        // unambiguously outlives the reused `state`. Not read after the
+        // state is built (WhisperState owns an Arc to the inner context),
+        // but we keep the wrapper as belt-and-suspenders against a
+        // use-after-free if that ownership ever changes upstream.
+        #[allow(dead_code)]
         ctx: WhisperContext,
+        // Inference state is created ONCE per model load and reused across
+        // every whisper_full call. In whisper-rs 0.16 WhisperState is owned
+        // + Send + Sync (it holds an Arc to the inner context, no lifetime),
+        // so it lives in the cache next to ctx. Re-creating it per chunk
+        // re-ran whisper_backend_init_gpu and re-allocated ~450 MB of compute
+        // buffers on every call — pure overhead, and the exact site that
+        // aborted GPU init under sustained meeting re-transcription.
+        state: whisper_rs::WhisperState,
         model_path: PathBuf,
     }
 
@@ -714,44 +728,55 @@ mod whisper_cache {
                 crate::gpu_health::mark_begin(&format!("whisper_load: {}", model_path.display()));
             }
             let ctx_result = WhisperContext::new_with_params(model_path, ctx_params);
+            let ctx = match ctx_result {
+                Ok(c) => c,
+                Err(e) => {
+                    if using_gpu {
+                        crate::gpu_health::mark_end();
+                    }
+                    return Err(crate::error::TranscribeError::LocalModel(format!(
+                        "failed to load model: {}",
+                        e
+                    )));
+                }
+            };
+            // Create the inference state ONCE, inside the same GPU
+            // crash-recovery window: create_state is where
+            // whisper_backend_init_gpu + the ~450 MB compute-buffer
+            // allocations happen, so the sentinel must cover it too. The
+            // state is then reused for every chunk (see transcribe loop).
+            crate::log("[LocalSTT] Creating inference state (once, reused across chunks)");
+            let state_result = ctx.create_state();
             if using_gpu {
                 crate::gpu_health::mark_end();
             }
-            let ctx = ctx_result.map_err(|e| {
-                crate::error::TranscribeError::LocalModel(format!("failed to load model: {}", e))
+            let state = state_result.map_err(|e| {
+                crate::log(&format!("[LocalSTT] create_state returned error: {}", e));
+                crate::error::TranscribeError::LocalModel(format!("failed to create state: {}", e))
             })?;
             *guard = Some(CachedModel {
                 ctx,
+                state,
                 model_path: model_path.to_path_buf(),
             });
-            crate::log("[LocalSTT] Model cached successfully");
+            crate::log("[LocalSTT] Model + state cached successfully");
         } else {
             crate::log("[LocalSTT] Using cached model (skip VRAM reload)");
         }
 
-        let cached = guard.as_ref().expect("cache must be populated after load");
+        // Reuse the cached state — created once at model load. No per-chunk
+        // create_state(), so no repeated whisper_backend_init_gpu and no
+        // ~450 MB compute-buffer churn (that re-init was the GPU-abort site).
+        let cached = guard.as_mut().expect("cache must be populated after load");
+        let state = &mut cached.state;
 
-        // ── Create state + run inference ─────────────────────────
-        // Forensic logging: `crate::log` flushes synchronously per line, so
-        // each checkpoint survives a C++ abort. If a future post-mortem shows
-        // the log cutting off between two lines here, the crash site is
-        // pinned to the call in between.
-        crate::log(&format!(
-            "[LocalSTT] Creating inference state ({} samples, lang={})",
-            samples.len(),
-            if language.is_empty() {
-                "auto"
-            } else {
-                language
-            }
-        ));
-        let mut state = cached.ctx.create_state().map_err(|e| {
-            crate::log(&format!("[LocalSTT] create_state returned error: {}", e));
-            crate::error::TranscribeError::LocalModel(format!("failed to create state: {}", e))
-        })?;
-        crate::log("[LocalSTT] Inference state created");
-
+        // ── Run inference on the reused state ────────────────────
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        // The state is shared across chunks, so suppress cross-call token
+        // history: each chunk must transcribe independently, exactly as a
+        // freshly-created state did. (The initial_prompt dict-biasing below
+        // still applies per call.)
+        params.set_no_context(true);
 
         // Inject the composed user prompt + dict (Wispr Flow-style
         // vocabulary biasing). Whisper.cpp treats `initial_prompt` as
