@@ -175,6 +175,10 @@ public sealed partial class MeetingWindow : Window
         if (App.Instance?.AppViewModel is { } vm)
         {
             vm.MeetingChunkReceived += OnMeetingChunkReceived;
+            // Drive the Done-view regenerate progress bar from the
+            // file_transcribe_progress event the core already emits per
+            // chunk during dimmy_meeting_retranscribe.
+            vm.FileTranscribeProgress += OnRegenTranscribeProgress;
             // React to externally-driven stop (pill stop button, call-detect
             // popup "Stop & recap"). Without this hook, the MeetingWindow
             // stays painted in Recording state for the entire recap LLM
@@ -195,6 +199,7 @@ public sealed partial class MeetingWindow : Window
             if (App.Instance?.AppViewModel is { } vmClose)
             {
                 vmClose.MeetingChunkReceived -= OnMeetingChunkReceived;
+                vmClose.FileTranscribeProgress -= OnRegenTranscribeProgress;
                 vmClose.PropertyChanged -= OnAppVmPropertyChanged;
             }
 
@@ -2481,7 +2486,13 @@ public sealed partial class MeetingWindow : Window
         if (btn != null) btn.IsEnabled = false;
         try
         {
-            ShowToast("Transcribing audio…");
+            // Determinate bar driven by file_transcribe_progress (per chunk).
+            // NB: the percent is per-band, so on a mic+system mix it sweeps
+            // 0→100 twice — acceptable; it still clearly shows live progress.
+            RegenProgressBar.IsIndeterminate = false;
+            RegenProgressBar.Value = 0;
+            RegenProgressText.Text = "Transcribing audio…";
+            RegenProgressPanel.Visibility = Visibility.Visible;
             var merged = await Task.Run(() => TranscribeMeetingDir(dir));
             if (string.IsNullOrWhiteSpace(merged))
             {
@@ -2502,6 +2513,7 @@ public sealed partial class MeetingWindow : Window
         finally
         {
             if (btn != null) btn.IsEnabled = true;
+            RegenProgressPanel.Visibility = Visibility.Collapsed;
         }
     }
 
@@ -2536,7 +2548,11 @@ public sealed partial class MeetingWindow : Window
             // empty so the model classifies; a specific key biases emphasis.
             var meetingType = (RecapTypePicker?.SelectedValue as string) ?? "";
             if (meetingType == "auto") meetingType = "";
-            ShowToast("Generating recap…");
+            // Recap is a single opaque LLM call — no progress events — so an
+            // indeterminate bar that simply stays up for the whole call.
+            RegenProgressBar.IsIndeterminate = true;
+            RegenProgressText.Text = "Generating recap…";
+            RegenProgressPanel.Visibility = Visibility.Visible;
             await GeneratePostProcessAsync(dir, transcript, meetingType);
             ShowToast("Recap regenerated.");
         }
@@ -2548,7 +2564,20 @@ public sealed partial class MeetingWindow : Window
         finally
         {
             if (btn != null) btn.IsEnabled = true;
+            RegenProgressPanel.Visibility = Visibility.Collapsed;
         }
+    }
+
+    // Ticks the regenerate progress bar from the core's per-chunk
+    // file_transcribe_progress event. Only acts while the panel is visible
+    // and determinate (transcript regen) — the recap path uses an
+    // indeterminate bar that ignores percent.
+    private void OnRegenTranscribeProgress(double processedSecs, double totalSecs, double percent)
+    {
+        if (RegenProgressPanel.Visibility != Visibility.Visible) return;
+        if (RegenProgressBar.IsIndeterminate) return;
+        RegenProgressBar.Value = percent;
+        RegenProgressText.Text = $"Transcribing audio… {(int)percent}%";
     }
 
     /// Run STT over whatever audio files exist in `dir`, returning the

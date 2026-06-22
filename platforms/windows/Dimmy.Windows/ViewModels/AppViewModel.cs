@@ -392,9 +392,12 @@ public partial class AppViewModel : ObservableObject
                     break;
                 case "file_transcribe_progress":
                     {
-                        var processed = payload.GetProperty("processed_secs").GetDouble();
-                        var total = payload.GetProperty("total_secs").GetDouble();
-                        var percent = payload.GetProperty("percent").GetDouble();
+                        // File-load emits {processed_secs,total_secs,percent};
+                        // meeting re-transcribe emits {percent} only. Read each
+                        // defensively so the percent-only payload doesn't throw.
+                        double processed = payload.TryGetProperty("processed_secs", out var ps) ? ps.GetDouble() : 0;
+                        double total = payload.TryGetProperty("total_secs", out var ts) ? ts.GetDouble() : 0;
+                        double percent = payload.TryGetProperty("percent", out var pc) ? pc.GetDouble() : 0;
                         FileTranscribeProgress?.Invoke(processed, total, percent);
                     }
                     break;

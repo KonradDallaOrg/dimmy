@@ -137,6 +137,14 @@ final class MeetingViewModel: ObservableObject {
     /// Cleared on stop / next start / once system audio starts flowing.
     @Published var systemAudioPermissionNeeded: Bool = false
 
+    /// Determinate progress (0–100) for meeting re-transcription, mirrored
+    /// from AppState.fileTranscribeProgress (the core emits
+    /// `file_transcribe_progress` per chunk during dimmy_meeting_retranscribe).
+    /// nil = not transcribing → the processing view shows its indeterminate
+    /// spinner (recap / idle). Set to 0 by regenerateTranscript, cleared when
+    /// the transcription pass returns.
+    @Published var retranscribePercent: Double?
+
     /// Combine bag for the live-transcript pipe from AppState.
     /// DimmyCore.handleEvent writes every `meeting_chunk` event's
     /// `line` into `AppState.meetingLiveTranscript`; we mirror that
@@ -162,6 +170,19 @@ final class MeetingViewModel: ObservableObject {
             .sink { [weak self] count in
                 guard let self else { return }
                 self.chunkSummary = count > 0 ? "\(count) chunks" : ""
+            }
+            .store(in: &liveTranscriptBag)
+        // Determinate progress for meeting re-transcription. The core emits
+        // file_transcribe_progress per chunk (same event as file-load);
+        // DimmyCore.handleEvent writes it to AppState.fileTranscribeProgress.
+        // Only mirror while a re-transcription is in flight (retranscribePercent
+        // set to 0 by regenerateTranscript) so a Settings file-load doesn't
+        // move the meeting bar.
+        AppState.shared.$fileTranscribeProgress
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] progress in
+                guard let self, self.retranscribePercent != nil, let p = progress else { return }
+                self.retranscribePercent = p.percent
             }
             .store(in: &liveTranscriptBag)
         // Pause state is also event-driven: DimmyCore.handleEvent
@@ -633,9 +654,15 @@ final class MeetingViewModel: ObservableObject {
         phase = .processing
         processingStep = .saving
         statusLabel = "Re-transcribing audio..."
+        // Arm the determinate bar — the file_transcribe_progress sink only
+        // mirrors while this is non-nil.
+        retranscribePercent = 0
         DispatchQueue.global(qos: .userInitiated).async {
             let result = DimmyCore.shared.meetingRetranscribe(dir: dir)
             DispatchQueue.main.async {
+                // Transcription pass done — clear the determinate bar so the
+                // recap step (no progress events) falls back to the spinner.
+                self.retranscribePercent = nil
                 switch result {
                 case .success(let text):
                     self.doneRawTranscript = text

@@ -518,6 +518,13 @@ final class HotkeyManager {
         let startedAt = recordingStartedAt
         recordingStartedAt = nil
 
+        // Captured at hotkey-down (or pill-record). Restored before the paste
+        // so clicking the pill Stop — which makes the pill the key window —
+        // doesn't make the synthetic Cmd+V land on the pill instead of the
+        // app the user was dictating into. Mirror of Win's _targetContext
+        // restore, shared with Command Mode (see stopAndCommandTransform).
+        let target = recordingTargetApp
+
         // Command Mode branch: transform the user's selected text with the
         // spoken instruction instead of dictating. Triggered by EITHER
         // the sticky menu toggle (`commandMode`) OR the one-shot
@@ -530,8 +537,26 @@ final class HotkeyManager {
         }
 
         // Stop recording + transcribe on background thread (blocking call)
-        DispatchQueue.global(qos: .userInitiated).async {
-            let transcript = DimmyCore.shared.stopRecording() ?? ""
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let transcript: String
+            switch DimmyCore.shared.stopRecording() {
+            case .skipped:
+                // A concurrent stop (toggle hotkey + pill Stop, or a double
+                // trigger) won the core guard and owns the transcript + its
+                // delivery. Do NOTHING — no state reset, no paste — or we
+                // tear down the UI the winning call is driving. Mirror of
+                // Win's `if (result.IsSkipped) return;`.
+                print("[HotkeyManager] stop skipped (rc -9) — concurrent stop owns it")
+                return
+            case .failed(let code):
+                print("[HotkeyManager] stop failed rc=\(code)")
+                DispatchQueue.main.async { [weak self] in
+                    self?.appState?.recordingState = .idle
+                }
+                return
+            case .transcript(let t):
+                transcript = t
+            }
 
             // LLM enhancement (if enabled, also blocking)
             var finalText = transcript
@@ -582,7 +607,15 @@ final class HotkeyManager {
 
                 // Inject text (paste into active app)
                 if !appState.keepInClipboard {
-                    TextInjector.shared.injectText(finalText)
+                    // Restore the recorded target to the foreground BEFORE the
+                    // synthetic Cmd+V. If the user stopped via the pill Stop
+                    // button, the pill is now the key window and a naive paste
+                    // would land on it. restoreForeground is a no-op when the
+                    // target is already frontmost (hotkey-stop case).
+                    Task { @MainActor in
+                        await self.restoreForeground(target)
+                        TextInjector.shared.injectText(finalText)
+                    }
                 } else {
                     // Just copy to clipboard without pasting
                     NSPasteboard.general.clearContents()
@@ -641,9 +674,16 @@ final class HotkeyManager {
         DispatchQueue.global(qos: .userInitiated).async {
             // Always stop recording so the session ends even with no
             // selection. The spoken text is taken RAW (it's the
-            // instruction, not content to enhance).
-            let spoken = (DimmyCore.shared.stopRecording() ?? "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
+            // instruction, not content to enhance). A concurrent-stop
+            // skip (rc -9) or a failure yields no instruction → empty,
+            // which the empty-transcript branch below handles as a no-op.
+            let spoken: String
+            switch DimmyCore.shared.stopRecording() {
+            case .transcript(let t):
+                spoken = t.trimmingCharacters(in: .whitespacesAndNewlines)
+            case .skipped, .failed:
+                spoken = ""
+            }
             DimmyCore.shared.clearAppContext()
 
             var resolved: String?
