@@ -1324,6 +1324,18 @@ final class AppState: ObservableObject {
         if let saved = UserDefaults.standard.string(forKey: "meetingHotkeyEncoded"),
            let combo = HotkeyCombo(encoded: saved) {
             self.meetingHotkey = combo
+        } else if !UserDefaults.standard.bool(forKey: "meetingHotkeyDefaultApplied") {
+            // First run: default to ⌃⌥M (Ctrl+Alt+M), mirroring the Windows
+            // default. NOT ⌃⇧M / ⌘⇧M — that's Teams' mute. Applied once (the
+            // flag prevents resurrecting it after the user clears it). didSet
+            // doesn't fire during init, so persist the encoded value explicitly.
+            UserDefaults.standard.set(true, forKey: "meetingHotkeyDefaultApplied")
+            let combo = HotkeyCombo(
+                control: true, option: true, command: false, shift: false,
+                keyCode: 0x2E, keyChar: "M"
+            )
+            UserDefaults.standard.set(combo.encoded, forKey: "meetingHotkeyEncoded")
+            self.meetingHotkey = combo
         }
         self.buyerEmail = UserDefaults.standard.string(forKey: "buyerEmail")
     }
