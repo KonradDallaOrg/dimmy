@@ -1013,6 +1013,11 @@ public sealed partial class PillWindow : Window
     }
 
     // ── Actions ─────────────────────────────────────────────────────
+    /// Display-only shortcut hint for a menu item (e.g. "   (Win+Alt)").
+    /// Empty when the combo is unset.
+    private static string ShortcutSuffix(string? combo)
+        => string.IsNullOrWhiteSpace(combo) ? "" : $"   ({combo})";
+
     private void Pill_RightTapped(object sender, RightTappedRoutedEventArgs e)
     {
         ShowContextMenu((FrameworkElement)sender, e.GetPosition((UIElement)sender));
@@ -1052,19 +1057,39 @@ public sealed partial class PillWindow : Window
         menu.Items.Add(BuildTranslateToSubmenu());
         menu.Items.Add(BuildStyleSubmenu());
 
-        // Command Mode toggle — when on, the next recording transforms the
-        // selected text instead of dictating. Same hotkey; the mode picks
-        // the behaviour. Checkable so the pill menu is the visible source
-        // of truth for "am I dictating or commanding?".
-        var commandItem = new ToggleMenuFlyoutItem
+        // Primary actions — mirror the three global shortcuts. The combo is
+        // shown as display-only trailing text: the global keys are handled by
+        // the Rust hook, so we must NOT attach a KeyboardAccelerator here (it
+        // would double-fire while the pill has focus).
+        var prefs = Services.UiPreferences.Load();
+        bool meetingActive = false;
+        try { meetingActive = DimmyNative.dimmy_meeting_is_active() == 1; } catch { }
+
+        var dictItem = new MenuFlyoutItem
         {
-            Text = "Command (edit selection)",
-            IsChecked = _vm.CommandMode,
+            Text = (_vm.CurrentState == AppState.Recording ? "Stop Dictation" : "Start Dictation")
+                   + ShortcutSuffix(_vm.Shortcut),
         };
-        commandItem.Click += (_, _) => _vm.CommandMode = !_vm.CommandMode;
+        dictItem.Click += (_, _) => App.Instance?.MenuToggleDictation();
+        menu.Items.Add(dictItem);
+
+        var commandItem = new MenuFlyoutItem
+        {
+            Text = "Command (next dictation)" + ShortcutSuffix(prefs.CommandHotkey),
+        };
+        commandItem.Click += (_, _) => App.Instance?.MenuArmCommandOneShot();
         menu.Items.Add(commandItem);
 
-        menu.Items.Add(new MenuFlyoutItem { Text = $"Shortcut: {_vm.Shortcut}", IsEnabled = false });
+        var meetingRecItem = new MenuFlyoutItem
+        {
+            Text = (meetingActive ? "Stop Meeting" : "Start Meeting") + ShortcutSuffix(prefs.MeetingHotkey),
+        };
+        meetingRecItem.Click += async (_, _) =>
+        {
+            if (App.Instance != null) await App.Instance.ToggleMeetingFromShortcutAsync();
+        };
+        menu.Items.Add(meetingRecItem);
+
         menu.Items.Add(new MenuFlyoutSeparator());
 
         // Actions

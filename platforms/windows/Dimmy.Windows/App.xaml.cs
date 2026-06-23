@@ -125,6 +125,36 @@ public partial class App : Application
         catch (Exception ex) { PttLog($"ToggleMeetingFromShortcut exc: {ex.Message}"); }
     }
 
+    /// <summary>Menu action "Start/Stop Dictation": toggle a dictation. If
+    /// recording → stop+process; else behaves exactly like pressing the
+    /// dictation shortcut (OnHotkeyPressed handles the meeting-active gate,
+    /// hold/toggle mode, pill visibility + rc handling).</summary>
+    public void MenuToggleDictation()
+    {
+        if (_appViewModel.IsRecording || _pttStarted)
+            _dispatcherQueue?.TryEnqueue(async () => await StopAndProcess());
+        else
+            OnHotkeyPressed();
+    }
+
+    /// <summary>Menu action "Command (next dictation)": arm a ONE-SHOT command
+    /// for the next dictation (no recording starts now — you then trigger
+    /// dictation normally and that one transforms your selection). Mirrors the
+    /// user's "solo per stavolta, con lo stesso shortcut della dettatura".</summary>
+    public void MenuArmCommandOneShot()
+    {
+        _dispatcherQueue?.TryEnqueue(() =>
+        {
+            if (DimmyNative.dimmy_meeting_is_active() != 0)
+            {
+                PttLog("arm-command ignored — meeting recording in progress");
+                return;
+            }
+            _appViewModel.CommandOneShot = true;
+            PttLog("Command armed for the next dictation (menu)");
+        });
+    }
+
     private PillWindow? _pillWindow;
     private CaptionWindow? _captionWindow;
     private MeetingWindow? _meetingWindow;
@@ -960,6 +990,10 @@ public partial class App : Application
                     return;
                 }
                 if (command == "open-meeting") { OpenMeetingWindow(); return; }
+                // Recording actions (jumplist mirrors the global shortcuts).
+                if (command == "start-dictation") { MenuToggleDictation(); return; }
+                if (command == "arm-command") { MenuArmCommandOneShot(); return; }
+                if (command == "toggle-meeting") { _ = ToggleMeetingFromShortcutAsync(); return; }
                 if (command == "quit") { Quit(); return; }
                 if (command.StartsWith("set-style:", StringComparison.Ordinal))
                 {
