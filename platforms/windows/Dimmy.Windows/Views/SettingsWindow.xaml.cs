@@ -240,6 +240,7 @@ public sealed partial class SettingsWindow : Window
             // The command hotkey now runs on the Rust hook (like dictation),
             // so modifier-only combos (Win+Alt) are valid — load it verbatim.
             ViewModel.CommandHotkey = prefs.CommandHotkey ?? "";
+            ViewModel.MeetingHotkey = prefs.MeetingHotkey ?? "";
         }
         catch { }
 
@@ -281,6 +282,27 @@ public sealed partial class SettingsWindow : Window
                     App.Instance?.ReregisterCommandHotkey(cmd);
                     App.Log($"command hotkey updated to '{cmd}'", "Hotkey");
                 }
+                else if (e.PropertyName == nameof(ViewModel.MeetingHotkey))
+                {
+                    var mtg = ViewModel.MeetingHotkey ?? "";
+                    // Reject a meeting combo overlapping the dictation, dict, OR
+                    // command hotkey (3-way) — all share the one Rust hook.
+                    if (!string.IsNullOrWhiteSpace(mtg)
+                        && (Interop.DimmyNative.dimmy_hotkey_combos_conflict(mtg, ViewModel.Shortcut ?? "") != 0
+                            || Interop.DimmyNative.dimmy_hotkey_combos_conflict(mtg, ViewModel.DictHotkey ?? "") != 0
+                            || Interop.DimmyNative.dimmy_hotkey_combos_conflict(mtg, ViewModel.CommandHotkey ?? "") != 0))
+                    {
+                        App.Log($"meeting hotkey '{mtg}' overlaps another shortcut — rejecting", "Hotkey");
+                        Services.DictNotificationService.ShowHotkeyConflict(mtg);
+                        ViewModel.MeetingHotkey = "";
+                        return;
+                    }
+                    var prefs = Services.UiPreferences.Load();
+                    prefs.MeetingHotkey = mtg;
+                    prefs.Save();
+                    App.Instance?.ReregisterMeetingHotkey(mtg);
+                    App.Log($"meeting hotkey updated to '{mtg}'", "Hotkey");
+                }
             }
             catch (Exception ex)
             {
@@ -304,6 +326,13 @@ public sealed partial class SettingsWindow : Window
     private void CommandHotkeyClear_Click(object sender, RoutedEventArgs e)
     {
         ViewModel.CommandHotkey = "";
+    }
+
+    /// <summary>Disable the optional meeting hotkey. Empties the combo → the
+    /// PropertyChanged handler persists "" and unregisters it.</summary>
+    private void MeetingHotkeyClear_Click(object sender, RoutedEventArgs e)
+    {
+        ViewModel.MeetingHotkey = "";
     }
 
     /// File extensions accepted by `dimmy_transcribe_file`. WAV is the

@@ -601,19 +601,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         meetingItem.isEnabled = true
         menu.addItem(meetingItem)
 
-        // Command Mode toggle — mirror of pill / status-bar entries.
-        // Title-flip (no checkmark) for the same Tahoe Dock-menu reason
-        // documented above on the pill-visibility item: state=.off items
-        // can silently swallow clicks in the Dock context.
-        let commandTitle = appState.commandMode
-            ? "✓ Command (edit selection)"
-            : "Command (edit selection)"
+        menu.addItem(NSMenuItem.separator())
+
+        // The three primary actions, mirrored across pill / status-bar / Dock.
+        // Title-flip (no checkmark) for the Tahoe Dock-menu reason documented
+        // above; no keyEquivalent (the global CGEventTap owns the shortcuts —
+        // a Dock key-equivalent would double-fire while the app is frontmost).
+        let dictTitle = appState.isRecording ? "Stop Dictation" : "Start Dictation"
+        let dictItem = NSMenuItem(title: dictTitle,
+                                  action: #selector(toggleDictationFromDock),
+                                  keyEquivalent: "")
+        dictItem.target = self
+        dictItem.isEnabled = true
+        menu.addItem(dictItem)
+
+        // Command (next dictation) — arms a one-shot command for the next
+        // dictation (does not record now). ✓ when armed.
+        let commandTitle = appState.oneShotCommandPending
+            ? "✓ Command (next dictation)"
+            : "Command (next dictation)"
         let commandItem = NSMenuItem(title: commandTitle,
-                                     action: #selector(toggleDockCommandMode),
+                                     action: #selector(armCommandFromDock),
                                      keyEquivalent: "")
         commandItem.target = self
         commandItem.isEnabled = true
         menu.addItem(commandItem)
+
+        // Start/Stop Meeting — consent-gated background toggle.
+        let mtgTitle = appState.meetingActive ? "Stop Meeting" : "Start Meeting"
+        let mtgItem = NSMenuItem(title: mtgTitle,
+                                 action: #selector(toggleMeetingFromDock),
+                                 keyEquivalent: "")
+        mtgItem.target = self
+        mtgItem.isEnabled = true
+        menu.addItem(mtgItem)
 
         return menu
     }
@@ -626,9 +647,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         openSettings()
     }
 
-    @objc func toggleDockCommandMode() {
-        hkLog("[AppDelegate] dock menu: toggle command mode (was=\(appState.commandMode))")
-        appState.commandMode.toggle()
+    @objc func toggleDictationFromDock() {
+        if !DimmyCore.shared.isInitialized {
+            DispatchQueue.global(qos: .userInitiated).async {
+                _ = DimmyCore.shared.initialize()
+                DispatchQueue.main.async { HotkeyManager.shared.toggleRecordingFromUI() }
+            }
+            return
+        }
+        HotkeyManager.shared.toggleRecordingFromUI()
+    }
+
+    @objc func armCommandFromDock() {
+        hkLog("[AppDelegate] dock menu: arm one-shot command (was=\(appState.oneShotCommandPending))")
+        appState.oneShotCommandPending.toggle()
+    }
+
+    @objc func toggleMeetingFromDock() {
+        if !DimmyCore.shared.isInitialized {
+            DispatchQueue.global(qos: .userInitiated).async {
+                _ = DimmyCore.shared.initialize()
+                DispatchQueue.main.async { MeetingShortcut.toggle(appState: self.appState, source: "menu") }
+            }
+            return
+        }
+        MeetingShortcut.toggle(appState: appState, source: "menu")
     }
 
     @objc func toggleDockPillVisibility() {

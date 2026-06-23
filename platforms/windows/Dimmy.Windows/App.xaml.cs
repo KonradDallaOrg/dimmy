@@ -56,6 +56,152 @@ public partial class App : Application
         catch (Exception ex) { Log($"ReregisterCommandHotkey exc: {ex.Message}", "Hotkey"); }
     }
 
+    /// <summary>Re-bind the optional meeting start/stop hotkey after the user
+    /// edits it in Settings. Empty disables it. Toggle-only. No-op until the
+    /// service exists.</summary>
+    public void ReregisterMeetingHotkey(string combo)
+    {
+        try { _hotkeyService?.SetMeetingShortcut(combo); }
+        catch (Exception ex) { Log($"ReregisterMeetingHotkey exc: {ex.Message}", "Hotkey"); }
+    }
+
+    private void OnMeetingHotkeyPressed()
+    {
+        _dispatcherQueue?.TryEnqueue(async () => await ToggleMeetingFromShortcutAsync());
+    }
+
+    /// <summary>Toggle meeting recording from the meeting hotkey OR a menu
+    /// action — the single consent-gated meeting entry point for those paths.
+    /// Active meeting → stop + recap (via the pill's existing pipeline).
+    /// Idle → mandatory consent modal, then start recording in the BACKGROUND
+    /// (the pill + taskbar reflect it via the `meeting_state` event; the Meeting
+    /// window is NOT opened). Ignored while a dictation is in flight: the two
+    /// captures share the cpal buffer and the core has no guard for that
+    /// direction (it only blocks dictation while a meeting is active, rc -7).</summary>
+    public async Task ToggleMeetingFromShortcutAsync(string source = "hotkey")
+    {
+        try
+        {
+            if (DimmyNative.dimmy_meeting_is_active() == 1)
+            {
+                PttLog("Meeting hotkey: stopping active meeting (+recap)");
+                try { DimmyNative.dimmy_track_meeting_action(source); } catch { }
+                if (_pillWindow != null)
+                    await _pillWindow.StopMeetingFromPillAsync();
+                return;
+            }
+            if (_appViewModel.IsRecording || _pttStarted)
+            {
+                PttLog("Meeting hotkey ignored — a dictation is in progress");
+                _appViewModel.SetError("Finish the dictation first");
+                return;
+            }
+            var lang = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+            // ConsentFlow self-hosts a correctly-sized window — no XamlRoot needed.
+            if (!await Services.ConsentFlow.ConfirmAndAnnounceAsync(null, lang))
+            {
+                PttLog("Meeting hotkey: consent declined");
+                return;
+            }
+            var buf = new byte[256];
+            int rc = DimmyNative.dimmy_meeting_start(buf, buf.Length);
+            if (rc <= 0)
+            {
+                PttLog($"Meeting hotkey: start failed rc={rc}");
+                _appViewModel.SetError($"Meeting start failed ({rc})");
+                return;
+            }
+            PttLog("Meeting hotkey: recording started (background)");
+            try { DimmyNative.dimmy_track_meeting_action(source); } catch { }
+            // Pill + taskbar flip to recording via the meeting_state event.
+        }
+        catch (Exception ex) { PttLog($"ToggleMeetingFromShortcut exc: {ex.Message}"); }
+    }
+
+    /// <summary>Host the recording-consent dialog in a properly sized window
+    /// and return the user's decision. The pill is too small to host a
+    /// ContentDialog — the consent text rendered clipped/illegible (burned
+    /// 2026-06-24). If a large window (Meeting/Settings) is already open we
+    /// reuse its XamlRoot; otherwise we spin up a transient centered host
+    /// window that closes as soon as the dialog does, so meeting-from-hotkey
+    /// still records in the background without leaving a window open.</summary>
+    private async Task<bool> RunConsentDialogAsync(string lang)
+    {
+        var existing = _meetingWindow?.Content?.XamlRoot
+            ?? _settingsWindow?.Content?.XamlRoot;
+        if (existing != null)
+            return await Services.ConsentFlow.ConfirmAndAnnounceAsync(existing, lang);
+
+        var host = new Microsoft.UI.Xaml.Window { Title = "Recording notice" };
+        host.Content = new Microsoft.UI.Xaml.Controls.Grid
+        {
+            Background = (Microsoft.UI.Xaml.Media.Brush?)
+                Application.Current.Resources["ApplicationPageBackgroundThemeBrush"],
+            RequestedTheme = Dimmy.Windows.Helpers.ThemeHelper.ResolvedElementTheme(),
+        };
+        try
+        {
+            var aw = host.AppWindow;
+            const int w = 560, h = 540;
+            var da = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(
+                aw.Id, Microsoft.UI.Windowing.DisplayAreaFallback.Primary);
+            int x = da.WorkArea.X + (da.WorkArea.Width - w) / 2;
+            int y = da.WorkArea.Y + (da.WorkArea.Height - h) / 2;
+            aw.MoveAndResize(new global::Windows.Graphics.RectInt32(x, y, w, h));
+            if (aw.Presenter is Microsoft.UI.Windowing.OverlappedPresenter p)
+            {
+                p.IsResizable = false;
+                p.IsMaximizable = false;
+                p.IsMinimizable = false;
+                p.IsAlwaysOnTop = true;
+            }
+        }
+        catch (Exception ex) { PttLog($"consent host size exc: {ex.Message}"); }
+
+        var ready = new TaskCompletionSource();
+        ((Microsoft.UI.Xaml.FrameworkElement)host.Content).Loaded += (_, __) => ready.TrySetResult();
+        host.Activate();
+        await ready.Task;
+        try
+        {
+            return await Services.ConsentFlow.ConfirmAndAnnounceAsync(host.Content.XamlRoot, lang);
+        }
+        finally
+        {
+            host.Close();
+        }
+    }
+
+    /// <summary>Menu action "Start/Stop Dictation": toggle a dictation. If
+    /// recording → stop+process; else behaves exactly like pressing the
+    /// dictation shortcut (OnHotkeyPressed handles the meeting-active gate,
+    /// hold/toggle mode, pill visibility + rc handling).</summary>
+    public void MenuToggleDictation()
+    {
+        if (_appViewModel.IsRecording || _pttStarted)
+            _dispatcherQueue?.TryEnqueue(async () => await StopAndProcess());
+        else
+            OnHotkeyPressed();
+    }
+
+    /// <summary>Menu action "Command (next dictation)": arm a ONE-SHOT command
+    /// for the next dictation (no recording starts now — you then trigger
+    /// dictation normally and that one transforms your selection). Mirrors the
+    /// user's "solo per stavolta, con lo stesso shortcut della dettatura".</summary>
+    public void MenuArmCommandOneShot()
+    {
+        _dispatcherQueue?.TryEnqueue(() =>
+        {
+            if (DimmyNative.dimmy_meeting_is_active() != 0)
+            {
+                PttLog("arm-command ignored — meeting recording in progress");
+                return;
+            }
+            _appViewModel.CommandOneShot = true;
+            PttLog("Command armed for the next dictation (menu)");
+        });
+    }
+
     private PillWindow? _pillWindow;
     private CaptionWindow? _captionWindow;
     private MeetingWindow? _meetingWindow;
@@ -395,11 +541,14 @@ public partial class App : Application
         _hotkeyService.HotkeyReleased += OnHotkeyReleased;
         _hotkeyService.CommandHotkeyPressed += OnCommandHotkeyPressed;
         _hotkeyService.CommandHotkeyReleased += OnCommandHotkeyReleased;
+        _hotkeyService.MeetingHotkeyPressed += OnMeetingHotkeyPressed;
         _hotkeyService.PttMode = _appViewModel.ShortcutMode == "hold";
         _hotkeyService.Register(_appViewModel.Shortcut);
         // Optional dedicated command-mode hotkey (empty = disabled). Runs on
         // the same hook, so it inherits toggle/PTT + every combo.
         _hotkeyService.SetCommandShortcut(_uiPrefs.CommandHotkey);
+        // Optional meeting start/stop hotkey (empty = disabled). Toggle-only.
+        _hotkeyService.SetMeetingShortcut(_uiPrefs.MeetingHotkey);
     }
 
     private void StartNormalMode()
@@ -888,6 +1037,10 @@ public partial class App : Application
                     return;
                 }
                 if (command == "open-meeting") { OpenMeetingWindow(); return; }
+                // Recording actions (jumplist mirrors the global shortcuts).
+                if (command == "start-dictation") { MenuToggleDictation(); return; }
+                if (command == "arm-command") { MenuArmCommandOneShot(); return; }
+                if (command == "toggle-meeting") { _ = ToggleMeetingFromShortcutAsync("jumplist"); return; }
                 if (command == "quit") { Quit(); return; }
                 if (command.StartsWith("set-style:", StringComparison.Ordinal))
                 {

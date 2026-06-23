@@ -345,15 +345,19 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         styleItem.submenu = buildStyleSubmenu()
         menu.addItem(styleItem)
 
-        // Command Mode toggle — when on, the next recording transforms the
-        // selected text instead of dictating. Same hotkey; the mode picks
-        // the behaviour. Checkmark reflects the live state. Mirror of Win's
-        // pill/tray "Command (edit selection)" toggle.
-        let commandItem = NSMenuItem(title: "Command (edit selection)",
-                                     action: #selector(toggleCommandMode),
+        // Command (next dictation) — arms a ONE-SHOT command: the next
+        // dictation transforms the selected text instead of dictating, then
+        // auto-clears. Does NOT start recording (you trigger dictation
+        // normally afterwards). The command hotkey combo is shown inline when
+        // set. Replaces the old sticky on/off toggle.
+        let commandTitle = appState.commandHotkey
+            .map { "Command (next dictation)   \($0.displayString)" }
+            ?? "Command (next dictation)"
+        let commandItem = NSMenuItem(title: commandTitle,
+                                     action: #selector(armCommandFromMenu),
                                      keyEquivalent: "")
         commandItem.target = self
-        commandItem.state = appState.commandMode ? .on : .off
+        commandItem.state = appState.oneShotCommandPending ? .on : .off
         menu.addItem(commandItem)
 
         // Shortcut (read-only).
@@ -401,6 +405,20 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         meetingItem.target = self
         menu.addItem(meetingItem)
 
+        // Start/Stop Meeting — the same consent-gated toggle as the meeting
+        // hotkey. Records in the background (no window). Title reflects the
+        // live meeting state; the meeting shortcut combo is shown inline when
+        // set. No keyEquivalent (avoids double-firing with the CGEventTap).
+        let mtgRecTitle = appState.meetingActive ? "Stop Meeting" : "Start Meeting"
+        let mtgRecFull = appState.meetingHotkey
+            .map { "\(mtgRecTitle)   \($0.displayString)" } ?? mtgRecTitle
+        let mtgRecItem = NSMenuItem(title: mtgRecFull,
+                                    action: #selector(toggleMeetingFromMenu),
+                                    keyEquivalent: "")
+        mtgRecItem.target = self
+        mtgRecItem.isEnabled = DimmyCore.shared.isInitialized
+        menu.addItem(mtgRecItem)
+
         menu.addItem(NSMenuItem.separator())
 
         // Actions.
@@ -417,9 +435,12 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         AppDelegate.shared?.openMeetingWindow()
     }
 
-    @objc private func toggleCommandMode() {
-        appState.commandMode.toggle()
-        NSLog("[CmdMode] toggled → \(appState.commandMode)")
+    /// Arm a ONE-SHOT command for the next dictation (does not record now).
+    /// The next time you trigger dictation it transforms the selection, then
+    /// auto-clears. Mirrors the command hotkey's "next dictation" semantics.
+    @objc private func armCommandFromMenu() {
+        appState.oneShotCommandPending.toggle()
+        NSLog("[CmdMode] one-shot armed → \(appState.oneShotCommandPending)")
     }
 
     @objc private func toggleRecordingFromMenu() {
@@ -433,6 +454,19 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             return
         }
         HotkeyManager.shared.toggleRecordingFromUI()
+    }
+
+    /// Start/stop a meeting recording — same consent-gated toggle as the
+    /// meeting hotkey (background record, no window). Lazy-inits the core.
+    @objc private func toggleMeetingFromMenu() {
+        if !DimmyCore.shared.isInitialized {
+            DispatchQueue.global(qos: .userInitiated).async {
+                _ = DimmyCore.shared.initialize()
+                DispatchQueue.main.async { MeetingShortcut.toggle(appState: self.appState, source: "menu") }
+            }
+            return
+        }
+        MeetingShortcut.toggle(appState: appState, source: "menu")
     }
 
     /// Public so AppDelegate can reuse it inside `applicationDockMenu(_:)`,

@@ -24,6 +24,12 @@ dimmy_claude_desktop_install
 dimmy_claude_desktop_status
 dimmy_claude_desktop_uninstall
 dimmy_clear_app_context
+dimmy_codex_binary_path
+dimmy_codex_diagnostics
+dimmy_codex_ping
+dimmy_codex_recheck
+dimmy_codex_spawn_login
+dimmy_codex_status
 dimmy_command_transform
 dimmy_compute_audio_peaks
 dimmy_config_dir_name
@@ -56,10 +62,12 @@ dimmy_hotkey_install
 dimmy_hotkey_poll_recording
 dimmy_hotkey_set
 dimmy_hotkey_set_command
+dimmy_hotkey_set_meeting
 dimmy_hotkey_start_recording
 dimmy_hotkey_stop_recording
 dimmy_hotkey_take_command_event
 dimmy_hotkey_take_event
+dimmy_hotkey_take_meeting_event
 dimmy_hotkey_take_recorded
 dimmy_init
 dimmy_is_recording
@@ -84,6 +92,7 @@ dimmy_meeting_is_paused
 dimmy_meeting_list_orphans
 dimmy_meeting_pause
 dimmy_meeting_resume
+dimmy_meeting_retranscribe
 dimmy_meeting_save_post_process
 dimmy_meeting_start
 dimmy_meeting_stop
@@ -119,6 +128,7 @@ dimmy_telemetry_set_crash_enabled
 dimmy_telemetry_set_enabled
 dimmy_telemetry_status
 dimmy_telemetry_track_typed
+dimmy_track_meeting_action
 dimmy_transcribe_file
 dimmy_update_stats
 dimmy_user_dict_add

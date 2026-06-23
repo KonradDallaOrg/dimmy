@@ -134,6 +134,10 @@ public partial class SettingsViewModel : ObservableObject
     /// disabled; command mode still works via the pill-menu toggle. Persisted
     /// to UiPreferences.CommandHotkey (Win-only UI knob).</summary>
     [ObservableProperty] private string _commandHotkey = "";
+
+    /// <summary>Optional meeting start/stop hotkey (toggle). EMPTY = disabled.
+    /// Persisted to UiPreferences.MeetingHotkey (Win-only UI knob).</summary>
+    [ObservableProperty] private string _meetingHotkey = "";
     [ObservableProperty] private string _shortcut = "Win+Alt";
     [ObservableProperty] private string _shortcutMode = "toggle";
     [ObservableProperty] private string? _selectedDevice;

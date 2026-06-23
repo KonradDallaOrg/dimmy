@@ -1318,12 +1318,17 @@ enum MeetingConsentFlow {
         let announcement = DimmyCore.shared.consentText(kind: "announcement", lang: lang)
             ?? "Quick note: this meeting is being recorded and transcribed for note-taking."
 
+        // Localized chrome from the shared core (parity with Windows).
+        let title = DimmyCore.shared.consentText(kind: "title", lang: lang) ?? "Recording notice"
+        let confirmLabel = DimmyCore.shared.consentText(kind: "confirm", lang: lang) ?? "I have consent, start"
+        let cancelLabel = DimmyCore.shared.consentText(kind: "cancel", lang: lang) ?? "Cancel"
+
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "Recording notice"
+        alert.messageText = title
         alert.informativeText = modal + "\n\n\u{201C}" + announcement + "\u{201D}"
-        alert.addButton(withTitle: "I have consent, start")
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: confirmLabel)
+        alert.addButton(withTitle: cancelLabel)
         // Highlight Cancel (the second button) so Enter doesn't blow past the gate.
         if alert.buttons.count > 1 {
             alert.window.defaultButtonCell = alert.buttons[1].cell as? NSButtonCell

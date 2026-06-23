@@ -224,6 +224,19 @@ public static class JumpListService
                 // every menu row was visually heavy. Transparent ICO
                 // keeps the row clean (Windows renders nothing in the
                 // icon slot when the source is fully transparent).
+                // Recording actions — mirror the three global shortcuts so the
+                // taskbar right-click can drive dictation / command / meeting
+                // without the pill. Labels are static (jumplists don't update
+                // live), so the meeting entry says "Start/stop"; HandleForwardedCommand
+                // toggles based on the live state. start-dictation / arm-command /
+                // toggle-meeting are dispatched there.
+                AddCategory(cdl, "Recording", new[]
+                {
+                    Task("Start / stop dictation", "start-dictation", icon: null),
+                    Task("Command (next dictation)", "arm-command",   icon: null),
+                    Task("Start / stop meeting",   "toggle-meeting",  icon: MeetingIcon()),
+                });
+
                 AddCategory(cdl, "Tasks", new[]
                 {
                     // Toggle pill carries the brand: it's the action

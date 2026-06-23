@@ -81,6 +81,7 @@ Current variants (V16+):
 | `error.audio_health` | code *(reserved)* |
 | `feature.hotkey_triggered` | – |
 | `feature.api_key_set` | scope, provider |
+| `feature.meeting_shortcut` | source (`hotkey` \| `menu` \| `jumplist`) |
 
 ### `core/src/telemetry/client.rs` — PostHog
 Plain HTTP POST to `https://eu.i.posthog.com/i/v0/e/`. No SDK dependency.

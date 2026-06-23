@@ -5256,7 +5256,11 @@ pub unsafe extern "C" fn dimmy_consent_text(
                 .unwrap_or(false);
             crate::consent::announcement_text(lang, stt_cloud || llm_cloud)
         }
-        _ => return -1,
+        // Localized dialog chrome: "title" | "intro" | "confirm" | "cancel".
+        other => match crate::consent::ui_text(other, lang) {
+            Some(s) => s,
+            None => return -1,
+        },
     };
     write_to_buf(&text, out_buf, buf_len)
 }
@@ -5927,6 +5931,26 @@ pub unsafe extern "C" fn dimmy_hotkey_set_command(combo_ptr: *const c_char) {
     }
 }
 
+/// Set (or clear) the optional meeting start/stop shortcut. Mirrors
+/// `dimmy_hotkey_set_command`: a null/empty/unparseable combo DISABLES it.
+/// The host treats its event (via `dimmy_hotkey_take_meeting_event`) as a
+/// TOGGLE — start the meeting if idle, stop it if a meeting is recording.
+///
+/// # Safety
+/// `combo_ptr` must be null or a valid null-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_hotkey_set_meeting(combo_ptr: *const c_char) {
+    if combo_ptr.is_null() {
+        crate::hotkey::set_meeting_shortcut("");
+        crate::log("[Hotkey] set_meeting_shortcut(disabled)");
+        return;
+    }
+    if let Ok(combo) = CStr::from_ptr(combo_ptr).to_str() {
+        crate::hotkey::set_meeting_shortcut(combo);
+        crate::log(&format!("[Hotkey] set_meeting_shortcut(\"{}\")", combo));
+    }
+}
+
 /// Returns 1 if the two combos conflict (one is a subset of the other, so
 /// pressing one would also trigger the other), else 0. Used by the host to
 /// reject a command hotkey that collides with the dictation / dictionary
@@ -6170,6 +6194,179 @@ fn decode_via_symphonia(path: &str) -> Result<(Vec<f32>, u32), String> {
     Ok((mono, sample_rate))
 }
 
+/// Streaming peak-envelope computation for the waveform. Unlike
+/// `decode_via_symphonia`, this NEVER materialises the full decoded track:
+/// it folds each decoded packet into a fine fixed-resolution envelope
+/// (`ENV_FRAMES` mono frames per cell) and discards the samples, then
+/// re-buckets the envelope down to `buckets` peaks. Memory is bounded to one
+/// packet plus the envelope (~0.7 MB for a 60-min meeting) regardless of
+/// length.
+///
+/// WHY: a full-track decode of a long meeting materialised the whole
+/// interleaved PCM in a doubling `Vec<f32>` — ~1.4 GB for 60 min stereo, with
+/// a ~4 GB transient on the final realloc. Under memory pressure (GPU +
+/// models + MediaPlayer opening the same file) that allocation aborts the
+/// whole process (`handle_alloc_error` → fastfail 7). Burned 2026-06-24
+/// opening a 60-min meeting in the Done view.
+///
+/// Returns the per-bucket peaks (each clamped to `[0, 1]`, NaN-guarded) and
+/// the track duration in seconds.
+fn compute_peaks_streaming(path: &str, buckets: usize) -> Result<(Vec<f32>, f64), String> {
+    use symphonia::core::audio::SampleBuffer;
+    use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
+    use symphonia::core::errors::Error as SymphoniaError;
+    use symphonia::core::formats::FormatOptions;
+    use symphonia::core::io::MediaSourceStream;
+    use symphonia::core::meta::MetadataOptions;
+    use symphonia::core::probe::Hint;
+
+    assert!(buckets > 0, "compute_peaks_streaming: buckets must be > 0");
+
+    // One envelope cell per this many mono frames. Far finer than the bucket
+    // grid (a 60-min file is ~169k cells vs ~400 buckets) so the re-bucketed
+    // result is visually identical to a per-sample bucket max, while memory
+    // stays ~0.7 MB.
+    const ENV_FRAMES: usize = 1024;
+
+    let file = std::fs::File::open(path).map_err(|e| format!("open: {e}"))?;
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let mut hint = Hint::new();
+    if let Some(ext) = std::path::Path::new(path)
+        .extension()
+        .and_then(|s| s.to_str())
+    {
+        hint.with_extension(ext);
+    }
+    let probed = symphonia::default::get_probe()
+        .format(
+            &hint,
+            mss,
+            &FormatOptions {
+                enable_gapless: true,
+                ..Default::default()
+            },
+            &MetadataOptions::default(),
+        )
+        .map_err(|e| format!("probe: {e}"))?;
+    let mut format = probed.format;
+    let track = format
+        .tracks()
+        .iter()
+        .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
+        .ok_or_else(|| "no decodable audio track".to_string())?;
+    let track_id = track.id;
+    let sample_rate = track
+        .codec_params
+        .sample_rate
+        .ok_or_else(|| "missing sample rate in codec params".to_string())?;
+    let channels = track
+        .codec_params
+        .channels
+        .map(|c| c.count())
+        .unwrap_or(1)
+        .max(1);
+    let mut decoder = symphonia::default::get_codecs()
+        .make(&track.codec_params, &DecoderOptions::default())
+        .map_err(|e| format!("decoder: {e}"))?;
+
+    let mut envelope: Vec<f32> = Vec::new();
+    let mut cell_max: f32 = 0.0;
+    let mut frames_in_cell: usize = 0;
+    let mut total_frames: u64 = 0;
+    let mut sample_buf: Option<SampleBuffer<f32>> = None;
+    let mut consecutive_packet_errs: u32 = 0;
+    loop {
+        let packet = match format.next_packet() {
+            Ok(p) => {
+                consecutive_packet_errs = 0;
+                p
+            }
+            Err(SymphoniaError::IoError(_)) => break,
+            Err(SymphoniaError::ResetRequired) => break,
+            Err(SymphoniaError::DecodeError(_)) => {
+                consecutive_packet_errs += 1;
+                if consecutive_packet_errs > 64 {
+                    break;
+                }
+                continue;
+            }
+            Err(_) => break,
+        };
+        if packet.track_id() != track_id {
+            continue;
+        }
+        match decoder.decode(&packet) {
+            Ok(audio_buf) => {
+                if sample_buf.is_none() {
+                    let spec = *audio_buf.spec();
+                    let duration = audio_buf.capacity() as u64;
+                    sample_buf = Some(SampleBuffer::<f32>::new(duration, spec));
+                }
+                if let Some(buf) = &mut sample_buf {
+                    buf.copy_interleaved_ref(audio_buf);
+                    for frame in buf.samples().chunks_exact(channels) {
+                        let acc: f32 = frame.iter().sum();
+                        let mono = acc / channels as f32;
+                        let a = if mono.is_finite() { mono.abs() } else { 0.0 };
+                        if a > cell_max {
+                            cell_max = a;
+                        }
+                        frames_in_cell += 1;
+                        total_frames += 1;
+                        if frames_in_cell == ENV_FRAMES {
+                            envelope.push(cell_max);
+                            cell_max = 0.0;
+                            frames_in_cell = 0;
+                        }
+                    }
+                }
+            }
+            Err(SymphoniaError::DecodeError(_)) => continue,
+            Err(SymphoniaError::ResetRequired) => break,
+            Err(SymphoniaError::IoError(_)) => break,
+            Err(_) => continue,
+        }
+    }
+    if frames_in_cell > 0 {
+        envelope.push(cell_max);
+    }
+    if total_frames == 0 || envelope.is_empty() {
+        return Err("symphonia produced 0 samples".into());
+    }
+
+    let peaks = rebucket_envelope(&envelope, buckets);
+    let duration_secs = total_frames as f64 / sample_rate as f64;
+    Ok((peaks, duration_secs))
+}
+
+/// Re-bucket a fine peak envelope down to exactly `buckets` peaks: each
+/// bucket spans an equal slice of the envelope and takes the max cell in
+/// that slice. Every cell is already a non-negative magnitude; the result
+/// is clamped to `[0, 1]`. Pulled out of `compute_peaks_streaming` so the
+/// index math (the off-by-one-prone part) is unit-testable without a decode.
+fn rebucket_envelope(envelope: &[f32], buckets: usize) -> Vec<f32> {
+    assert!(buckets > 0, "rebucket_envelope: buckets must be > 0");
+    let cells = envelope.len();
+    let mut peaks: Vec<f32> = Vec::with_capacity(buckets);
+    if cells == 0 {
+        peaks.resize(buckets, 0.0);
+        return peaks;
+    }
+    for b in 0..buckets {
+        let start = (b * cells / buckets).min(cells - 1);
+        let end = ((b + 1) * cells / buckets).max(start + 1).min(cells);
+        let mut peak: f32 = 0.0;
+        for &c in &envelope[start..end] {
+            if c > peak {
+                peak = c;
+            }
+        }
+        peaks.push(peak.min(1.0));
+    }
+    assert_eq!(peaks.len(), buckets, "peaks length must equal bucket count");
+    peaks
+}
+
 /// Decode any audio file the loader supports (WAV via hound, m4a /
 /// mp3 / aac / flac / ogg via Symphonia) and write it as a real
 /// mono int16 WAV at the source's native sample rate. Used by the
@@ -6287,38 +6484,47 @@ pub unsafe extern "C" fn dimmy_compute_audio_peaks(
         .and_then(|s| s.to_str())
         .map(|s| s.to_ascii_lowercase())
         .unwrap_or_default();
-    let (mono, sample_rate) = match if ext == "wav" {
-        decode_wav_via_hound(path)
-    } else {
-        decode_via_symphonia(path)
-    } {
-        Ok(v) => v,
-        Err(_) => return -2,
-    };
-    if mono.is_empty() || sample_rate == 0 {
-        return -2;
-    }
     let buckets = bucket_count as usize;
-    let total = mono.len();
-    let frames_per_bucket = (total / buckets).max(1);
-    let mut peaks: Vec<f32> = Vec::with_capacity(buckets);
-    for b in 0..buckets {
-        let start = b * frames_per_bucket;
-        if start >= total {
-            peaks.push(0.0);
-            continue;
+    let (peaks, duration_secs): (Vec<f32>, f64) = if ext == "wav" {
+        // WAV: hound full-load fast path. WAV is uncommon/short for meeting
+        // recordings; the streaming branch below is what guards the long
+        // compressed tracks (.ogg) against the unbounded-decode OOM.
+        let (mono, sample_rate) = match decode_wav_via_hound(path) {
+            Ok(v) => v,
+            Err(_) => return -2,
+        };
+        if mono.is_empty() || sample_rate == 0 {
+            return -2;
         }
-        let end = ((b + 1) * frames_per_bucket).min(total);
-        let mut peak: f32 = 0.0;
-        for &s in &mono[start..end] {
-            let a = s.abs();
-            if a > peak {
-                peak = a;
+        let total = mono.len();
+        let frames_per_bucket = (total / buckets).max(1);
+        let mut peaks: Vec<f32> = Vec::with_capacity(buckets);
+        for b in 0..buckets {
+            let start = b * frames_per_bucket;
+            if start >= total {
+                peaks.push(0.0);
+                continue;
             }
+            let end = ((b + 1) * frames_per_bucket).min(total);
+            let mut peak: f32 = 0.0;
+            for &s in &mono[start..end] {
+                let a = s.abs();
+                if a > peak {
+                    peak = a;
+                }
+            }
+            peaks.push(peak.min(1.0));
         }
-        peaks.push(peak.min(1.0));
-    }
-    let duration_secs = total as f64 / sample_rate as f64;
+        (peaks, total as f64 / sample_rate as f64)
+    } else {
+        // Compressed (ogg/m4a/mp3/flac): stream the decode into a bounded
+        // peak envelope. A full-track decode of a 60-min meeting OOM-aborted
+        // the process (fastfail 7). Burned 2026-06-24.
+        match compute_peaks_streaming(path, buckets) {
+            Ok(v) => v,
+            Err(_) => return -2,
+        }
+    };
     // Manual JSON build with capped precision. `serde_json` would
     // serialise f32 values through their f64 promotion and emit the
     // full mantissa (~22 chars for `0.00005151328514330089`); 200
@@ -7046,6 +7252,37 @@ pub extern "C" fn dimmy_hotkey_take_event() -> c_int {
 #[no_mangle]
 pub extern "C" fn dimmy_hotkey_take_command_event() -> c_int {
     crate::hotkey::take_command_event() as c_int
+}
+
+/// Take the latest meeting hotkey event: 0=none, 1=pressed, 2=released.
+/// Returns 0 forever while the meeting hotkey is unconfigured. The host
+/// treats `1` (pressed) as a toggle and ignores `2` (released).
+#[no_mangle]
+pub extern "C" fn dimmy_hotkey_take_meeting_event() -> c_int {
+    crate::hotkey::take_meeting_event() as c_int
+}
+
+/// Track that a meeting recording was started/stopped from one of the new
+/// surfaces. `source` is mapped to a fixed categorical enum tag
+/// (hotkey|menu|jumplist|other) before emitting — never forwarded verbatim, so
+/// no host string can leak into telemetry.
+///
+/// # Safety
+/// `source_ptr` must be null or a valid null-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_track_meeting_action(source_ptr: *const c_char) {
+    let raw = if source_ptr.is_null() {
+        ""
+    } else {
+        CStr::from_ptr(source_ptr).to_str().unwrap_or("")
+    };
+    let source: &'static str = match raw {
+        "hotkey" => "hotkey",
+        "menu" => "menu",
+        "jumplist" => "jumplist",
+        _ => "other",
+    };
+    crate::telemetry::track(crate::telemetry::Event::FeatureMeetingShortcut { source });
 }
 
 /// Start recording mode for shortcut capture.
@@ -8606,6 +8843,41 @@ mod tests {
     // Settings → Recap to fix." Pin each branch.
 
     use crate::error::LlmError;
+
+    // ── streaming waveform peaks (bounded memory) ────────────────
+    //
+    // Burned 2026-06-24: opening a 60-min meeting in the Done view aborted
+    // the whole process (fastfail 7) — `dimmy_compute_audio_peaks` fully
+    // decoded the ~1.4 GB PCM track via `decode_via_symphonia`, and the
+    // doubling-realloc spike OOM'd under memory pressure. The streaming path
+    // (`compute_peaks_streaming`) folds the decode into a bounded envelope
+    // and re-buckets it via `rebucket_envelope`. The decode loop is verified
+    // on real meeting .ogg files (tests/repro_peaks_crash.rs, env-gated);
+    // here we pin the index-math of the re-bucketing, which is the
+    // off-by-one-prone part.
+    #[test]
+    fn rebucket_envelope_shapes_and_bounds() {
+        // Exact divisor: 8 cells → 4 buckets, each bucket = max of 2 cells.
+        let env = [0.1, 0.2, 0.9, 0.3, 0.4, 0.5, 0.05, 0.6];
+        let p = rebucket_envelope(&env, 4);
+        assert_eq!(p, vec![0.2, 0.9, 0.5, 0.6]);
+
+        // More buckets than cells: every bucket maps to a valid cell, no
+        // panic, output length == buckets, values clamped to [0,1].
+        let few = [0.25, 1.7]; // 1.7 must clamp to 1.0
+        let p = rebucket_envelope(&few, 5);
+        assert_eq!(p.len(), 5);
+        for &v in &p {
+            assert!((0.0..=1.0).contains(&v), "out of range: {v}");
+        }
+        assert!(p.iter().any(|&v| (v - 1.0).abs() < 1e-6), "clamp to 1.0");
+
+        // Empty envelope → all-zero, length == buckets (never panics).
+        assert_eq!(rebucket_envelope(&[], 3), vec![0.0, 0.0, 0.0]);
+
+        // Single bucket → global max.
+        assert_eq!(rebucket_envelope(&[0.1, 0.7, 0.3], 1), vec![0.7]);
+    }
 
     #[test]
     fn categorize_404_model_not_found_returns_minus_5() {

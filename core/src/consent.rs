@@ -83,6 +83,52 @@ pub fn announcement_text(lang: &str, cloud_processing: bool) -> String {
     format!("{base} {storage}")
 }
 
+/// Localized UI chrome for the recording-consent dialog (title, the helper
+/// line above the announcement, and the two button labels). Kept here so every
+/// platform renders the SAME wording instead of hardcoding English host-side
+/// (which left the buttons + title in English while the body was localized).
+/// ASCII-apostrophe style matches `modal_text`. Returns `None` for unknown
+/// kinds so the FFI can reject them.
+pub fn ui_text(kind: &str, lang: &str) -> Option<String> {
+    let l = norm_lang(lang);
+    let s = match kind {
+        "title" => match l {
+            "it" => "Avviso di registrazione",
+            "es" => "Aviso de grabacion",
+            "fr" => "Avis d'enregistrement",
+            "de" => "Aufnahmehinweis",
+            "pt" => "Aviso de gravacao",
+            _ => "Recording notice",
+        },
+        "intro" => match l {
+            "it" => "Dimmy leggera' questo avviso ad alta voce e lo copiera' cosi' puoi incollarlo nella chat del meeting:",
+            "es" => "Dimmy leera este aviso en voz alta y lo copiara para que puedas pegarlo en el chat de la reunion:",
+            "fr" => "Dimmy lira cet avis a voix haute et le copiera pour que vous puissiez le coller dans le chat de la reunion :",
+            "de" => "Dimmy liest diesen Hinweis vor und kopiert ihn, damit Sie ihn in den Meeting-Chat einfuegen koennen:",
+            "pt" => "O Dimmy lera este aviso em voz alta e o copiara para que voce possa cola-lo no chat da reuniao:",
+            _ => "Dimmy will read this notice aloud and copy it so you can paste it in the meeting chat:",
+        },
+        "confirm" => match l {
+            "it" => "Ho il consenso, avvia",
+            "es" => "Tengo consentimiento, iniciar",
+            "fr" => "J'ai le consentement, demarrer",
+            "de" => "Zustimmung liegt vor, starten",
+            "pt" => "Tenho consentimento, iniciar",
+            _ => "I have consent, start",
+        },
+        "cancel" => match l {
+            "it" => "Annulla",
+            "es" => "Cancelar",
+            "fr" => "Annuler",
+            "de" => "Abbrechen",
+            "pt" => "Cancelar",
+            _ => "Cancel",
+        },
+        _ => return None,
+    };
+    Some(s.to_string())
+}
+
 /// JSON line for one consent event. Pure (no clock / IO) so it can be tested.
 /// `kind` is the event tag the host emits: "confirmed", "declined",
 /// "announced", "chat_copied".
@@ -140,6 +186,17 @@ mod tests {
         // English fallback keeps the same distinction.
         assert!(announcement_text("xx", false).contains("on my device"));
         assert!(announcement_text("xx", true).contains("external service"));
+    }
+
+    #[test]
+    fn ui_text_localizes_chrome_and_rejects_unknown() {
+        assert_eq!(ui_text("title", "it").unwrap(), "Avviso di registrazione");
+        assert_eq!(ui_text("cancel", "de").unwrap(), "Abbrechen");
+        assert!(ui_text("confirm", "it").unwrap().contains("consenso"));
+        assert!(ui_text("intro", "fr").unwrap().contains("Dimmy"));
+        // Unknown language → English fallback; unknown kind → None.
+        assert_eq!(ui_text("title", "ja").unwrap(), "Recording notice");
+        assert!(ui_text("bogus", "it").is_none());
     }
 
     #[test]

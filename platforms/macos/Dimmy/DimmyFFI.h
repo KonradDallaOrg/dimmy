@@ -250,6 +250,11 @@ int32_t dimmy_consent_text(const char * _Nonnull kind, const char * _Nonnull lan
 /// "confirmed", "declined", "announced", "chat_copied". Returns 0, or -1.
 int32_t dimmy_consent_log_event(const char * _Nonnull kind, const char * _Nullable lang);
 
+/// Track that a meeting recording was started/stopped from a shortcut or menu.
+/// `source` is mapped to a fixed categorical tag (hotkey|menu|jumplist|other)
+/// inside the core before emitting — never forwarded verbatim.
+void dimmy_track_meeting_action(const char * _Nullable source);
+
 /// GPU known-bad marker status as JSON. Returns bytes written, or -1.
 int32_t dimmy_gpu_get_status(char * _Nonnull out_buf, int32_t buf_len);
 
