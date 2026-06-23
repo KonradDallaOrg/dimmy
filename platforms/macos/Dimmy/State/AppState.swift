@@ -1232,6 +1232,23 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Optional global shortcut that TOGGLES a meeting recording (start ↔
+    /// stop). `HotkeyManager` matches it on the shared CGEventTap; the pressed
+    /// edge runs the consent-gated `MeetingShortcut.toggle`. EMPTY by default
+    /// (opt-in) — a meeting-record key easily collides with whatever app is
+    /// focused during a call (e.g. ⌃⇧M / ⌘⇧M is Teams mute). Toggle-only (a
+    /// meeting can't be push-to-talk). Mac-only knob; persisted to UserDefaults
+    /// like `commandHotkey`.
+    @Published var meetingHotkey: HotkeyCombo? = nil {
+        didSet {
+            if let h = meetingHotkey {
+                UserDefaults.standard.set(h.encoded, forKey: "meetingHotkeyEncoded")
+            } else {
+                UserDefaults.standard.removeObject(forKey: "meetingHotkeyEncoded")
+            }
+        }
+    }
+
     // MARK: - App rules (foreground-app overrides)
 
     /// User-curated rules evaluated top-down at hotkey-down. Persisted
@@ -1303,6 +1320,10 @@ final class AppState: ObservableObject {
         if let saved = UserDefaults.standard.string(forKey: "commandHotkeyEncoded"),
            let combo = HotkeyCombo(encoded: saved) {
             self.commandHotkey = combo
+        }
+        if let saved = UserDefaults.standard.string(forKey: "meetingHotkeyEncoded"),
+           let combo = HotkeyCombo(encoded: saved) {
+            self.meetingHotkey = combo
         }
         self.buyerEmail = UserDefaults.standard.string(forKey: "buyerEmail")
     }

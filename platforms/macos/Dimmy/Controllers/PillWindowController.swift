@@ -180,15 +180,42 @@ final class PillWindowController {
         meetingItem.target = self
         menu.addItem(meetingItem)
 
-        // Command Mode toggle — same surface as the status-bar / dock
-        // entries. Mirror of Win's pill flyout entry. Checkmark reflects
-        // the live appState.commandMode.
-        let commandItem = NSMenuItem(title: "Command (edit selection)",
-                                     action: #selector(toggleCommandModeAction),
+        menu.addItem(.separator())
+
+        // The three primary actions, mirrored across pill / status-bar / Dock.
+        // The shortcut combo is shown inline as text when set; no keyEquivalent
+        // (the global CGEventTap owns the shortcuts — a menu key-equivalent
+        // would double-fire while the app is frontmost).
+        let dictTitle = appState.isRecording ? "Stop Dictation" : "Start Dictation"
+        let dictItem = NSMenuItem(title: dictTitle,
+                                  action: #selector(toggleDictationAction),
+                                  keyEquivalent: "")
+        dictItem.target = self
+        menu.addItem(dictItem)
+
+        // Command (next dictation) — arms a one-shot command (does not record
+        // now). ✓ when armed. Replaces the old sticky command toggle.
+        let commandTitle = appState.commandHotkey
+            .map { "Command (next dictation)   \($0.displayString)" }
+            ?? "Command (next dictation)"
+        let commandItem = NSMenuItem(title: commandTitle,
+                                     action: #selector(armCommandAction),
                                      keyEquivalent: "")
         commandItem.target = self
-        commandItem.state = appState.commandMode ? .on : .off
+        commandItem.state = appState.oneShotCommandPending ? .on : .off
         menu.addItem(commandItem)
+
+        // Start/Stop Meeting — consent-gated background toggle.
+        let mtgTitle = appState.meetingActive ? "Stop Meeting" : "Start Meeting"
+        let mtgFull = appState.meetingHotkey
+            .map { "\(mtgTitle)   \($0.displayString)" } ?? mtgTitle
+        let mtgItem = NSMenuItem(title: mtgFull,
+                                 action: #selector(toggleMeetingAction),
+                                 keyEquivalent: "")
+        mtgItem.target = self
+        menu.addItem(mtgItem)
+
+        menu.addItem(.separator())
 
         let hideItem = NSMenuItem(title: "Hide pill", action: #selector(hidePillAction), keyEquivalent: "")
         hideItem.target = self
@@ -215,9 +242,31 @@ final class PillWindowController {
         appState.pillVisible = false
     }
 
-    @objc private func toggleCommandModeAction() {
-        appState.commandMode.toggle()
-        hkLog("[CmdMode] pill menu toggled → \(appState.commandMode)")
+    @objc private func toggleDictationAction() {
+        if !DimmyCore.shared.isInitialized {
+            DispatchQueue.global(qos: .userInitiated).async {
+                _ = DimmyCore.shared.initialize()
+                DispatchQueue.main.async { HotkeyManager.shared.toggleRecordingFromUI() }
+            }
+            return
+        }
+        HotkeyManager.shared.toggleRecordingFromUI()
+    }
+
+    @objc private func armCommandAction() {
+        appState.oneShotCommandPending.toggle()
+        hkLog("[CmdMode] pill menu one-shot armed → \(appState.oneShotCommandPending)")
+    }
+
+    @objc private func toggleMeetingAction() {
+        if !DimmyCore.shared.isInitialized {
+            DispatchQueue.global(qos: .userInitiated).async {
+                _ = DimmyCore.shared.initialize()
+                DispatchQueue.main.async { MeetingShortcut.toggle(appState: self.appState) }
+            }
+            return
+        }
+        MeetingShortcut.toggle(appState: appState)
     }
 
     @objc private func quitAction() {

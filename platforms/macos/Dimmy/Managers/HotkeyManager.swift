@@ -74,6 +74,11 @@ final class HotkeyManager {
     private let commandComboState = CommandComboState()
     private var commandLastPressTime: Date?
 
+    // Dedicated meeting start/stop hotkey — same CGEventTap + combo matcher as
+    // the command hotkey, but TOGGLE-only (a meeting can't be push-to-talk):
+    // we act on the pressed edge and ignore the release.
+    private let meetingComboState = CommandComboState()
+
     private init() {
         hkLog("[HotkeyManager] singleton init")
     }
@@ -123,6 +128,16 @@ final class HotkeyManager {
                 hkLog("[CmdHotkey] state machine rebound to \(newValue?.displayString ?? "<nil>")")
             }
             .store(in: &cancellables)
+
+        // Same for the optional meeting start/stop hotkey.
+        meetingComboState.setCombo(appState.meetingHotkey)
+        appState.$meetingHotkey
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] newValue in
+                self?.meetingComboState.setCombo(newValue)
+                hkLog("[MtgHotkey] state machine rebound to \(newValue?.displayString ?? "<nil>")")
+            }
+            .store(in: &cancellables)
     }
 
     private var cancellables = Set<AnyCancellable>()
@@ -137,6 +152,7 @@ final class HotkeyManager {
         }
         wakeObserver = nil
         commandComboState.reset()
+        meetingComboState.reset()
         cancellables.removeAll()
         appState?.hotkeyStatus = .uninstalled
     }
@@ -330,7 +346,8 @@ final class HotkeyManager {
         let dictConsume = handleFlags(rawFlags)
         let cmdEvent = commandComboState.processFlags(rawFlags)
         let cmdConsume = dispatchCommandEvent(cmdEvent)
-        return dictConsume || cmdConsume
+        let mtgConsume = dispatchMeetingEvent(meetingComboState.processFlags(rawFlags))
+        return dictConsume || cmdConsume || mtgConsume
     }
 
     /// keyDown handler — feeds the command-combo state machine. Only the
@@ -341,7 +358,9 @@ final class HotkeyManager {
     @discardableResult
     private func handleCommandKeyDown(keyCode: UInt16, flags: NSEvent.ModifierFlags) -> Bool {
         let event = commandComboState.processKeyDown(keyCode: keyCode, flags: flags)
-        return dispatchCommandEvent(event)
+        let cmdConsume = dispatchCommandEvent(event)
+        let mtgConsume = dispatchMeetingEvent(meetingComboState.processKeyDown(keyCode: keyCode, flags: flags))
+        return cmdConsume || mtgConsume
     }
 
     /// keyUp handler — also for the command-combo state machine. Fires
@@ -352,7 +371,9 @@ final class HotkeyManager {
     @discardableResult
     private func handleCommandKeyUp(keyCode: UInt16) -> Bool {
         let event = commandComboState.processKeyUp(keyCode: keyCode)
-        return dispatchCommandEvent(event)
+        let cmdConsume = dispatchCommandEvent(event)
+        let mtgConsume = dispatchMeetingEvent(meetingComboState.processKeyUp(keyCode: keyCode))
+        return cmdConsume || mtgConsume
     }
 
     /// Map a `CommandComboState` event onto the press/release handlers
@@ -369,6 +390,31 @@ final class HotkeyManager {
             handleCommandRelease()
             return true
         }
+    }
+
+    /// Map a meeting-combo event onto the toggle. TOGGLE-only: the pressed
+    /// edge fires the consent-gated start/stop; the release is consumed (for
+    /// chord symmetry so a downstream app never sees half a chord) but takes
+    /// no action — a meeting can't be push-to-talk.
+    @discardableResult
+    private func dispatchMeetingEvent(_ event: CommandComboState.Event) -> Bool {
+        switch event {
+        case .none:
+            return false
+        case .pressed:
+            handleMeetingToggle()
+            return true
+        case .released:
+            return true
+        }
+    }
+
+    /// Meeting hotkey press → the single consent-gated toggle shared with the
+    /// status-bar / Dock / pill menu actions.
+    @MainActor
+    private func handleMeetingToggle() {
+        guard let appState else { return }
+        MeetingShortcut.toggle(appState: appState)
     }
 
     /// Returns true if the event should be consumed (i.e. not forwarded to other apps).
@@ -1033,4 +1079,44 @@ final class CommandComboState {
     // `active` private without weakening encapsulation in production
     // code. `nonisolated` so XCTest can call it from outside @MainActor.
     var isActiveForTesting: Bool { active }
+}
+
+/// Single consent-gated entry point to TOGGLE a meeting recording, shared by
+/// the meeting hotkey (`HotkeyManager`) and the status-bar / Dock / pill menu
+/// actions. Mirror of the Windows `App.ToggleMeetingFromShortcutAsync`.
+///
+/// - Active meeting → stop + recap via the pill's existing pipeline.
+/// - A dictation in flight → ignored (the two captures share the cpal buffer
+///   and the core only guards the other direction — it blocks dictation while
+///   a meeting runs, not the reverse).
+/// - Idle → mandatory consent modal, then start in the BACKGROUND (the Meeting
+///   window is NOT opened; the pill + menus reflect state via the
+///   `meeting_state` event / `appState.meetingActive`).
+///
+/// Lives here (a file already in the Xcode target) rather than its own file
+/// because the project lists sources explicitly — a new .swift wouldn't build
+/// without a project.pbxproj edit.
+@MainActor
+enum MeetingShortcut {
+    static func toggle(appState: AppState) {
+        if DimmyCore.shared.meetingIsActive {
+            NSLog("[MeetingShortcut] stopping active meeting (+recap)")
+            PillWindowController.stopMeetingFromPill(appState: appState)
+            return
+        }
+        if appState.isRecording {
+            NSLog("[MeetingShortcut] ignored — a dictation is in progress")
+            appState.lastError = "Finish the dictation first"
+            return
+        }
+        let lang = Locale.current.language.languageCode?.identifier ?? "en"
+        guard MeetingConsentFlow.confirmAndAnnounce(lang: lang) else {
+            NSLog("[MeetingShortcut] consent declined")
+            return
+        }
+        if DimmyCore.shared.meetingStart() == nil {
+            NSLog("[MeetingShortcut] meeting start failed")
+            appState.lastError = "Meeting start failed"
+        }
+    }
 }
