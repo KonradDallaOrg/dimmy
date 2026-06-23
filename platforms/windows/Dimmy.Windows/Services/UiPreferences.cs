@@ -85,6 +85,13 @@ public sealed class UiPreferences
     /// Win-only UI knob, hence here and not in config.json.</summary>
     public string CommandHotkey { get; set; } = "";
 
+    /// <summary>Optional global shortcut that toggles a MEETING recording
+    /// (start ↔ stop). EMPTY by default — opt-in, because a meeting-record key
+    /// easily collides with whatever app is focused during a call (e.g.
+    /// Ctrl+Shift+M is Teams mute). Toggle-only. Win-only UI knob, hence here
+    /// and not in config.json.</summary>
+    public string MeetingHotkey { get; set; } = "";
+
     /// <summary>If true, Dimmy pins its system-tray icon to the always-visible
     /// notification area (next to wifi / volume / clock) by setting IsPromoted
     /// on its Win11 NotifyIconSettings entry, so the user doesn't have to drag

@@ -56,6 +56,75 @@ public partial class App : Application
         catch (Exception ex) { Log($"ReregisterCommandHotkey exc: {ex.Message}", "Hotkey"); }
     }
 
+    /// <summary>Re-bind the optional meeting start/stop hotkey after the user
+    /// edits it in Settings. Empty disables it. Toggle-only. No-op until the
+    /// service exists.</summary>
+    public void ReregisterMeetingHotkey(string combo)
+    {
+        try { _hotkeyService?.SetMeetingShortcut(combo); }
+        catch (Exception ex) { Log($"ReregisterMeetingHotkey exc: {ex.Message}", "Hotkey"); }
+    }
+
+    private void OnMeetingHotkeyPressed()
+    {
+        _dispatcherQueue?.TryEnqueue(async () => await ToggleMeetingFromShortcutAsync());
+    }
+
+    /// <summary>Toggle meeting recording from the meeting hotkey OR a menu
+    /// action — the single consent-gated meeting entry point for those paths.
+    /// Active meeting → stop + recap (via the pill's existing pipeline).
+    /// Idle → mandatory consent modal, then start recording in the BACKGROUND
+    /// (the pill + taskbar reflect it via the `meeting_state` event; the Meeting
+    /// window is NOT opened). Ignored while a dictation is in flight: the two
+    /// captures share the cpal buffer and the core has no guard for that
+    /// direction (it only blocks dictation while a meeting is active, rc -7).</summary>
+    public async Task ToggleMeetingFromShortcutAsync()
+    {
+        try
+        {
+            if (DimmyNative.dimmy_meeting_is_active() == 1)
+            {
+                PttLog("Meeting hotkey: stopping active meeting (+recap)");
+                if (_pillWindow != null)
+                    await _pillWindow.StopMeetingFromPillAsync();
+                return;
+            }
+            if (_appViewModel.IsRecording || _pttStarted)
+            {
+                PttLog("Meeting hotkey ignored — a dictation is in progress");
+                _appViewModel.SetError("Finish the dictation first");
+                return;
+            }
+            // The consent ContentDialog needs a XamlRoot; the pill is our
+            // always-available host. Show it if the user runs taskbar-only.
+            if (!IsPillVisible())
+                ShowPill();
+            var xamlRoot = _pillWindow?.Content?.XamlRoot;
+            if (xamlRoot == null)
+            {
+                PttLog("Meeting hotkey: no XamlRoot to host consent — aborting");
+                return;
+            }
+            var lang = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+            if (!await Services.ConsentFlow.ConfirmAndAnnounceAsync(xamlRoot, lang))
+            {
+                PttLog("Meeting hotkey: consent declined");
+                return;
+            }
+            var buf = new byte[256];
+            int rc = DimmyNative.dimmy_meeting_start(buf, buf.Length);
+            if (rc <= 0)
+            {
+                PttLog($"Meeting hotkey: start failed rc={rc}");
+                _appViewModel.SetError($"Meeting start failed ({rc})");
+                return;
+            }
+            PttLog("Meeting hotkey: recording started (background)");
+            // Pill + taskbar flip to recording via the meeting_state event.
+        }
+        catch (Exception ex) { PttLog($"ToggleMeetingFromShortcut exc: {ex.Message}"); }
+    }
+
     private PillWindow? _pillWindow;
     private CaptionWindow? _captionWindow;
     private MeetingWindow? _meetingWindow;
@@ -395,11 +464,14 @@ public partial class App : Application
         _hotkeyService.HotkeyReleased += OnHotkeyReleased;
         _hotkeyService.CommandHotkeyPressed += OnCommandHotkeyPressed;
         _hotkeyService.CommandHotkeyReleased += OnCommandHotkeyReleased;
+        _hotkeyService.MeetingHotkeyPressed += OnMeetingHotkeyPressed;
         _hotkeyService.PttMode = _appViewModel.ShortcutMode == "hold";
         _hotkeyService.Register(_appViewModel.Shortcut);
         // Optional dedicated command-mode hotkey (empty = disabled). Runs on
         // the same hook, so it inherits toggle/PTT + every combo.
         _hotkeyService.SetCommandShortcut(_uiPrefs.CommandHotkey);
+        // Optional meeting start/stop hotkey (empty = disabled). Toggle-only.
+        _hotkeyService.SetMeetingShortcut(_uiPrefs.MeetingHotkey);
     }
 
     private void StartNormalMode()

@@ -28,6 +28,12 @@ public class HotkeyService : IDisposable
     public event Action? CommandHotkeyPressed;
     public event Action? CommandHotkeyReleased;
 
+    /// <summary>Dedicated meeting start/stop hotkey. TOGGLE-only by design — a
+    /// meeting can't be push-to-talk (you can't hold a key for an hour), so
+    /// only the pressed edge fires regardless of <see cref="PttMode"/>; the
+    /// handler decides start-vs-stop from the live meeting state.</summary>
+    public event Action? MeetingHotkeyPressed;
+
     /// <summary>Whether PTT mode is active. Set by the caller before Register.
     /// Drives BOTH the dictation and the command hotkey release semantics.</summary>
     public bool PttMode { get; set; }
@@ -80,6 +86,15 @@ public class HotkeyService : IDisposable
         Log($"SetCommandShortcut(\"{c}\") via Rust FFI");
     }
 
+    /// <summary>Set (or clear) the optional meeting start/stop shortcut on the
+    /// same Rust hook. Empty/whitespace disables it.</summary>
+    public void SetMeetingShortcut(string? combo)
+    {
+        var c = combo ?? "";
+        DimmyNative.dimmy_hotkey_set_meeting(c);
+        Log($"SetMeetingShortcut(\"{c}\") via Rust FFI");
+    }
+
     private void StopPolling()
     {
         _polling = false;
@@ -116,6 +131,15 @@ public class HotkeyService : IDisposable
                 Log($"CMD EVENT: released (PttMode={PttMode})");
                 if (PttMode)
                     _dispatcher.TryEnqueue(() => CommandHotkeyReleased?.Invoke());
+            }
+
+            // Meeting hotkey: TOGGLE-only — fire on pressed, ignore released
+            // regardless of PttMode (a meeting can't be push-to-talk).
+            int mev = DimmyNative.dimmy_hotkey_take_meeting_event();
+            if (mev == 1)
+            {
+                Log("MTNG EVENT: pressed (toggle)");
+                _dispatcher.TryEnqueue(() => MeetingHotkeyPressed?.Invoke());
             }
             Thread.Sleep(10);
         }

@@ -443,6 +443,15 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_hotkey_take_command_event();
 
+    // Optional meeting start/stop hotkey on the same Rust hook. Empty combo
+    // disables it. Its event is a TOGGLE (pressed = start/stop).
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void dimmy_hotkey_set_meeting(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string combo);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_hotkey_take_meeting_event();
+
     // 1 if the two combos conflict (one is a subset of the other) — used to
     // reject a command hotkey that collides with the dictation/dict hotkey.
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
