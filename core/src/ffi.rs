@@ -5256,7 +5256,11 @@ pub unsafe extern "C" fn dimmy_consent_text(
                 .unwrap_or(false);
             crate::consent::announcement_text(lang, stt_cloud || llm_cloud)
         }
-        _ => return -1,
+        // Localized dialog chrome: "title" | "intro" | "confirm" | "cancel".
+        other => match crate::consent::ui_text(other, lang) {
+            Some(s) => s,
+            None => return -1,
+        },
     };
     write_to_buf(&text, out_buf, buf_len)
 }

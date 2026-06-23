@@ -97,7 +97,8 @@ public partial class App : Application
                 return;
             }
             var lang = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
-            if (!await RunConsentDialogAsync(lang))
+            // ConsentFlow self-hosts a correctly-sized window — no XamlRoot needed.
+            if (!await Services.ConsentFlow.ConfirmAndAnnounceAsync(null, lang))
             {
                 PttLog("Meeting hotkey: consent declined");
                 return;
