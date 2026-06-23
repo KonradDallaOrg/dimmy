@@ -96,18 +96,8 @@ public partial class App : Application
                 _appViewModel.SetError("Finish the dictation first");
                 return;
             }
-            // The consent ContentDialog needs a XamlRoot; the pill is our
-            // always-available host. Show it if the user runs taskbar-only.
-            if (!IsPillVisible())
-                ShowPill();
-            var xamlRoot = _pillWindow?.Content?.XamlRoot;
-            if (xamlRoot == null)
-            {
-                PttLog("Meeting hotkey: no XamlRoot to host consent — aborting");
-                return;
-            }
             var lang = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
-            if (!await Services.ConsentFlow.ConfirmAndAnnounceAsync(xamlRoot, lang))
+            if (!await RunConsentDialogAsync(lang))
             {
                 PttLog("Meeting hotkey: consent declined");
                 return;
@@ -125,6 +115,60 @@ public partial class App : Application
             // Pill + taskbar flip to recording via the meeting_state event.
         }
         catch (Exception ex) { PttLog($"ToggleMeetingFromShortcut exc: {ex.Message}"); }
+    }
+
+    /// <summary>Host the recording-consent dialog in a properly sized window
+    /// and return the user's decision. The pill is too small to host a
+    /// ContentDialog — the consent text rendered clipped/illegible (burned
+    /// 2026-06-24). If a large window (Meeting/Settings) is already open we
+    /// reuse its XamlRoot; otherwise we spin up a transient centered host
+    /// window that closes as soon as the dialog does, so meeting-from-hotkey
+    /// still records in the background without leaving a window open.</summary>
+    private async Task<bool> RunConsentDialogAsync(string lang)
+    {
+        var existing = _meetingWindow?.Content?.XamlRoot
+            ?? _settingsWindow?.Content?.XamlRoot;
+        if (existing != null)
+            return await Services.ConsentFlow.ConfirmAndAnnounceAsync(existing, lang);
+
+        var host = new Microsoft.UI.Xaml.Window { Title = "Recording notice" };
+        host.Content = new Microsoft.UI.Xaml.Controls.Grid
+        {
+            Background = (Microsoft.UI.Xaml.Media.Brush?)
+                Application.Current.Resources["ApplicationPageBackgroundThemeBrush"],
+            RequestedTheme = Dimmy.Windows.Helpers.ThemeHelper.ResolvedElementTheme(),
+        };
+        try
+        {
+            var aw = host.AppWindow;
+            const int w = 560, h = 540;
+            var da = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(
+                aw.Id, Microsoft.UI.Windowing.DisplayAreaFallback.Primary);
+            int x = da.WorkArea.X + (da.WorkArea.Width - w) / 2;
+            int y = da.WorkArea.Y + (da.WorkArea.Height - h) / 2;
+            aw.MoveAndResize(new global::Windows.Graphics.RectInt32(x, y, w, h));
+            if (aw.Presenter is Microsoft.UI.Windowing.OverlappedPresenter p)
+            {
+                p.IsResizable = false;
+                p.IsMaximizable = false;
+                p.IsMinimizable = false;
+                p.IsAlwaysOnTop = true;
+            }
+        }
+        catch (Exception ex) { PttLog($"consent host size exc: {ex.Message}"); }
+
+        var ready = new TaskCompletionSource();
+        ((Microsoft.UI.Xaml.FrameworkElement)host.Content).Loaded += (_, __) => ready.TrySetResult();
+        host.Activate();
+        await ready.Task;
+        try
+        {
+            return await Services.ConsentFlow.ConfirmAndAnnounceAsync(host.Content.XamlRoot, lang);
+        }
+        finally
+        {
+            host.Close();
+        }
     }
 
     /// <summary>Menu action "Start/Stop Dictation": toggle a dictation. If
