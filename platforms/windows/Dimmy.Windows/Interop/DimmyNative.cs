@@ -452,6 +452,12 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_hotkey_take_meeting_event();
 
+    // Telemetry: a meeting was started/stopped from a shortcut or menu.
+    // source = "hotkey" | "menu" | "jumplist" (categorical, no content).
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void dimmy_track_meeting_action(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string source);
+
     // 1 if the two combos conflict (one is a subset of the other) — used to
     // reject a command hotkey that collides with the dictation/dict hotkey.
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]

@@ -1086,7 +1086,7 @@ public sealed partial class PillWindow : Window
         };
         meetingRecItem.Click += async (_, _) =>
         {
-            if (App.Instance != null) await App.Instance.ToggleMeetingFromShortcutAsync();
+            if (App.Instance != null) await App.Instance.ToggleMeetingFromShortcutAsync("menu");
         };
         menu.Items.Add(meetingRecItem);
 

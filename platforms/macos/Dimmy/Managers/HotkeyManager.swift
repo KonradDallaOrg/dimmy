@@ -1098,9 +1098,10 @@ final class CommandComboState {
 /// without a project.pbxproj edit.
 @MainActor
 enum MeetingShortcut {
-    static func toggle(appState: AppState) {
+    static func toggle(appState: AppState, source: String = "hotkey") {
         if DimmyCore.shared.meetingIsActive {
             NSLog("[MeetingShortcut] stopping active meeting (+recap)")
+            DimmyCore.shared.trackMeetingAction(source: source)
             PillWindowController.stopMeetingFromPill(appState: appState)
             return
         }
@@ -1117,6 +1118,8 @@ enum MeetingShortcut {
         if DimmyCore.shared.meetingStart() == nil {
             NSLog("[MeetingShortcut] meeting start failed")
             appState.lastError = "Meeting start failed"
+        } else {
+            DimmyCore.shared.trackMeetingAction(source: source)
         }
     }
 }

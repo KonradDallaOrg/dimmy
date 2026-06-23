@@ -173,6 +173,14 @@ pub enum Event {
         scope: &'static str,
         provider: &'static str,
     },
+    /// Emitted when a meeting recording is started/stopped via the dedicated
+    /// meeting shortcut or one of the action menus (pill / taskbar-jumplist /
+    /// macOS status-bar+Dock). `source` is a stable categorical enum tag
+    /// (hotkey|menu|jumplist) — never any content. Pairs with `meeting.started`
+    /// to measure how the new shortcut/menu surfaces are adopted vs the button.
+    FeatureMeetingShortcut {
+        source: &'static str,
+    },
 
     // ── Errors (also forwarded to Sentry) ────────────────────
     ErrorCloudStt {
@@ -503,6 +511,7 @@ impl Event {
             Event::ErrorAudioHealth { .. } => "error.audio_health",
             Event::FeatureHotkeyTriggered => "feature.hotkey_triggered",
             Event::FeatureApiKeySet { .. } => "feature.api_key_set",
+            Event::FeatureMeetingShortcut { .. } => "feature.meeting_shortcut",
             Event::LicenseActivated { .. } => "license.activated",
             Event::LicenseActivationFailed { .. } => "license.activation_failed",
             Event::LicenseRefreshed { .. } => "license.refreshed",
@@ -627,6 +636,13 @@ mod tests {
         assert_eq!(p["had_llm"], false);
         assert_eq!(p["entry_point"], "hotkey");
         assert_eq!(p["local_backend"], "");
+    }
+
+    #[test]
+    fn meeting_shortcut_event_name_and_source() {
+        let e = Event::FeatureMeetingShortcut { source: "hotkey" };
+        assert_eq!(e.name(), "feature.meeting_shortcut");
+        assert_eq!(e.properties()["source"], "hotkey");
     }
 
     #[test]

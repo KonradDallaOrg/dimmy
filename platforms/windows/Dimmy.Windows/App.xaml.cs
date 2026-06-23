@@ -78,13 +78,14 @@ public partial class App : Application
     /// window is NOT opened). Ignored while a dictation is in flight: the two
     /// captures share the cpal buffer and the core has no guard for that
     /// direction (it only blocks dictation while a meeting is active, rc -7).</summary>
-    public async Task ToggleMeetingFromShortcutAsync()
+    public async Task ToggleMeetingFromShortcutAsync(string source = "hotkey")
     {
         try
         {
             if (DimmyNative.dimmy_meeting_is_active() == 1)
             {
                 PttLog("Meeting hotkey: stopping active meeting (+recap)");
+                try { DimmyNative.dimmy_track_meeting_action(source); } catch { }
                 if (_pillWindow != null)
                     await _pillWindow.StopMeetingFromPillAsync();
                 return;
@@ -120,6 +121,7 @@ public partial class App : Application
                 return;
             }
             PttLog("Meeting hotkey: recording started (background)");
+            try { DimmyNative.dimmy_track_meeting_action(source); } catch { }
             // Pill + taskbar flip to recording via the meeting_state event.
         }
         catch (Exception ex) { PttLog($"ToggleMeetingFromShortcut exc: {ex.Message}"); }
@@ -993,7 +995,7 @@ public partial class App : Application
                 // Recording actions (jumplist mirrors the global shortcuts).
                 if (command == "start-dictation") { MenuToggleDictation(); return; }
                 if (command == "arm-command") { MenuArmCommandOneShot(); return; }
-                if (command == "toggle-meeting") { _ = ToggleMeetingFromShortcutAsync(); return; }
+                if (command == "toggle-meeting") { _ = ToggleMeetingFromShortcutAsync("jumplist"); return; }
                 if (command == "quit") { Quit(); return; }
                 if (command.StartsWith("set-style:", StringComparison.Ordinal))
                 {

@@ -462,11 +462,11 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         if !DimmyCore.shared.isInitialized {
             DispatchQueue.global(qos: .userInitiated).async {
                 _ = DimmyCore.shared.initialize()
-                DispatchQueue.main.async { MeetingShortcut.toggle(appState: self.appState) }
+                DispatchQueue.main.async { MeetingShortcut.toggle(appState: self.appState, source: "menu") }
             }
             return
         }
-        MeetingShortcut.toggle(appState: appState)
+        MeetingShortcut.toggle(appState: appState, source: "menu")
     }
 
     /// Public so AppDelegate can reuse it inside `applicationDockMenu(_:)`,

@@ -7076,6 +7076,29 @@ pub extern "C" fn dimmy_hotkey_take_meeting_event() -> c_int {
     crate::hotkey::take_meeting_event() as c_int
 }
 
+/// Track that a meeting recording was started/stopped from one of the new
+/// surfaces. `source` is mapped to a fixed categorical enum tag
+/// (hotkey|menu|jumplist|other) before emitting — never forwarded verbatim, so
+/// no host string can leak into telemetry.
+///
+/// # Safety
+/// `source_ptr` must be null or a valid null-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_track_meeting_action(source_ptr: *const c_char) {
+    let raw = if source_ptr.is_null() {
+        ""
+    } else {
+        CStr::from_ptr(source_ptr).to_str().unwrap_or("")
+    };
+    let source: &'static str = match raw {
+        "hotkey" => "hotkey",
+        "menu" => "menu",
+        "jumplist" => "jumplist",
+        _ => "other",
+    };
+    crate::telemetry::track(crate::telemetry::Event::FeatureMeetingShortcut { source });
+}
+
 /// Start recording mode for shortcut capture.
 #[no_mangle]
 pub extern "C" fn dimmy_hotkey_start_recording() {

@@ -288,6 +288,14 @@ extension DimmyCore {
         }
     }
 
+    /// Telemetry: a meeting was started/stopped from a shortcut or menu.
+    /// `source` ∈ {"hotkey","menu","jumplist"} (categorical, no content).
+    func trackMeetingAction(source: String) {
+        source.withCString { s in
+            dimmy_track_meeting_action(s)
+        }
+    }
+
     // MARK: - Raw LLM call
 
     /// Bypass the dictation rewrite wrapper and send a raw prompt to the

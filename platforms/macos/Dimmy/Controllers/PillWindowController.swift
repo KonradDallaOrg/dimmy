@@ -262,11 +262,11 @@ final class PillWindowController {
         if !DimmyCore.shared.isInitialized {
             DispatchQueue.global(qos: .userInitiated).async {
                 _ = DimmyCore.shared.initialize()
-                DispatchQueue.main.async { MeetingShortcut.toggle(appState: self.appState) }
+                DispatchQueue.main.async { MeetingShortcut.toggle(appState: self.appState, source: "menu") }
             }
             return
         }
-        MeetingShortcut.toggle(appState: appState)
+        MeetingShortcut.toggle(appState: appState, source: "menu")
     }
 
     @objc private func quitAction() {
