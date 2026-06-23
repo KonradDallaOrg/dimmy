@@ -194,6 +194,11 @@ impl Binding {
 static DICT: Binding = Binding::new();
 /// The optional dedicated command-mode shortcut binding (empty = disabled).
 static CMD: Binding = Binding::new();
+/// The optional meeting-recording start/stop shortcut binding (empty =
+/// disabled). Like CMD it never falls back to a default. The host treats its
+/// event as a TOGGLE regardless of the global hold/PTT mode — you can't hold a
+/// key for an hour-long meeting.
+static MTNG: Binding = Binding::new();
 
 /// When `true`, the LL keyboard hook consumes (returns 1 for) every event
 /// matching the configured shortcut keys, instead of forwarding to the OS
@@ -483,6 +488,15 @@ pub fn set_command_shortcut(combo: &str) {
     }
 }
 
+/// Set (or clear) the optional meeting start/stop shortcut. Mirrors
+/// `set_command_shortcut`: an empty or unparseable combo DISABLES it.
+pub fn set_meeting_shortcut(combo: &str) {
+    match parse_combo(combo) {
+        Some((k1, k2, k3)) => MTNG.set_codes(k1, k2, k3),
+        None => MTNG.clear(),
+    }
+}
+
 /// Tagged keyset of a combo for conflict detection: each modifier group and
 /// the non-modifier key become distinct tokens. `None` for empty/unparseable.
 fn combo_keyset(combo: &str) -> Option<Vec<u32>> {
@@ -634,6 +648,13 @@ pub fn take_event() -> u8 {
 /// Returns 0 forever while the command hotkey is unconfigured.
 pub fn take_command_event() -> u8 {
     CMD.take_event()
+}
+
+/// Take the latest meeting hotkey event: 0=none, 1=pressed, 2=released.
+/// Returns 0 forever while the meeting hotkey is unconfigured. The host
+/// treats `pressed` as a toggle (start/stop) and ignores `released`.
+pub fn take_meeting_event() -> u8 {
+    MTNG.take_event()
 }
 
 /// Install the global keyboard hook.
@@ -993,20 +1014,25 @@ mod platform {
             MODIFIER_SUPPRESS.store(true, Ordering::SeqCst);
             emit_synthetic_combo_release(&CMD);
         }
+        if MTNG.process(vk, is_down, is_up) == Transition::Pressed {
+            MODIFIER_SUPPRESS.store(true, Ordering::SeqCst);
+            emit_synthetic_combo_release(&MTNG);
+        }
 
-        // Clear suppression only once NEITHER combo is active AND every
-        // shortcut key of both bindings is physically up — so the trailing
-        // modifier-up that ends a hold is suppressed too (no orphan Win/Alt
-        // up reaching the shell).
+        // Clear suppression only once NO combo is active AND every shortcut key
+        // of all bindings is physically up — so the trailing modifier-up that
+        // ends a hold is suppressed too (no orphan Win/Alt up reaching the shell).
         if !DICT.combo_active.load(Ordering::SeqCst)
             && !CMD.combo_active.load(Ordering::SeqCst)
+            && !MTNG.combo_active.load(Ordering::SeqCst)
             && DICT.all_released()
             && CMD.all_released()
+            && MTNG.all_released()
         {
             MODIFIER_SUPPRESS.store(false, Ordering::SeqCst);
         }
 
-        let is_combo_key = DICT.matches_key(vk) || CMD.matches_key(vk);
+        let is_combo_key = DICT.matches_key(vk) || CMD.matches_key(vk) || MTNG.matches_key(vk);
         if is_combo_key && MODIFIER_SUPPRESS.load(Ordering::SeqCst) {
             return 1;
         }
@@ -1645,6 +1671,51 @@ mod tests {
         assert!(
             !combos_conflict("ctrl+space", ""),
             "disabled never conflicts"
+        );
+    }
+
+    #[test]
+    fn meeting_shortcut_set_and_clear() {
+        // Only this test touches MTNG, so its global state is race-free.
+        // (Independence from DICT/CMD is structural — they are separate
+        // statics — so we don't read those here: other tests mutate them in
+        // parallel.)
+        set_meeting_shortcut("ctrl+shift+o");
+        assert_eq!(
+            MTNG.key1_codes.load(Ordering::SeqCst),
+            group_to_packed(GROUP_CTRL)
+        );
+        assert_eq!(
+            MTNG.key2_codes.load(Ordering::SeqCst),
+            group_to_packed(GROUP_SHIFT)
+        );
+        assert_eq!(MTNG.key3_code.load(Ordering::SeqCst), name_to_vk("o"));
+        // Empty disables it + the event mailbox stays silent.
+        set_meeting_shortcut("");
+        assert_eq!(MTNG.key1_codes.load(Ordering::SeqCst), 0);
+        assert_eq!(MTNG.key3_code.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            take_meeting_event(),
+            0,
+            "disabled meeting hotkey never fires"
+        );
+    }
+
+    #[test]
+    fn combos_conflict_three_way() {
+        // The host validates a candidate meeting combo against BOTH dictation
+        // and command before binding it.
+        assert!(
+            combos_conflict("ctrl+space", "ctrl+shift+space"),
+            "meeting superset of dictation must be rejected"
+        );
+        assert!(
+            !combos_conflict("ctrl+shift+o", "ctrl+space"),
+            "ctrl+shift+o vs ctrl+space: no subset relation"
+        );
+        assert!(
+            !combos_conflict("ctrl+shift+o", "win+alt"),
+            "ctrl+shift+o vs command win+alt: distinct"
         );
     }
 }

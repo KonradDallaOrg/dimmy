@@ -56,10 +56,12 @@ dimmy_hotkey_install
 dimmy_hotkey_poll_recording
 dimmy_hotkey_set
 dimmy_hotkey_set_command
+dimmy_hotkey_set_meeting
 dimmy_hotkey_start_recording
 dimmy_hotkey_stop_recording
 dimmy_hotkey_take_command_event
 dimmy_hotkey_take_event
+dimmy_hotkey_take_meeting_event
 dimmy_hotkey_take_recorded
 dimmy_init
 dimmy_is_recording

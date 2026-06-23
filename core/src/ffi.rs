@@ -5927,6 +5927,26 @@ pub unsafe extern "C" fn dimmy_hotkey_set_command(combo_ptr: *const c_char) {
     }
 }
 
+/// Set (or clear) the optional meeting start/stop shortcut. Mirrors
+/// `dimmy_hotkey_set_command`: a null/empty/unparseable combo DISABLES it.
+/// The host treats its event (via `dimmy_hotkey_take_meeting_event`) as a
+/// TOGGLE — start the meeting if idle, stop it if a meeting is recording.
+///
+/// # Safety
+/// `combo_ptr` must be null or a valid null-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_hotkey_set_meeting(combo_ptr: *const c_char) {
+    if combo_ptr.is_null() {
+        crate::hotkey::set_meeting_shortcut("");
+        crate::log("[Hotkey] set_meeting_shortcut(disabled)");
+        return;
+    }
+    if let Ok(combo) = CStr::from_ptr(combo_ptr).to_str() {
+        crate::hotkey::set_meeting_shortcut(combo);
+        crate::log(&format!("[Hotkey] set_meeting_shortcut(\"{}\")", combo));
+    }
+}
+
 /// Returns 1 if the two combos conflict (one is a subset of the other, so
 /// pressing one would also trigger the other), else 0. Used by the host to
 /// reject a command hotkey that collides with the dictation / dictionary
@@ -7046,6 +7066,14 @@ pub extern "C" fn dimmy_hotkey_take_event() -> c_int {
 #[no_mangle]
 pub extern "C" fn dimmy_hotkey_take_command_event() -> c_int {
     crate::hotkey::take_command_event() as c_int
+}
+
+/// Take the latest meeting hotkey event: 0=none, 1=pressed, 2=released.
+/// Returns 0 forever while the meeting hotkey is unconfigured. The host
+/// treats `1` (pressed) as a toggle and ignores `2` (released).
+#[no_mangle]
+pub extern "C" fn dimmy_hotkey_take_meeting_event() -> c_int {
+    crate::hotkey::take_meeting_event() as c_int
 }
 
 /// Start recording mode for shortcut capture.
