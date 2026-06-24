@@ -897,6 +897,15 @@ jobs:
           Copy-Item "mcp-server/target/release/dimmy-mcp.exe" "$pubDir/" -Force
           Get-ChildItem "$pubDir" -Filter "*.pdb" -Recurse | Remove-Item -ErrorAction SilentlyContinue
 
+      # The self-hosted `sign-windows` job consumes this to Authenticode-sign
+      # the Dimmy binaries with the Certum cloud cert and re-pack signed.
+      - name: Upload unsigned publish dir (for self-hosted signing)
+        uses: actions/upload-artifact@v4
+        with:
+          name: win-publish
+          path: platforms/windows/Dimmy.Windows/publish
+          retention-days: 1
+
       - name: Verify self-contained bundle
         shell: pwsh
         run: platforms/windows/verify-self-contained.ps1 -Path platforms/windows/Dimmy.Windows/publish
@@ -926,6 +935,70 @@ jobs:
             platforms/windows/velopack-output/Dimmy-win-Portable.zip
             platforms/windows/velopack-output/Dimmy-*-full.nupkg
             platforms/windows/velopack-output/releases.win.json
+
+  # ── Full Authenticode signing on the self-hosted runner (Konrad's PC) ──
+  # PROD twin of staging-tester's sign-windows: same design, prod vpk args
+  # (packId Dimmy, default channel) + prod asset names (Dimmy-win-*). The
+  # Certum cloud key is non-exportable / no headless login → signing is
+  # local-only on the self-hosted runner (label `dimmy-sign`).
+  # PREREQ: runner PC-KDALLA ONLINE + SimplySign Desktop LOGGED IN.
+  # SAFE BY DESIGN: build-windows already uploaded the UNSIGNED assets, so if
+  # this job is skipped/fails the release still works — re-run sign-windows
+  # after logging into SimplySign.
+  sign-windows:
+    name: Sign Windows (self-hosted Certum)
+    needs: [create-release, build-windows]
+    runs-on: [self-hosted, dimmy-sign]
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download unsigned publish dir
+        uses: actions/download-artifact@v4
+        with:
+          name: win-publish
+          path: platforms/windows/Dimmy.Windows/publish
+
+      - name: Sign Dimmy binaries + re-pack signed + overwrite assets
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $thumb = "DD0AD19CFEB75B2D02A58363CA17CF0ED16BFDB4"
+          $ts = "http://time.certum.pl/"
+
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool) { throw "signtool.exe not found (Windows SDK missing on runner)." }
+          $pubDir = (Resolve-Path "platforms/windows/Dimmy.Windows/publish").Path
+
+          # Sign only Dimmy-owned binaries (Microsoft's runtime DLLs are already signed).
+          $mine = @("Dimmy.Windows.exe", "Dimmy.Windows.dll", "dimmy_lib.dll", "dimmy-mcp.exe")
+          foreach ($name in $mine) {
+            $f = Join-Path $pubDir $name
+            if (Test-Path $f) {
+              Write-Host "Signing $name"
+              & $signtool.FullName sign /sha1 $thumb /fd sha256 /tr $ts /td sha256 $f
+              if ($LASTEXITCODE -ne 0) { throw "Sign failed on $name. Is SimplySign Desktop logged in?" }
+            }
+          }
+
+          # Re-pack with Velopack (PROD args: packId Dimmy, default channel),
+          # signing the Setup/Update/main wrapper exes via --signParams.
+          dotnet tool install -g vpk 2>$null
+          $env:PATH += ";$env:USERPROFILE\.dotnet\tools"
+          $version = "${{ needs.create-release.outputs.version }}"
+          if (Test-Path velopack-output) { Remove-Item velopack-output -Recurse -Force }
+          vpk pack --packId Dimmy --packVersion $version --packDir "$pubDir" --mainExe Dimmy.Windows.exe --icon "platforms/windows/Dimmy.Windows/Assets/dimmy.ico" --framework "vcredist143-x64" --signParams "/sha1 $thumb /fd sha256 /tr $ts /td sha256" --outputDir velopack-output
+          if ($LASTEXITCODE -ne 0) { throw "vpk pack failed." }
+
+          # Overwrite the release assets with the signed ones.
+          $tag = "${{ github.ref_name }}"
+          $files = Get-ChildItem velopack-output -Recurse -Include "Dimmy-win-Setup.exe","Dimmy-win-Portable.zip","Dimmy-*-full.nupkg","releases.win.json" |
+            ForEach-Object { $_.FullName }
+          if (-not $files) { throw "No Velopack output to upload." }
+          gh release upload $tag $files --repo "$env:GITHUB_REPOSITORY" --clobber
+          Write-Host "=== Signed Windows assets uploaded to $tag ==="
 
   # ── Linux Native Build ─────────────────────────────────────────────
   build-linux:
@@ -1016,7 +1089,11 @@ jobs:
   # ── Publish (waits for all jobs including test-install) ─────────────
   publish-release:
     name: Publish Release
-    needs: [rust-check, create-release, build-macos, build-windows, build-linux, test-install]
+    # sign-windows is a required dependency: the release is created as a DRAFT
+    # and only flipped to public here, so it never goes live with unsigned
+    # Windows assets. If signing fails (SimplySign not logged in), the release
+    # stays draft — log into SimplySign and re-run the failed jobs.
+    needs: [rust-check, create-release, build-macos, build-windows, build-linux, test-install, sign-windows]
     runs-on: ubuntu-latest
     steps:
       - name: Publish release
