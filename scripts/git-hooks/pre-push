@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# pre-push — Windows code-signing reminder when pushing a version tag.
+#
+# Signed Windows builds run the `sign-windows` CI job on the self-hosted
+# runner (PC-KDALLA), which can only sign while SimplySign Desktop is logged
+# in. Forget that and the release ships unsigned (recoverable, but wastes a
+# build). This hook fires ONLY when a `v*` tag is in the push, prompts on the
+# terminal, and aborts unless you confirm. Normal branch pushes pass silently.
+#
+# See CLAUDE.md "SIGNED WINDOWS BUILDS" + memory reference_windows_code_signing_certum.
+# Skip ad-hoc with `git push --no-verify`.
+
+pushing_version_tag=0
+while read -r local_ref _local_sha _remote_ref _remote_sha; do
+    case "$local_ref" in
+        refs/tags/v*) pushing_version_tag=1 ;;
+    esac
+done
+
+if [ "$pushing_version_tag" -eq 1 ] && [ -e /dev/tty ]; then
+    {
+        echo ""
+        echo "  ============================================================"
+        echo "  PUSHING A VERSION TAG -- Windows signing prerequisite"
+        echo "  ------------------------------------------------------------"
+        echo "  The 'sign-windows' CI job signs on the self-hosted runner."
+        echo "  Before this tag builds, make sure:"
+        echo "    1) self-hosted runner PC-KDALLA is ONLINE  (./run.cmd)"
+        echo "    2) SimplySign Desktop is OPEN + LOGGED IN  (~3h session)"
+        echo ""
+        echo "  If not: the build still ships UNSIGNED assets (not broken);"
+        echo "  re-run the 'sign-windows' job after logging in."
+        echo "  ============================================================"
+        printf "  Continue the push? [y/N] "
+    } > /dev/tty
+    read -r answer < /dev/tty
+    case "$answer" in
+        y | Y | yes | YES | s | S | si | SI) echo "  -> proceeding." > /dev/tty ;;
+        *) echo "  -> push aborted (use 'git push --no-verify' to skip this check)." > /dev/tty; exit 1 ;;
+    esac
+fi
+
+exit 0
