@@ -631,6 +631,15 @@ jobs:
           Copy-Item "mcp-server/target/release/dimmy-mcp.exe" "$pubDir/" -Force
           Get-ChildItem "$pubDir" -Filter "*.pdb" -Recurse | Remove-Item -ErrorAction SilentlyContinue
 
+      # The self-hosted `sign-windows` job below consumes this to Authenticode-
+      # sign the Dimmy binaries with the Certum cloud cert and re-pack signed.
+      - name: Upload unsigned publish dir (for self-hosted signing)
+        uses: actions/upload-artifact@v4
+        with:
+          name: win-publish
+          path: platforms/windows/Dimmy.Windows/publish
+          retention-days: 1
+
       - name: Install Velopack CLI
         run: dotnet tool install -g vpk
 
@@ -660,3 +669,69 @@ jobs:
             platforms/windows/velopack-output/Dimmy-Staging-*Portable.zip
             platforms/windows/velopack-output/Dimmy-Staging-*-full.nupkg
             platforms/windows/velopack-output/releases*.json
+
+  # ── Full Authenticode signing on a self-hosted runner (Konrad's PC) ──
+  # The Certum "Code Signing in the cloud" key is non-exportable and has no
+  # headless login, so signing happens on the self-hosted runner (label
+  # `dimmy-sign`) where a logged-in SimplySign Desktop session exposes the key
+  # to signtool. PREREQ at release time: open SimplySign Desktop + log in.
+  #
+  # SAFE BY DESIGN: `build-windows` already uploaded the (unsigned) Velopack
+  # assets, so if this job is skipped or fails (e.g. SimplySign not logged in)
+  # the release still has working assets — just re-run this job after logging
+  # in. On success it signs every Dimmy-owned binary, re-packs with
+  # --signParams, and overwrites the release assets with signed ones.
+  sign-windows:
+    name: Sign Windows (self-hosted Certum)
+    needs: [create-release, build-windows]
+    runs-on: [self-hosted, dimmy-sign]
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download unsigned publish dir
+        uses: actions/download-artifact@v4
+        with:
+          name: win-publish
+          path: platforms/windows/Dimmy.Windows/publish
+
+      - name: Sign Dimmy binaries + re-pack signed + overwrite assets
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $thumb = "DD0AD19CFEB75B2D02A58363CA17CF0ED16BFDB4"
+          $ts = "http://time.certum.pl/"
+
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool) { throw "signtool.exe not found (Windows SDK missing on runner)." }
+          $pubDir = (Resolve-Path "platforms/windows/Dimmy.Windows/publish").Path
+
+          # Sign only Dimmy-owned binaries (Microsoft's runtime DLLs are already
+          # signed — re-signing them would be pointless and replace MS's sig).
+          $mine = @("Dimmy.Windows.exe", "Dimmy.Windows.dll", "dimmy_lib.dll", "dimmy-mcp.exe")
+          foreach ($name in $mine) {
+            $f = Join-Path $pubDir $name
+            if (Test-Path $f) {
+              Write-Host "Signing $name"
+              & $signtool.FullName sign /sha1 $thumb /fd sha256 /tr $ts /td sha256 $f
+              if ($LASTEXITCODE -ne 0) { throw "Sign failed on $name. Is SimplySign Desktop logged in?" }
+            }
+          }
+
+          # Re-pack with Velopack, signing the Setup/Update/main wrapper exes too.
+          dotnet tool install -g vpk 2>$null
+          $env:PATH += ";$env:USERPROFILE\.dotnet\tools"
+          $version = "${{ needs.create-release.outputs.version }}"
+          if (Test-Path velopack-output) { Remove-Item velopack-output -Recurse -Force }
+          vpk pack --packId Dimmy-Staging --packVersion $version --packDir "$pubDir" --mainExe Dimmy.Windows.exe --icon "platforms/windows/Dimmy.Windows/Assets/dimmy.ico" --framework "vcredist143-x64" --channel staging --signParams "/sha1 $thumb /fd sha256 /tr $ts /td sha256" --outputDir velopack-output
+          if ($LASTEXITCODE -ne 0) { throw "vpk pack failed." }
+
+          # Overwrite the release assets with the signed ones.
+          $tag = "${{ github.ref_name }}"
+          $files = Get-ChildItem velopack-output -Recurse -Include "Dimmy-Staging-*Setup.exe","Dimmy-Staging-*Portable.zip","Dimmy-Staging-*-full.nupkg","releases*.json" |
+            ForEach-Object { $_.FullName }
+          if (-not $files) { throw "No Velopack output to upload." }
+          gh release upload $tag $files --repo "$env:GITHUB_REPOSITORY" --clobber
+          Write-Host "=== Signed Windows assets uploaded to $tag ==="
