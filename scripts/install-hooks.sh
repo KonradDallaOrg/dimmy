@@ -28,4 +28,7 @@ echo "✓ Git hooks activated:"
 ls -1 "$HOOKS_DIR" | sed 's/^/    /'
 echo ""
 echo "  pre-commit will run \`cargo fmt --check\` on staged Rust files"
-echo "  before each commit. Skip ad-hoc with --no-verify."
+echo "  before each commit."
+echo "  pre-push reminds about the Windows signing prerequisite (runner +"
+echo "  SimplySign login) when pushing a version tag."
+echo "  Skip ad-hoc with --no-verify."
