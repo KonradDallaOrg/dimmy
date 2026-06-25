@@ -1,0 +1,112 @@
+name: Linker bench (lld vs default) — THROWAWAY
+
+# Isolated benchmark: is lld-link faster than the default MSVC link.exe for
+# the core cdylib? Produces NO artifacts, NO signing, touches NO release
+# pipeline. Delete after measuring.
+#
+# Trigger by pushing this branch to a `linkerbench/*` ref. The linker is
+# derived from the ref name (ends with "lld" -> lld-link, else default):
+#   git push origin chore/ci-dll-reuse:linkerbench/default
+#   git push origin chore/ci-dll-reuse:linkerbench/lld
+# Compare the "Build core cdylib" step duration between the two runs
+# (same source compiled cold both times -> the delta approximates the link
+# difference). Also reports the PE "linker version" lld stamps, to see if
+# it would trip the I1 dumpbin gate.
+
+on:
+  push:
+    branches: ["linkerbench/**"]
+
+jobs:
+  bench:
+    name: "Bench core link"
+    runs-on: windows-2025-vs2026
+    env:
+      LINKER: ${{ endsWith(github.ref_name, 'lld') && 'lld' || 'default' }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Show config
+        shell: bash
+        run: echo "ref=${{ github.ref_name }}  linker=${{ env.LINKER }}"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install CMake & Ninja
+        uses: lukka/get-cmake@latest
+
+      - name: Install VS 2026 BuildTools side-by-side (MSVC 14.50+)
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs2026 = & $vswhere -version "[18.0,19.0)" -prerelease -products "*" -property installationPath 2>$null | Select-Object -First 1
+          if (-not $vs2026) {
+            $params = "--add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --add Microsoft.VisualStudio.Component.Windows11SDK.22621 --quiet --norestart --wait --nocache"
+            choco install visualstudio2026buildtools-preview -y --pre --no-progress --package-parameters="$params"
+            for ($i = 0; $i -lt 24; $i++) {
+              Start-Sleep -Seconds 5
+              $vs2026 = & $vswhere -version "[18.0,19.0)" -prerelease -products "*" -property installationPath 2>$null | Select-Object -First 1
+              if ($vs2026) { break }
+            }
+            if (-not $vs2026) { throw "VS 2026 not found" }
+          }
+          Add-Content -Path $env:GITHUB_ENV -Value "VS2026_PATH=$vs2026" -Encoding utf8
+          exit 0
+
+      - name: Install Vulkan SDK
+        shell: pwsh
+        run: |
+          $sdkDir = $null
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            choco install vulkan-sdk -y --no-progress
+            $sdkDir = Get-ChildItem "C:\VulkanSDK" -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
+            if ($sdkDir) { break }
+            Start-Sleep -Seconds (30 * $attempt)
+          }
+          if (-not $sdkDir) { throw "VulkanSDK not found" }
+          Add-Content -Path $env:GITHUB_ENV -Value "VULKAN_SDK=$($sdkDir.FullName)" -Encoding utf8
+          Add-Content -Path $env:GITHUB_PATH -Value "$($sdkDir.FullName)\Bin" -Encoding utf8
+
+      - name: Fetch onnxruntime win-x64 DLL (ort link dep)
+        shell: pwsh
+        run: scripts/download-onnxruntime.ps1
+
+      - name: Put lld-link on PATH (lld only)
+        if: ${{ env.LINKER == 'lld' }}
+        shell: pwsh
+        run: |
+          $lld = Get-ChildItem "C:\Program Files\LLVM\bin\lld-link.exe","${env:ProgramFiles}\LLVM\bin\lld-link.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $lld) { throw "lld-link.exe not found — LLVM not on this image" }
+          Add-Content -Path $env:GITHUB_PATH -Value (Split-Path $lld.FullName) -Encoding utf8
+          & $lld.FullName --version
+
+      - name: Build core cdylib (TIMED — this step's duration is the metric)
+        working-directory: core
+        shell: cmd
+        env:
+          LIBCLANG_PATH: "C:\\Program Files\\LLVM\\bin"
+          CMAKE_GENERATOR: Ninja
+          CARGO_TARGET_DIR: "D:\\t"
+        run: |
+          call "%VS2026_PATH%\VC\Auxiliary\Build\vcvars64.bat"
+          if errorlevel 1 exit /b 1
+          if "%LINKER%"=="lld" set "RUSTFLAGS=-C linker=lld-link"
+          echo LINKER=%LINKER%  RUSTFLAGS=%RUSTFLAGS%
+          cargo build --lib --release --features local-stt-vulkan,local-stt-parakeet,local-llm-vulkan,local-dfn,license-client
+
+      - name: Report PE linker version (I1 gate impact)
+        if: always()
+        shell: pwsh
+        run: |
+          $dll = "D:\t\release\dimmy_lib.dll"
+          if (-not (Test-Path $dll)) { Write-Host "no DLL produced"; exit 0 }
+          $vcRoot = "$env:VS2026_PATH\VC\Tools\MSVC"
+          $msvc = Get-ChildItem $vcRoot -Directory | Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1
+          $dumpbin = Join-Path $msvc.FullName "bin\Hostx64\x64\dumpbin.exe"
+          $line = & $dumpbin /headers $dll | Select-String "linker version"
+          Write-Host "DLL size: $((Get-Item $dll).Length) bytes"
+          Write-Host "PE $line"
+          Write-Host "NOTE: I1 gate needs linker version >= 14.50; lld stamps its own value here."
