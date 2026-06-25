@@ -1691,11 +1691,13 @@
                          FontSize="12" FontWeight="SemiBold"
                          Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                          CharacterSpacing="40" Margin="2,20,0,8" />
-              <controls:SettingCard Glyph="&#xE71B;"
-                                    Label="Website"
-                                    InfoTip="dimmy.app: features, downloads, and docs.">
-                <HyperlinkButton Content="Open" NavigateUri="https://dimmy.app" />
-              </controls:SettingCard>
+              <!-- No "Website" link card here on purpose: the homepage offers
+                   the app download + Pro purchase, and Microsoft Store policy
+                   10.1.5 forbids a Store-distributed build from promoting
+                   acquiring the software outside the Store. Same binary ships
+                   to the website + Store, so the card is dropped for all
+                   builds. The site stays reachable normally; updates come via
+                   Velopack / the Store. Burned: Store cert 2026-06-25. -->
               <controls:SettingCard Glyph="&#xE943;"
                                     Label="Source code"
                                     InfoTip="Open-source on GitHub.">
