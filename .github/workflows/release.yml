@@ -189,16 +189,24 @@ jobs:
         working-directory: core
         env:
           # sccache caches the whisper.cpp / llama.cpp (Metal) object files in
-          # the GitHub Actions cache, keyed on compiler input — so the
+          # the R2 (S3) cache, keyed on compiler input — so the
           # `cargo clean` below (and a version-only Cargo.lock bump that busts
           # the Swatinem rust-cache key) no longer force a from-scratch C++
           # recompile. RUSTC_WRAPPER caches Rust crates; CMAKE_*_COMPILER_LAUNCHER
           # routes the cmake C/C++ compiles through sccache. Transparent: on a
           # cache miss or backend hiccup sccache just compiles normally.
-          SCCACHE_GHA_ENABLED: "true"
+          # R2 (S3) backend = a GLOBAL cache shared by EVERY run, including
+          # tag-triggered releases. (The GHA cache backend is ref-scoped:
+          # release tags only fall back to the default branch `main`, so it
+          # would never share across releases — useless for our case.)
           RUSTC_WRAPPER: sccache
           CMAKE_C_COMPILER_LAUNCHER: sccache
           CMAKE_CXX_COMPILER_LAUNCHER: sccache
+          SCCACHE_BUCKET: dimmy-sccache
+          SCCACHE_REGION: auto
+          SCCACHE_ENDPOINT: ${{ secrets.SCCACHE_R2_ENDPOINT }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.SCCACHE_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_R2_SECRET_ACCESS_KEY }}
           # Telemetry secrets — embedded into the binary at build time via
           # core/build.rs. PostHog analytics + Sentry crash reporting +
           # logs both active. Sentry 0.47 with default-features = false
@@ -765,17 +773,25 @@ jobs:
         shell: cmd
         env:
           # sccache caches the whisper.cpp / llama.cpp (Vulkan) cl.exe object
-          # files in the GitHub Actions cache, keyed on compiler input — so a
+          # files in the R2 (S3) cache, keyed on compiler input — so a
           # version-only Cargo.lock bump (which busts the Swatinem rust-cache
           # key) no longer forces a 15-min from-scratch C++ recompile.
           # RUSTC_WRAPPER caches Rust crates; CMAKE_*_COMPILER_LAUNCHER routes
           # the Ninja/cl.exe cmake compiles. sccache is on PATH via the action
           # (GITHUB_PATH), visible to this cmd subshell. Transparent: on a miss
           # or backend hiccup it just compiles normally — never blocks the build.
-          SCCACHE_GHA_ENABLED: "true"
+          # R2 (S3) backend = a GLOBAL cache shared by EVERY run, including
+          # tag-triggered releases. (The GHA cache backend is ref-scoped:
+          # release tags only fall back to the default branch `main`, so it
+          # would never share across releases — useless for our case.)
           RUSTC_WRAPPER: sccache
           CMAKE_C_COMPILER_LAUNCHER: sccache
           CMAKE_CXX_COMPILER_LAUNCHER: sccache
+          SCCACHE_BUCKET: dimmy-sccache
+          SCCACHE_REGION: auto
+          SCCACHE_ENDPOINT: ${{ secrets.SCCACHE_R2_ENDPOINT }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.SCCACHE_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_R2_SECRET_ACCESS_KEY }}
           LIBCLANG_PATH: "C:\\Program Files\\LLVM\\bin"
           CMAKE_GENERATOR: Ninja
           CARGO_TARGET_DIR: "D:\\t"

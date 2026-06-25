@@ -164,12 +164,16 @@ jobs:
       - name: Build Rust static library (staging flavor)
         working-directory: core
         env:
-          # sccache: caches whisper/llama (Metal) C++ objects in GHA cache,
+          # sccache: caches whisper/llama (Metal) C++ objects in the R2 (S3) cache,
           # survives the `cargo clean` below + version-bump cache busts.
-          SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: sccache
           CMAKE_C_COMPILER_LAUNCHER: sccache
           CMAKE_CXX_COMPILER_LAUNCHER: sccache
+          SCCACHE_BUCKET: dimmy-sccache
+          SCCACHE_REGION: auto
+          SCCACHE_ENDPOINT: ${{ secrets.SCCACHE_R2_ENDPOINT }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.SCCACHE_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_R2_SECRET_ACCESS_KEY }}
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           DIMMY_LICENSE_PUBKEY: ${{ secrets.DIMMY_LICENSE_PUBKEY_STAGING }}
@@ -536,12 +540,16 @@ jobs:
         working-directory: core
         shell: cmd
         env:
-          # sccache: caches whisper/llama (Vulkan) cl.exe objects in GHA cache,
+          # sccache: caches whisper/llama (Vulkan) cl.exe objects in the R2 (S3) cache,
           # survives the version-bump rust-cache bust. On PATH via the action.
-          SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: sccache
           CMAKE_C_COMPILER_LAUNCHER: sccache
           CMAKE_CXX_COMPILER_LAUNCHER: sccache
+          SCCACHE_BUCKET: dimmy-sccache
+          SCCACHE_REGION: auto
+          SCCACHE_ENDPOINT: ${{ secrets.SCCACHE_R2_ENDPOINT }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.SCCACHE_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_R2_SECRET_ACCESS_KEY }}
           LIBCLANG_PATH: "C:\\Program Files\\LLVM\\bin"
           CMAKE_GENERATOR: Ninja
           CARGO_TARGET_DIR: "D:\\t"
