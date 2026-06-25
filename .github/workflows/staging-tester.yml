@@ -158,9 +158,18 @@ jobs:
           restore-keys: |
             fluidaudio-${{ runner.os }}-
 
+      - name: Setup sccache (compiler cache for whisper/llama C++)
+        uses: mozilla-actions/sccache-action@v0.0.6
+
       - name: Build Rust static library (staging flavor)
         working-directory: core
         env:
+          # sccache: caches whisper/llama (Metal) C++ objects in GHA cache,
+          # survives the `cargo clean` below + version-bump cache busts.
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: sccache
+          CMAKE_C_COMPILER_LAUNCHER: sccache
+          CMAKE_CXX_COMPILER_LAUNCHER: sccache
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           DIMMY_LICENSE_PUBKEY: ${{ secrets.DIMMY_LICENSE_PUBKEY_STAGING }}
@@ -175,6 +184,10 @@ jobs:
           cargo clean --release 2>/dev/null
           cargo build --lib --release --target aarch64-apple-darwin \
             --features local-stt-metal,local-llm-metal,local-stt-parakeet-coreml,local-stt-parakeet-fluid,local-dfn,license-client
+
+      - name: sccache stats (Mac)
+        if: always()
+        run: sccache --show-stats || true
 
       - name: Verify static library
         run: |
@@ -516,10 +529,19 @@ jobs:
           workspaces: core
           shared-key: windows-staging
 
+      - name: Setup sccache (compiler cache for whisper/llama C++)
+        uses: mozilla-actions/sccache-action@v0.0.6
+
       - name: Build Rust DLL (staging flavor, VS 2026 MSVC env)
         working-directory: core
         shell: cmd
         env:
+          # sccache: caches whisper/llama (Vulkan) cl.exe objects in GHA cache,
+          # survives the version-bump rust-cache bust. On PATH via the action.
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: sccache
+          CMAKE_C_COMPILER_LAUNCHER: sccache
+          CMAKE_CXX_COMPILER_LAUNCHER: sccache
           LIBCLANG_PATH: "C:\\Program Files\\LLVM\\bin"
           CMAKE_GENERATOR: Ninja
           CARGO_TARGET_DIR: "D:\\t"
@@ -561,6 +583,11 @@ jobs:
           # staging testers always exercise the production-default
           # backend.
           cargo build --lib --release --features local-stt-vulkan,local-stt-parakeet,local-llm-vulkan,local-dfn,license-client
+
+      - name: sccache stats (Win)
+        if: always()
+        shell: pwsh
+        run: sccache --show-stats
 
       - name: Fetch onnxruntime win-x64 DLL (Parakeet ort path)
         # ort 2.0.0-rc.10 binds to onnxruntime 1.22.0; the .csproj
