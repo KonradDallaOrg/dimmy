@@ -2574,6 +2574,41 @@ public sealed partial class SettingsWindow : Window
         if (ViewModel.RecapAuthMethod == newAuth) return;
         ViewModel.RecapAuthMethod = newAuth;
         RefreshAuthIntegrationStatus();
+        PersistRecapToCore();
+    }
+
+    /// <summary>Push the gated Recap block (recap_auth_method,
+    /// recap_use_same_key, recap_model_override) to the Rust core
+    /// immediately on user edit.
+    ///
+    /// WHY this exists: the global debounced auto-save
+    /// (<see cref="OnAutoSaveTick"/>) serializes with <c>ToJson()</c>
+    /// default, which OMITS the Recap (and LLM) blocks on purpose
+    /// (wipe-protection). Neither does <c>App.ApplySettings</c> —
+    /// it only mirrors runtime UI fields, never calling
+    /// <c>dimmy_set_config_json</c>. So before this, editing the recap
+    /// subscription toggle / model picker only reached the core on
+    /// Save (which closes the window) or window-close. A user who
+    /// toggled "use subscription" + picked Opus, saw the "Saved" pulse,
+    /// and ran a recap with Settings still open silently dispatched the
+    /// recap over the api_key HTTP path → 413 on a long transcript,
+    /// despite the toggle showing ON.
+    ///
+    /// includeRecap:true keeps the if-empty-omit anti-wipe (the model
+    /// override is omitted when empty); the LLM block stays omitted so
+    /// this never disturbs dictation auth.</summary>
+    private void PersistRecapToCore()
+    {
+        if (!_loaded) return;
+        try
+        {
+            DimmyNative.dimmy_set_config_json(ViewModel.ToJson(includeRecap: true));
+            App.Instance?.ReloadConfig();
+        }
+        catch (Exception ex)
+        {
+            App.Log($"PersistRecapToCore: {ex.Message}", "Settings");
+        }
     }
 
     // Per-provider has_key flags cached at Settings open. Maps the
@@ -4614,8 +4649,11 @@ public sealed partial class SettingsWindow : Window
         // Visibility recompute happens here so the user sees the key
         // field appear/disappear under the toggle without latency.
         UpdateRecapKeyCardVisibility(ViewModel.LlmApiUrl ?? "");
-        // ApplySettings persists the new bool to Rust + disk.
+        // ApplySettings only mirrors runtime UI fields — it does NOT
+        // write the config. Persist the recap block explicitly so the
+        // toggle takes effect without Save / window-close.
         App.Instance?.ApplySettings(ViewModel);
+        PersistRecapToCore();
     }
 
     /// Drain the Recap PasswordBox into the Rust keystore under the
@@ -4679,6 +4717,7 @@ public sealed partial class SettingsWindow : Window
             // Anthropic; key card visibility depends on the derived
             // vendor and upstream key state).
             RefreshAuthIntegrationStatus();
+            PersistRecapToCore();
 
             // Local recap picked but the .gguf isn't on disk → the recap
             // would fail with rc -4. Nudge the user to download it.
@@ -4717,6 +4756,7 @@ public sealed partial class SettingsWindow : Window
         // The TextBox is Two-Way bound, so RecapModelOverride is already
         // up to date by the time we get here. Just push the config.
         if (_loaded) App.Instance?.ApplySettings(ViewModel);
+        PersistRecapToCore();
     }
 
     // ── Meetings storage folder ──────────────────────────────────────
