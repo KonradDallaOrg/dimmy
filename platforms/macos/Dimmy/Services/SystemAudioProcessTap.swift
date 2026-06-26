@@ -112,35 +112,13 @@ final class SystemAudioProcessTap {
             // audio appears (.deferred → .live promotion in
             // rescanAndRebuildIfNeeded). The caller (SystemAudioCaptureService)
             // treats .deferred as success and holds onto the instance.
-            NSLog("[SystemAudio/tap] no audio-active processes at start() — deferred (rescan will promote)")
+            dimmyHostLog("[SystemAudio/tap] no audio-active processes at start() — deferred (rescan will promote)")
             startRescan()
             return .deferred
         }
-        // Prefer a SINGLE known call app (Teams/Zoom/Meet/...) over mixing
-        // EVERY audio-active process. The all-processes mixdown is fragile on
-        // Tahoe — it behaves like the broken global tap (zero buffers / IO
-        // proc never fires). A single-process tap fires reliably: it's the
-        // pattern Apple's AudioCap reference + Notion + AudioTee all use (tap
-        // ONE selected process, not the whole system). Falls back to the full
-        // mixdown only when no known call app is producing audio.
-        let callObj = activeObjects.first { obj in
-            guard let p = Self.pid(forAudioObject: obj) else { return false }
-            return CallDetectionManager.resolveKnownCallApp(p) != nil
-        }
-        let tapTargets: [AudioObjectID]
-        if let callObj {
-            tapTargets = [callObj]
-            let appName = Self.pid(forAudioObject: callObj)
-                .flatMap { CallDetectionManager.resolveKnownCallApp($0) } ?? "?"
-            NSLog("[SystemAudio/tap] tapping SINGLE known call process (%@) of %d active",
-                  appName, activeObjects.count)
-        } else {
-            tapTargets = activeObjects
-            NSLog("[SystemAudio/tap] no known call app among %d active — full mixdown fallback",
-                  activeObjects.count)
-        }
+        dimmyHostLog("[SystemAudio/tap] tapping \(activeObjects.count) audio-active process(es)")
 
-        let description = CATapDescription(monoMixdownOfProcesses: tapTargets)
+        let description = CATapDescription(monoMixdownOfProcesses: activeObjects)
         description.uuid = UUID()
         description.name = "Dimmy System Audio"
         description.muteBehavior = .unmuted
@@ -154,7 +132,7 @@ final class SystemAudioProcessTap {
             return .failed
         }
         tapID = newTap
-        currentTapPidSet = Set(tapTargets.compactMap { Self.pid(forAudioObject: $0) })
+        currentTapPidSet = Set(activeObjects.compactMap { Self.pid(forAudioObject: $0) })
 
         guard let asbd = Self.readTapFormat(tapID) else {
             NSLog("[SystemAudio/tap] could not read tap stream format")

@@ -2,6 +2,14 @@ import Foundation
 import ScreenCaptureKit
 import AVFoundation
 
+/// NSLog a line AND mirror it into the shared dimmy.log file (via FFI), so the
+/// macOS system-audio capture-path decisions are retrievable from the file log
+/// the user can grab — not buried in the OS unified log on a remote machine.
+func dimmyHostLog(_ msg: String) {
+    NSLog("%@", msg)
+    msg.withCString { dimmy_host_log($0) }
+}
+
 /// Captures system audio for meeting mode and forwards f32 PCM samples to
 /// Rust via `dimmy_push_loopback_audio`.
 ///
@@ -157,24 +165,23 @@ final class SystemAudioCaptureService: NSObject {
                 if tap.hasReceivedNonZeroAudio {
                     UserDefaults.standard.removeObject(
                         forKey: Self.tapSilentEnvDefaultsKey)
-                    NSLog("[SystemAudio] capture via Core Audio process tap (signal confirmed)")
+                    dimmyHostLog("[SystemAudio] capture via Core Audio process tap (signal confirmed)")
                     return true
                 }
                 // Apple's documented recovery: a FULL teardown + rebuild of the
                 // tap + aggregate (restarting the IO proc alone is unreliable).
                 // Try once before bailing to ScreenCaptureKit.
-                NSLog("[SystemAudio] tap live but no real audio in 1.5s — rebuilding tap+aggregate (Tahoe recovery)")
+                dimmyHostLog("[SystemAudio] tap live but no real audio in 1.5s — rebuilding tap+aggregate (Tahoe recovery)")
                 tap.stop()
                 _ = tap.start()
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
                 if tap.hasReceivedNonZeroAudio {
                     UserDefaults.standard.removeObject(
                         forKey: Self.tapSilentEnvDefaultsKey)
-                    NSLog("[SystemAudio] process tap recovered after rebuild (signal confirmed)")
+                    dimmyHostLog("[SystemAudio] process tap recovered after rebuild (signal confirmed)")
                     return true
                 }
-                NSLog("[SystemAudio] tap still silent after rebuild (Tahoe) — cached env=%@ -> ScreenCaptureKit fallback",
-                    currentEnv)
+                dimmyHostLog("[SystemAudio] tap still silent after rebuild (Tahoe) — cached env=\(currentEnv) -> ScreenCaptureKit fallback")
                 tap.stop()
                 processTap = nil
                 isRunning = false
@@ -191,12 +198,10 @@ final class SystemAudioCaptureService: NSObject {
             case .failed:
                 UserDefaults.standard.set(
                     currentEnv, forKey: Self.tapSilentEnvDefaultsKey)
-                NSLog("[SystemAudio] tap creation failed — cached env=%@ → ScreenCaptureKit fallback",
-                    currentEnv)
+                dimmyHostLog("[SystemAudio] tap creation failed — cached env=\(currentEnv) → ScreenCaptureKit fallback")
             }
         } else if skipTapDueToCache {
-            NSLog("[SystemAudio] skipping process tap (env=%@ previously silent) → ScreenCaptureKit fallback",
-                currentEnv)
+            dimmyHostLog("[SystemAudio] skipping process tap (env=\(currentEnv) previously silent) → ScreenCaptureKit fallback")
         }
 
         return await startWithScreenCapture()
@@ -234,7 +239,7 @@ final class SystemAudioCaptureService: NSObject {
             // The actual rate published on each push (from ASBD)
             // wins if it differs.
             _ = dimmy_set_loopback_sample_rate(Int32(chosenRate))
-            NSLog("[SystemAudio] SCStream sampleRate=%d", chosenRate)
+            dimmyHostLog("[SystemAudio] SCStream fallback started, sampleRate=\(chosenRate)")
             // Minimal 2×2 display capture required by SCStream API even for
             // audio-only; GPU cost is negligible at this resolution.
             config.width = 2
