@@ -158,31 +158,13 @@ jobs:
           restore-keys: |
             fluidaudio-${{ runner.os }}-
 
-      - name: Restore prebuilt core static lib from cache
-        id: dllcache
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.SCCACHE_R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_R2_SECRET_ACCESS_KEY }}
-          SCCACHE_R2_ENDPOINT: ${{ secrets.SCCACHE_R2_ENDPOINT }}
-          DIMMY_LICENSE_PUBKEY: ${{ secrets.DIMMY_LICENSE_PUBKEY_STAGING }}
-          DIMMY_LICENSE_SERVER_URL: https://license-staging.dimmy.app
-          DIMMY_BUILD_FLAVOR: staging
-          DIMMY_CONFIG_NAMESPACE: dimmy-staging
-          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
-          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
-          FEAT: "local-stt-metal,local-llm-metal,local-stt-parakeet-coreml,local-stt-parakeet-fluid,local-dfn,license-client"
-        run: |
-          res="$(scripts/dev/dll-cache.sh restore mac-arm64 "$FEAT" "core/target/aarch64-apple-darwin/release/libdimmy_lib.a" || echo MISS)"
-          echo "restore: $res"
-          if [ "$res" = "HIT" ]; then
-            echo "DLL_REUSED=1" >> "$GITHUB_ENV"
-            echo "::notice title=DLL reuse::core unchanged — reused cached libdimmy_lib.a, skipped the build"
-          else
-            echo "::notice title=DLL reuse::core changed / no cache — full build"
-          fi
-
+      # NOTE: DLL-reuse is Windows-only. macOS links the app against SEPARATE
+      # static libs (libdimmy_lib.a + libllama.a + libwhisper.a + libggml*.a)
+      # produced as side-artifacts of the cargo build; restoring only
+      # libdimmy_lib.a and skipping the build leaves Xcode unable to find
+      # `llama` (ld: library 'llama' not found). Mac always full-builds until
+      # a proper multi-archive cache is implemented.
       - name: Build Rust static library (staging flavor)
-        if: env.DLL_REUSED != '1'
         working-directory: core
         env:
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
@@ -199,21 +181,6 @@ jobs:
           cargo clean --release 2>/dev/null
           cargo build --lib --release --target aarch64-apple-darwin \
             --features local-stt-metal,local-llm-metal,local-stt-parakeet-coreml,local-stt-parakeet-fluid,local-dfn,license-client
-
-      - name: Store prebuilt core static lib to cache
-        if: env.DLL_REUSED != '1'
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.SCCACHE_R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_R2_SECRET_ACCESS_KEY }}
-          SCCACHE_R2_ENDPOINT: ${{ secrets.SCCACHE_R2_ENDPOINT }}
-          DIMMY_LICENSE_PUBKEY: ${{ secrets.DIMMY_LICENSE_PUBKEY_STAGING }}
-          DIMMY_LICENSE_SERVER_URL: https://license-staging.dimmy.app
-          DIMMY_BUILD_FLAVOR: staging
-          DIMMY_CONFIG_NAMESPACE: dimmy-staging
-          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
-          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
-          FEAT: "local-stt-metal,local-llm-metal,local-stt-parakeet-coreml,local-stt-parakeet-fluid,local-dfn,license-client"
-        run: scripts/dev/dll-cache.sh store mac-arm64 "$FEAT" "core/target/aarch64-apple-darwin/release/libdimmy_lib.a" || true
 
       - name: Verify static library
         run: |
