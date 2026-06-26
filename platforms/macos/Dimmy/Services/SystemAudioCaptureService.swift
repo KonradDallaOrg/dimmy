@@ -141,10 +141,30 @@ final class SystemAudioCaptureService: NSObject {
             case .live:
                 processTap = tap
                 isRunning = true
-                UserDefaults.standard.removeObject(
-                    forKey: Self.tapSilentEnvDefaultsKey)
-                NSLog("[SystemAudio] capture via Core Audio process tap")
-                return true
+                // Tahoe (macOS 26) silent-deny watchdog: `.live` only means
+                // AudioDeviceStart returned noErr — NOT that the IO proc ever
+                // fires. On non-Developer-ID bundles tccd accepts every call
+                // but never delivers a frame, leaving the meeting permanently
+                // mic-only with NO fallback (burned 2026-06-26, colleague's
+                // stable build on 26.2). Verify a real frame lands within a
+                // short window; if not, treat it like `.failed`: cache the
+                // silent env and fall through to ScreenCaptureKit (which works
+                // with the Screen Recording grant).
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                if tap.hasReceivedAudio {
+                    UserDefaults.standard.removeObject(
+                        forKey: Self.tapSilentEnvDefaultsKey)
+                    NSLog("[SystemAudio] capture via Core Audio process tap (frames confirmed)")
+                    return true
+                }
+                NSLog("[SystemAudio] tap live but 0 frames in 1.5s (Tahoe silent-deny) — cached env=%@ -> ScreenCaptureKit fallback",
+                    currentEnv)
+                tap.stop()
+                processTap = nil
+                isRunning = false
+                UserDefaults.standard.set(
+                    currentEnv, forKey: Self.tapSilentEnvDefaultsKey)
+                // fall through to startWithScreenCapture() below
             case .deferred:
                 processTap = tap
                 isRunning = true
