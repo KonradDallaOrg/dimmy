@@ -158,6 +158,12 @@ jobs:
           restore-keys: |
             fluidaudio-${{ runner.os }}-
 
+      # NOTE: DLL-reuse is Windows-only. macOS links the app against SEPARATE
+      # static libs (libdimmy_lib.a + libllama.a + libwhisper.a + libggml*.a)
+      # produced as side-artifacts of the cargo build; restoring only
+      # libdimmy_lib.a and skipping the build leaves Xcode unable to find
+      # `llama` (ld: library 'llama' not found). Mac always full-builds until
+      # a proper multi-archive cache is implemented.
       - name: Build Rust static library (staging flavor)
         working-directory: core
         env:
@@ -516,7 +522,39 @@ jobs:
           workspaces: core
           shared-key: windows-staging
 
+      # ── DLL reuse (skip the ~15min build when the Rust core is unchanged) ──
+      # Restores dimmy_lib.dll from R2 keyed by a content hash of the core
+      # (src/build.rs/assets/deps + features + toolchain + build-time license/
+      # flavor/telemetry env). HIT -> skip the build step below. Fail-safe:
+      # any error degrades to MISS -> full build. The linker-version gate
+      # still validates the restored DLL.
+      - name: Restore prebuilt core DLL from cache
+        id: dllcache
+        shell: bash
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.SCCACHE_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_R2_SECRET_ACCESS_KEY }}
+          SCCACHE_R2_ENDPOINT: ${{ secrets.SCCACHE_R2_ENDPOINT }}
+          # MUST mirror the Build step's embedded env so the hash matches.
+          DIMMY_LICENSE_PUBKEY: ${{ secrets.DIMMY_LICENSE_PUBKEY_STAGING }}
+          DIMMY_LICENSE_SERVER_URL: https://license-staging.dimmy.app
+          DIMMY_BUILD_FLAVOR: staging
+          DIMMY_CONFIG_NAMESPACE: dimmy-staging
+          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          FEAT: "local-stt-vulkan,local-stt-parakeet,local-llm-vulkan,local-dfn,license-client"
+        run: |
+          res="$(scripts/dev/dll-cache.sh restore win-x64 "$FEAT" "D:/t/release/dimmy_lib.dll" || echo MISS)"
+          echo "restore: $res"
+          if [ "$res" = "HIT" ]; then
+            echo "DLL_REUSED=1" >> "$GITHUB_ENV"
+            echo "::notice title=DLL reuse::core unchanged — reused cached dimmy_lib.dll, skipped the ~15min build"
+          else
+            echo "::notice title=DLL reuse::core changed / no cache — full build"
+          fi
+
       - name: Build Rust DLL (staging flavor, VS 2026 MSVC env)
+        if: env.DLL_REUSED != '1'
         working-directory: core
         shell: cmd
         env:
@@ -561,6 +599,22 @@ jobs:
           # staging testers always exercise the production-default
           # backend.
           cargo build --lib --release --features local-stt-vulkan,local-stt-parakeet,local-llm-vulkan,local-dfn,license-client
+
+      - name: Store prebuilt core DLL to cache
+        if: env.DLL_REUSED != '1'
+        shell: bash
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.SCCACHE_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_R2_SECRET_ACCESS_KEY }}
+          SCCACHE_R2_ENDPOINT: ${{ secrets.SCCACHE_R2_ENDPOINT }}
+          DIMMY_LICENSE_PUBKEY: ${{ secrets.DIMMY_LICENSE_PUBKEY_STAGING }}
+          DIMMY_LICENSE_SERVER_URL: https://license-staging.dimmy.app
+          DIMMY_BUILD_FLAVOR: staging
+          DIMMY_CONFIG_NAMESPACE: dimmy-staging
+          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          FEAT: "local-stt-vulkan,local-stt-parakeet,local-llm-vulkan,local-dfn,license-client"
+        run: scripts/dev/dll-cache.sh store win-x64 "$FEAT" "D:/t/release/dimmy_lib.dll" || true
 
       - name: Fetch onnxruntime win-x64 DLL (Parakeet ort path)
         # ort 2.0.0-rc.10 binds to onnxruntime 1.22.0; the .csproj

@@ -1,0 +1,4 @@
+# Shell scripts MUST stay LF — they run under bash on the Windows CI
+# runners (git-bash). A CRLF checkout breaks the shebang + every line
+# ("bash: \r: command not found"). Force LF regardless of core.autocrlf.
+*.sh text eol=lf

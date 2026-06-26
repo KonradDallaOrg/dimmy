@@ -182,6 +182,11 @@ jobs:
           restore-keys: |
             fluidaudio-${{ runner.os }}-
 
+      # NOTE: DLL-reuse is Windows-only (the cdylib is a self-contained DLL).
+      # macOS links the app against SEPARATE static libs (libdimmy_lib.a +
+      # libllama.a + libwhisper.a + libggml*.a); restoring only libdimmy_lib.a
+      # and skipping the build breaks the Xcode link (ld: library 'llama' not
+      # found). Mac always full-builds until a multi-archive cache is added.
       - name: Build Rust static library
         working-directory: core
         env:
@@ -739,7 +744,35 @@ jobs:
         shell: pwsh
         run: scripts/download-onnxruntime.ps1
 
+      # ── DLL reuse: skip the ~15min build when the Rust core is unchanged ──
+      # Validated on staging-tester (v0.6.66-staging.2): HIT -> build skipped
+      # -> build-windows dropped from ~24min to ~6.5min. Fail-safe: any error
+      # degrades to MISS -> full build. The dumpbin linker gate below still
+      # validates the restored DLL.
+      - name: Restore prebuilt core DLL from cache
+        shell: bash
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.SCCACHE_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_R2_SECRET_ACCESS_KEY }}
+          SCCACHE_R2_ENDPOINT: ${{ secrets.SCCACHE_R2_ENDPOINT }}
+          # MUST mirror the Build step's embedded env so the hash matches.
+          DIMMY_LICENSE_PUBKEY: ${{ secrets.DIMMY_LICENSE_PUBKEY }}
+          DIMMY_LICENSE_SERVER_URL: https://license.dimmy.app
+          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          FEAT: "local-stt-vulkan,local-llm-vulkan,local-stt-parakeet,license-client"
+        run: |
+          res="$(scripts/dev/dll-cache.sh restore win-x64 "$FEAT" "D:/t/release/dimmy_lib.dll" || echo MISS)"
+          echo "restore: $res"
+          if [ "$res" = "HIT" ]; then
+            echo "DLL_REUSED=1" >> "$GITHUB_ENV"
+            echo "::notice title=DLL reuse::core unchanged — reused cached dimmy_lib.dll, skipped the ~15min build"
+          else
+            echo "::notice title=DLL reuse::core changed / no cache — full build"
+          fi
+
       - name: Build Rust DLL (VS 2026 MSVC env)
+        if: env.DLL_REUSED != '1'
         working-directory: core
         shell: cmd
         env:
@@ -770,6 +803,20 @@ jobs:
           REM     If a Win release ever ships a broken DLL, FIRST add
           REM     `cargo clean --release` back and re-run.
           cargo build --lib --release --features local-stt-vulkan,local-llm-vulkan,local-stt-parakeet,license-client
+
+      - name: Store prebuilt core DLL to cache
+        if: env.DLL_REUSED != '1'
+        shell: bash
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.SCCACHE_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_R2_SECRET_ACCESS_KEY }}
+          SCCACHE_R2_ENDPOINT: ${{ secrets.SCCACHE_R2_ENDPOINT }}
+          DIMMY_LICENSE_PUBKEY: ${{ secrets.DIMMY_LICENSE_PUBKEY }}
+          DIMMY_LICENSE_SERVER_URL: https://license.dimmy.app
+          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          FEAT: "local-stt-vulkan,local-llm-vulkan,local-stt-parakeet,license-client"
+        run: scripts/dev/dll-cache.sh store win-x64 "$FEAT" "D:/t/release/dimmy_lib.dll" || true
 
       - name: Gate — verify dimmy_lib.dll linker version
         shell: pwsh
