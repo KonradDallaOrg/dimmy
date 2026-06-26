@@ -65,6 +65,15 @@ final class SystemAudioProcessTap {
     private let receivedAudioFlag = OSAllocatedUnfairLock(initialState: false)
     var hasReceivedAudio: Bool { receivedAudioFlag.withLock { $0 } }
 
+    /// Latched true the first time a buffer with a NON-ZERO sample arrives.
+    /// macOS 26 (Tahoe) has a second regression beyond "IO proc never fires":
+    /// the proc fires at the right cadence with correct frame counts but every
+    /// sample is exactly 0.0 (reproduced with Teams). `hasReceivedAudio` can't
+    /// tell that apart from a live capture — this can. The capture watchdog
+    /// keys its rebuild/fallback decision on THIS, not on hasReceivedAudio.
+    private let receivedNonZeroFlag = OSAllocatedUnfairLock(initialState: false)
+    var hasReceivedNonZeroAudio: Bool { receivedNonZeroFlag.withLock { $0 } }
+
     private let ioQueue = DispatchQueue(
         label: "dimmy.systemaudio.tap.io", qos: .userInteractive)
 
@@ -193,6 +202,7 @@ final class SystemAudioProcessTap {
         let rate = sampleRate
         let channels = channelCount
         let receivedFlag = receivedAudioFlag
+        let nonZeroFlag = receivedNonZeroFlag
         var newProcID: AudioDeviceIOProcID?
         err = AudioDeviceCreateIOProcIDWithBlock(&newProcID, aggregateID, ioQueue) {
             _, inInputData, _, _, _ in
@@ -210,6 +220,11 @@ final class SystemAudioProcessTap {
                       Self.firstBufferSampleCount(inInputData))
             }
             Self.forward(inInputData, channels: channels, rate: rate, to: handler)
+            // Tahoe all-zero-buffer detection: latch once a real sample lands.
+            // Cheap (early-exits on first non-zero) and only scans until set.
+            if !nonZeroFlag.withLock({ $0 }), Self.firstBufferHasSignal(inInputData) {
+                nonZeroFlag.withLock { $0 = true }
+            }
         }
         guard err == noErr, let procID = newProcID else {
             NSLog("[SystemAudio/tap] AudioDeviceCreateIOProcIDWithBlock failed: %d", err)
@@ -496,6 +511,23 @@ final class SystemAudioProcessTap {
         return Int(buffer.mDataByteSize) / MemoryLayout<Float>.size
     }
 
+    /// True if the first buffer holds at least one non-zero sample. Powers the
+    /// Tahoe all-zero-buffer watchdog. Runs on the realtime IO thread, so it
+    /// early-exits on the first non-zero float and the caller only calls it
+    /// until the latch flips.
+    private static func firstBufferHasSignal(
+        _ inInputData: UnsafePointer<AudioBufferList>
+    ) -> Bool {
+        let abl = UnsafeMutableAudioBufferListPointer(
+            UnsafeMutablePointer(mutating: inInputData))
+        guard let buffer = abl.first, let data = buffer.mData else { return false }
+        let total = Int(buffer.mDataByteSize) / MemoryLayout<Float>.size
+        guard total > 0 else { return false }
+        let floats = data.assumingMemoryBound(to: Float.self)
+        for i in 0..<total where floats[i] != 0 { return true }
+        return false
+    }
+
     // MARK: - Realtime forwarding
 
     /// Read the tapped buffer (float32) and forward a mono frame. Runs on
@@ -537,6 +569,10 @@ final class SystemAudioProcessTap {
     private func teardown() {
         currentTapPidSet = []
         builtOutputUID = nil
+        // Reset capture latches so a rebuilt tap re-detects from scratch
+        // (the Tahoe recovery path stops + starts this same instance).
+        receivedAudioFlag.withLock { $0 = false }
+        receivedNonZeroFlag.withLock { $0 = false }
         if let procID = ioProcID, aggregateID != AudioObjectID(kAudioObjectUnknown) {
             AudioDeviceStop(aggregateID, procID)
             AudioDeviceDestroyIOProcID(aggregateID, procID)

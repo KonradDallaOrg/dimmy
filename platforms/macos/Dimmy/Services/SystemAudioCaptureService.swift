@@ -150,14 +150,30 @@ final class SystemAudioCaptureService: NSObject {
                 // short window; if not, treat it like `.failed`: cache the
                 // silent env and fall through to ScreenCaptureKit (which works
                 // with the Screen Recording grant).
+                // Key on NON-ZERO audio (not just "a frame arrived"): Tahoe
+                // variant (2) fires the IO proc with all-0.0 buffers, which
+                // hasReceivedAudio can't distinguish from a live capture.
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
-                if tap.hasReceivedAudio {
+                if tap.hasReceivedNonZeroAudio {
                     UserDefaults.standard.removeObject(
                         forKey: Self.tapSilentEnvDefaultsKey)
-                    NSLog("[SystemAudio] capture via Core Audio process tap (frames confirmed)")
+                    NSLog("[SystemAudio] capture via Core Audio process tap (signal confirmed)")
                     return true
                 }
-                NSLog("[SystemAudio] tap live but 0 frames in 1.5s (Tahoe silent-deny) — cached env=%@ -> ScreenCaptureKit fallback",
+                // Apple's documented recovery: a FULL teardown + rebuild of the
+                // tap + aggregate (restarting the IO proc alone is unreliable).
+                // Try once before bailing to ScreenCaptureKit.
+                NSLog("[SystemAudio] tap live but no real audio in 1.5s — rebuilding tap+aggregate (Tahoe recovery)")
+                tap.stop()
+                _ = tap.start()
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                if tap.hasReceivedNonZeroAudio {
+                    UserDefaults.standard.removeObject(
+                        forKey: Self.tapSilentEnvDefaultsKey)
+                    NSLog("[SystemAudio] process tap recovered after rebuild (signal confirmed)")
+                    return true
+                }
+                NSLog("[SystemAudio] tap still silent after rebuild (Tahoe) — cached env=%@ -> ScreenCaptureKit fallback",
                     currentEnv)
                 tap.stop()
                 processTap = nil
