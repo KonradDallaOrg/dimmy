@@ -1047,6 +1047,62 @@ jobs:
           gh release upload $tag $files --repo "$env:GITHUB_REPOSITORY" --clobber
           Write-Host "=== Signed Windows assets uploaded to $tag ==="
 
+      # Hand the SIGNED Setup.exe to the R2-publish job (hosted runner has the
+      # aws CLI; this self-hosted runner may not). Stable releases only — gated
+      # on the consuming job, but skip the upload for rc/prerelease to avoid a
+      # ~120 MB artifact round-trip that nothing consumes.
+      - name: Upload signed Setup.exe artifact (for R2 publish)
+        if: ${{ !contains(github.ref_name, '-') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-win-setup
+          path: |
+            velopack-output/Dimmy-win-Setup.exe
+            velopack-output/**/Dimmy-win-Setup.exe
+          if-no-files-found: error
+
+  # ── Publish Windows Setup.exe to R2 (dl.dimmy.app) ─────────────────
+  # STABLE releases only (`!contains(ref_name,'-')`) so an rc/prerelease can
+  # NEVER overwrite the public download the website links to. Reuses the same
+  # R2 token as the DLL-cache (now scoped read+write on both buckets); the
+  # account-level endpoint means the `dimmy-downloads` bucket is just a
+  # different s3:// path. Publishes an immutable versioned key (for the
+  # Microsoft Store package URL — must be redirect-free) AND overwrites the
+  # `Dimmy-win-Setup.exe` latest alias (for the website download button).
+  publish-r2-windows:
+    name: Publish Windows Setup to R2 (dl.dimmy.app)
+    needs: [create-release, sign-windows]
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download signed Setup.exe
+        uses: actions/download-artifact@v4
+        with:
+          name: signed-win-setup
+          path: r2in
+
+      - name: Upload to R2 dimmy-downloads
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.SCCACHE_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.SCCACHE_R2_ENDPOINT }}
+          VERSION: ${{ needs.create-release.outputs.version }}
+        run: |
+          set -euo pipefail
+          setup="$(find r2in -name 'Dimmy-win-Setup.exe' | head -1)"
+          if [ -z "$setup" ]; then echo "::error::signed Setup.exe artifact not found"; exit 1; fi
+          sha=$(sha256sum "$setup" | cut -d' ' -f1)
+          size=$(stat -c%s "$setup")
+          echo "Setup.exe: $setup  size=$size  sha256=$sha  version=$VERSION"
+          if [ "$size" -lt 10000000 ]; then echo "::error::Setup.exe suspiciously small ($size bytes) — aborting"; exit 1; fi
+          for key in "Dimmy-win-Setup-${VERSION}.exe" "Dimmy-win-Setup.exe"; do
+            aws s3 cp "$setup" "s3://dimmy-downloads/${key}" \
+              --endpoint-url "$R2_ENDPOINT" --region auto \
+              --content-type application/octet-stream
+            echo "  published -> https://dl.dimmy.app/${key}"
+          done
+          echo "::notice title=R2 publish::Dimmy-win-Setup-${VERSION}.exe (sha256 ${sha}) live on dl.dimmy.app"
+
   # ── Linux Native Build ─────────────────────────────────────────────
   build-linux:
     name: Build Linux (GTK4)
