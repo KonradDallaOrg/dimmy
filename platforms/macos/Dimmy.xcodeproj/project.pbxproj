@@ -958,7 +958,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 0.6.65;
 				DEVELOPMENT_TEAM = 7CYV82BZ24;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = NO;
@@ -976,7 +976,7 @@
 					"$(inherited)",
 					"$(PROJECT_DIR)/../../core/target/aarch64-apple-darwin/release",
 				);
-				MARKETING_VERSION = 0.6.45;
+				MARKETING_VERSION = 0.6.65;
 				OTHER_LDFLAGS = (
 					"-lc++",
 					"-lresolv",
@@ -1008,7 +1008,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 0.6.65;
 				DEVELOPMENT_TEAM = 7CYV82BZ24;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = NO;
@@ -1026,7 +1026,7 @@
 					"$(inherited)",
 					"$(PROJECT_DIR)/../../core/target/aarch64-apple-darwin/release",
 				);
-				MARKETING_VERSION = 0.6.45;
+				MARKETING_VERSION = 0.6.65;
 				OTHER_LDFLAGS = (
 					"-lc++",
 					"-lresolv",
