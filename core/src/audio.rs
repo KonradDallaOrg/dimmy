@@ -338,6 +338,16 @@ pub fn spawn_audio_thread(
             // on the stale device. `None` when no loopback is active (Mic-only,
             // or before the first Start) and on every non-Windows platform.
             let mut bound_loopback_name: Option<String> = None;
+            // Name of the input device the mic stream is currently bound to
+            // (the default input at the last Start, when Start was called
+            // with device_name=None). The 1 s heartbeat compares this to
+            // the live default input; if they diverge (user replugged
+            // headphones / Jabra connect / AirPods switch) AND the user
+            // hadn't pinned a device, we rebuild the mic stream on the
+            // new endpoint so the meeting follows the hardware swap
+            // without the user noticing. `None` when the user pinned a
+            // device by name, or before the first Start.
+            let mut bound_input_name: Option<String> = None;
             // True when the next AudioCommand::Start came from the
             // auto-recovery branch (not from a fresh user request).
             // The Start body must NOT clear the buffers in that case:
@@ -386,7 +396,7 @@ pub fn spawn_audio_thread(
                         // is still alive, just no longer default), so the
                         // dead-flag path can't catch a replug. Compare the live
                         // default output to the device the loopback is bound to.
-                        let default_changed = if !dead {
+                        let output_changed = if !dead {
                             match last_start_params {
                                 Some((_, src)) if bound_loopback_name.is_some() => {
                                     loopback_should_follow_default(
@@ -400,10 +410,25 @@ pub fn spawn_audio_thread(
                         } else {
                             false
                         };
+                        let input_changed = if !dead {
+                            match last_start_params {
+                                Some((ref dn, _)) => input_should_follow_default(
+                                    dn.as_deref(),
+                                    bound_input_name.as_deref(),
+                                    current_default_input_name(&host).as_deref(),
+                                ),
+                                None => false,
+                            }
+                        } else {
+                            false
+                        };
+                        let default_changed = output_changed || input_changed;
                         if dead || default_changed {
                             if let Some((ref dn, src)) = last_start_params {
                                 let trigger = if dead {
                                     "stream_dead"
+                                } else if input_changed {
+                                    "default_input_changed"
                                 } else {
                                     "default_output_changed"
                                 };
@@ -461,6 +486,18 @@ pub fn spawn_audio_thread(
                         // heartbeat can notice a mid-meeting default-output change
                         // (replug) and rebind. None when no loopback is in play.
                         bound_loopback_name = system_device.as_ref().and_then(|d| d.name().ok());
+                        // Same for the mic side: remember the resolved input
+                        // device so the heartbeat can notice a default-input
+                        // change (Jabra connect/disconnect, AirPods switch)
+                        // and rebuild the mic stream. Only meaningful when
+                        // device_name was None (user wants whatever the
+                        // system default is at any given moment); if the
+                        // user pinned a device by name, cpal keeps that one.
+                        bound_input_name = if device_name.is_none() {
+                            mic_device.as_ref().and_then(|d| d.name().ok())
+                        } else {
+                            None
+                        };
 
                         // For Mix, both must succeed; if system fails we degrade to
                         // mic-only with a log line so the user still gets SOMETHING.
@@ -784,6 +821,7 @@ pub fn spawn_audio_thread(
                         // meeting worker) explicitly asked us to halt.
                         last_start_params = None;
                         bound_loopback_name = None;
+                        bound_input_name = None;
                         AUDIO_STREAM_DEAD.store(false, Ordering::Relaxed);
                         // Clear the published mic rate so callers
                         // (e.g. SystemAudioCaptureService on Mac)
@@ -983,6 +1021,14 @@ fn current_default_output_name(_host: &cpal::Host) -> Option<String> {
     None
 }
 
+/// Live name of the system default INPUT device. Cross-platform — every
+/// host needs this so the mic stream follows headset / Jabra / AirPods
+/// hot-plug. Returns `None` if no default input is currently available
+/// (transient state, e.g. all devices unplugged between events).
+fn current_default_input_name(host: &cpal::Host) -> Option<String> {
+    host.default_input_device().and_then(|d| d.name().ok())
+}
+
 /// Decide whether the audio thread should restart streams to FOLLOW a system
 /// default-output change (the Windows loopback-follow path). Pure so it can be
 /// unit-tested without cpal.
@@ -1004,6 +1050,32 @@ fn loopback_should_follow_default(
         return false;
     }
     match (bound_loopback_name, current_default_output) {
+        (Some(bound), Some(current)) => bound != current,
+        _ => false,
+    }
+}
+
+/// True when the mic stream must be rebuilt because the system default
+/// input device changed (e.g. Jabra plugged/unplugged, AirPods connect,
+/// user picked a different input in Sound preferences). Mirrors
+/// `loopback_should_follow_default` for the mic side: only fires when
+/// the user explicitly asked for the default (`requested_device_name`
+/// is None) — when they pinned a specific device by name, cpal keeps
+/// using THAT device and we don't second-guess the choice.
+///
+/// `requested_device_name`: what the caller passed to `Start` (None
+/// means "default"). `bound_input_name`: which device cpal actually
+/// resolved to and bound the stream to. `current_default_input`:
+/// the live system default input as seen from cpal right now.
+fn input_should_follow_default(
+    requested_device_name: Option<&str>,
+    bound_input_name: Option<&str>,
+    current_default_input: Option<&str>,
+) -> bool {
+    if requested_device_name.is_some() {
+        return false;
+    }
+    match (bound_input_name, current_default_input) {
         (Some(bound), Some(current)) => bound != current,
         _ => false,
     }

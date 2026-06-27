@@ -90,118 +90,37 @@ final class SystemAudioCaptureService: NSObject {
         return 48_000
     }
 
-    /// UserDefaults key that pins the (appVersion, osMajor) tuple in which
-    /// the Core Audio process tap was found silent. When the current launch
-    /// matches that tuple, we skip the tap entirely and go straight to
-    /// ScreenCaptureKit — avoids the ~800 ms dead window every meeting on
-    /// Tahoe ad-hoc builds where the tap is structurally broken.
-    ///
-    /// The combo resets implicitly when either field changes:
-    ///   • app upgrade (e.g. Developer-ID-signed release lands) → version
-    ///     bumps → cache miss → tap is re-attempted on the next meeting.
-    ///   • macOS upgrade → osMajor bumps → cache miss → re-attempted.
-    /// We also explicitly clear it whenever the tap *does* deliver audio,
-    /// so a transient denial (e.g. user toggled a permission mid-session)
-    /// doesn't keep us pinned to SCKit forever.
-    private static let tapSilentEnvDefaultsKey = "DimmySystemAudioTapSilentEnv"
-
-    private static func currentTapEnvFingerprint() -> String {
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"]
-            as? String ?? "unknown"
-        let os = ProcessInfo.processInfo.operatingSystemVersion
-        return "\(version):\(os.majorVersion).\(os.minorVersion)"
-    }
-
     func start() async -> Bool {
         guard !isRunning else { return true }
 
         // Prefer the Core Audio process tap — audio-only permission, no
         // screen-recording / media-library prompts. Falls through to
-        // ScreenCaptureKit on:
-        //   1. older OS / no default output / HAL refusal — `tap.start()` returns false
-        //   2. macOS 26 (Tahoe) on ad-hoc signed bundles — `tap.start()` returns true
-        //      (HAL accepts every call) but the IO proc never fires because tccd
-        //      silently denies `kTCCServiceAudioCapture` to non-Developer-ID apps.
-        //      Detect this by waiting briefly for the first frame; if nothing
-        //      arrives, record the (appVersion, osMajor) combo in UserDefaults
-        //      so subsequent meetings skip the tap immediately and start SCKit
-        //      with zero dead-air.
-        let currentEnv = Self.currentTapEnvFingerprint()
-        let cachedSilentEnv = UserDefaults.standard.string(
-            forKey: Self.tapSilentEnvDefaultsKey)
-        let skipTapDueToCache = cachedSilentEnv == currentEnv
-
-        if !skipTapDueToCache, #available(macOS 14.4, *) {
+        // ScreenCaptureKit ONLY when the HAL explicitly rejects tap
+        // creation (returns false from `.failed`). Tap creation here
+        // never inspects sample data — single-process tap is what Apple
+        // ships in their own sample apps and is treated as authoritative;
+        // listener-driven rebuilds (process death, default output
+        // change) keep it pointed at whatever app is currently making
+        // sound.
+        if #available(macOS 14.4, *) {
             let tap = SystemAudioProcessTap()
             tap.onSamples = { ptr, count, rate in
                 _ = dimmy_push_loopback_audio(ptr, Int32(count), rate)
             }
-            // Per-process tap StartOutcome dispatch:
-            //   .live     → tap is recording, keep it
-            //   .deferred → no audio source yet; rescan timer will promote
-            //               the moment one appears (~3 s latency). Keep
-            //               the tap instance — falling through to SCKit
-            //               here would defeat the per-process design.
-            //   .failed   → HAL error or denied grant. Cache the env so
-            //               next meetings skip the tap instantly, fall
-            //               through to SCStream.
             switch tap.start() {
             case .live:
                 processTap = tap
                 isRunning = true
-                // Tahoe (macOS 26) silent-deny watchdog: `.live` only means
-                // AudioDeviceStart returned noErr — NOT that the IO proc ever
-                // fires. On non-Developer-ID bundles tccd accepts every call
-                // but never delivers a frame, leaving the meeting permanently
-                // mic-only with NO fallback (burned 2026-06-26, colleague's
-                // stable build on 26.2). Verify a real frame lands within a
-                // short window; if not, treat it like `.failed`: cache the
-                // silent env and fall through to ScreenCaptureKit (which works
-                // with the Screen Recording grant).
-                // Key on NON-ZERO audio (not just "a frame arrived"): Tahoe
-                // variant (2) fires the IO proc with all-0.0 buffers, which
-                // hasReceivedAudio can't distinguish from a live capture.
-                try? await Task.sleep(nanoseconds: 1_500_000_000)
-                if tap.hasReceivedNonZeroAudio {
-                    UserDefaults.standard.removeObject(
-                        forKey: Self.tapSilentEnvDefaultsKey)
-                    dimmyHostLog("[SystemAudio] capture via Core Audio process tap (signal confirmed)")
-                    return true
-                }
-                // Apple's documented recovery: a FULL teardown + rebuild of the
-                // tap + aggregate (restarting the IO proc alone is unreliable).
-                // Try once before bailing to ScreenCaptureKit.
-                dimmyHostLog("[SystemAudio] tap live but no real audio in 1.5s — rebuilding tap+aggregate (Tahoe recovery)")
-                tap.stop()
-                _ = tap.start()
-                try? await Task.sleep(nanoseconds: 1_500_000_000)
-                if tap.hasReceivedNonZeroAudio {
-                    UserDefaults.standard.removeObject(
-                        forKey: Self.tapSilentEnvDefaultsKey)
-                    dimmyHostLog("[SystemAudio] process tap recovered after rebuild (signal confirmed)")
-                    return true
-                }
-                dimmyHostLog("[SystemAudio] tap still silent after rebuild (Tahoe) — cached env=\(currentEnv) -> ScreenCaptureKit fallback")
-                tap.stop()
-                processTap = nil
-                isRunning = false
-                UserDefaults.standard.set(
-                    currentEnv, forKey: Self.tapSilentEnvDefaultsKey)
-                // fall through to startWithScreenCapture() below
+                dimmyHostLog("[SystemAudio] capture via Core Audio process tap")
+                return true
             case .deferred:
                 processTap = tap
                 isRunning = true
-                UserDefaults.standard.removeObject(
-                    forKey: Self.tapSilentEnvDefaultsKey)
-                NSLog("[SystemAudio] tap deferred (no audio source yet) — rescan will promote when audio appears")
+                dimmyHostLog("[SystemAudio] tap deferred (no audio source yet) — rescan will promote when audio appears")
                 return true
             case .failed:
-                UserDefaults.standard.set(
-                    currentEnv, forKey: Self.tapSilentEnvDefaultsKey)
-                dimmyHostLog("[SystemAudio] tap creation failed — cached env=\(currentEnv) → ScreenCaptureKit fallback")
+                dimmyHostLog("[SystemAudio] tap creation failed (HAL refused) → ScreenCaptureKit fallback")
             }
-        } else if skipTapDueToCache {
-            dimmyHostLog("[SystemAudio] skipping process tap (env=\(currentEnv) previously silent) → ScreenCaptureKit fallback")
         }
 
         return await startWithScreenCapture()
