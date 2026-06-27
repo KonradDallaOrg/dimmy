@@ -601,6 +601,11 @@ int32_t dimmy_claude_desktop_uninstall(void);
 int32_t dimmy_telemetry_track_typed(const char * _Nonnull name_ptr,
                                     const char * _Nullable props_json_ptr);
 
+/// Append a host-side diagnostic line to the shared dimmy.log file logger.
+/// Used so macOS capture-path decisions (which otherwise only reach the
+/// unified log) land in the file the user can retrieve. No-op on null.
+void dimmy_host_log(const char * _Nullable msg_ptr);
+
 /// Push one mic-activity observation from the host's audio-session
 /// poll. `mic_active` = 1 iff some process is currently capturing
 /// the default microphone (CoreAudio

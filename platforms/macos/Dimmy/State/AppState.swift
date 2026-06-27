@@ -98,20 +98,57 @@ final class PermissionsManager: ObservableObject {
     /// keep stale entries keyed on old signatures (common when developing ad-hoc signed builds
     /// — System Settings shows the app as granted but `AXIsProcessTrustedWithOptions` returns
     /// false because the running process's signature matches a different/missing entry).
-    func resetTccEntries(services: [String]) {
+    /// Captures tccutil's exit code + output so a silent failure is no longer
+    /// invisible. Returns true only if every reset reported success.
+    ///
+    /// IMPORTANT (why the old reset buttons "did nothing"): the status APIs
+    /// `AXIsProcessTrustedWithOptions`, `AVCaptureDevice.authorizationStatus`
+    /// and `IOHIDCheckAccess` are latched for the lifetime of THIS process.
+    /// After a reset, `refresh()` cannot observe the change and the checkmarks
+    /// won't update — the app must be relaunched (`relaunchApp()`). tccutil DID
+    /// run; the live checks just couldn't reflect it. Callers must prompt for
+    /// a relaunch.
+    @discardableResult
+    func resetTccEntries(services: [String]) -> Bool {
         let bundleId = Bundle.main.bundleIdentifier ?? "com.dimmy.app"
+        var allOK = true
         for service in services {
             let process = Process()
             process.launchPath = "/usr/bin/tccutil"
             process.arguments = ["reset", service, bundleId]
+            let pipe = Pipe()
+            process.standardError = pipe
+            process.standardOutput = pipe
             do {
                 try process.run()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
                 process.waitUntilExit()
+                let out = String(data: data, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let ok = process.terminationStatus == 0
+                allOK = allOK && ok
+                NSLog("[Permissions] tccutil reset %@ %@ -> exit=%d %@",
+                      service, bundleId, process.terminationStatus, out)
             } catch {
-                NSLog("[PermissionsManager] tccutil reset %@ failed: %@", service, error.localizedDescription)
+                allOK = false
+                NSLog("[Permissions] tccutil reset %@ could not launch: %@",
+                      service, error.localizedDescription)
             }
         }
         refresh()
+        return allOK
+    }
+
+    /// Quit + reopen the app. Required after a TCC reset because the
+    /// permission-status APIs are latched per-process and won't reflect the
+    /// new state until a fresh launch.
+    func relaunchApp() {
+        let url = Bundle.main.bundleURL
+        let config = NSWorkspace.OpenConfiguration()
+        config.createsNewApplicationInstance = true
+        NSWorkspace.shared.openApplication(at: url, configuration: config) { _, _ in
+            DispatchQueue.main.async { NSApp.terminate(nil) }
+        }
     }
 
     /// Trigger the Input Monitoring prompt. macOS shows its own dialog if status is unknown.

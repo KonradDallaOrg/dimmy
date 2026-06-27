@@ -204,17 +204,25 @@ struct MacPermissionsPage: View {
                 }
                 MacRow(
                     "Reset and re-prompt",
-                    hint: "Wipes Dimmy's TCC entry for the chosen permission so the next request shows a fresh system prompt. Useful when a grant looks stale (e.g. \"granted\" but recording is silent).",
+                    hint: "Wipes Dimmy's TCC entry for the chosen permission. The reset is immediate — for System Audio just start a new meeting and the tap re-requests the grant (NO relaunch needed). Only the Accessibility status checkmark above can stay stale until relaunch (macOS latches it per-process) — that's cosmetic, not functional. (\"System Audio\" = the meeting tap, kTCCServiceAudioCapture.)",
                     showsDivider: false
                 ) {
                     Button("Reset Microphone") {
                         perms.resetTccEntries(services: ["Microphone"])
-                        perms.refreshNow()
                     }
                     .controlSize(.small)
                     Button("Reset Accessibility") {
                         perms.resetTccEntries(services: ["Accessibility"])
-                        perms.refreshNow()
+                    }
+                    .controlSize(.small)
+                    Button("Reset System Audio") {
+                        perms.resetTccEntries(services: ["AudioCapture"])
+                    }
+                    .controlSize(.small)
+                    // Optional: only needed to refresh the Accessibility checkmark
+                    // (latched per-process). NOT needed for the audio reset to work.
+                    Button("Relaunch (refresh status)") {
+                        perms.relaunchApp()
                     }
                     .controlSize(.small)
                 }

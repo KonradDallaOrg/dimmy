@@ -57,11 +57,11 @@ final class SystemAudioProcessTap {
     /// nil while deferred or torn down.
     private(set) var builtOutputUID: String?
 
-    /// Latched true the first time the IO proc fires. When the audio-
-    /// recording grant is missing the tap is created but its IO proc never
-    /// runs, so this stays false — that's how the meeting tells "ungranted"
-    /// apart from "granted but currently silent" (which still fires the proc
-    /// with zero-amplitude buffers). Set on the realtime thread, read on main.
+    /// Latched true the first time the IO proc fires. Diagnostic only —
+    /// callers no longer key any recovery on this. The capture service
+    /// trusts `.live` from `start()`; if the HAL ever stops delivering
+    /// frames the listener-driven rebuild path (process death / default
+    /// output change) takes over without timer-driven probes.
     private let receivedAudioFlag = OSAllocatedUnfairLock(initialState: false)
     var hasReceivedAudio: Bool { receivedAudioFlag.withLock { $0 } }
 
@@ -88,28 +88,35 @@ final class SystemAudioProcessTap {
     func start() -> StartOutcome {
         guard !running else { return .live }
 
-        // Per-process tap (Tahoe workaround): enumerate every audio-active
-        // process except Dimmy itself, then build a mono mixdown of their
-        // outputs. The historic global `monoGlobalTapButExcludeProcesses`
-        // variant silently delivers zero-amplitude buffers on macOS 26.x
-        // — verified by 6-config aggregate probe 2026-06-04: every variant
-        // returned peak=0.0000. The per-process variant on the same
-        // machine returned peak=0.0900 (real audio).
+        // Tap a SINGLE process — the pattern Apple's AudioCap reference +
+        // Notion + AudioTee all use. The historic "mono mixdown of N>1
+        // processes" variant has shown intermittent zero-buffer behaviour
+        // across recent macOS releases; one-process-at-a-time tap fires
+        // reliably and avoids the entire class of issues.
+        //
+        // Selection: the FIRST audio-active process the HAL returns. No
+        // priority list, no scoring, no known-app filter — the listener
+        // path below (kAudioHardwarePropertyProcessObjectList +
+        // per-process kAudioProcessPropertyIsRunning) rebuilds the tap
+        // automatically when the active set changes, so re-selecting on
+        // every change keeps us pointed at whatever app the user is
+        // currently making sound with.
         let selfPid = ProcessInfo.processInfo.processIdentifier
         let activeObjects = Self.audioActiveProcessObjects(excludingSelf: selfPid)
-        guard !activeObjects.isEmpty else {
+        guard let target = activeObjects.first else {
             // No app is currently producing audio. Don't create a dead tap;
-            // keep the rescan timer alive so we self-recover the moment
+            // keep the rescan listeners armed so we self-recover the moment
             // audio appears (.deferred → .live promotion in
-            // rescanAndRebuildIfNeeded). The caller (SystemAudioCaptureService)
-            // treats .deferred as success and holds onto the instance.
-            NSLog("[SystemAudio/tap] no audio-active processes at start() — deferred (rescan will promote)")
+            // rescanAndRebuildIfNeeded). The caller treats .deferred as
+            // success and holds onto the instance.
+            dimmyHostLog("[SystemAudio/tap] no audio-active processes at start() — deferred (rescan will promote)")
             startRescan()
             return .deferred
         }
-        NSLog("[SystemAudio/tap] tapping %d audio-active process(es)", activeObjects.count)
+        let targetPid = Self.pid(forAudioObject: target) ?? -1
+        dimmyHostLog("[SystemAudio/tap] tapping SINGLE process pid=\(targetPid) (of \(activeObjects.count) active)")
 
-        let description = CATapDescription(monoMixdownOfProcesses: activeObjects)
+        let description = CATapDescription(monoMixdownOfProcesses: [target])
         description.uuid = UUID()
         description.name = "Dimmy System Audio"
         description.muteBehavior = .unmuted
@@ -123,7 +130,7 @@ final class SystemAudioProcessTap {
             return .failed
         }
         tapID = newTap
-        currentTapPidSet = Set(activeObjects.compactMap { Self.pid(forAudioObject: $0) })
+        currentTapPidSet = targetPid > 0 ? Set([targetPid]) : Set()
 
         guard let asbd = Self.readTapFormat(tapID) else {
             NSLog("[SystemAudio/tap] could not read tap stream format")
@@ -197,9 +204,7 @@ final class SystemAudioProcessTap {
         err = AudioDeviceCreateIOProcIDWithBlock(&newProcID, aggregateID, ioQueue) {
             _, inInputData, _, _, _ in
             // Latch + detect the first fire so we can log "capture is live"
-            // exactly once. A tap that's denied the audio-capture grant
-            // never reaches this block, so the absence of this log line in
-            // dimmy.log is the signature of a missing permission.
+            // exactly once. Diagnostic only — no recovery logic keys on it.
             let firstFire = receivedFlag.withLock { (state: inout Bool) -> Bool in
                 let wasSet = state
                 state = true
@@ -537,6 +542,9 @@ final class SystemAudioProcessTap {
     private func teardown() {
         currentTapPidSet = []
         builtOutputUID = nil
+        // Reset the diagnostic "first fire" latch so a rebuilt instance
+        // logs its first frame again.
+        receivedAudioFlag.withLock { $0 = false }
         if let procID = ioProcID, aggregateID != AudioObjectID(kAudioObjectUnknown) {
             AudioDeviceStop(aggregateID, procID)
             AudioDeviceDestroyIOProcID(aggregateID, procID)
