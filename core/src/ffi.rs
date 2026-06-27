@@ -5348,8 +5348,14 @@ pub extern "C" fn dimmy_meetings_dir(out_buf: *mut c_char, buf_len: c_int) -> c_
 /// the macOS `[SystemAudio]` capture-path decisions, which go to the unified
 /// log, not dimmy.log) land in the file the user can actually retrieve.
 /// No-op on null / non-UTF-8 input.
+///
+/// # Safety
+/// `msg_ptr` must be either null or a valid pointer to a NUL-terminated
+/// UTF-8 byte string. Caller retains ownership; this function only reads
+/// the bytes and returns. Behaviour is undefined for non-NUL-terminated or
+/// otherwise invalid pointers.
 #[no_mangle]
-pub extern "C" fn dimmy_host_log(msg_ptr: *const c_char) {
+pub unsafe extern "C" fn dimmy_host_log(msg_ptr: *const c_char) {
     if msg_ptr.is_null() {
         return;
     }

@@ -255,7 +255,7 @@ pub fn run_in_new_terminal_window(command: &str, slug: &str) -> std::io::Result<
     );
 
     let dir = config_dir_path()
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "no config dir"))?
+        .ok_or_else(|| std::io::Error::other("no config dir"))?
         .join("installers");
     std::fs::create_dir_all(&dir)?;
 
