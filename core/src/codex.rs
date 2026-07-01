@@ -128,8 +128,11 @@ fn candidate_paths() -> Vec<PathBuf> {
     }
 
     if let Some(home) = dirs::home_dir() {
-        // XDG user-bin (install script default on Mac/Linux).
-        #[cfg(not(target_os = "windows"))]
+        // XDG user-bin — the NATIVE Codex installer targets ~/.local/bin
+        // on Windows too (%USERPROFILE%\.local\bin\codex.exe), not just
+        // Mac/Linux, so this must NOT be gated off Windows or a recheck
+        // stays blind to a fresh install. push_variants emits the
+        // .exe/.cmd variants on Windows.
         push_variants(&mut paths, home.join(".local").join("bin"));
 
         // npm custom global prefix.
