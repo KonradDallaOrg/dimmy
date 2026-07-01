@@ -103,7 +103,21 @@ final class SystemAudioProcessTap {
         // currently making sound with.
         let selfPid = ProcessInfo.processInfo.processIdentifier
         let activeObjects = Self.audioActiveProcessObjects(excludingSelf: selfPid)
-        guard let target = activeObjects.first else {
+        // Prefer a known call app (Teams / Zoom / Webex / Meet) among the
+        // audio-active processes over "whatever the HAL returns first" — so a
+        // meeting always taps the CALL, not a music player / notification that
+        // happens to be first in the list. Still a SINGLE process: our N>1
+        // mixdown showed intermittent zero buffers, so we keep one target.
+        // When no known call app is producing audio (e.g. recording a YouTube
+        // tab) we fall back to the first active process = today's behaviour,
+        // so the generic case is unchanged. NOTE: this is NOT the reverted
+        // gate-or-break heuristic — there is no broken global-mixdown fallback;
+        // worst case we tap `.first` exactly like now.
+        let callObj = activeObjects.first { obj in
+            guard let p = Self.pid(forAudioObject: obj) else { return false }
+            return CallDetectionManager.resolveKnownCallApp(p) != nil
+        }
+        guard let target = callObj ?? activeObjects.first else {
             // No app is currently producing audio. Don't create a dead tap;
             // keep the rescan listeners armed so we self-recover the moment
             // audio appears (.deferred → .live promotion in
@@ -114,7 +128,8 @@ final class SystemAudioProcessTap {
             return .deferred
         }
         let targetPid = Self.pid(forAudioObject: target) ?? -1
-        dimmyHostLog("[SystemAudio/tap] tapping SINGLE process pid=\(targetPid) (of \(activeObjects.count) active)")
+        let targetKind = callObj != nil ? "call-app" : "first-active"
+        dimmyHostLog("[SystemAudio/tap] tapping SINGLE \(targetKind) process pid=\(targetPid) (of \(activeObjects.count) active)")
 
         let description = CATapDescription(monoMixdownOfProcesses: [target])
         description.uuid = UUID()
