@@ -1119,6 +1119,14 @@ enum MeetingShortcut {
             NSLog("[MeetingShortcut] meeting start failed")
             appState.lastError = "Meeting start failed"
         } else {
+            // Pin the recap intent for THIS meeting. A background/shortcut
+            // meeting has no per-meeting "Generate recap" toggle (that UI
+            // only exists in the meeting window's idle view), so every stop
+            // path reads AppState.meetingGenerateRecap — if we don't set it
+            // here it keeps a STALE value left over from an earlier
+            // window-started meeting and the recap gets silently skipped at
+            // stop. Default to the app-wide intent (recap on).
+            appState.meetingGenerateRecap = true
             DimmyCore.shared.trackMeetingAction(source: source)
         }
     }

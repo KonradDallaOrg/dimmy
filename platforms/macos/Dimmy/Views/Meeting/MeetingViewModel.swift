@@ -536,6 +536,7 @@ final class MeetingViewModel: ObservableObject {
                 self.titlebarTitle = self.doneTitle
 
                 if cleanTranscript.isEmpty {
+                    dimmyHostLog("[Recap] skip (window stop): reason=empty transcript — no recap will run")
                     // No speech captured (very short recording, VAD
                     // rejected everything, or STT failed silently).
                     // Don't pretend the recap "wasn't generated", be
@@ -554,6 +555,7 @@ final class MeetingViewModel: ObservableObject {
                     self.processingStep = .generatingRecap
                     self.runPostProcess(dir: result.dir, transcript: cleanTranscript)
                 } else {
+                    dimmyHostLog("[Recap] skip (window stop): reason=meetingGenerateRecap=false (recap toggled off for this meeting) — transcript kept, no recap")
                     self.isWorking = false
                     self.phase = .done
                     self.doneSections = [

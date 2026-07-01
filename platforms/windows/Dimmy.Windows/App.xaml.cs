@@ -112,6 +112,13 @@ public partial class App : Application
                 return;
             }
             PttLog("Meeting hotkey: recording started (background)");
+            // Pin the recap intent for THIS meeting. A background/shortcut
+            // meeting has no per-meeting "Generate recap" checkbox (that UI
+            // only lives in the meeting window), so the stop path reads
+            // AppViewModel.MeetingGenerateRecap — if we don't set it here it
+            // keeps a STALE value from an earlier window-started meeting and
+            // the recap is silently skipped at stop. Default to recap on.
+            _appViewModel.MeetingGenerateRecap = true;
             try { DimmyNative.dimmy_track_meeting_action(source); } catch { }
             // Pill + taskbar flip to recording via the meeting_state event.
         }
