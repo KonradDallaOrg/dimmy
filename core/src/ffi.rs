@@ -1121,11 +1121,31 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
         }
     }
 
-    let processed = raw.preprocess(preprocessing);
+    // Route-aware preprocessing. The VAD + dagc pass HELPS local whisper /
+    // parakeet (they hallucinate on long silence and want normalized levels)
+    // but HURTS cloud STT: Groq/OpenAI/Deepgram already run their own VAD +
+    // normalization server-side, so ours is redundant and can only degrade.
+    // Proven 2026-07-01: an attenuated mic (input_gain 0.75) produced quiet
+    // audio; our VAD mistook the speech for silence and trimmed it, then dagc
+    // amplified the leftover noise to clipping — a full 45 s dictation
+    // transcribed to "Ah!". For cloud we therefore use the same safe
+    // highpass-only path as file-load (removes rumble, touches nothing else).
+    // preprocessing_enabled=false still means full passthrough (raw).
+    let processed = if !preprocessing {
+        raw.preprocess(false)
+    } else if stt_mode == "local" {
+        raw.preprocess(true)
+    } else {
+        crate::audio::ProcessedAudio {
+            samples: crate::preprocess::process_buffer_for_file_load(&raw.samples, raw.sample_rate),
+            sample_rate: raw.sample_rate,
+        }
+    };
     log(&format!(
-        "[StopRec] after preprocess: {} samples (preprocessing={})",
+        "[StopRec] after preprocess: {} samples (preprocessing={}, stt_mode={})",
         processed.samples.len(),
-        preprocessing
+        preprocessing,
+        stt_mode
     ));
 
     // Save processed audio
