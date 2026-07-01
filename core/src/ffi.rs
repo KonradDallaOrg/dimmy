@@ -700,20 +700,26 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
         *sr = crate::audio::MEETING_CANONICAL_RATE;
     }
 
-    // Always-mix architecture (2026-05-08): the audio capture session
-    // ALWAYS opens both mic + system loopback, AEC3 always processes
-    // the mic with the loopback as far-end reference. Pill dictation
-    // still consumes only the cleaned mic buffer (audio_buffer) — the
-    // loopback samples flow into audio_buffer_secondary which the
-    // dictation chunked-stt worker simply ignores. Net effect:
-    //   • no more "Mic vs Mix vs System" decision at the call site
-    //   • AEC3 cleans up speaker echo even during pill dictation
-    //   • the pill amplitude visualizer can read MAX(mic, loopback) so
-    //     the user sees activity from either source
-    //   • robustness: aec.rs no longer blocks on missing ref, so a
-    //     loopback that never delivers (no default output, no audio
-    //     playing) gracefully falls back to mic-only behavior
-    let source = crate::audio::AudioSource::Mix;
+    // Dictation captures MIC-ONLY, NOT Mix. (Meeting still uses Mix —
+    // it needs AEC to cancel the loopback echo.)
+    //
+    // Why NOT Mix here: in Mix mode the mic is routed through the AEC
+    // ring (`aec_mic_ring`, capped at 1 s) and the AEC3 + DeepFilterNet
+    // worker drains it. When that worker can't keep realtime — a 48 kHz
+    // stereo mic + heavy NN denoise in a noisy room — the ring overflows
+    // and DROPS the oldest samples. Proven 2026-07-01: a 41 s and a 53 s
+    // dictation each landed only ~37 % of their samples in the buffer
+    // (15.6 s / 19.9 s), so Whisper transcribed a truncated fragment and
+    // the user rightly reported "this isn't what I dictated". Dictation
+    // has no loopback echo to cancel, so AEC buys nothing here and costs
+    // 60 % of the audio.
+    //
+    // Mic-only makes the mic callback write straight to `audio_buffer`
+    // (no ring, no worker, no drop). Trade-off: no realtime AEC/denoise
+    // on dictation — but full raw audio to STT beats a denoised 37 %
+    // fragment every time. The pill amplitude visualizer reads mic level
+    // (loopback empty in Mic mode), which is exactly what dictation wants.
+    let source = crate::audio::AudioSource::Mic;
     let _ = st.audio_tx.lock().map(|tx| {
         tx.send(AudioCommand::Start {
             device_name: selected_device,
