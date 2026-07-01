@@ -139,6 +139,18 @@ pub fn bucket_audio_secs(secs: f64) -> &'static str {
 }
 
 /// Wall-clock processing time buckets (STT or LLM call).
+/// Capture-ratio buckets: captured audio seconds / elapsed recording
+/// seconds. `ge_95` is healthy (Mic-mode dictation should land here);
+/// anything below `85_95` means the capture path silently dropped audio.
+pub fn bucket_capture_ratio(ratio: f64) -> &'static str {
+    match ratio {
+        r if r < 0.50 => "lt_50",
+        r if r < 0.85 => "50_85",
+        r if r < 0.95 => "85_95",
+        _ => "ge_95",
+    }
+}
+
 pub fn bucket_processing_ms(ms: u64) -> &'static str {
     match ms {
         m if m < 500 => "lt_500",

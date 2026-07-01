@@ -511,6 +511,135 @@ pub fn process_buffer(samples: &[f32], sample_rate: u32) -> Vec<f32> {
     output
 }
 
+/// Which preprocessing path a captured dictation buffer takes before STT.
+///
+/// Single source of truth for the route-aware decision made at
+/// `dimmy_stop_recording`. Extracted as a pure function so the mapping is
+/// unit-testable and can't silently drift (it did, twice — see BUG B in
+/// known-bugs.md).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreprocessRoute {
+    /// User disabled preprocessing — pass samples through untouched.
+    Raw,
+    /// Local STT (whisper / parakeet): full VAD + AGC. They hallucinate on
+    /// long silence and want normalized levels, so the pipeline HELPS.
+    Full,
+    /// Cloud STT (Groq / OpenAI / Deepgram): 80 Hz highpass only. They run
+    /// their own VAD + normalization server-side, so ours is redundant and
+    /// can only degrade (proven 2026-07-01: quiet mic → VAD trims speech →
+    /// dagc amplifies noise to clipping → a 45 s dictation became "Ah!").
+    HighpassOnly,
+}
+
+/// Pure route decision for a dictation buffer. `stt_mode` is the config
+/// string; anything that isn't exactly `"local"` is treated as cloud — the
+/// conservative default, because the highpass-only path can never make audio
+/// worse than raw.
+///
+/// This reproduces the exact inline mapping that shipped in
+/// `dimmy_stop_recording` on 2026-07-01; extracting it changes no behaviour.
+pub fn preprocess_route(preprocessing_enabled: bool, stt_mode: &str) -> PreprocessRoute {
+    if !preprocessing_enabled {
+        PreprocessRoute::Raw
+    } else if stt_mode == "local" {
+        PreprocessRoute::Full
+    } else {
+        PreprocessRoute::HighpassOnly
+    }
+}
+
+fn rms(samples: &[f32]) -> f32 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    // Treat any non-finite sample as 0 so a stray NaN/Inf in the input can't
+    // poison the RMS (which would make the make-it-worse comparison behave
+    // unpredictably). f64 accumulation keeps precision over long buffers.
+    let sum_sq: f64 = samples
+        .iter()
+        .map(|&s| {
+            let s = if s.is_finite() { s as f64 } else { 0.0 };
+            s * s
+        })
+        .sum();
+    (sum_sq / samples.len() as f64).sqrt() as f32
+}
+
+/// Retained-sample fraction below which the full pipeline is considered to
+/// have collapsed the recording. Deliberately EXTREME (5 %): a normal VAD
+/// trim keeps ~40-60 %, so this only trips on near-total loss.
+const COLLAPSE_RETENTION_FLOOR: f32 = 0.05;
+/// Output-vs-input RMS ratio below which the output is considered
+/// effectively silent relative to a speech-level input.
+const COLLAPSE_RMS_FLOOR: f32 = 0.05;
+
+/// Did the full preprocessing pipeline make a clearly-speech input
+/// *catastrophically* worse? The user's rule: preprocessing must HELP, never
+/// make audio worse than raw. This is the detector for the LOCAL make-it-worse
+/// fallback.
+///
+/// Returns true ONLY on near-total collapse of a speech-level input:
+/// - the input is clearly speech (`rms(input) > ENERGY_FLOOR`), AND
+/// - the output is empty, OR retained < 5 % of the samples, OR its RMS is
+///   below 5 % of the input's (essentially silent).
+///
+/// It is intentionally conservative so it can NEVER fire on a healthy 40-60 %
+/// VAD trim — i.e. it does not alter the behaviour validated in real
+/// dictations; it is a floor, not a quality knob. If the input has no clear
+/// speech energy there is nothing to protect, so it returns false.
+pub fn preprocess_made_it_worse(input: &[f32], output: &[f32]) -> bool {
+    if input.is_empty() {
+        return false;
+    }
+    let input_rms = rms(input);
+    if input_rms <= ENERGY_FLOOR {
+        return false;
+    }
+    // f64 division so the fraction stays exact even for multi-minute buffers
+    // (>2^24 samples exceeds f32 integer precision).
+    let retained = output.len() as f64 / input.len() as f64;
+    output.is_empty()
+        || retained < COLLAPSE_RETENTION_FLOOR as f64
+        || rms(output) < input_rms * COLLAPSE_RMS_FLOOR
+}
+
+/// Full pipeline with a make-it-worse safety net for the LOCAL path.
+///
+/// Runs the full VAD + AGC pipeline (`process_buffer`); if that
+/// catastrophically collapses a speech-level input (see
+/// `preprocess_made_it_worse`), falls back to the highpass-only path — the
+/// same safe path cloud + file-load use. This guarantees the pipeline never
+/// ships audio worse than doing nothing, even for an input we never
+/// anticipated. On healthy audio the full output is returned unchanged.
+pub fn process_buffer_guarded(samples: &[f32], sample_rate: u32) -> Vec<f32> {
+    assert!(
+        sample_rate > 0,
+        "process_buffer_guarded: sample_rate must be > 0, got {}",
+        sample_rate
+    );
+    if samples.is_empty() {
+        return Vec::new();
+    }
+
+    let full = process_buffer(samples, sample_rate);
+    if preprocess_made_it_worse(samples, &full) {
+        crate::log(
+            "[Preprocess] WARN full pipeline collapsed a speech-level input — \
+             falling back to highpass-only (make-it-worse guard)",
+        );
+        let fallback = process_buffer_for_file_load(samples, sample_rate);
+        // Postcondition (house rule: assert in prod): the fallback preserves
+        // the input (highpass keeps sample count + level), so it can never
+        // itself be degenerate. Only runs on the rare fallback path.
+        assert!(
+            !preprocess_made_it_worse(samples, &fallback),
+            "highpass fallback is itself degenerate — the make-it-worse guard has no safe path"
+        );
+        return fallback;
+    }
+    full
+}
+
 /// Downsample audio to 16kHz for Whisper (which internally resamples to 16kHz anyway).
 /// Uses a lowpass anti-aliasing filter + linear interpolation.
 /// Returns samples at 16kHz. If source is already 16kHz, returns a clone.
@@ -1285,5 +1414,127 @@ mod tests {
                 sr
             );
         }
+    }
+
+    // ---- Route-aware preprocessing (§1) -----------------------------------
+
+    #[test]
+    fn preprocess_route_maps_cloud_local_disabled() {
+        use PreprocessRoute::*;
+        // Disabled → Raw regardless of mode.
+        assert_eq!(preprocess_route(false, "local"), Raw);
+        assert_eq!(preprocess_route(false, "cloud"), Raw);
+        // Enabled + local → Full.
+        assert_eq!(preprocess_route(true, "local"), Full);
+        // Enabled + cloud (or anything not "local") → HighpassOnly.
+        assert_eq!(preprocess_route(true, "cloud"), HighpassOnly);
+        assert_eq!(preprocess_route(true, ""), HighpassOnly);
+        assert_eq!(preprocess_route(true, "groq"), HighpassOnly);
+    }
+
+    // ---- Make-it-worse fallback (§2) --------------------------------------
+
+    #[test]
+    fn made_it_worse_false_on_healthy_vad_trim() {
+        // Healthy speech in, a normal ~50% VAD trim out at a healthy level:
+        // this is the everyday case and must NEVER be flagged as degenerate,
+        // otherwise the guard would alter validated dictations.
+        let input = generate_speech_like(48_000, 4.0, 0.3);
+        let output = generate_speech_like(48_000, 2.0, 0.2); // half the samples, healthy RMS
+        assert!(rms(&input) > ENERGY_FLOOR);
+        assert!(!preprocess_made_it_worse(&input, &output));
+    }
+
+    #[test]
+    fn made_it_worse_true_on_empty_output() {
+        let input = generate_speech_like(48_000, 4.0, 0.3);
+        assert!(preprocess_made_it_worse(&input, &[]));
+    }
+
+    #[test]
+    fn made_it_worse_true_on_near_total_sample_loss() {
+        // 4.0 s in (192 000 samples), 0.1 s out (4 800 samples) = 2.5 % —
+        // below the 5 % COLLAPSE_RETENTION_FLOOR, so the guard must trip.
+        let input = generate_speech_like(48_000, 4.0, 0.3);
+        let output = generate_speech_like(48_000, 0.1, 0.3);
+        assert!(preprocess_made_it_worse(&input, &output));
+    }
+
+    #[test]
+    fn made_it_worse_true_on_near_silent_output() {
+        let input = generate_speech_like(48_000, 4.0, 0.3);
+        // Same length, but essentially silent (rms << 5% of input rms).
+        let output = vec![0.0001f32; input.len()];
+        assert!(preprocess_made_it_worse(&input, &output));
+    }
+
+    #[test]
+    fn made_it_worse_false_when_input_has_no_speech() {
+        // Silence in → nothing to protect, never a "make it worse" case even
+        // if the output is empty.
+        let input = vec![0.0f32; 48_000];
+        assert!(!preprocess_made_it_worse(&input, &[]));
+    }
+
+    #[test]
+    fn made_it_worse_false_on_empty_input() {
+        assert!(!preprocess_made_it_worse(&[], &[]));
+    }
+
+    #[test]
+    fn guarded_matches_full_on_healthy_speech() {
+        // On healthy speech the guard must NOT trip: guarded output is
+        // byte-identical to the plain full pipeline. This is the invariant
+        // that keeps validated dictations unchanged.
+        let input = generate_speech_like(48_000, 6.0, 0.3);
+        let full = process_buffer(&input, 48_000);
+        let guarded = process_buffer_guarded(&input, 48_000);
+        assert_eq!(
+            guarded.len(),
+            full.len(),
+            "guard altered a healthy recording"
+        );
+        assert_eq!(guarded, full);
+    }
+
+    #[test]
+    fn guarded_output_is_never_degenerate() {
+        // Whatever the input, the guarded output is never itself flagged as a
+        // make-it-worse collapse (either full was fine, or we fell back to
+        // highpass which preserves the input).
+        for (dur, amp) in &[(6.0f32, 0.3f32), (2.0, 0.05), (10.0, 0.2)] {
+            let input = generate_speech_like(48_000, *dur, *amp);
+            let guarded = process_buffer_guarded(&input, 48_000);
+            assert!(
+                !preprocess_made_it_worse(&input, &guarded),
+                "guarded output degenerate for dur={dur} amp={amp}"
+            );
+            assert!(guarded.iter().all(|s| s.is_finite()));
+        }
+    }
+
+    // ---- AUDIO-001 belt-and-suspenders (§4) -------------------------------
+
+    #[test]
+    fn full_pipeline_on_exact_zeros_produces_no_nan() {
+        // Feeding pure silence must never yield NaN (dagc-on-zero is the
+        // AUDIO-001 root cause). Empty output is fine; NaN is not.
+        let zeros = vec![0.0f32; 48_000 * 2];
+        let out = process_buffer(&zeros, 48_000);
+        assert!(
+            out.iter().all(|s| s.is_finite()),
+            "process_buffer emitted non-finite samples on pure silence"
+        );
+    }
+
+    #[test]
+    fn full_pipeline_on_near_zero_produces_no_nan() {
+        // Near-zero (denormal-ish) input is the other dagc danger zone.
+        let tiny = vec![1e-9f32; 48_000 * 2];
+        let out = process_buffer(&tiny, 48_000);
+        assert!(
+            out.iter().all(|s| s.is_finite()),
+            "process_buffer emitted non-finite samples on near-zero input"
+        );
     }
 }

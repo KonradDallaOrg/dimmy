@@ -36,6 +36,13 @@ static STREAMING: Mutex<Option<crate::deepgram_stream::DeepgramStreamer>> = Mute
 /// read at the stop emit (where the streaming/chunked locals are out of scope).
 static DICTATION_ENGINE: Mutex<&'static str> = Mutex::new("batch");
 
+/// Wall-clock instant the current dictation recording started. Set in
+/// `dimmy_start_recording`, read + cleared in `dimmy_stop_recording` to
+/// compute the capture-ratio invariant (captured audio seconds vs elapsed
+/// recording seconds). Catches the class where the capture path silently
+/// drops audio (BUG A — the Mix AEC ring dropped ~60 %). See known-bugs.md.
+static RECORDING_STARTED_AT: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
 /// Active meeting-mode session, if any. Independent of CHUNKED — the
 /// meeting flow runs its own audio capture (started via
 /// `dimmy_meeting_start`, NOT via the dictation hotkey).
@@ -884,6 +891,10 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
         ));
     }
 
+    if let Ok(mut slot) = RECORDING_STARTED_AT.lock() {
+        *slot = Some(std::time::Instant::now());
+    }
+
     emit_event("recording_started", "{}");
     0
 }
@@ -923,6 +934,17 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
     let _stop_guard = StopGuard;
 
     let st = state();
+
+    // Consume the recording-start instant up front so it is cleared on EVERY
+    // exit path (the early returns below for empty/muted buffer must not leave
+    // a stale Instant for the next recording's capture-ratio to misread).
+    // Measured here it also excludes the stop-processing overhead, so it
+    // reflects the true recording duration. Used by the capture-ratio guard.
+    let recording_elapsed = RECORDING_STARTED_AT
+        .lock()
+        .ok()
+        .and_then(|mut s| s.take())
+        .map(|i| i.elapsed().as_secs_f64());
 
     // Wait briefly for audio samples to arrive if the stream just started.
     // The cpal stream can take 100-300ms to produce first samples after Start.
@@ -1062,6 +1084,48 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
         .lock()
         .map(|m| m.clone())
         .unwrap_or_else(|_| "cloud".to_string());
+    // Capture-integrity invariant: how much audio did we actually capture vs
+    // how long the user recorded? Mic-mode dictation should land ~100 %; a
+    // low ratio means the capture path silently dropped samples (BUG A — the
+    // Mix AEC ring dropped ~60 %). We WARN + emit telemetry rather than
+    // `assert!`: a shortfall is device/load-dependent (a slow BT-HFP mic on a
+    // busy box), not a logic bug, and crashing the app over it would be worse
+    // than the drop. Skipped for Deepgram streaming (it clears + rolls the
+    // buffer, so buffer.len() isn't the captured total) and while a meeting is
+    // active (its buffer grows unbounded by design).
+    {
+        if let Some(elapsed_secs) = recording_elapsed {
+            let captured_secs = buf_len_samples as f64 / sample_rate.max(1) as f64;
+            let ratio = captured_secs / elapsed_secs;
+            // `elapsed_secs > 3.0` also guarantees a non-zero denominator, so
+            // `ratio` is finite; the explicit `is_finite` is belt-and-suspenders
+            // so a corrupt reading can never mis-bucket as healthy (`ge_95`).
+            if elapsed_secs > 3.0
+                && ratio.is_finite()
+                && streaming_final.is_none()
+                && !meeting_is_active()
+            {
+                // Dictation captures Mic-only since 2026-07-01; kept explicit
+                // so it's obvious what to revisit if that ever varies again.
+                let source = "mic";
+                if ratio < 0.85 {
+                    log(&format!(
+                        "[StopRec] WARN capture ratio {:.0}% — captured {:.1}s of {:.1}s recorded \
+                         (source={}); capture path may be dropping audio",
+                        ratio * 100.0,
+                        captured_secs,
+                        elapsed_secs,
+                        source
+                    ));
+                }
+                crate::telemetry::track(crate::telemetry::Event::DictationCaptureRatio {
+                    ratio_bucket: crate::telemetry::sanitize::bucket_capture_ratio(ratio),
+                    source,
+                });
+            }
+        }
+    }
+
     let local_model_filename = st
         .local_model
         .lock()
@@ -1131,15 +1195,23 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
     // transcribed to "Ah!". For cloud we therefore use the same safe
     // highpass-only path as file-load (removes rumble, touches nothing else).
     // preprocessing_enabled=false still means full passthrough (raw).
-    let processed = if !preprocessing {
-        raw.preprocess(false)
-    } else if stt_mode == "local" {
-        raw.preprocess(true)
-    } else {
-        crate::audio::ProcessedAudio {
+    let route = crate::preprocess::preprocess_route(preprocessing, &stt_mode);
+    let processed = match route {
+        // Passthrough — unchanged from the pre-refactor behaviour.
+        crate::preprocess::PreprocessRoute::Raw => raw.preprocess(false),
+        // Local whisper/parakeet: full VAD + AGC, but guarded so a
+        // catastrophic collapse falls back to highpass-only instead of
+        // shipping degraded audio. On healthy audio this is byte-identical
+        // to the old `raw.preprocess(true)` (the guard never trips).
+        crate::preprocess::PreprocessRoute::Full => crate::audio::ProcessedAudio {
+            samples: crate::preprocess::process_buffer_guarded(&raw.samples, raw.sample_rate),
+            sample_rate: raw.sample_rate,
+        },
+        // Cloud: highpass-only (same safe path as file-load) — unchanged.
+        crate::preprocess::PreprocessRoute::HighpassOnly => crate::audio::ProcessedAudio {
             samples: crate::preprocess::process_buffer_for_file_load(&raw.samples, raw.sample_rate),
             sample_rate: raw.sample_rate,
-        }
+        },
     };
     log(&format!(
         "[StopRec] after preprocess: {} samples (preprocessing={}, stt_mode={})",
