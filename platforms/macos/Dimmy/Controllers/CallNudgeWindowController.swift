@@ -46,6 +46,11 @@ final class CallNudgeWindowController {
     private var hostingView: NSHostingView<CallNudgeView>?
     private var viewModel: CallNudgeViewModel?
     private var dismissTimer: Timer?
+    /// True while WE set the panel frame, so the didMove observer doesn't
+    /// persist a programmatic reposition as if the user had dragged it.
+    private var isRepositioning = false
+    /// UserDefaults key for the user-dragged origin (NSStringFromPoint).
+    private static let savedOriginKey = "callNudgePanelOrigin"
 
     private init() {}
 
@@ -119,9 +124,14 @@ final class CallNudgeWindowController {
             styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
             backing: .buffered,
             defer: false)
-        panel.level = .floating
+        // `.statusBar` sits above normal windows AND above macOS
+        // notification banners, so the nudge is not buried under other
+        // notifications (Marta's report: bottom-right card covered + missed).
+        panel.level = .statusBar
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-        panel.isMovableByWindowBackground = false
+        // Draggable by its background so the user can move it out of the way
+        // of whatever else lives in that corner; the position is remembered.
+        panel.isMovableByWindowBackground = true
         panel.backgroundColor = .clear
         panel.isOpaque = false
         panel.hasShadow = true
@@ -134,22 +144,47 @@ final class CallNudgeWindowController {
         host.autoresizingMask = [.width, .height]
 
         self.panel = panel
+
+        // Remember where the user drags it. Built once (ensurePanel guards on
+        // panel != nil) so this observer is added exactly once — no leak.
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didMoveNotification, object: panel, queue: .main
+        ) { [weak self] _ in
+            guard let self, let p = self.panel, !self.isRepositioning else { return }
+            UserDefaults.standard.set(NSStringFromPoint(p.frame.origin), forKey: Self.savedOriginKey)
+        }
     }
 
     private func present() {
         guard let panel else { return }
-        positionAtScreenBottomRight(panel)
+        positionPanel(panel)
         panel.orderFrontRegardless()
         scheduleDismiss()
     }
 
-    private func positionAtScreenBottomRight(_ panel: NSPanel) {
+    /// Restore the user's dragged position if it still lands on a visible
+    /// screen; otherwise fall back to the bottom-right default.
+    private func positionPanel(_ panel: NSPanel) {
+        isRepositioning = true
+        defer { isRepositioning = false }
+
+        let size = NSSize(width: Self.cardWidth, height: Self.cardHeight)
+        if let saved = UserDefaults.standard.string(forKey: Self.savedOriginKey) {
+            let origin = NSPointFromString(saved)
+            let rect = NSRect(origin: origin, size: size)
+            // Only honour it if the card is (mostly) on some visible screen —
+            // a stale origin from an unplugged monitor must not hide it.
+            if NSScreen.screens.contains(where: { $0.visibleFrame.intersects(rect) }) {
+                panel.setFrame(rect, display: true)
+                return
+            }
+        }
+
         let screen = NSScreen.main ?? NSScreen.screens.first
         guard let visible = screen?.visibleFrame else { return }
         let originX = visible.maxX - Self.cardWidth - Self.rightMargin
         let originY = visible.minY + Self.bottomMargin
-        panel.setFrame(NSRect(x: originX, y: originY,
-                              width: Self.cardWidth, height: Self.cardHeight),
+        panel.setFrame(NSRect(x: originX, y: originY, width: size.width, height: size.height),
                        display: true)
     }
 
