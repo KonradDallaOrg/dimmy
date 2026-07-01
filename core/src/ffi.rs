@@ -3613,6 +3613,16 @@ pub extern "C" fn dimmy_meeting_is_active() -> c_int {
     MEETING.lock().map(|g| g.is_some() as c_int).unwrap_or(0)
 }
 
+/// Internal (Rust-side) meeting-active probe. Same source of truth as
+/// `dimmy_meeting_is_active`, exposed for core modules (e.g. the audio
+/// worker's long-dictation guardrail) that must NOT trip on a meeting —
+/// a meeting's `audio_buffer` also grows unbounded by design (the worker
+/// tracks `samples_written` against it rather than draining), so any
+/// buffer-size guard has to skip while a meeting is live.
+pub fn meeting_is_active() -> bool {
+    MEETING.lock().map(|g| g.is_some()).unwrap_or(false)
+}
+
 /// Pause the in-flight meeting. While paused, the meeting worker
 /// stops draining the audio buffers, stops writing to the WAV files,
 /// and stops emitting STT chunks. cpal callbacks keep firing — we
