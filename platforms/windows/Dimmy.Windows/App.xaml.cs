@@ -125,6 +125,31 @@ public partial class App : Application
         catch (Exception ex) { PttLog($"ToggleMeetingFromShortcut exc: {ex.Message}"); }
     }
 
+    /// <summary>Core hit the 5 min soft threshold on a single dictation:
+    /// nudge toward Meeting mode without interrupting the recording.</summary>
+    private void OnDictationLongWarning()
+    {
+        try { Services.DictNotificationService.ShowLongDictationWarning(); }
+        catch (Exception ex) { PttLog($"OnDictationLongWarning exc: {ex.Message}"); }
+    }
+
+    /// <summary>Core hit the 10 min hard cap on a single dictation. Stop it
+    /// like a normal hotkey stop (transcribes + pastes what was said, which
+    /// bounds the otherwise-unbounded dictation buffer), then nudge toward
+    /// Meeting mode. Runs on the UI thread (HandleEvent is dispatched there).</summary>
+    private async void OnDictationMaxDuration()
+    {
+        try
+        {
+            PttLog("dictation.max_duration — auto-stopping the runaway dictation");
+            if (_appViewModel.IsRecording || _pttStarted)
+                await StopAndProcess();
+            _pttStarted = false;
+            Services.DictNotificationService.ShowLongDictationCapped();
+        }
+        catch (Exception ex) { PttLog($"OnDictationMaxDuration exc: {ex.Message}"); }
+    }
+
     /// <summary>Host the recording-consent dialog in a properly sized window
     /// and return the user's decision. The pill is too small to host a
     /// ContentDialog — the consent text rendered clipped/illegible (burned
@@ -447,6 +472,12 @@ public partial class App : Application
             // paste at stop is suppressed for these sessions (see
             // StopAndProcess) so the text isn't injected twice.
             _appViewModel.StreamingSegmentFinalized += OnStreamingSegmentFinalized;
+
+            // 2d. Long-dictation guardrail (core-driven, event-based). A pill
+            // dictation buffers unbounded audio (no draining worker), so the
+            // core emits a soft warning at 5 min and a hard cap at 10 min.
+            _appViewModel.DictationLongWarning += OnDictationLongWarning;
+            _appViewModel.DictationMaxDurationReached += OnDictationMaxDuration;
 
             // 3. Load config into ViewModel
             LoadConfigIntoViewModel();

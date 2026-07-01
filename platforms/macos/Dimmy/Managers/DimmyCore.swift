@@ -1056,6 +1056,22 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
     case "recording_cancelled":
         appState.recordingState = .idle
 
+    case "dictation.long_warning":
+        // Core hit the 5 min soft threshold on a single dictation. A pill
+        // dictation buffers unbounded audio (no draining worker), so nudge
+        // toward Meeting mode without interrupting the recording.
+        appState.lastError = "You have been dictating for a while. For long recordings, Meeting mode is the better tool."
+
+    case "dictation.max_duration":
+        // Core hit the 10 min hard cap. Stop it like a normal hotkey stop
+        // (transcribes + pastes what was said), which bounds the otherwise
+        // unbounded dictation buffer, then nudge toward Meeting mode.
+        print("[DimmyCore] dictation.max_duration — auto-stopping the runaway dictation")
+        DispatchQueue.main.async {
+            HotkeyManager.shared.stopToggleRecording()
+            appState.lastError = "Dictation stopped at 10 min. Dimmy transcribed what you said. For long recordings, use Meeting mode."
+        }
+
     case "meeting_state":
         // Replaces the 0.5 s `meetingStatePollTimer` on PillWindowController.
         // Rust emits this exactly once per state transition (start /

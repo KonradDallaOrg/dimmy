@@ -54,6 +54,24 @@ public static class DictNotificationService
              $"“{combo}” overlaps another Dimmy shortcut. Pick a different command mode shortcut.");
     }
 
+    /// <summary>Soft nudge at the 5 min mark of a single dictation: a
+    /// marathon dictation buffers unbounded audio (no draining worker),
+    /// so steer the user toward Meeting mode before it grows large.</summary>
+    public static void ShowLongDictationWarning()
+    {
+        Show("Long dictation",
+             "You have been dictating for a while. For long recordings, Meeting mode is the better tool.");
+    }
+
+    /// <summary>Fired when a single dictation hits the 10 min hard cap and
+    /// Dimmy auto-stops it (the audio so far is transcribed + pasted). Tells
+    /// the user why it stopped and points at Meeting mode.</summary>
+    public static void ShowLongDictationCapped()
+    {
+        Show("Dictation stopped at 10 min",
+             "Dimmy stopped and transcribed what you said. For long recordings, use Meeting mode.");
+    }
+
     private static void Show(string title, string body)
     {
         try
