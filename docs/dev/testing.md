@@ -40,10 +40,21 @@
 **Where.** `core/tests/ffi_e2e.rs` — 12 tests, cross-platform. Plus
 `core/tests/meeting_pause_resume.rs` (4 tests, exercises the
 `dimmy_meeting_pause/_resume/_is_paused` FFI contract + worker
-behaviour while paused) and `core/tests/parakeet_long_file.rs` (1
-diagnostic test on real long WAVs, skips cleanly when fixture
-unavailable; survives in tree as a regression early-warning for
-future preprocess changes).
+behaviour while paused), `core/tests/audio_hardening.rs` (4 tests —
+dictation route-aware preprocess + BUG A/B guardrails, see below) and
+`core/tests/parakeet_long_file.rs` (1 diagnostic test on real long
+WAVs, skips cleanly when fixture unavailable; survives in tree as a
+regression early-warning for future preprocess changes).
+
+**Audio hardening (`core/tests/audio_hardening.rs`)** — regression tests
+for the two silent dictation bugs (known-bugs.md AUDIO-004): the LOCAL
+Full route transcribes real speech through the make-it-worse guard, the
+CLOUD route delivers a non-empty body to the provider, quiet attenuated
+speech still transcribes locally, and a synthesized medium file
+(jfk×4, ~44 s) transcribes via `dimmy_transcribe_file`. The route
+*selection* itself is pinned deterministically by the `preprocess_route`
+unit test; the capture-ratio guard is unit-tested in `telemetry::`
+(it's inert in the injection harness — no real capture timing).
 
 Coverage groups:
 - **Local STT**: jfk sample, silent input, short clip (<30s, set_single_segment guard), long clip (>30s, segmentation guard), preprocess pipeline end-to-end.
