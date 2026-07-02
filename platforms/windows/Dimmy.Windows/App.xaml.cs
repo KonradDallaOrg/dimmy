@@ -273,6 +273,14 @@ public partial class App : Application
 
     private static void PttLog(string msg) => Log(msg, "PTT");
 
+    // ptt.log rotation cap. Every hotkey event / FFI callback appends here,
+    // and before 2026-07-02 the file grew unbounded (7.7 MB observed on a
+    // real machine — audit blocker). Mirrors the Rust core's dimmy.log
+    // rotation (core/src/lib.rs): over the cap → keep the newest half,
+    // cut at a line boundary.
+    private const long MaxPttLogBytes = 1_048_576; // 1 MB
+    private static int _logCallsSinceSizeCheck;
+
     /// Public diagnostic logger callable from any window for ad-hoc
     /// debugging. Routes to the same ptt.log so output is one stream.
     public static void Log(string msg, string tag = "Dimmy")
@@ -280,7 +288,18 @@ public partial class App : Application
         var line = $"[{DateTime.Now:HH:mm:ss.fff}] [{tag}] {msg}";
         Console.WriteLine(line);
         Console.Out.Flush();
-        try { File.AppendAllText(PttLogPath, line + Environment.NewLine); } catch { }
+        try
+        {
+            // Stat the file every 64th call — a per-append stat is cheap but
+            // pointless at this cadence, and 64 lines (~6 KB) of overshoot
+            // past the 1 MB cap is immaterial.
+            if (Interlocked.Increment(ref _logCallsSinceSizeCheck) % 64 == 1)
+            {
+                Helpers.LogRotation.TrimToHalfIfOver(PttLogPath, MaxPttLogBytes);
+            }
+            File.AppendAllText(PttLogPath, line + Environment.NewLine);
+        }
+        catch { }
     }
 
     public App()
@@ -338,6 +357,17 @@ public partial class App : Application
         // we set it later, the jump list we register doesn't bind to
         // our taskbar entry and right-click shows nothing custom.
         JumpListService.SetProcessAumi();
+
+        // One-time cleanup of the retired app-rules-diag.log (the
+        // "temporary" 2026-05-12 diag logger grew unbounded on users'
+        // disks — audit 2026-07-02; the logger itself is deleted).
+        try
+        {
+            File.Delete(Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "dimmy", "app-rules-diag.log"));
+        }
+        catch { }
 
         // Register the dimmy:// custom URL scheme in HKCU\Classes so
         // activation magic-link emails can deep-link into the app.

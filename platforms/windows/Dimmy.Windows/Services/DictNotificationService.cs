@@ -63,6 +63,16 @@ public static class DictNotificationService
              "You have been dictating for a while. For long recordings, Meeting mode is the better tool.");
     }
 
+    /// <summary>A meeting's audio file could not be finalised (classically
+    /// disk-full while rewriting the header): the recording on disk is
+    /// incomplete. Without this the user finds out only when the recap
+    /// mysteriously fails — audit 2026-07-02, "no silent failures".</summary>
+    public static void ShowMeetingAudioIncomplete(string detail)
+    {
+        Show("Meeting audio incomplete",
+             $"The recording could not be finalised ({detail}). Check free disk space; the transcript may still be usable.");
+    }
+
     /// <summary>Fired when a single dictation hits the 10 min hard cap and
     /// Dimmy auto-stops it (the audio so far is transcribed + pasted). Tells
     /// the user why it stopped and points at Meeting mode.</summary>

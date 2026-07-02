@@ -12,26 +12,10 @@ public record ProviderPreset(string Name, string Url, string DefaultModel);
 
 public partial class SettingsViewModel : ObservableObject
 {
-    /// <summary>
-    /// Temporary diagnostic logger for the app_rules persistence bug
-    /// (2026-05-12). Appends to a dedicated file under config dir so
-    /// the trail isn't drowned by other entries in ptt.log. Best-
-    /// effort — silently ignores IO failures because diag is not
-    /// load-bearing for the app to work.
-    /// </summary>
-    private static void DiagLog(string line)
-    {
-        try
-        {
-            var path = System.IO.Path.Combine(
-                System.Environment.GetFolderPath(System.Environment.SpecialFolder.ApplicationData),
-                "dimmy", "app-rules-diag.log");
-            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
-            System.IO.File.AppendAllText(path,
-                $"[{System.DateTime.Now:HH:mm:ss.fff}] {line}{System.Environment.NewLine}");
-        }
-        catch { }
-    }
+    // NOTE (audit 2026-07-02): the "temporary" app-rules-diag.log logger
+    // added 2026-05-12 was removed — the persistence bug it traced is long
+    // fixed, but the file kept growing on every debounced ToJson (443 KB
+    // observed on a real machine). App.OnLaunched deletes the leftover file.
 
     // STT + LLM provider presets are now DERIVED from the single-source
     // model catalog embedded in the Rust core (assets/model-catalog.json,
@@ -873,7 +857,6 @@ public partial class SettingsViewModel : ObservableObject
             });
         }
         dict["app_rules"] = rules;
-        DiagLog($"[AppRulesDiag] ToJson: serializing app_rules with {rules.Count} entries (ViewModel.AppRules.Count={AppRules.Count})");
 
         return JsonSerializer.Serialize(dict);
     }
@@ -883,10 +866,8 @@ public partial class SettingsViewModel : ObservableObject
         AppRules.Clear();
         if (!r.TryGetProperty("app_rules", out var arr) || arr.ValueKind != JsonValueKind.Array)
         {
-            DiagLog("[AppRulesDiag] LoadAppRulesFromJson: no app_rules key OR not array — AppRules left empty");
             return;
         }
-        DiagLog($"[AppRulesDiag] LoadAppRulesFromJson: loading {arr.GetArrayLength()} rules from JSON");
         foreach (var el in arr.EnumerateArray())
         {
             var pattern = el.TryGetProperty("match_pattern", out var p) ? p.GetString() ?? "" : "";
