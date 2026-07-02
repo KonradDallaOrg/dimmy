@@ -24,11 +24,14 @@ if [ ! -f "$CARGO_TOML" ]; then
     exit 2
 fi
 
-# Extract just the numeric version, dropping any -rc1/-beta suffix
-# for comparison purposes. The suffix doesn't disambiguate ordering
-# (rc1 < final), but we want the underlying number to be unique.
+# Extract just the numeric version, dropping any -rc1/-beta/-staging.N
+# suffix for comparison purposes. The suffix doesn't disambiguate
+# ordering (rc1 < final), but we want the underlying number to be
+# unique. NOTE the dot in the class: `-staging.13` has a dot, and the
+# old `[a-zA-Z0-9]+` left the base as `0.6.66-staging.13`, making every
+# comparison against staging tags fail (found 2026-07-02).
 CARGO_VER=$(grep -m1 '^version = ' "$CARGO_TOML" | sed -E 's/version = "([^"]+)"/\1/' | sed 's/[[:space:]]//g')
-CARGO_BASE=$(echo "$CARGO_VER" | sed -E 's/-[a-zA-Z0-9]+$//')
+CARGO_BASE=$(echo "$CARGO_VER" | sed -E 's/-[a-zA-Z0-9.]+$//')
 
 echo "[check-version] Cargo.toml version: $CARGO_VER (base: $CARGO_BASE)"
 
@@ -36,7 +39,7 @@ echo "[check-version] Cargo.toml version: $CARGO_VER (base: $CARGO_BASE)"
 TAGS=$(git tag --sort=-version:refname 2>/dev/null | head -20)
 if [ -n "$TAGS" ]; then
     LATEST_TAG=$(echo "$TAGS" | head -1 | sed 's/^v//')
-    LATEST_TAG_BASE=$(echo "$LATEST_TAG" | sed -E 's/-[a-zA-Z0-9]+$//')
+    LATEST_TAG_BASE=$(echo "$LATEST_TAG" | sed -E 's/-[a-zA-Z0-9.]+$//')
     echo "[check-version] highest local git tag: $LATEST_TAG (base: $LATEST_TAG_BASE)"
 fi
 
@@ -45,7 +48,7 @@ LATEST_GH=""
 if command -v gh >/dev/null 2>&1; then
     LATEST_GH=$(gh release list --limit 20 2>/dev/null | awk -F'\t' '$3 ~ /^v[0-9]/ { print $3 }' | sort -V -r | head -1 | sed 's/^v//')
     if [ -n "$LATEST_GH" ]; then
-        LATEST_GH_BASE=$(echo "$LATEST_GH" | sed -E 's/-[a-zA-Z0-9]+$//')
+        LATEST_GH_BASE=$(echo "$LATEST_GH" | sed -E 's/-[a-zA-Z0-9.]+$//')
         echo "[check-version] highest GitHub release: $LATEST_GH (base: $LATEST_GH_BASE)"
     fi
 fi
