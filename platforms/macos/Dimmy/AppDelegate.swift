@@ -868,6 +868,20 @@ private func crashLogPath() -> String {
 
 private func crashAppendLine(_ line: String) {
     let path = crashLogPath()
+    // Rotation (audit 2026-07-02): this appends to the same dimmy.log the
+    // Rust core rotates at 1 MB, but a crash burst can land between core
+    // rotations (or before the core loads). Mirror the core's policy —
+    // over the cap, keep the newest half cut at a line boundary.
+    let maxBytes = 1_048_576
+    if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+       let size = attrs[.size] as? Int, size > maxBytes,
+       let text = try? String(contentsOfFile: path, encoding: .utf8) {
+        let half = text.index(text.startIndex, offsetBy: text.count / 2)
+        if let cut = text[half...].firstIndex(of: "\n") {
+            try? String(text[text.index(after: cut)...])
+                .write(toFile: path, atomically: false, encoding: .utf8)
+        }
+    }
     let stamped = "[\(ISO8601DateFormatter().string(from: Date()))] [crash] \(line)\n"
     if let data = stamped.data(using: .utf8) {
         if let handle = FileHandle(forWritingAtPath: path) {

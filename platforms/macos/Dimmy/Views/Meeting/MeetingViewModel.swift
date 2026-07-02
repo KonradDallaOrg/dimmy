@@ -528,6 +528,14 @@ final class MeetingViewModel: ObservableObject {
                 self.doneMeta = String(
                     format: "%.0fs · %d chunks", result.durationSecs, result.chunkCount
                 )
+                // Surface a finalize failure (disk-full → incomplete audio on
+                // disk). The core has always serialized `error`; silently
+                // ignoring it meant the user learned about the damage only
+                // when the recap failed. Win parity (MeetingWindow stop).
+                if let stopError = result.error {
+                    dimmyHostLog("[Meeting] stop reported error: \(stopError)")
+                    self.doneMeta += " · ⚠ audio incomplete (\(stopError))"
+                }
                 self.doneAudioURL = self.audioURL(for: result.dir)
                 self.doneAudioMicURL = self.micAudioURL(for: result.dir)
                 self.doneAudioSystemURL = self.systemAudioURL(for: result.dir)
