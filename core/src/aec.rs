@@ -168,16 +168,26 @@ fn run(
             }
             ref_frame_zeroed = true;
             // Periodic info log so prolonged ref starvation is visible
-            // without spamming. Only emit once every 30 s.
+            // without spamming. Only emit once every 30 s. NOTE: this must
+            // fire even after the first ref frame arrived — the original
+            // `should_log && !ref_seen_ever` condition silenced it for the
+            // rest of the session, so a loopback device dying MID-meeting
+            // (BT speaker disconnect) starved the ref ring with zero trace
+            // in dimmy.log (audit 2026-07-02).
             let now = std::time::Instant::now();
             let should_log = match last_ref_log {
                 None => true,
                 Some(t) => now.duration_since(t).as_secs() >= 30,
             };
-            if should_log && !ref_seen_ever {
-                crate::log(
-                    "[AEC] ref ring empty — running mic-only (no echo cancellation reference)",
-                );
+            if should_log {
+                // Neutral wording for the mid-session case: an idle ref ring
+                // can be a dead loopback device OR simply nothing playing
+                // (WASAPI loopback goes quiet with no render streams).
+                crate::log(if ref_seen_ever {
+                    "[AEC] ref ring empty (no loopback frames recently) — echo cancellation idle, mic passthrough"
+                } else {
+                    "[AEC] ref ring empty — running mic-only (no echo cancellation reference)"
+                });
                 last_ref_log = Some(now);
             }
         }
@@ -223,8 +233,12 @@ fn run(
 
         // Push cleaned mic to the audio buffer — same Vec<f32> the
         // meeting worker / amplitude probe / live waveform read from.
-        if let Ok(mut buf) = output_buffer.lock() {
-            buf.extend_from_slice(&output_frame);
+        // Paused meeting: skip the append (gap-skip discards these at
+        // resume; keeping them only grows RAM).
+        if !crate::audio::meeting_capture_gated() {
+            if let Ok(mut buf) = output_buffer.lock() {
+                buf.extend_from_slice(&output_frame);
+            }
         }
     }
 }
@@ -256,8 +270,11 @@ fn run_passthrough(
             let drop = FRAME_SAMPLES.min(r.len());
             r.drain(..drop);
         }
-        if let Ok(mut buf) = output_buffer.lock() {
-            buf.extend_from_slice(&frame);
+        // Paused meeting: skip append (see run_aec twin).
+        if !crate::audio::meeting_capture_gated() {
+            if let Ok(mut buf) = output_buffer.lock() {
+                buf.extend_from_slice(&frame);
+            }
         }
     }
 }

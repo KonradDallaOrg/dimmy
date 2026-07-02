@@ -211,6 +211,16 @@ pub async fn ping(token: &str) -> Result<WorkspaceInfo, TranscribeError> {
         .and_then(|w| w.as_str())
         .unwrap_or("")
         .to_string();
+    // Auth worked but the response shape wasn't what we expect — say so
+    // in the log instead of silently rendering "Connected as (blank)"
+    // in Settings (audit 2026-07-02: no silent failures).
+    if bot_name.is_empty() || workspace_name.is_empty() {
+        crate::log(&format!(
+            "[Notion] WARN ping ok but response missing fields (name empty: {}, workspace empty: {}) — API shape changed?",
+            bot_name.is_empty(),
+            workspace_name.is_empty()
+        ));
+    }
     Ok(WorkspaceInfo {
         bot_name,
         workspace_name,
@@ -253,6 +263,12 @@ pub async fn search(token: &str, query: &str) -> Result<Vec<NotionSearchResult>,
         .map_err(|e| TranscribeError::Network(format!("Notion search decode: {e}")))?;
     let mut out = Vec::new();
     let arr = v.get("results").and_then(|r| r.as_array());
+    if arr.is_none() {
+        // 2xx but no `results` array — API shape drift. Log it so an
+        // empty destination picker in Settings is explainable instead
+        // of looking broken (audit 2026-07-02: no silent failures).
+        crate::log("[Notion] WARN search response missing 'results' array — API shape changed?");
+    }
     if let Some(arr) = arr {
         for item in arr {
             let id = item

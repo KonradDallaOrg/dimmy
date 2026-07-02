@@ -191,10 +191,11 @@ fn gethostname_fallback() -> String {
     }
 }
 
-// ── AES-256-GCM encryption (pure XOR + GHASH-free simplified variant) ──
-// We use AES-256-CTR + HMAC-SHA256 for authenticated encryption.
-// This avoids needing a full GCM/GHASH implementation while providing
-// the same security guarantees (encrypt-then-MAC).
+// ── Authenticated encryption: AES-256-CTR + HMAC-SHA256 (encrypt-then-MAC) ──
+// NOT GCM — deliberately. Encrypt-then-MAC with HMAC-SHA256 over the
+// ciphertext gives the same authenticated-encryption guarantees without
+// a GHASH implementation, and the MAC check runs BEFORE decryption
+// (see decrypt below), which rules out padding/oracle-style attacks.
 //
 // Format per entry: base64(nonce ‖ ciphertext ‖ mac)
 //   nonce: 12 bytes random
@@ -223,7 +224,8 @@ fn aes256_ctr_encrypt(key: &[u8; 32], nonce: &[u8; 12], plaintext: &[u8]) -> Vec
     ciphertext
 }
 
-/// HMAC-SHA256 for authenticate-then-encrypt MAC.
+/// HMAC-SHA256 for the encrypt-then-MAC construction (MAC is computed
+/// over nonce ‖ ciphertext, after encryption — see module comment).
 fn hmac_sha256(key: &[u8; 32], data: &[u8]) -> [u8; 32] {
     let mut ipad = [0x36u8; 64];
     let mut opad = [0x5cu8; 64];

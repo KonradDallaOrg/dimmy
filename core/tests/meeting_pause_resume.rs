@@ -22,6 +22,14 @@
 //! Skips with `eprintln!` when no usable cargo target dir env is
 //! reachable for the meetings/ subdir; CI without HOME always has
 //! one so it should run there.
+//!
+//! Gated on `test-ffi` so the lib is compiled with the isolated
+//! config-dir override — `MeetingSession::start` writes meeting dirs
+//! under `meetings_dir()`, which must NEVER be the developer's real
+//! %APPDATA%/dimmy (burned 2026-07-02). Run with:
+//! `cargo test --test meeting_pause_resume --features test-ffi`
+
+#![cfg(feature = "test-ffi")]
 
 use std::sync::Mutex;
 use std::time::Duration;
@@ -30,9 +38,21 @@ use std::time::Duration;
 /// slot inside the loaded library.
 static FFI_LOCK: Mutex<()> = Mutex::new(());
 
+/// Point every config-derived path (incl. meetings/) at a disposable
+/// per-process temp dir before anything touches the disk.
+fn isolate() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let dir = std::env::temp_dir().join(format!("dimmy-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        std::env::set_var("DIMMY_TEST_CONFIG_DIR", &dir);
+    });
+}
+
 #[test]
 fn pause_resume_no_op_when_no_meeting_active() {
     let _g = FFI_LOCK.lock().unwrap();
+    isolate();
 
     // No meeting started → all three FFI calls report 0 ("no-op /
     // nothing to flip"). Specifically pause/resume must NOT return -1
@@ -77,6 +97,7 @@ fn pause_resume_no_op_when_no_meeting_active() {
 #[test]
 fn pause_resume_idempotency_via_session() {
     let _g = FFI_LOCK.lock().unwrap();
+    isolate();
     use dimmy_lib::audio::AudioSource;
     use dimmy_lib::meeting::{MeetingSession, SttSnapshot};
     use std::sync::Arc;
@@ -117,6 +138,12 @@ fn pause_resume_idempotency_via_session() {
         session.is_paused(),
         "is_paused must reflect post-pause state"
     );
+    // Audit 2026-07-02: pausing must close the capture gate so the
+    // append-only meeting buffers stop growing during the pause.
+    assert!(
+        dimmy_lib::audio::meeting_capture_gated(),
+        "pause must gate capture appends"
+    );
 
     // Second pause → no-op, returns false.
     assert!(
@@ -128,6 +155,10 @@ fn pause_resume_idempotency_via_session() {
     // First resume → state flips back, returns true.
     assert!(session.resume(), "first resume must return true (flipped)");
     assert!(!session.is_paused(), "is_paused false after resume");
+    assert!(
+        !dimmy_lib::audio::meeting_capture_gated(),
+        "resume must reopen the capture gate"
+    );
 
     // Second resume → no-op, returns false.
     assert!(
@@ -154,6 +185,7 @@ fn pause_resume_idempotency_via_session() {
 #[test]
 fn ffi_signatures_callable() {
     let _g = FFI_LOCK.lock().unwrap();
+    isolate();
     // No assertions on values — these may return -1 (lock failure)
     // in pathological CI states. Success criterion: callable +
     // returns SOMETHING in c_int range.
@@ -171,6 +203,7 @@ fn ffi_signatures_callable() {
 #[test]
 fn stop_while_paused_does_not_deadlock() {
     let _g = FFI_LOCK.lock().unwrap();
+    isolate();
     use dimmy_lib::audio::AudioSource;
     use dimmy_lib::meeting::{MeetingSession, SttSnapshot};
     use std::sync::Arc;
@@ -206,6 +239,12 @@ fn stop_while_paused_does_not_deadlock() {
         elapsed < Duration::from_secs(2),
         "stop() while paused must return promptly (took {:?})",
         elapsed
+    );
+    // Stop-while-paused must NOT leave the capture gate latched, or the
+    // next recording's buffers would stay silently empty.
+    assert!(
+        !dimmy_lib::audio::meeting_capture_gated(),
+        "stop must clear the capture gate even when paused"
     );
     // Result is best-effort — chunks=0 is expected because we never
     // pushed audio. The key check is that stop() returned at all.

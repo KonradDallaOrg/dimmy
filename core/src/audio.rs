@@ -34,6 +34,24 @@ pub const MEETING_CANONICAL_RATE: u32 = 48_000;
 pub const DICTATION_SOFT_WARN_SECS: f64 = 300.0; // 5 min
 pub const DICTATION_HARD_STOP_SECS: f64 = 600.0; // 10 min
 
+/// True while a meeting is PAUSED. Every append site into
+/// `audio_buffer` / `audio_buffer_secondary` (mic callback, loopback
+/// callback, PushLoopback worker path, AEC worker output) checks this
+/// and SKIPS the append while set — the meeting buffer is append-only
+/// for the whole session (cursors, never drained), so a long pause
+/// would otherwise accumulate unbounded RAM (~345 MB/h at 48 kHz) for
+/// samples the resume cursor-jump discards anyway (gap-skip semantics).
+/// Owned by `MeetingSession::{start,pause,resume,stop}` — false during
+/// dictation, so the pill path is untouched. Audit 2026-07-02.
+pub static MEETING_CAPTURE_GATED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Cheap relaxed read for the capture hot paths.
+#[inline]
+pub fn meeting_capture_gated() -> bool {
+    MEETING_CAPTURE_GATED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Pure threshold decision for the long-dictation guardrail. Returns
 /// `(emit_soft_warning, emit_hard_stop)` given the current buffer length,
 /// the canonical sample rate, and which events already fired this
@@ -768,8 +786,13 @@ pub fn spawn_audio_thread(
                                                 mono_samples
                                             }
                                         };
-                                        if let Ok(mut b) = buf.lock() {
-                                            b.extend_from_slice(&to_push);
+                                        // Paused meeting: skip the append (gap-skip
+                                        // discards these at resume; keeping them only
+                                        // grows RAM). See MEETING_CAPTURE_GATED.
+                                        if !meeting_capture_gated() {
+                                            if let Ok(mut b) = buf.lock() {
+                                                b.extend_from_slice(&to_push);
+                                            }
                                         }
                                     },
                                     |err| notify_audio_stream_error("primary", "F32", &err),
@@ -807,8 +830,11 @@ pub fn spawn_audio_thread(
                                                 mono_samples
                                             }
                                         };
-                                        if let Ok(mut b) = buf2.lock() {
-                                            b.extend_from_slice(&to_push);
+                                        // Paused meeting: skip append (see F32 twin).
+                                        if !meeting_capture_gated() {
+                                            if let Ok(mut b) = buf2.lock() {
+                                                b.extend_from_slice(&to_push);
+                                            }
                                         }
                                     },
                                     |err| notify_audio_stream_error("primary", "I16", &err),
@@ -820,6 +846,16 @@ pub fn spawn_audio_thread(
                                     "[Audio] ERROR: Unsupported sample format: {:?}",
                                     config.sample_format()
                                 ));
+                                // Tell the USER too — without a stream this
+                                // recording captures pure silence and before
+                                // 2026-07-02 the only trace was dimmy.log.
+                                crate::ffi::emit_event(
+                                    "error",
+                                    &format!(
+                                        r#"{{"message":"Microphone format {:?} not supported — recording will be silent. Pick another input device in Settings."}}"#,
+                                        config.sample_format()
+                                    ),
+                                );
                                 continue;
                             }
                         };
@@ -956,14 +992,18 @@ pub fn spawn_audio_thread(
                         };
                         let out_len = canonical.len();
 
-                        if let Ok(mut b) = buffer_secondary.lock() {
-                            for &s in &canonical {
-                                b.push(s.clamp(-1.0, 1.0));
+                        // Paused meeting: skip appends (gap-skip discards
+                        // these at resume; keeping them only grows RAM).
+                        if !meeting_capture_gated() {
+                            if let Ok(mut b) = buffer_secondary.lock() {
+                                for &s in &canonical {
+                                    b.push(s.clamp(-1.0, 1.0));
+                                }
                             }
-                        }
-                        if let Ok(mut r) = aec_ref_ring.lock() {
-                            for &s in &canonical {
-                                r.push(s.clamp(-1.0, 1.0));
+                            if let Ok(mut r) = aec_ref_ring.lock() {
+                                for &s in &canonical {
+                                    r.push(s.clamp(-1.0, 1.0));
+                                }
                             }
                         }
 
@@ -1338,11 +1378,15 @@ fn build_secondary_stream(
                             mono_samples
                         }
                     };
-                    if let Ok(mut b) = buf.lock() {
-                        b.extend_from_slice(&to_push);
-                    }
-                    if let Some(ref aec) = aec_ref {
-                        crate::aec::push_to_ring(aec, &to_push);
+                    // Paused meeting: skip appends (gap-skip discards these
+                    // at resume; keeping them only grows RAM).
+                    if !meeting_capture_gated() {
+                        if let Ok(mut b) = buf.lock() {
+                            b.extend_from_slice(&to_push);
+                        }
+                        if let Some(ref aec) = aec_ref {
+                            crate::aec::push_to_ring(aec, &to_push);
+                        }
                     }
                 },
                 |err| notify_audio_stream_error("secondary", "F32", &err),
@@ -1418,11 +1462,14 @@ fn build_secondary_stream(
                             mono_samples
                         }
                     };
-                    if let Ok(mut b) = buf.lock() {
-                        b.extend_from_slice(&to_push);
-                    }
-                    if let Some(ref aec) = aec_ref {
-                        crate::aec::push_to_ring(aec, &to_push);
+                    // Paused meeting: skip appends (see F32 twin).
+                    if !meeting_capture_gated() {
+                        if let Ok(mut b) = buf.lock() {
+                            b.extend_from_slice(&to_push);
+                        }
+                        if let Some(ref aec) = aec_ref {
+                            crate::aec::push_to_ring(aec, &to_push);
+                        }
                     }
                 },
                 |err| notify_audio_stream_error("secondary", "I16", &err),

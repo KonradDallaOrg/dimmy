@@ -134,6 +134,11 @@ static INIT: Once = Once::new();
 
 fn ensure_init() {
     INIT.call_once(|| {
+        // Isolated per-process config dir — dimmy_init refuses test-ffi runs
+        // without it (protects the real %APPDATA%/dimmy; burned 2026-07-02).
+        let dir = std::env::temp_dir().join(format!("dimmy-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        std::env::set_var("DIMMY_TEST_CONFIG_DIR", &dir);
         let rc = dimmy_init();
         assert!(
             rc == 0 || rc == 1,

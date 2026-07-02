@@ -151,14 +151,26 @@ pub fn append_event(kind: &str, lang: &str) {
     let line = format_event(kind, lang, now);
     if let Some(dir) = crate::config_dir_path() {
         let _ = std::fs::create_dir_all(&dir);
-        if let Ok(mut f) = std::fs::OpenOptions::new()
+        match std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(dir.join("consent.jsonl"))
         {
-            use std::io::Write;
-            let _ = writeln!(f, "{line}");
+            Ok(mut f) => {
+                use std::io::Write;
+                if let Err(e) = writeln!(f, "{line}") {
+                    // Still best-effort (never block recording), but an
+                    // incomplete AUDIT trail must at least be visible in
+                    // the log (audit 2026-07-02: no silent failures).
+                    crate::log(&format!("[Consent] WARN audit write failed: {e}"));
+                }
+            }
+            Err(e) => {
+                crate::log(&format!("[Consent] WARN audit open failed: {e}"));
+            }
         }
+    } else {
+        crate::log("[Consent] WARN audit skipped: config dir unavailable");
     }
 }
 

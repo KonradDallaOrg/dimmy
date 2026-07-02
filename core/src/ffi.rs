@@ -54,6 +54,15 @@ fn state() -> &'static AppState {
         .expect("dimmy_init() must be called before any other function")
 }
 
+/// Non-panicking variant for host POLLERS (amplitude, recording state):
+/// UI timers can legitimately fire before `dimmy_init` completes, and a
+/// safe default beats aborting the whole process over a harmless early
+/// poll (release builds are panic=abort). Every other entry point keeps
+/// `state()`'s hard precondition — init-before-use is the host contract.
+fn try_state() -> Option<&'static AppState> {
+    GLOBAL_STATE.get()
+}
+
 /// Emit an event to the native UI via the registered callback.
 /// Called from within Rust core instead of `app_handle.emit()`.
 pub fn emit_event(event_name: &str, payload_json: &str) {
@@ -547,6 +556,23 @@ fn dimmy_init_inner() -> c_int {
                                 Err(e) => log(&format!("[HistoryAudio] prune err: {}", e)),
                             }
                         }
+                        // audio_debug retention (audit 2026-07-02): sessions
+                        // used to accumulate forever. Fixed 7-day / 500 MB
+                        // budget — diagnostic data, deliberately no knobs.
+                        if let Some(dir) = crate::audio_debug_dir() {
+                            match crate::prune_audio_debug_dirs(&dir, 7, 500 * 1024 * 1024) {
+                                Ok((removed, bytes)) => {
+                                    if removed > 0 {
+                                        log(&format!(
+                                            "[AudioDebug] pruned {} session dirs / {:.1} MB",
+                                            removed,
+                                            bytes as f64 / 1_048_576.0
+                                        ));
+                                    }
+                                }
+                                Err(e) => log(&format!("[AudioDebug] prune err: {}", e)),
+                            }
+                        }
                         std::thread::sleep(std::time::Duration::from_secs(3600));
                     }
                 })
@@ -565,10 +591,31 @@ fn dimmy_init_inner() -> c_int {
 /// inside the inner init (config load, audio thread spawn, telemetry
 /// init, …) is converted to a -1 return value rather than aborting the
 /// host process via __fastfail. Without this, a panic crossing the
-/// `extern "C"` boundary would force-abort because the default ABI is
-/// no-unwind. The C# host can then surface a normal error to the user.
+/// `extern "C"` boundary force-aborts (rustc ≥1.81 guarantees the abort
+/// — defined behaviour, see core/Cargo.toml panic-strategy note). The
+/// C# host can then surface a normal error to the user.
 #[no_mangle]
 pub extern "C" fn dimmy_init() -> c_int {
+    // Negative-space backstop for test builds: a `test-ffi` binary MUST run
+    // against an isolated config dir. Refusing init here means even a manual
+    // `cargo test` without the harness env cannot reach a user's live data
+    // (config_dir_path() would already return None, but a loud refusal beats
+    // a silent defaults-only run). Never compiled into shipping builds.
+    #[cfg(feature = "test-ffi")]
+    {
+        let isolated = std::env::var("DIMMY_TEST_CONFIG_DIR")
+            .map(|d| !d.is_empty())
+            .unwrap_or(false);
+        if !isolated {
+            eprintln!(
+                "dimmy_init REFUSED: test-ffi builds must set DIMMY_TEST_CONFIG_DIR \
+                 to a disposable temp dir (protects the real user config). \
+                 See docs/dev/testing.md."
+            );
+            write_init_trace("REFUSED: test-ffi without DIMMY_TEST_CONFIG_DIR");
+            return -1;
+        }
+    }
     write_init_trace("P0: dimmy_init entered");
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(dimmy_init_inner));
     match result {
@@ -979,8 +1026,19 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
         }
     }
 
-    // Stop audio capture
-    let _ = st.audio_tx.lock().map(|tx| tx.send(AudioCommand::Stop));
+    // Stop audio capture. A send failure means the audio worker is DEAD
+    // (receiver dropped — e.g. it crashed during init): the streams may
+    // still be live and the next recording will misbehave, so leave a
+    // trace instead of silently pretending the stop landed (audit
+    // 2026-07-02).
+    match st.audio_tx.lock() {
+        Ok(tx) => {
+            if tx.send(AudioCommand::Stop).is_err() {
+                log("[StopRec] WARN audio worker unreachable (channel closed) — Stop command dropped");
+            }
+        }
+        Err(_) => log("[StopRec] WARN audio_tx lock poisoned — Stop command not sent"),
+    }
     if let Ok(mut r) = st.recording.lock() {
         *r = false;
     }
@@ -2111,8 +2169,22 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
     }
     // Local STT fields
     if let Some(s) = v["stt_mode"].as_str() {
+        // Allow-list (audit 2026-07-02): every consumer branches on exact
+        // string equality ("local" vs everything-else-is-cloud), so a typo
+        // like "locall" would silently flip the user to the WRONG backend
+        // (the AUDIO-004 class). Coerce + WARN instead.
+        let normalized = match s {
+            "local" | "cloud" => s,
+            _ => {
+                log(&format!(
+                    "[Config] WARN stt_mode '{}' not in {{local,cloud}} — coerced to 'cloud'",
+                    s
+                ));
+                "cloud"
+            }
+        };
         if let Ok(mut m) = st.stt_mode.lock() {
-            *m = s.to_string();
+            *m = normalized.to_string();
         }
     }
     if let Some(s) = v["local_model"].as_str() {
@@ -2128,11 +2200,25 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
         }
     }
     if let Some(s) = v["local_stt_backend"].as_str() {
-        if let Ok(mut m) = st.local_stt_backend.lock() {
-            if *m != s {
-                log(&format!("[LocalSTT] Backend changed: {} → {}", *m, s));
+        // Allow-list (audit 2026-07-02) — see stt_mode above.
+        let normalized = match s {
+            "whisper" | "parakeet" => s,
+            _ => {
+                log(&format!(
+                    "[Config] WARN local_stt_backend '{}' not in {{whisper,parakeet}} — coerced to 'whisper'",
+                    s
+                ));
+                "whisper"
             }
-            *m = s.to_string();
+        };
+        if let Ok(mut m) = st.local_stt_backend.lock() {
+            if *m != normalized {
+                log(&format!(
+                    "[LocalSTT] Backend changed: {} → {}",
+                    *m, normalized
+                ));
+            }
+            *m = normalized.to_string();
         }
     }
     if let Some(b) = v["live_captions_enabled"].as_bool() {
@@ -2196,8 +2282,19 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
     }
     // Local LLM fields
     if let Some(s) = v["llm_mode"].as_str() {
+        // Allow-list (audit 2026-07-02) — see stt_mode above.
+        let normalized = match s {
+            "local" | "cloud" => s,
+            _ => {
+                log(&format!(
+                    "[Config] WARN llm_mode '{}' not in {{local,cloud}} — coerced to 'cloud'",
+                    s
+                ));
+                "cloud"
+            }
+        };
         if let Ok(mut m) = st.llm_mode.lock() {
-            *m = s.to_string();
+            *m = normalized.to_string();
         }
     }
     if let Some(s) = v["local_llm_model"].as_str() {
@@ -2495,7 +2592,10 @@ pub extern "C" fn dimmy_gpu_clear_known_bad() -> c_int {
 /// Get current microphone amplitude (0.0 - 1.0).
 #[no_mangle]
 pub extern "C" fn dimmy_get_amplitude() -> c_float {
-    let st = state();
+    let st = match try_state() {
+        Some(s) => s,
+        None => return 0.0, // polled before init — silent zero, not a crash
+    };
     let buffer = match st.audio_buffer.lock() {
         Ok(b) => b,
         Err(_) => return 0.0,
@@ -2525,7 +2625,10 @@ pub extern "C" fn dimmy_get_amplitude() -> c_float {
 /// bands so the user can see both streams at a glance.
 #[no_mangle]
 pub extern "C" fn dimmy_get_loopback_amplitude() -> c_float {
-    let st = state();
+    let st = match try_state() {
+        Some(s) => s,
+        None => return 0.0, // polled before init — silent zero, not a crash
+    };
     let buffer = match st.audio_buffer_secondary.lock() {
         Ok(b) => b,
         Err(_) => return 0.0,
@@ -5486,7 +5589,10 @@ pub extern "C" fn dimmy_model_catalog_json(out_buf: *mut c_char, buf_len: c_int)
 /// Check if recording is active. Returns 1=yes, 0=no.
 #[no_mangle]
 pub extern "C" fn dimmy_is_recording() -> c_int {
-    let st = state();
+    let st = match try_state() {
+        Some(s) => s,
+        None => return 0, // polled before init — not recording, not a crash
+    };
     st.recording.lock().map(|r| *r as c_int).unwrap_or(0)
 }
 
@@ -9357,6 +9463,13 @@ mod tests {
     /// Safe to call multiple times — OnceLock + Once ensure single init.
     fn ensure_test_state() {
         INIT_TEST_STATE.call_once(|| {
+            // Isolate every config-derived path (config.json, keys.enc, …)
+            // into a per-process temp dir. Without this, tests that call
+            // dimmy_set_config_json would save the synthetic test state
+            // over the developer's REAL config (burned 2026-07-02).
+            let dir = std::env::temp_dir().join(format!("dimmy-test-{}", std::process::id()));
+            let _ = std::fs::create_dir_all(&dir);
+            std::env::set_var("DIMMY_TEST_CONFIG_DIR", &dir);
             let (tx, _rx) = std::sync::mpsc::channel();
             let test_state = AppState {
                 recording: Mutex::new(false),
@@ -9683,6 +9796,46 @@ mod tests {
         // Restore
         let restore = CString::new(r#"{"language":"en"}"#).unwrap();
         unsafe { dimmy_set_config_json(restore.as_ptr()) };
+    }
+
+    #[test]
+    #[serial]
+    fn set_config_json_coerces_invalid_modes_to_safe_defaults() {
+        // Audit 2026-07-02: a typo'd mode string used to be stored verbatim
+        // and every `== "local"` comparison silently flipped the user onto
+        // the wrong backend (AUDIO-004 class). The allow-list coerces.
+        ensure_test_state();
+        let json = CString::new(
+            r#"{"stt_mode":"locall","llm_mode":"clud","local_stt_backend":"parakeeet"}"#,
+        )
+        .unwrap();
+        assert_eq!(unsafe { dimmy_set_config_json(json.as_ptr()) }, 0);
+        assert_eq!(state().stt_mode.lock().unwrap().as_str(), "cloud");
+        assert_eq!(state().llm_mode.lock().unwrap().as_str(), "cloud");
+        assert_eq!(
+            state().local_stt_backend.lock().unwrap().as_str(),
+            "whisper"
+        );
+
+        // Valid values pass through untouched.
+        let json = CString::new(
+            r#"{"stt_mode":"local","llm_mode":"local","local_stt_backend":"parakeet"}"#,
+        )
+        .unwrap();
+        assert_eq!(unsafe { dimmy_set_config_json(json.as_ptr()) }, 0);
+        assert_eq!(state().stt_mode.lock().unwrap().as_str(), "local");
+        assert_eq!(state().llm_mode.lock().unwrap().as_str(), "local");
+        assert_eq!(
+            state().local_stt_backend.lock().unwrap().as_str(),
+            "parakeet"
+        );
+
+        // Restore the test-state defaults for neighbours.
+        let restore = CString::new(
+            r#"{"stt_mode":"cloud","llm_mode":"cloud","local_stt_backend":"whisper"}"#,
+        )
+        .unwrap();
+        assert_eq!(unsafe { dimmy_set_config_json(restore.as_ptr()) }, 0);
     }
 
     #[test]

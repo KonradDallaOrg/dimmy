@@ -77,6 +77,8 @@ cargo test --release --test ffi_e2e --features local-stt,test-ffi -- --nocapture
 
 `--test-threads=1` is required because these tests share Dimmy's process-wide `GLOBAL_STATE`. The `serial_test` attribute already serializes them; the flag is belt-and-suspenders.
 
+**Config-dir isolation (MANDATORY, enforced in code).** Test builds can NEVER touch the real `%APPDATA%/dimmy`: under `cfg(test)` or the `test-ffi` feature, `config_dir_path()` resolves to `DIMMY_TEST_CONFIG_DIR` (set per-process by each harness's `ensure_init()`), falls back to a per-process temp dir for unit tests, and `dimmy_init` REFUSES to run in `test-ffi` binaries when the env var is missing. Added 2026-07-02 after a local `cargo test` overwrote a live install's config.json (shortcut, LLM settings and device were clobbered by test fixtures). If you add a new integration test file, copy the `ensure_init()` from `ffi_e2e.rs` — the env-set lines are load-bearing. `meeting_pause_resume.rs` is gated on `test-ffi` for the same reason (it writes meeting dirs): run it with `--features test-ffi`.
+
 **Add a new test.** Pick a scenario that should be caught before the installer ships. Follow the existing pattern: `ensure_init()`, `set_config(...)` to a minimal JSON, `transcribe_pcm(samples, sr)`, assert on substring or behaviour. For cloud provider mismatches, mount a `wiremock::MockServer` per test.
 
 **Do not ignore a failing test to unblock a push.** The test exists because the bug reached production before. If you genuinely believe the test is wrong, rewrite it; don't `#[ignore]` it.
@@ -222,7 +224,7 @@ cargo test --lib --features local-stt,local-llm
 cargo test --release --test ffi_e2e --features local-stt,test-ffi -- --test-threads=1
 cargo test --release --test abi_snapshot --features local-stt
 cargo test --release --test preprocess_properties --features local-stt
-cargo test --release --test meeting_pause_resume --features local-stt -- --test-threads=1
+cargo test --release --test meeting_pause_resume --features local-stt,test-ffi -- --test-threads=1
 
 # C# (Windows)
 cd ../platforms/windows/Dimmy.Windows.Tests

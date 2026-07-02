@@ -99,6 +99,11 @@ static INIT: Once = Once::new();
 
 fn ensure_init() {
     INIT.call_once(|| {
+        // Isolated per-process config dir — dimmy_init refuses test-ffi runs
+        // without it (protects the real %APPDATA%/dimmy; burned 2026-07-02).
+        let dir = std::env::temp_dir().join(format!("dimmy-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        std::env::set_var("DIMMY_TEST_CONFIG_DIR", &dir);
         let rc = dimmy_init();
         assert!(
             rc == 0 || rc == 1,
@@ -629,12 +634,13 @@ fn config_persists_to_disk_so_next_launch_sees_v2_fields() {
         .to_string(),
     );
 
-    // Locate the same config.json the Mac AppDelegate reads via
-    // FileManager.applicationSupportDirectory. core uses dirs::config_dir
-    // which on Mac == ~/Library/Application Support → matches.
-    let path = dirs::config_dir()
-        .expect("config_dir resolvable on this platform")
-        .join("dimmy")
+    // Locate the same config.json a next launch would read. Resolved via
+    // the core's own config_dir_path() — under test-ffi that is the
+    // ISOLATED per-process dir (never the real %APPDATA%/dimmy; the old
+    // hardcoded dirs::config_dir().join("dimmy") read the user's live
+    // file — exactly the footgun fixed 2026-07-02).
+    let path = dimmy_lib::config_dir_path()
+        .expect("isolated config dir resolvable")
         .join("config.json");
     assert!(
         path.exists(),
@@ -683,9 +689,8 @@ fn config_round_trip_preserves_claude_code_url() {
     //    coerced the URL — next launch would dispatch via HTTP and hit
     //    https://claude-code/ giving a connect refused with the
     //    transcript in the body).
-    let path = dirs::config_dir()
-        .expect("config_dir resolvable on this platform")
-        .join("dimmy")
+    let path = dimmy_lib::config_dir_path()
+        .expect("isolated config dir resolvable")
         .join("config.json");
     assert!(
         path.exists(),
@@ -1144,9 +1149,8 @@ fn user_dict_persists_to_disk_so_next_launch_sees_it() {
     let word = CString::new("LoadBearingWord").unwrap();
     assert_eq!(unsafe { dimmy_user_dict_add(word.as_ptr()) }, 0);
 
-    let path = dirs::config_dir()
-        .expect("config_dir resolvable")
-        .join("dimmy")
+    let path = dimmy_lib::config_dir_path()
+        .expect("isolated config dir resolvable")
         .join("config.json");
     assert!(path.exists(), "config.json missing after dict add");
     let raw = std::fs::read_to_string(&path).expect("read config.json");
@@ -1188,6 +1192,59 @@ fn push_loopback_audio_feeds_secondary_buffer() {
     assert_eq!(rc, 0);
     let amp = unsafe { dimmy_get_loopback_amplitude() };
     assert!(amp > 0.0, "loopback amplitude must reflect pushed samples");
+}
+
+/// Regression guard (audit 2026-07-02): while a meeting is PAUSED the
+/// capture paths must NOT keep appending — a multi-hour pause would
+/// otherwise hold hundreds of MB of discarded-at-resume samples in RAM.
+/// Drives the real worker path (PushLoopback command → secondary buffer)
+/// with `MEETING_CAPTURE_GATED` flipped by hand, observing via the
+/// loopback amplitude (peak of the LAST 800 samples): a blocked append
+/// leaves the previous amplitude in place.
+#[test]
+#[serial]
+fn meeting_pause_gate_blocks_capture_append() {
+    ensure_init();
+    use std::sync::atomic::Ordering;
+
+    fn push(amp: f32) {
+        let s: Vec<f32> = vec![amp; 1600];
+        let rc = unsafe { dimmy_push_loopback_audio(s.as_ptr(), s.len() as i32, 48_000) };
+        assert_eq!(rc, 0);
+    }
+    fn wait_amp(target: f32) -> bool {
+        for _ in 0..50 {
+            let a = unsafe { dimmy_get_loopback_amplitude() };
+            if (a - target).abs() < 0.05 {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        false
+    }
+
+    // Gate OFF: the pipeline is alive — 0.9 lands in the buffer.
+    dimmy_lib::audio::MEETING_CAPTURE_GATED.store(false, Ordering::SeqCst);
+    push(0.9);
+    assert!(
+        wait_amp(0.9),
+        "baseline push must reach the secondary buffer"
+    );
+
+    // Gate ON: the 0.2 push must be dropped — amplitude stays 0.9.
+    dimmy_lib::audio::MEETING_CAPTURE_GATED.store(true, Ordering::SeqCst);
+    push(0.2);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let amp = unsafe { dimmy_get_loopback_amplitude() };
+    assert!(
+        (amp - 0.9).abs() < 0.05,
+        "gated push must NOT append (amplitude changed to {amp})"
+    );
+
+    // Gate OFF again: pipeline resumes — 0.2 lands (not frozen for good).
+    dimmy_lib::audio::MEETING_CAPTURE_GATED.store(false, Ordering::SeqCst);
+    push(0.2);
+    assert!(wait_amp(0.2), "post-gate push must append again");
 }
 
 #[test]

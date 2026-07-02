@@ -137,6 +137,7 @@ fn worker_loop(
 
     let mut cumulative = String::new();
     let mut last_processed: usize = 0;
+    let mut poison_logged = false;
 
     loop {
         if cancel.load(Ordering::SeqCst) {
@@ -147,7 +148,18 @@ fn worker_loop(
 
         let buf_len = match audio_buffer.lock() {
             Ok(b) => b.len(),
-            Err(_) => continue,
+            Err(_) => {
+                // A poisoned buffer lock means a capture-side thread
+                // panicked mid-write. The worker can only idle, but that
+                // must be VISIBLE (once, not per 100 ms tick) — before
+                // this it silently spun while the transcript stalled
+                // (audit 2026-07-02).
+                if !poison_logged {
+                    poison_logged = true;
+                    crate::log("[ChunkedSTT] WARN audio_buffer lock poisoned — capture thread panicked? worker idling");
+                }
+                continue;
+            }
         };
 
         if buf_len < last_processed.saturating_add(chunk_samples) {
