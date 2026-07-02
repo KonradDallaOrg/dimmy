@@ -315,6 +315,7 @@ final class PillWindowController {
                 let transcript = stopResult?.transcript
                     .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 guard let stopResult, !transcript.isEmpty else {
+                    dimmyHostLog("[Recap] skip (pill stop): reason=\(stopResult == nil ? "meetingStop returned nil" : "empty transcript") — no recap will run")
                     // Empty / failed stop → no recap will run. Still post
                     // meetingRecapSaved so a meeting window pinned in
                     // "Wrapping up…" (the $meetingActive→processing path)
@@ -344,6 +345,7 @@ final class PillWindowController {
                 // informational for any future consumer; the existing
                 // observer only reads `dir`.
                 if !generateRecap {
+                    dimmyHostLog("[Recap] skip (pill stop): reason=meetingGenerateRecap=false (recap toggled off for this meeting) — transcript kept, no recap")
                     await MainActor.run {
                         appState.recordingState = .idle
                         appState.meetingActive = DimmyCore.shared.meetingIsActive

@@ -92,6 +92,56 @@ Check this file before touching audio preprocessing, macOS FFI, or Windows trans
   `worker_processes_mic_with_ref_present` (symmetric) +
   `worker_honours_shutdown_signal` (no hang on terminate).
 
+## AUDIO-004: dictation silent regressions — Mix ring-drop + preprocess-degrade (CRITICAL)
+Two independent, *silent* dictation-quality bugs found + fixed 2026-07-01
+(branch `fix/subscription-recap-robustness`). Both recurred because nothing
+pinned the invariants — hardened with guardrails + tests so the CLASSES
+can't come back.
+
+- **BUG A — Mix-mode drops ~60 % of dictation audio.**
+  - **Symptom**: A 41 s / 53 s dictation buffered only ~15.6 s / 19.9 s
+    (~37 %); Whisper transcribed a truncated fragment. Load/device-dependent
+    (48 kHz stereo Realtek + noisy room dropped; a quiet BT-HFP mono mic did
+    not).
+  - **Root cause**: pill dictation forced `AudioSource::Mix` (2026-05-08). In
+    Mix the mic feeds `aec_mic_ring` (capped `MAX_RING_SAMPLES = 48000` = 1 s)
+    drained by the AEC3+DFN worker. When that worker can't keep realtime the
+    ring overflows and drops the oldest samples. Dictation has no loopback
+    echo to cancel, so Mix bought nothing and cost the audio.
+  - **Fix**: dictation → `AudioSource::Mic` (`ffi.rs::dimmy_start_recording`)
+    — mic callback writes straight to `audio_buffer`, no ring, no worker, no
+    drop. Meeting keeps Mix (it needs AEC for the loopback far-end ref).
+  - **Guardrail**: capture-ratio invariant at stop — WARN log + telemetry
+    (`dictation.capture_ratio`) if captured/elapsed < 0.85. WARN not
+    `assert!` (device/load-dependent, not a logic bug).
+
+- **BUG B — preprocessing HURTS cloud STT.**
+  - **Symptom**: on an attenuated mic (`input_gain 0.75`, quiet audio) a full
+    45 s dictation transcribed to "Ah!". raw.wav 45.6 s @ rms 0.018 →
+    processed.wav 27.7 s @ rms 0.0047 + peak clipped to 1.0.
+  - **Root cause**: `preprocessing_enabled` applied VAD + dagc uniformly.
+    Cloud STT already runs its own VAD + normalization server-side, so ours
+    was redundant: our VAD mistook the quiet speech for silence and trimmed
+    it, then dagc amplified the residual noise to clipping.
+  - **Fix**: **route-aware** preprocessing (`preprocess::preprocess_route`) —
+    cloud → highpass-only (same safe path as file-load); local → full VAD+AGC
+    (whisper hallucinates on silence + wants normalized levels);
+    `preprocessing_enabled=false` → raw passthrough.
+  - **Guardrail**: `process_buffer_guarded` (local path) falls back to
+    highpass-only if the full pipeline collapses a speech-level input —
+    *preprocessing must HELP, never make audio worse than raw*.
+
+- **Both live in the shared Rust core → Mac gets them for free.**
+- **Files**: `core/src/ffi.rs` (`dimmy_start_recording`, `dimmy_stop_recording`),
+  `core/src/preprocess.rs` (`preprocess_route`, `process_buffer_guarded`,
+  `preprocess_made_it_worse`), `core/src/telemetry/{events,sanitize}.rs`.
+- **Tests**: `core/src/preprocess.rs::tests` (route mapping, make-it-worse
+  decision, guarded-matches-full-on-healthy, zero/near-zero no-NaN);
+  `core/tests/audio_hardening.rs` (route e2e through STT, quiet-speech
+  survives, cloud body non-empty, medium file); `telemetry::events::tests`
+  (capture-ratio buckets, no-PII).
+- **Related**: AUDIO-001 (dagc NaN), AUDIO-003 (Mix ring starvation).
+
 ## LLM-001: Anthropic Opus 4.7+ rejects `thinking.type=enabled` + `budget_tokens`
 - **Symptom**: Recap pipeline fails on Opus 4.7 / Sonnet 5+ with HTTP 400
   `invalid_request_error: thinking.type.enabled is not supported for

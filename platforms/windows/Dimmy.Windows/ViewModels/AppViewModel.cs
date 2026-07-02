@@ -309,6 +309,16 @@ public partial class AppViewModel : ObservableObject
     /// Pure observer — does NOT affect the paste flow in StopAndProcess.
     public event Action<string>? TranscriptReady;
 
+    /// Fires when a single dictation crosses the 5 min soft threshold
+    /// (core `dictation.long_warning`). Host shows a Meeting-mode nudge.
+    public event Action? DictationLongWarning;
+
+    /// Fires when a single dictation hits the 10 min hard cap (core
+    /// `dictation.max_duration`). Host auto-stops + pastes what was said,
+    /// bounding the otherwise-unbounded dictation buffer, then nudges
+    /// toward Meeting mode. See App.OnDictationMaxDuration.
+    public event Action? DictationMaxDurationReached;
+
     /// Fires when the Rust call-detector decides the user is in a
     /// meeting (mic-active past the debounce, not suppressed). Args:
     /// (appIdOrNull, sinceSeconds). Host shows the CallNudgeWindow.
@@ -450,6 +460,16 @@ public partial class AppViewModel : ObservableObject
                 case "error":
                     var msg = payload.GetProperty("message").GetString() ?? "Unknown error";
                     SetError(msg);
+                    break;
+                case "dictation.long_warning":
+                    // Core fired the 5 min soft threshold on a single dictation.
+                    DictationLongWarning?.Invoke();
+                    break;
+                case "dictation.max_duration":
+                    // Core fired the 10 min hard cap: the host stops + pastes
+                    // (bounds the unbounded dictation buffer) and nudges toward
+                    // Meeting mode. See App.OnDictationMaxDuration.
+                    DictationMaxDurationReached?.Invoke();
                     break;
                 case "meeting_state":
                     // Replaces the 500 ms _meetingStatePollTimer on

@@ -201,10 +201,11 @@ fn candidate_paths_for(binary: &str) -> Vec<PathBuf> {
 
     if let Some(home) = dirs::home_dir() {
         // XDG user-bin — pipx, mise (Rust-based runtime manager),
-        // manual installs, and increasingly many distro-agnostic
-        // package managers default here. Mac+Linux only (no Windows
-        // convention).
-        #[cfg(not(target_os = "windows"))]
+        // manual installs, and the NATIVE Claude Code installer, which
+        // targets ~/.local/bin on Windows too (verified:
+        // %USERPROFILE%\.local\bin\claude.exe — the recheck was blind to
+        // it before because this was gated Mac/Linux-only). push_variants
+        // emits the .exe/.cmd variants on Windows.
         push_variants(&mut paths, home.join(".local").join("bin"));
 
         // npm with custom global prefix (very common — devs who
@@ -1038,6 +1039,27 @@ mod tests {
         assert!(
             joined.contains(".local/bin/claude") || joined.contains(".local\\bin\\claude"),
             "missing ~/.local/bin/claude — XDG user-bin users would be invisible"
+        );
+    }
+
+    /// The NATIVE Claude Code installer drops the binary in
+    /// `%USERPROFILE%\.local\bin\claude.exe` on Windows too. That dir
+    /// used to be gated Mac/Linux-only, so a `recheck` after a fresh
+    /// native install stayed blind until the whole app was restarted
+    /// (the process PATH is a launch-time snapshot and Windows has no
+    /// login-shell fallback). Pin that `~/.local/bin\claude.exe` is a
+    /// candidate on Windows so the gate can't silently come back.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn candidate_paths_includes_local_bin_on_windows() {
+        let joined = candidate_paths()
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            joined.contains(".local\\bin\\claude.exe"),
+            "missing ~/.local/bin/claude.exe — native-installer users are invisible until app restart"
         );
     }
 

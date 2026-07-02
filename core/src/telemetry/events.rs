@@ -126,6 +126,17 @@ pub enum Event {
     TranscriptionCancelled {
         audio_secs: f64,
     },
+    /// Fired at dictation stop with the ratio of captured audio seconds to
+    /// elapsed recording seconds. `ge_95` is healthy; `lt_50` / `50_85` mean
+    /// the capture path silently dropped audio (BUG A — the Mix AEC ring
+    /// dropped ~60 %). Bucketed so an unusual recording length can't
+    /// fingerprint a user. Added 2026-07-01 as the capture-integrity guard.
+    DictationCaptureRatio {
+        /// `lt_50` | `50_85` | `85_95` | `ge_95`
+        ratio_bucket: &'static str,
+        /// `mic` | `mix` — the capture source in effect for the recording.
+        source: &'static str,
+    },
 
     // ── LLM post-processing ──────────────────────────────────
     LlmApplied {
@@ -496,6 +507,7 @@ impl Event {
             Event::TranscriptionCompleted { .. } => "transcription.completed",
             Event::TranscriptionFailed { .. } => "transcription.failed",
             Event::TranscriptionCancelled { .. } => "transcription.cancelled",
+            Event::DictationCaptureRatio { .. } => "dictation.capture_ratio",
             Event::ModelDownloadCompleted { .. } => "model.download_completed",
             Event::ConsentLogged { .. } => "consent.logged",
             Event::LlmApplied { .. } => "llm.applied",
@@ -636,6 +648,34 @@ mod tests {
         assert_eq!(p["had_llm"], false);
         assert_eq!(p["entry_point"], "hotkey");
         assert_eq!(p["local_backend"], "");
+    }
+
+    #[test]
+    fn dictation_capture_ratio_name_props_and_no_content() {
+        let e = Event::DictationCaptureRatio {
+            ratio_bucket: "ge_95",
+            source: "mic",
+        };
+        assert_eq!(e.name(), "dictation.capture_ratio");
+        let p = e.properties();
+        assert_eq!(p["ratio_bucket"], "ge_95");
+        assert_eq!(p["source"], "mic");
+        // Only the two categorical fields — no counts, paths, or content.
+        assert_eq!(p.as_object().map(|o| o.len()), Some(2));
+    }
+
+    #[test]
+    fn capture_ratio_bucket_boundaries() {
+        use crate::telemetry::sanitize::bucket_capture_ratio;
+        assert_eq!(bucket_capture_ratio(0.0), "lt_50");
+        assert_eq!(bucket_capture_ratio(0.37), "lt_50"); // the observed BUG A drop
+        assert_eq!(bucket_capture_ratio(0.49), "lt_50");
+        assert_eq!(bucket_capture_ratio(0.50), "50_85");
+        assert_eq!(bucket_capture_ratio(0.84), "50_85");
+        assert_eq!(bucket_capture_ratio(0.85), "85_95");
+        assert_eq!(bucket_capture_ratio(0.94), "85_95");
+        assert_eq!(bucket_capture_ratio(0.95), "ge_95");
+        assert_eq!(bucket_capture_ratio(1.0), "ge_95");
     }
 
     #[test]

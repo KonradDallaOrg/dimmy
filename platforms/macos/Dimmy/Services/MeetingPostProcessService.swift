@@ -42,7 +42,7 @@ enum MeetingPostProcessService {
                 // user knows where to fix it.
                 switch e {
                 case .notConfigured:
-                    return "No LLM provider configured. Open Settings → LLM and add a key (Anthropic, OpenAI, or Google), OR switch to Local mode + download a Gemma model."
+                    return "No recap LLM is configured. Open Settings → LLM and add a key (Anthropic, OpenAI, or Google), OR switch to Local mode + download a Gemma model. If you use a Claude/Codex subscription, open Settings → Integrations and sign in again."
                 case .httpError:
                     return "LLM request failed — check your network and API key, then click Regenerate. Details in Console.app under \"dimmy\"."
                 case .emptyPrompt, .invalidArgs:
@@ -57,9 +57,10 @@ enum MeetingPostProcessService {
                     // endpoint's vendor (e.g. gpt-5 vs api.anthropic.com).
                     return "Recap model is not supported by the recap endpoint. Open Settings → Recap and pick a model that matches the endpoint vendor."
                 case .unauthorized:
-                    // -6: 401/403 — the recap-side key is missing
-                    // or unauthorized for the override URL.
-                    return "Recap API key is missing or unauthorized. Open Settings → Recap to fix it."
+                    // -6: 401/403 — the recap-side key is missing or
+                    // unauthorized for the override URL, OR a Claude/Codex
+                    // subscription sign-in that expired / was revoked.
+                    return "Recap sign-in is missing or expired. Open Settings → Recap (API key), or if you use a Claude/Codex subscription open Settings → Integrations and sign in again."
                 case .rateLimited:
                     // -7: 429 — too many requests this minute.
                     return "Recap rate limited (429). Try again in a minute, or pick a faster model in Settings → Recap."

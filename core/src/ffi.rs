@@ -36,6 +36,13 @@ static STREAMING: Mutex<Option<crate::deepgram_stream::DeepgramStreamer>> = Mute
 /// read at the stop emit (where the streaming/chunked locals are out of scope).
 static DICTATION_ENGINE: Mutex<&'static str> = Mutex::new("batch");
 
+/// Wall-clock instant the current dictation recording started. Set in
+/// `dimmy_start_recording`, read + cleared in `dimmy_stop_recording` to
+/// compute the capture-ratio invariant (captured audio seconds vs elapsed
+/// recording seconds). Catches the class where the capture path silently
+/// drops audio (BUG A — the Mix AEC ring dropped ~60 %). See known-bugs.md.
+static RECORDING_STARTED_AT: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
 /// Active meeting-mode session, if any. Independent of CHUNKED — the
 /// meeting flow runs its own audio capture (started via
 /// `dimmy_meeting_start`, NOT via the dictation hotkey).
@@ -45,6 +52,15 @@ fn state() -> &'static AppState {
     GLOBAL_STATE
         .get()
         .expect("dimmy_init() must be called before any other function")
+}
+
+/// Non-panicking variant for host POLLERS (amplitude, recording state):
+/// UI timers can legitimately fire before `dimmy_init` completes, and a
+/// safe default beats aborting the whole process over a harmless early
+/// poll (release builds are panic=abort). Every other entry point keeps
+/// `state()`'s hard precondition — init-before-use is the host contract.
+fn try_state() -> Option<&'static AppState> {
+    GLOBAL_STATE.get()
 }
 
 /// Emit an event to the native UI via the registered callback.
@@ -540,6 +556,23 @@ fn dimmy_init_inner() -> c_int {
                                 Err(e) => log(&format!("[HistoryAudio] prune err: {}", e)),
                             }
                         }
+                        // audio_debug retention (audit 2026-07-02): sessions
+                        // used to accumulate forever. Fixed 7-day / 500 MB
+                        // budget — diagnostic data, deliberately no knobs.
+                        if let Some(dir) = crate::audio_debug_dir() {
+                            match crate::prune_audio_debug_dirs(&dir, 7, 500 * 1024 * 1024) {
+                                Ok((removed, bytes)) => {
+                                    if removed > 0 {
+                                        log(&format!(
+                                            "[AudioDebug] pruned {} session dirs / {:.1} MB",
+                                            removed,
+                                            bytes as f64 / 1_048_576.0
+                                        ));
+                                    }
+                                }
+                                Err(e) => log(&format!("[AudioDebug] prune err: {}", e)),
+                            }
+                        }
                         std::thread::sleep(std::time::Duration::from_secs(3600));
                     }
                 })
@@ -558,10 +591,31 @@ fn dimmy_init_inner() -> c_int {
 /// inside the inner init (config load, audio thread spawn, telemetry
 /// init, …) is converted to a -1 return value rather than aborting the
 /// host process via __fastfail. Without this, a panic crossing the
-/// `extern "C"` boundary would force-abort because the default ABI is
-/// no-unwind. The C# host can then surface a normal error to the user.
+/// `extern "C"` boundary force-aborts (rustc ≥1.81 guarantees the abort
+/// — defined behaviour, see core/Cargo.toml panic-strategy note). The
+/// C# host can then surface a normal error to the user.
 #[no_mangle]
 pub extern "C" fn dimmy_init() -> c_int {
+    // Negative-space backstop for test builds: a `test-ffi` binary MUST run
+    // against an isolated config dir. Refusing init here means even a manual
+    // `cargo test` without the harness env cannot reach a user's live data
+    // (config_dir_path() would already return None, but a loud refusal beats
+    // a silent defaults-only run). Never compiled into shipping builds.
+    #[cfg(feature = "test-ffi")]
+    {
+        let isolated = std::env::var("DIMMY_TEST_CONFIG_DIR")
+            .map(|d| !d.is_empty())
+            .unwrap_or(false);
+        if !isolated {
+            eprintln!(
+                "dimmy_init REFUSED: test-ffi builds must set DIMMY_TEST_CONFIG_DIR \
+                 to a disposable temp dir (protects the real user config). \
+                 See docs/dev/testing.md."
+            );
+            write_init_trace("REFUSED: test-ffi without DIMMY_TEST_CONFIG_DIR");
+            return -1;
+        }
+    }
     write_init_trace("P0: dimmy_init entered");
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(dimmy_init_inner));
     match result {
@@ -700,20 +754,26 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
         *sr = crate::audio::MEETING_CANONICAL_RATE;
     }
 
-    // Always-mix architecture (2026-05-08): the audio capture session
-    // ALWAYS opens both mic + system loopback, AEC3 always processes
-    // the mic with the loopback as far-end reference. Pill dictation
-    // still consumes only the cleaned mic buffer (audio_buffer) — the
-    // loopback samples flow into audio_buffer_secondary which the
-    // dictation chunked-stt worker simply ignores. Net effect:
-    //   • no more "Mic vs Mix vs System" decision at the call site
-    //   • AEC3 cleans up speaker echo even during pill dictation
-    //   • the pill amplitude visualizer can read MAX(mic, loopback) so
-    //     the user sees activity from either source
-    //   • robustness: aec.rs no longer blocks on missing ref, so a
-    //     loopback that never delivers (no default output, no audio
-    //     playing) gracefully falls back to mic-only behavior
-    let source = crate::audio::AudioSource::Mix;
+    // Dictation captures MIC-ONLY, NOT Mix. (Meeting still uses Mix —
+    // it needs AEC to cancel the loopback echo.)
+    //
+    // Why NOT Mix here: in Mix mode the mic is routed through the AEC
+    // ring (`aec_mic_ring`, capped at 1 s) and the AEC3 + DeepFilterNet
+    // worker drains it. When that worker can't keep realtime — a 48 kHz
+    // stereo mic + heavy NN denoise in a noisy room — the ring overflows
+    // and DROPS the oldest samples. Proven 2026-07-01: a 41 s and a 53 s
+    // dictation each landed only ~37 % of their samples in the buffer
+    // (15.6 s / 19.9 s), so Whisper transcribed a truncated fragment and
+    // the user rightly reported "this isn't what I dictated". Dictation
+    // has no loopback echo to cancel, so AEC buys nothing here and costs
+    // 60 % of the audio.
+    //
+    // Mic-only makes the mic callback write straight to `audio_buffer`
+    // (no ring, no worker, no drop). Trade-off: no realtime AEC/denoise
+    // on dictation — but full raw audio to STT beats a denoised 37 %
+    // fragment every time. The pill amplitude visualizer reads mic level
+    // (loopback empty in Mic mode), which is exactly what dictation wants.
+    let source = crate::audio::AudioSource::Mic;
     let _ = st.audio_tx.lock().map(|tx| {
         tx.send(AudioCommand::Start {
             device_name: selected_device,
@@ -878,6 +938,10 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
         ));
     }
 
+    if let Ok(mut slot) = RECORDING_STARTED_AT.lock() {
+        *slot = Some(std::time::Instant::now());
+    }
+
     emit_event("recording_started", "{}");
     0
 }
@@ -918,6 +982,17 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
 
     let st = state();
 
+    // Consume the recording-start instant up front so it is cleared on EVERY
+    // exit path (the early returns below for empty/muted buffer must not leave
+    // a stale Instant for the next recording's capture-ratio to misread).
+    // Measured here it also excludes the stop-processing overhead, so it
+    // reflects the true recording duration. Used by the capture-ratio guard.
+    let recording_elapsed = RECORDING_STARTED_AT
+        .lock()
+        .ok()
+        .and_then(|mut s| s.take())
+        .map(|i| i.elapsed().as_secs_f64());
+
     // Wait briefly for audio samples to arrive if the stream just started.
     // The cpal stream can take 100-300ms to produce first samples after Start.
     // Without this, rapid Start→Stop yields an empty buffer.
@@ -951,8 +1026,19 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
         }
     }
 
-    // Stop audio capture
-    let _ = st.audio_tx.lock().map(|tx| tx.send(AudioCommand::Stop));
+    // Stop audio capture. A send failure means the audio worker is DEAD
+    // (receiver dropped — e.g. it crashed during init): the streams may
+    // still be live and the next recording will misbehave, so leave a
+    // trace instead of silently pretending the stop landed (audit
+    // 2026-07-02).
+    match st.audio_tx.lock() {
+        Ok(tx) => {
+            if tx.send(AudioCommand::Stop).is_err() {
+                log("[StopRec] WARN audio worker unreachable (channel closed) — Stop command dropped");
+            }
+        }
+        Err(_) => log("[StopRec] WARN audio_tx lock poisoned — Stop command not sent"),
+    }
     if let Ok(mut r) = st.recording.lock() {
         *r = false;
     }
@@ -1056,6 +1142,48 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
         .lock()
         .map(|m| m.clone())
         .unwrap_or_else(|_| "cloud".to_string());
+    // Capture-integrity invariant: how much audio did we actually capture vs
+    // how long the user recorded? Mic-mode dictation should land ~100 %; a
+    // low ratio means the capture path silently dropped samples (BUG A — the
+    // Mix AEC ring dropped ~60 %). We WARN + emit telemetry rather than
+    // `assert!`: a shortfall is device/load-dependent (a slow BT-HFP mic on a
+    // busy box), not a logic bug, and crashing the app over it would be worse
+    // than the drop. Skipped for Deepgram streaming (it clears + rolls the
+    // buffer, so buffer.len() isn't the captured total) and while a meeting is
+    // active (its buffer grows unbounded by design).
+    {
+        if let Some(elapsed_secs) = recording_elapsed {
+            let captured_secs = buf_len_samples as f64 / sample_rate.max(1) as f64;
+            let ratio = captured_secs / elapsed_secs;
+            // `elapsed_secs > 3.0` also guarantees a non-zero denominator, so
+            // `ratio` is finite; the explicit `is_finite` is belt-and-suspenders
+            // so a corrupt reading can never mis-bucket as healthy (`ge_95`).
+            if elapsed_secs > 3.0
+                && ratio.is_finite()
+                && streaming_final.is_none()
+                && !meeting_is_active()
+            {
+                // Dictation captures Mic-only since 2026-07-01; kept explicit
+                // so it's obvious what to revisit if that ever varies again.
+                let source = "mic";
+                if ratio < 0.85 {
+                    log(&format!(
+                        "[StopRec] WARN capture ratio {:.0}% — captured {:.1}s of {:.1}s recorded \
+                         (source={}); capture path may be dropping audio",
+                        ratio * 100.0,
+                        captured_secs,
+                        elapsed_secs,
+                        source
+                    ));
+                }
+                crate::telemetry::track(crate::telemetry::Event::DictationCaptureRatio {
+                    ratio_bucket: crate::telemetry::sanitize::bucket_capture_ratio(ratio),
+                    source,
+                });
+            }
+        }
+    }
+
     let local_model_filename = st
         .local_model
         .lock()
@@ -1115,11 +1243,39 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
         }
     }
 
-    let processed = raw.preprocess(preprocessing);
+    // Route-aware preprocessing. The VAD + dagc pass HELPS local whisper /
+    // parakeet (they hallucinate on long silence and want normalized levels)
+    // but HURTS cloud STT: Groq/OpenAI/Deepgram already run their own VAD +
+    // normalization server-side, so ours is redundant and can only degrade.
+    // Proven 2026-07-01: an attenuated mic (input_gain 0.75) produced quiet
+    // audio; our VAD mistook the speech for silence and trimmed it, then dagc
+    // amplified the leftover noise to clipping — a full 45 s dictation
+    // transcribed to "Ah!". For cloud we therefore use the same safe
+    // highpass-only path as file-load (removes rumble, touches nothing else).
+    // preprocessing_enabled=false still means full passthrough (raw).
+    let route = crate::preprocess::preprocess_route(preprocessing, &stt_mode);
+    let processed = match route {
+        // Passthrough — unchanged from the pre-refactor behaviour.
+        crate::preprocess::PreprocessRoute::Raw => raw.preprocess(false),
+        // Local whisper/parakeet: full VAD + AGC, but guarded so a
+        // catastrophic collapse falls back to highpass-only instead of
+        // shipping degraded audio. On healthy audio this is byte-identical
+        // to the old `raw.preprocess(true)` (the guard never trips).
+        crate::preprocess::PreprocessRoute::Full => crate::audio::ProcessedAudio {
+            samples: crate::preprocess::process_buffer_guarded(&raw.samples, raw.sample_rate),
+            sample_rate: raw.sample_rate,
+        },
+        // Cloud: highpass-only (same safe path as file-load) — unchanged.
+        crate::preprocess::PreprocessRoute::HighpassOnly => crate::audio::ProcessedAudio {
+            samples: crate::preprocess::process_buffer_for_file_load(&raw.samples, raw.sample_rate),
+            sample_rate: raw.sample_rate,
+        },
+    };
     log(&format!(
-        "[StopRec] after preprocess: {} samples (preprocessing={})",
+        "[StopRec] after preprocess: {} samples (preprocessing={}, stt_mode={})",
         processed.samples.len(),
-        preprocessing
+        preprocessing,
+        stt_mode
     ));
 
     // Save processed audio
@@ -2013,8 +2169,22 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
     }
     // Local STT fields
     if let Some(s) = v["stt_mode"].as_str() {
+        // Allow-list (audit 2026-07-02): every consumer branches on exact
+        // string equality ("local" vs everything-else-is-cloud), so a typo
+        // like "locall" would silently flip the user to the WRONG backend
+        // (the AUDIO-004 class). Coerce + WARN instead.
+        let normalized = match s {
+            "local" | "cloud" => s,
+            _ => {
+                log(&format!(
+                    "[Config] WARN stt_mode '{}' not in {{local,cloud}} — coerced to 'cloud'",
+                    s
+                ));
+                "cloud"
+            }
+        };
         if let Ok(mut m) = st.stt_mode.lock() {
-            *m = s.to_string();
+            *m = normalized.to_string();
         }
     }
     if let Some(s) = v["local_model"].as_str() {
@@ -2030,11 +2200,25 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
         }
     }
     if let Some(s) = v["local_stt_backend"].as_str() {
-        if let Ok(mut m) = st.local_stt_backend.lock() {
-            if *m != s {
-                log(&format!("[LocalSTT] Backend changed: {} → {}", *m, s));
+        // Allow-list (audit 2026-07-02) — see stt_mode above.
+        let normalized = match s {
+            "whisper" | "parakeet" => s,
+            _ => {
+                log(&format!(
+                    "[Config] WARN local_stt_backend '{}' not in {{whisper,parakeet}} — coerced to 'whisper'",
+                    s
+                ));
+                "whisper"
             }
-            *m = s.to_string();
+        };
+        if let Ok(mut m) = st.local_stt_backend.lock() {
+            if *m != normalized {
+                log(&format!(
+                    "[LocalSTT] Backend changed: {} → {}",
+                    *m, normalized
+                ));
+            }
+            *m = normalized.to_string();
         }
     }
     if let Some(b) = v["live_captions_enabled"].as_bool() {
@@ -2098,8 +2282,19 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
     }
     // Local LLM fields
     if let Some(s) = v["llm_mode"].as_str() {
+        // Allow-list (audit 2026-07-02) — see stt_mode above.
+        let normalized = match s {
+            "local" | "cloud" => s,
+            _ => {
+                log(&format!(
+                    "[Config] WARN llm_mode '{}' not in {{local,cloud}} — coerced to 'cloud'",
+                    s
+                ));
+                "cloud"
+            }
+        };
         if let Ok(mut m) = st.llm_mode.lock() {
-            *m = s.to_string();
+            *m = normalized.to_string();
         }
     }
     if let Some(s) = v["local_llm_model"].as_str() {
@@ -2397,7 +2592,10 @@ pub extern "C" fn dimmy_gpu_clear_known_bad() -> c_int {
 /// Get current microphone amplitude (0.0 - 1.0).
 #[no_mangle]
 pub extern "C" fn dimmy_get_amplitude() -> c_float {
-    let st = state();
+    let st = match try_state() {
+        Some(s) => s,
+        None => return 0.0, // polled before init — silent zero, not a crash
+    };
     let buffer = match st.audio_buffer.lock() {
         Ok(b) => b,
         Err(_) => return 0.0,
@@ -2427,7 +2625,10 @@ pub extern "C" fn dimmy_get_amplitude() -> c_float {
 /// bands so the user can see both streams at a glance.
 #[no_mangle]
 pub extern "C" fn dimmy_get_loopback_amplitude() -> c_float {
-    let st = state();
+    let st = match try_state() {
+        Some(s) => s,
+        None => return 0.0, // polled before init — silent zero, not a crash
+    };
     let buffer = match st.audio_buffer_secondary.lock() {
         Ok(b) => b,
         Err(_) => return 0.0,
@@ -3611,6 +3812,16 @@ pub unsafe extern "C" fn dimmy_meeting_list_orphans(out_buf: *mut c_char, buf_le
 #[no_mangle]
 pub extern "C" fn dimmy_meeting_is_active() -> c_int {
     MEETING.lock().map(|g| g.is_some() as c_int).unwrap_or(0)
+}
+
+/// Internal (Rust-side) meeting-active probe. Same source of truth as
+/// `dimmy_meeting_is_active`, exposed for core modules (e.g. the audio
+/// worker's long-dictation guardrail) that must NOT trip on a meeting —
+/// a meeting's `audio_buffer` also grows unbounded by design (the worker
+/// tracks `samples_written` against it rather than draining), so any
+/// buffer-size guard has to skip while a meeting is live.
+pub fn meeting_is_active() -> bool {
+    MEETING.lock().map(|g| g.is_some()).unwrap_or(false)
 }
 
 /// Pause the in-flight meeting. While paused, the meeting worker
@@ -5378,7 +5589,10 @@ pub extern "C" fn dimmy_model_catalog_json(out_buf: *mut c_char, buf_len: c_int)
 /// Check if recording is active. Returns 1=yes, 0=no.
 #[no_mangle]
 pub extern "C" fn dimmy_is_recording() -> c_int {
-    let st = state();
+    let st = match try_state() {
+        Some(s) => s,
+        None => return 0, // polled before init — not recording, not a crash
+    };
     st.recording.lock().map(|r| *r as c_int).unwrap_or(0)
 }
 
@@ -9249,6 +9463,13 @@ mod tests {
     /// Safe to call multiple times — OnceLock + Once ensure single init.
     fn ensure_test_state() {
         INIT_TEST_STATE.call_once(|| {
+            // Isolate every config-derived path (config.json, keys.enc, …)
+            // into a per-process temp dir. Without this, tests that call
+            // dimmy_set_config_json would save the synthetic test state
+            // over the developer's REAL config (burned 2026-07-02).
+            let dir = std::env::temp_dir().join(format!("dimmy-test-{}", std::process::id()));
+            let _ = std::fs::create_dir_all(&dir);
+            std::env::set_var("DIMMY_TEST_CONFIG_DIR", &dir);
             let (tx, _rx) = std::sync::mpsc::channel();
             let test_state = AppState {
                 recording: Mutex::new(false),
@@ -9575,6 +9796,46 @@ mod tests {
         // Restore
         let restore = CString::new(r#"{"language":"en"}"#).unwrap();
         unsafe { dimmy_set_config_json(restore.as_ptr()) };
+    }
+
+    #[test]
+    #[serial]
+    fn set_config_json_coerces_invalid_modes_to_safe_defaults() {
+        // Audit 2026-07-02: a typo'd mode string used to be stored verbatim
+        // and every `== "local"` comparison silently flipped the user onto
+        // the wrong backend (AUDIO-004 class). The allow-list coerces.
+        ensure_test_state();
+        let json = CString::new(
+            r#"{"stt_mode":"locall","llm_mode":"clud","local_stt_backend":"parakeeet"}"#,
+        )
+        .unwrap();
+        assert_eq!(unsafe { dimmy_set_config_json(json.as_ptr()) }, 0);
+        assert_eq!(state().stt_mode.lock().unwrap().as_str(), "cloud");
+        assert_eq!(state().llm_mode.lock().unwrap().as_str(), "cloud");
+        assert_eq!(
+            state().local_stt_backend.lock().unwrap().as_str(),
+            "whisper"
+        );
+
+        // Valid values pass through untouched.
+        let json = CString::new(
+            r#"{"stt_mode":"local","llm_mode":"local","local_stt_backend":"parakeet"}"#,
+        )
+        .unwrap();
+        assert_eq!(unsafe { dimmy_set_config_json(json.as_ptr()) }, 0);
+        assert_eq!(state().stt_mode.lock().unwrap().as_str(), "local");
+        assert_eq!(state().llm_mode.lock().unwrap().as_str(), "local");
+        assert_eq!(
+            state().local_stt_backend.lock().unwrap().as_str(),
+            "parakeet"
+        );
+
+        // Restore the test-state defaults for neighbours.
+        let restore = CString::new(
+            r#"{"stt_mode":"cloud","llm_mode":"cloud","local_stt_backend":"whisper"}"#,
+        )
+        .unwrap();
+        assert_eq!(unsafe { dimmy_set_config_json(restore.as_ptr()) }, 0);
     }
 
     #[test]

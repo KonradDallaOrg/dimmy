@@ -165,6 +165,48 @@ If dagc is ever replaced, verify the replacement handles:
 
 Consequence: if silence frames end up in the output Vec (e.g., from grace period), AGC sees them in the same pass as speech. dagc NaN corruption from those silence frames destroys all subsequent speech in the same Vec.
 
+### Route-aware preprocessing (dictation stop)
+
+The full VAD+AGC pipeline is NOT applied uniformly. `dimmy_stop_recording`
+picks a route via the pure `preprocess::preprocess_route(preprocessing_enabled,
+stt_mode)` (single source of truth, unit-tested so the mapping can't drift):
+
+| Config | Route | Path |
+|---|---|---|
+| `preprocessing_enabled = false` | `Raw` | passthrough, untouched |
+| enabled + `stt_mode == "local"` | `Full` | `process_buffer_guarded` (VAD+AGC, guarded) |
+| enabled + cloud (anything else) | `HighpassOnly` | `process_buffer_for_file_load` (80 Hz highpass only) |
+
+**Why cloud is highpass-only (BUG B):** Groq/OpenAI/Deepgram run their own
+VAD + normalization server-side. Ours is redundant and can only degrade —
+on a quiet mic our VAD trimmed the speech and dagc amplified the residual
+noise to clipping, so a 45 s dictation transcribed to "Ah!". Cloud now uses
+the same safe path as file-load. See known-bugs.md AUDIO-004.
+
+**Make-it-worse guard (LOCAL path).** `process_buffer_guarded` runs the full
+pipeline, then checks `preprocess_made_it_worse(input, output)`: if a
+clearly-speech input (`rms > ENERGY_FLOOR`) collapsed to near-nothing (empty,
+< 5 % of samples retained, or output RMS < 5 % of input RMS) it falls back to
+highpass-only. This is the user's rule — *preprocessing must HELP, never make
+audio worse than raw* — enforced in production, not just in tests. It is
+deliberately conservative: a normal 40–60 % VAD trim never trips it, so it
+does NOT alter validated dictations; it is a floor, not a quality knob.
+
+### Capture-ratio invariant (BUG A)
+
+At dictation stop, `dimmy_stop_recording` compares captured audio seconds
+(`buffer.len() / rate`) to elapsed recording seconds (from a start `Instant`).
+Mic-mode dictation should land ~100 %; a low ratio means the capture path
+silently dropped samples (the Mix AEC ring dropped ~60 % — see AUDIO-004).
+
+- On ratio < 0.85 (and elapsed > 3 s, not a meeting): **WARN log + telemetry**
+  (`dictation.capture_ratio`, bucketed). It is intentionally **WARN, not
+  `assert!`** — a shortfall is device/load-dependent (a slow BT-HFP mic on a
+  busy box), not a logic bug, and crashing over it would be worse than the drop.
+- The guard is inert in the `test-ffi` injection harness (no real capture
+  timing); its arithmetic is unit-tested in `telemetry::sanitize` /
+  `telemetry::events`.
+
 ## Downsampling
 
 - Source: 48kHz (or device rate)
@@ -213,20 +255,23 @@ The processed WAV is at the original sample rate (typically 48kHz), not 16kHz. D
 - Returns voice probability [0.0, 1.0] per frame
 - RNN-based: state can drift on very long recordings (hence energy floor fallback)
 
-## Always-mix capture (`feat/system-audio-capture`)
+## Capture source: Mic for dictation, Mix for meetings
 
 Pre-2026-05, the user could pick `AudioSource = Mic | System | Mix`.
-Post-`3eddac3`, the pill and meeting paths force `AudioSource::Mix`
-unconditionally. The enum is dead at call sites but kept on disk for
-backward-compat with old `config.json` files. The C# `AudioSource`
-view-model still reads/writes the field and the Mac mirror does the
-same; the Rust runtime ignores it.
+Post-`3eddac3`, the pill + meeting paths forced `AudioSource::Mix`
+unconditionally. **That was walked back for DICTATION on 2026-07-01**
+(BUG A, see known-bugs.md AUDIO-004): dictation now captures
+`AudioSource::Mic` — the mic callback writes straight to `audio_buffer`,
+no AEC ring, no worker, no drop. **Meeting mode keeps `AudioSource::Mix`**
+(it genuinely needs AEC to cancel the loopback far-end echo).
 
-**Why "always mix"**: users opening a meeting expected to capture both
-their voice and the remote participants' voices in one stream. Picking
-between Mic / System / Mix every time produced a class of
-"silent recording" support tickets. Always-mix gets the right behaviour
-by default; AEC3 (`aec.rs`) keeps it from sounding like a feedback loop.
+Why the split: dictation has no loopback echo to cancel, so Mix bought
+nothing and cost ~60 % of the audio when the AEC ring overflowed under
+load (48 kHz stereo mic + heavy NN denoise). Meetings do mix in remote
+participants, so they need the AEC3 path. The `AudioSource` enum is kept
+on disk for backward-compat with old `config.json`; the Rust runtime
+picks the source per path (`dimmy_start_recording` = Mic, meeting worker
+= Mix).
 
 **Failure-mode safety** (load-bearing — guarded by
 `worker_processes_mic_when_ref_ring_empty`): if the loopback ring stays
@@ -259,13 +304,16 @@ free VU meter that's visible when the pill is hidden.
 
 ## Voice processing chain: what is applied, and when
 
-Capture is ALWAYS in Mix mode (`ffi.rs` forces `AudioSource::Mix`), so the
-mic always runs through the AEC worker (`aec.rs`), whose output is the shared
-"cleaned mic" buffer used by every consumer. Wave glyphs below are stylised:
+**This diagram describes MEETING capture (Mix mode).** DICTATION since
+2026-07-01 is Mic-only: it skips the whole AEC worker (steps 1-5) and feeds
+raw mic straight to `audio_buffer`, then applies the route-aware step 6 at
+stop (highpass-only for cloud, guarded VAD+AGC for local). Meeting capture is
+Mix, so the mic runs through the AEC worker (`aec.rs`), whose output is the
+shared "cleaned mic" buffer. Wave glyphs below are stylised:
 `∿`=voice, `····`=background noise, `▂▂`=low rumble, `▁▁`=quiet, `██`=too loud.
 
 ```
- ┌─ SOURCES (always captured in "Mix mode") ────────────────────────────────┐
+ ┌─ SOURCES (MEETING — captured in "Mix mode"; dictation = Mic-only) ────────┐
  │   MIC (voice + room noise)                  SYSTEM loopback (PC audio)    │
  │   ∿∿∿ ···· ▂▂                               ∿∿∿                          │
  └──────┬───────────────────────────────────────────┬──────────────────────┘
@@ -286,9 +334,9 @@ mic always runs through the AEC worker (`aec.rs`), whose output is the shared
                        └───┬───────────────┬───┘
         ┌──────────────────┘               └──────────────────┐
         ▼ LIVE (while speaking)                                ▼ AT STOP (dictation)
-   REALTIME / CHUNKED / DEEPGRAM                    (6) PREPROCESS  toggle (def ON)
-   reads buffer ~every 3 s                              high-pass + VAD (trim
-   NO extra filtering                                   silence) + AGC (dagc)
+   REALTIME / CHUNKED / DEEPGRAM                    (6) PREPROCESS  route-aware (def ON)
+   reads buffer ~every 3 s                              cloud -> high-pass ONLY
+   NO extra filtering                                   local -> VAD+AGC (guarded)
         │                                                    │
         ▼                                                    ▼
    text typed live at cursor                          STT -> final text
@@ -299,10 +347,11 @@ mic always runs through the AEC worker (`aec.rs`), whose output is the shared
  FILE LOAD: no capture  ->  high-pass ONLY (no AGC, protects long files)  -> STT
 ```
 
-Net effect on normal dictation: two noise suppressors (1 RNNoise + 4 WebRTC
-NS) and two AGC stages (5 AGC2 + 6 dagc), plus two high-passes. Steps 1-5 are
-unconditional (Mix mode); step 6 is dictation-only and gated by
-`preprocessing_enabled`. The WebRTC chain (2-3-4-5) is NOT individually
-toggleable; only DENOISE (1) and PREPROCESSING (6) are user toggles. If voice
-ever sounds over-processed/pumped, the suspects in order are AGC2 (5), then
-dagc (6), then the two NS stages.
+Net effect since 2026-07-01: **dictation skips steps 1-5 entirely** (Mic-only
+capture, no AEC worker) and applies only the route-aware step 6 at stop —
+cloud gets highpass-only, local gets guarded VAD+AGC. Steps 1-5 apply to
+MEETING capture (Mix mode). This removed the old double-processing on
+dictation (two NS + two AGC + two high-passes) that could over-pump quiet
+speech. Step 6 is gated by `preprocessing_enabled`; DENOISE (1) is the only
+other user toggle. If meeting voice sounds over-processed/pumped, the suspects
+in order are AGC2 (5), then the two NS stages.

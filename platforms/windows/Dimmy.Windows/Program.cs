@@ -18,11 +18,17 @@ public static class Program
     private static readonly string StartupLogPath = Path.Combine(
         Path.GetTempPath(), "dimmy_startup.log");
 
+    // A crash-looping install appends stack traces forever (audit
+    // 2026-07-02) — cap the file, keep the newest half on overflow.
+    private const long MaxStartupLogBytes = 262_144; // 256 KB
+
     [STAThread]
     public static void Main(string[] args)
     {
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
             LogCrash("AppDomain.UnhandledException", e.ExceptionObject as Exception);
+
+        RotateIfOversized();
 
         try
         {
@@ -59,6 +65,9 @@ public static class Program
             throw;
         }
     }
+
+    private static void RotateIfOversized() =>
+        Helpers.LogRotation.TrimToHalfIfOver(StartupLogPath, MaxStartupLogBytes);
 
     private static void LogStage(string stage)
     {

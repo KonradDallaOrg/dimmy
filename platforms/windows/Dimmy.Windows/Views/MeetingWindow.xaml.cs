@@ -474,11 +474,26 @@ public sealed partial class MeetingWindow : Window
             _viewingMeetingDir = dir;
             RefreshRecapWithClaudeButton();
 
+            // Surface a finalize failure (disk-full → incomplete audio on
+            // disk). The core has always serialized `error`; the host never
+            // read it — the user learned about the damage only when the
+            // recap failed. Audit 2026-07-02: no silent failures.
+            string? stopError = root.TryGetProperty("error", out var errEl)
+                && errEl.ValueKind == JsonValueKind.String
+                ? errEl.GetString()
+                : null;
+            if (!string.IsNullOrWhiteSpace(stopError))
+            {
+                App.Log($"meeting stop reported error: {stopError}", "Meeting");
+                Services.DictNotificationService.ShowMeetingAudioIncomplete(stopError!);
+            }
+
             // Prefer the LLM-chosen title from meta.json (the recap's
             // first H1 H1 gets parsed + stored there by save_post_process).
             // Falls back to the meeting id directory name.
             DoneTitle.Text = ResolveDoneTitle(dir);
-            DoneMeta.Text = $"{FormatDuration(dur)} · {chunks} chunks · {DateTime.Now:yyyy-MM-dd HH:mm}";
+            DoneMeta.Text = $"{FormatDuration(dur)} · {chunks} chunks · {DateTime.Now:yyyy-MM-dd HH:mm}"
+                + (string.IsNullOrWhiteSpace(stopError) ? "" : " · ⚠ audio incomplete");
             Helpers.TranscriptRenderer.Render(RawTranscriptText,
                 string.IsNullOrEmpty(transcript)
                     ? "(no transcript: VAD may have removed all audio)"

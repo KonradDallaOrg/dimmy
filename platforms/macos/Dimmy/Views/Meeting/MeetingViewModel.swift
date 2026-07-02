@@ -528,6 +528,14 @@ final class MeetingViewModel: ObservableObject {
                 self.doneMeta = String(
                     format: "%.0fs · %d chunks", result.durationSecs, result.chunkCount
                 )
+                // Surface a finalize failure (disk-full → incomplete audio on
+                // disk). The core has always serialized `error`; silently
+                // ignoring it meant the user learned about the damage only
+                // when the recap failed. Win parity (MeetingWindow stop).
+                if let stopError = result.error {
+                    dimmyHostLog("[Meeting] stop reported error: \(stopError)")
+                    self.doneMeta += " · ⚠ audio incomplete (\(stopError))"
+                }
                 self.doneAudioURL = self.audioURL(for: result.dir)
                 self.doneAudioMicURL = self.micAudioURL(for: result.dir)
                 self.doneAudioSystemURL = self.systemAudioURL(for: result.dir)
@@ -536,6 +544,7 @@ final class MeetingViewModel: ObservableObject {
                 self.titlebarTitle = self.doneTitle
 
                 if cleanTranscript.isEmpty {
+                    dimmyHostLog("[Recap] skip (window stop): reason=empty transcript — no recap will run")
                     // No speech captured (very short recording, VAD
                     // rejected everything, or STT failed silently).
                     // Don't pretend the recap "wasn't generated", be
@@ -554,6 +563,7 @@ final class MeetingViewModel: ObservableObject {
                     self.processingStep = .generatingRecap
                     self.runPostProcess(dir: result.dir, transcript: cleanTranscript)
                 } else {
+                    dimmyHostLog("[Recap] skip (window stop): reason=meetingGenerateRecap=false (recap toggled off for this meeting) — transcript kept, no recap")
                     self.isWorking = false
                     self.phase = .done
                     self.doneSections = [

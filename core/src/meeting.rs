@@ -198,18 +198,24 @@ impl TrackSink {
     }
 
     /// Finalise the stream (Ogg trailer / WAV header) and close.
-    fn finalize(self) {
+    ///
+    /// Returns the failure instead of swallowing it: a finalize error
+    /// (classically disk-full while rewriting the RIFF size header)
+    /// means the file on disk is INCOMPLETE — the caller must surface
+    /// that in `MeetingResult.error` so the user learns the recording
+    /// is damaged now, not when the recap mysteriously fails later.
+    fn finalize(self) -> Result<(), String> {
         match self {
-            TrackSink::Ogg(enc) => {
-                if let Err(e) = enc.finish() {
-                    crate::log(&format!("[Meeting] vorbis finish failed: {e}"));
-                }
-            }
-            TrackSink::Wav(w) => {
-                if let Err(e) = w.finalize() {
-                    crate::log(&format!("[Meeting] wav finalize failed: {e}"));
-                }
-            }
+            TrackSink::Ogg(enc) => enc.finish().map(|_| ()).map_err(|e| {
+                let msg = format!("vorbis finish failed: {e}");
+                crate::log(&format!("[Meeting] {msg}"));
+                msg
+            }),
+            TrackSink::Wav(w) => w.finalize().map_err(|e| {
+                let msg = format!("wav finalize failed: {e}");
+                crate::log(&format!("[Meeting] {msg}"));
+                msg
+            }),
         }
     }
 }
@@ -256,6 +262,9 @@ impl MeetingSession {
             device_sample_rate > 0,
             "device_sample_rate must be positive"
         );
+        // Fresh session: the capture gate must be open regardless of how
+        // the previous session ended (belt — stop() already clears it).
+        crate::audio::MEETING_CAPTURE_GATED.store(false, Ordering::SeqCst);
         let id = uuid_v4_simple();
         let dir = crate::meetings_dir()
             .ok_or_else(|| "config dir unavailable".to_string())?
@@ -358,6 +367,10 @@ impl MeetingSession {
     pub fn pause(&self) -> bool {
         let was_paused = self.paused.swap(true, Ordering::SeqCst);
         if !was_paused {
+            // Gate every capture append while paused: the resume cursor-jump
+            // discards the paused window anyway, so buffering it is pure RAM
+            // waste (~345 MB/h at 48 kHz). Audit 2026-07-02.
+            crate::audio::MEETING_CAPTURE_GATED.store(true, Ordering::SeqCst);
             crate::log(&format!("[Meeting] pause id={}", self.id));
             crate::telemetry::track(crate::telemetry::Event::MeetingPaused);
             true
@@ -371,6 +384,7 @@ impl MeetingSession {
     pub fn resume(&self) -> bool {
         let was_paused = self.paused.swap(false, Ordering::SeqCst);
         if was_paused {
+            crate::audio::MEETING_CAPTURE_GATED.store(false, Ordering::SeqCst);
             crate::log(&format!("[Meeting] resume id={}", self.id));
             crate::telemetry::track(crate::telemetry::Event::MeetingResumed);
             true
@@ -387,6 +401,9 @@ impl MeetingSession {
     /// caller is then expected to invoke the post-processing pipeline
     /// (LLM recap + actions) and persist the artifacts.
     pub fn stop(mut self) -> MeetingResult {
+        // Never leave the capture gate latched — a stop-while-paused
+        // would otherwise silence the NEXT recording's buffers.
+        crate::audio::MEETING_CAPTURE_GATED.store(false, Ordering::SeqCst);
         self.cancel.store(true, Ordering::SeqCst);
         let handle = self.handle.take();
         let result = handle
@@ -1152,10 +1169,20 @@ fn worker_loop(
     }
 
     // Finalize all three track sinks (Ogg trailer / WAV header) + meta.
-    writer.finalize();
-    writer_mic.finalize();
+    // Collect the FIRST failure into MeetingResult.error — a finalize
+    // error (disk-full mid-header-rewrite) leaves the audio file
+    // incomplete on disk and the user must hear about it at stop time.
+    let mut finalize_error: Option<String> = None;
+    if let Err(e) = writer.finalize() {
+        finalize_error.get_or_insert(format!("audio track incomplete: {e}"));
+    }
+    if let Err(e) = writer_mic.finalize() {
+        finalize_error.get_or_insert(format!("mic track incomplete: {e}"));
+    }
     if let Some(w) = writer_system {
-        w.finalize();
+        if let Err(e) = w.finalize() {
+            finalize_error.get_or_insert(format!("system track incomplete: {e}"));
+        }
     }
     let duration_secs = started.elapsed().as_secs_f64();
     finalize_meeting_meta(&dir, &id, duration_secs, chunk_count);
@@ -1185,7 +1212,7 @@ fn worker_loop(
         transcript: merged_transcript,
         duration_secs,
         chunk_count,
-        error: None,
+        error: finalize_error,
     }
 }
 
@@ -1600,7 +1627,7 @@ mod tests {
         let mut sink = TrackSink::create(&dir, "audio_mic", 48_000).expect("sink create");
         sink.write(&samples);
         sink.flush();
-        sink.finalize();
+        sink.finalize().expect("finalize must succeed on tempdir");
 
         if cfg!(any(target_os = "windows", target_os = "macos")) {
             let ogg = dir.join("audio_mic.ogg");
@@ -1638,7 +1665,7 @@ mod tests {
         let mut sink = TrackSink::create(&dir, "audio", 16_000).expect("sink create");
         sink.write(&[]); // no-op, must not panic or write
         sink.write(&[2.0, -3.0, 0.5, -0.5]); // 2.0/-3.0 out of range
-        sink.finalize();
+        sink.finalize().expect("finalize must succeed on tempdir");
 
         if cfg!(any(target_os = "windows", target_os = "macos")) {
             assert!(dir.join("audio.ogg").exists());

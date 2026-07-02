@@ -1,6 +1,6 @@
 [package]
 name = "dimmy"
-version = "0.6.65"
+version = "0.6.66"
 edition = "2021"
 description = "Dimmy — Cross-platform voice transcription overlay"
 license = "AGPL-3.0-only"
@@ -314,3 +314,15 @@ object = { version = "0.36", default-features = false, features = ["read", "std"
 # `local-stt-parakeet-fluid` feature.
 [target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
 fluidaudio-rs = { git = "https://github.com/FluidInference/fluidaudio-rs", tag = "v0.12.6", optional = true }
+
+# PANIC STRATEGY AT THE FFI BOUNDARY — deliberate NON-choice (audit
+# 2026-07-02). We do NOT set `panic = "abort"` here even though ~100
+# extern "C" fns assert!() in production (house negative-space style):
+# - On modern rustc (1.81+) a panic unwinding out of an `extern "C"` fn
+#   is a GUARANTEED process abort (the no-unwind shim), not UB — so the
+#   clean-crash behaviour we want already holds at every FFI boundary.
+# - Setting panic=abort on [profile.release] breaks the frozen tier-1
+#   invocation `cargo test --release --test ffi_e2e ...`: dependency
+#   crates get built with abort while the test harness requires unwind
+#   ("requires panic strategy `abort` which is incompatible"). Verified
+#   2026-07-02 — do not re-add without solving that first.

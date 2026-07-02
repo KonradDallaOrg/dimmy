@@ -639,11 +639,11 @@ public static class MeetingRecapHelpers
         var modelHint = string.IsNullOrWhiteSpace(modelOverride) ? "auto" : modelOverride;
         return rc switch
         {
-            -2 => "Configure an LLM API key + URL first.",
+            -2 => "No recap LLM is configured. Add a provider key in Settings > Recap, OR if you use a Claude/Codex subscription open Settings > Integrations and sign in again.",
             -3 => "LLM HTTP call failed — provider returned an unexpected error. See dimmy.log.",
             -4 => "Local LLM model is not available. Pick a model in Settings → LLM.",
             -5 => $"Recap model '{modelHint}' is not supported by the recap endpoint. Pick a different model in Settings → Recap.",
-            -6 => "Recap API key is missing or unauthorized. Open Settings → Recap to fix it.",
+            -6 => "Recap sign-in is missing or expired. Open Settings > Recap (API key) or Settings > Integrations to sign in to your Claude/Codex subscription again.",
             -7 => "Recap rate limited (429). Try again in a minute, or pick a faster model.",
             -8 => "Network error reaching the recap endpoint. Check your connection.",
             -9 => $"The recap is too large for '{modelHint}' (413). Pick a model with a bigger context, or a higher-tier provider.",

@@ -172,7 +172,34 @@ pub fn config_dir_name() -> &'static str {
 }
 
 pub fn config_dir_path() -> Option<std::path::PathBuf> {
-    dirs::config_dir().map(|p| p.join(config_dir_name()))
+    // Test isolation — under ANY test compilation (unit `cfg(test)` or the
+    // integration-only `test-ffi` feature) the REAL user config dir is
+    // UNREACHABLE. Tests must point DIMMY_TEST_CONFIG_DIR at a disposable
+    // temp dir; without it every derived path (config.json, keys.enc,
+    // history.db, meetings/, audio_debug/) resolves to None and nothing can
+    // touch a live install. Burned 2026-07-02: a local `cargo test`
+    // overwrote the owner's real config.json (shortcut, LLM prompt, device —
+    // all clobbered by test fixtures). Shipping builds never enable
+    // `test-ffi` (frozen feature set), so this block is compiled out.
+    #[cfg(any(test, feature = "test-ffi"))]
+    {
+        match std::env::var("DIMMY_TEST_CONFIG_DIR") {
+            Ok(d) if !d.is_empty() => Some(std::path::PathBuf::from(d)),
+            // Unit tests (`cargo test --lib`): deterministic per-process temp
+            // dir — the env var is process-global and tests run in parallel,
+            // so relying on one test to set it first would be order-dependent.
+            #[cfg(test)]
+            _ => Some(std::env::temp_dir().join(format!("dimmy-test-{}", std::process::id()))),
+            // Integration binaries (`test-ffi` without cfg(test)): no env →
+            // no path at all; dimmy_init additionally REFUSES to run.
+            #[cfg(not(test))]
+            _ => None,
+        }
+    }
+    #[cfg(not(any(test, feature = "test-ffi")))]
+    {
+        dirs::config_dir().map(|p| p.join(config_dir_name()))
+    }
 }
 
 /// Marker file path for onboarding completion.
@@ -300,8 +327,91 @@ fn transcription_debug_log_path() -> Option<std::path::PathBuf> {
     config_dir_path().map(|p| p.join("transcription_debug.log"))
 }
 
-fn audio_debug_dir() -> Option<std::path::PathBuf> {
+pub(crate) fn audio_debug_dir() -> Option<std::path::PathBuf> {
     config_dir_path().map(|p| p.join("audio_debug"))
+}
+
+/// Prune audio-debug session directories by age + total-size cap.
+/// audio_debug is a DIAGNOSTIC aid (per-dictation raw/processed WAV
+/// dumps), not user data — before this, sessions accumulated forever
+/// (audit 2026-07-02: a month of troubleshooting = GB of WAVs). Fixed
+/// defaults at the call site, deliberately no config knobs.
+/// Session dirs are named `YYYY-MM-DD_HH-MM-SS`, so the lexicographic
+/// sort used for the size cap IS chronological; age uses dir mtime.
+/// Returns `(dirs_removed, bytes_freed)`; missing base dir is Ok((0,0)).
+pub fn prune_audio_debug_dirs(
+    base: &std::path::Path,
+    keep_days: u64,
+    max_total_bytes: u64,
+) -> std::io::Result<(usize, u64)> {
+    if !base.exists() {
+        return Ok((0, 0));
+    }
+    fn dir_size(p: &std::path::Path) -> u64 {
+        std::fs::read_dir(p)
+            .map(|rd| {
+                rd.flatten()
+                    .filter_map(|e| e.metadata().ok())
+                    .filter(|m| m.is_file())
+                    .map(|m| m.len())
+                    .sum()
+            })
+            .unwrap_or(0)
+    }
+
+    let mut sessions: Vec<(
+        String,
+        std::path::PathBuf,
+        u64,
+        Option<std::time::SystemTime>,
+    )> = std::fs::read_dir(base)?
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .map(|e| {
+            let p = e.path();
+            let name = e.file_name().to_string_lossy().into_owned();
+            let size = dir_size(&p);
+            let mtime = e.metadata().ok().and_then(|m| m.modified().ok());
+            (name, p, size, mtime)
+        })
+        .collect();
+    // Oldest first (timestamp names sort chronologically).
+    sessions.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut removed = 0usize;
+    let mut freed = 0u64;
+    let cutoff = std::time::SystemTime::now()
+        .checked_sub(std::time::Duration::from_secs(keep_days * 86_400));
+
+    // Pass 1: age.
+    sessions.retain(|(_, path, size, mtime)| {
+        let too_old = match (cutoff, mtime) {
+            (Some(c), Some(m)) => *m <= c,
+            _ => false,
+        };
+        if too_old && std::fs::remove_dir_all(path).is_ok() {
+            removed += 1;
+            freed += size;
+            false
+        } else {
+            true
+        }
+    });
+
+    // Pass 2: total-size cap — drop oldest until under budget.
+    let mut total: u64 = sessions.iter().map(|(_, _, s, _)| *s).sum();
+    for (_, path, size, _) in &sessions {
+        if total <= max_total_bytes {
+            break;
+        }
+        if std::fs::remove_dir_all(path).is_ok() {
+            removed += 1;
+            freed += size;
+            total = total.saturating_sub(*size);
+        }
+    }
+
+    Ok((removed, freed))
 }
 
 /// Where meeting-mode sessions persist their on-disk artefacts
@@ -2065,12 +2175,81 @@ mod tests {
         save_config_file(&cfg);
     }
 
+    // ── prune_audio_debug_dirs (audit 2026-07-02) ────────────────────
+
+    fn mk_session(base: &std::path::Path, name: &str, bytes: usize) -> std::path::PathBuf {
+        let dir = base.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("raw.wav"), vec![0u8; bytes]).unwrap();
+        dir
+    }
+
     #[test]
-    fn config_dir_path_returns_some() {
+    fn prune_audio_debug_keeps_everything_within_budget() {
+        let base = std::env::temp_dir().join(format!("dimmy-adbg-keep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        mk_session(&base, "2026-01-01_00-00-01", 1_000);
+        mk_session(&base, "2026-01-01_00-00-02", 1_000);
+        let (removed, freed) = prune_audio_debug_dirs(&base, 36_500, u64::MAX).unwrap();
+        assert_eq!((removed, freed), (0, 0), "young + small sessions must stay");
+        assert_eq!(std::fs::read_dir(&base).unwrap().count(), 2);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn prune_audio_debug_age_removes_expired_sessions() {
+        let base = std::env::temp_dir().join(format!("dimmy-adbg-age-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        mk_session(&base, "2026-01-01_00-00-01", 1_000);
+        // keep_days = 0 → cutoff is NOW → every existing dir is expired.
+        let (removed, freed) = prune_audio_debug_dirs(&base, 0, u64::MAX).unwrap();
+        assert_eq!(removed, 1);
+        assert_eq!(freed, 1_000);
+        assert_eq!(std::fs::read_dir(&base).unwrap().count(), 0);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn prune_audio_debug_size_cap_drops_oldest_first() {
+        let base = std::env::temp_dir().join(format!("dimmy-adbg-cap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        mk_session(&base, "2026-01-01_00-00-01", 10_000); // oldest
+        mk_session(&base, "2026-01-01_00-00-02", 10_000);
+        mk_session(&base, "2026-01-01_00-00-03", 10_000); // newest
+                                                          // Cap at 15 KB → the two OLDEST go, the newest survives.
+        let (removed, freed) = prune_audio_debug_dirs(&base, 36_500, 15_000).unwrap();
+        assert_eq!(removed, 2);
+        assert_eq!(freed, 20_000);
+        assert!(
+            base.join("2026-01-01_00-00-03").exists(),
+            "newest must survive"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn prune_audio_debug_missing_base_is_ok() {
+        let base = std::env::temp_dir().join("dimmy-adbg-definitely-missing");
+        let _ = std::fs::remove_dir_all(&base);
+        assert_eq!(prune_audio_debug_dirs(&base, 7, 1).unwrap(), (0, 0));
+    }
+
+    #[test]
+    fn config_dir_path_is_isolated_under_test() {
+        // Under cfg(test) the REAL user config dir must be unreachable:
+        // the path is either the DIMMY_TEST_CONFIG_DIR override or the
+        // deterministic per-process temp dir — never %APPDATA%/dimmy.
         let p = config_dir_path();
-        assert!(p.is_some(), "config_dir_path should return Some on any OS");
+        assert!(p.is_some(), "config_dir_path should return Some in tests");
         let p = p.unwrap();
-        assert!(p.ends_with("dimmy"), "Path should end with 'dimmy'");
+        let s = p.to_string_lossy();
+        assert!(
+            s.contains("dimmy-test-"),
+            "test builds must resolve to an isolated dir, got {s}"
+        );
+        if let Some(real) = dirs::config_dir().map(|d| d.join("dimmy")) {
+            assert_ne!(p, real, "test config dir must never equal the real one");
+        }
     }
 
     #[test]

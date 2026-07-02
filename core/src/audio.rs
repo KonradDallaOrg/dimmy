@@ -23,6 +23,52 @@ use std::thread;
 ///   which linear interpolation handles cleanly (no aliasing).
 pub const MEETING_CANONICAL_RATE: u32 = 48_000;
 
+/// Long-dictation guardrail thresholds (seconds of buffered audio).
+/// The pill dictation buffer has NO draining worker, so a marathon /
+/// forgotten dictation grows unbounded → memory pressure (root of the
+/// macOS whole-system freeze, 2026-06-30). At the soft threshold we nudge
+/// the user toward Meeting mode; at the hard threshold the host auto-stops
+/// (transcribes + pastes what was said) and offers to open it as a meeting.
+/// Meeting mode is unaffected: its `audio_buffer` also grows, so the guard
+/// is gated on `meeting_is_active() == false` at the call site.
+pub const DICTATION_SOFT_WARN_SECS: f64 = 300.0; // 5 min
+pub const DICTATION_HARD_STOP_SECS: f64 = 600.0; // 10 min
+
+/// True while a meeting is PAUSED. Every append site into
+/// `audio_buffer` / `audio_buffer_secondary` (mic callback, loopback
+/// callback, PushLoopback worker path, AEC worker output) checks this
+/// and SKIPS the append while set — the meeting buffer is append-only
+/// for the whole session (cursors, never drained), so a long pause
+/// would otherwise accumulate unbounded RAM (~345 MB/h at 48 kHz) for
+/// samples the resume cursor-jump discards anyway (gap-skip semantics).
+/// Owned by `MeetingSession::{start,pause,resume,stop}` — false during
+/// dictation, so the pill path is untouched. Audit 2026-07-02.
+pub static MEETING_CAPTURE_GATED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Cheap relaxed read for the capture hot paths.
+#[inline]
+pub fn meeting_capture_gated() -> bool {
+    MEETING_CAPTURE_GATED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Pure threshold decision for the long-dictation guardrail. Returns
+/// `(emit_soft_warning, emit_hard_stop)` given the current buffer length,
+/// the canonical sample rate, and which events already fired this
+/// recording. Each event fires at most once (the caller latches the
+/// flags). Split out so it can be unit-tested without the audio pipeline.
+fn dictation_duration_events(
+    buf_len: usize,
+    rate: u32,
+    soft_warned: bool,
+    hard_emitted: bool,
+) -> (bool, bool) {
+    let secs = buf_len as f64 / (rate.max(1) as f64);
+    let warn = !soft_warned && secs >= DICTATION_SOFT_WARN_SECS;
+    let stop = !hard_emitted && secs >= DICTATION_HARD_STOP_SECS;
+    (warn, stop)
+}
+
 /// Stateful linear-interpolation resampler for streaming audio.
 /// Used by `build_secondary_stream` so the loopback callback can
 /// emit samples at the meeting's canonical rate even when the
@@ -383,6 +429,10 @@ pub fn spawn_audio_thread(
             let mut loopback_diag_pushes: u64 = 0;
             let mut loopback_diag_peak_abs: f32 = 0.0;
 
+            // Long-dictation guardrail latches (reset on each fresh Start).
+            let mut dict_soft_warned = false;
+            let mut dict_hard_emitted = false;
+
             // Event loop: wait for commands, with a 1 s timeout that
             // doubles as the heartbeat for device-change auto-recovery.
             loop {
@@ -390,6 +440,31 @@ pub fn spawn_audio_thread(
                     Ok(c) => c,
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     Err(mpsc::RecvTimeoutError::Timeout) => {
+                        // Long-dictation guardrail. The pill dictation buffer
+                        // has no draining worker, so a marathon dictation grows
+                        // unbounded → memory pressure (macOS whole-system freeze,
+                        // 2026-06-30). Gated on meeting-inactive because a
+                        // meeting's `audio_buffer` also grows by design. Emit
+                        // host-facing events; the host stops + pastes + offers
+                        // Meeting mode. Event-driven — no host polling timer.
+                        if !crate::ffi::meeting_is_active() {
+                            let buf_len = buffer.lock().map(|b| b.len()).unwrap_or(0);
+                            let (warn, stop) = dictation_duration_events(
+                                buf_len,
+                                MEETING_CANONICAL_RATE,
+                                dict_soft_warned,
+                                dict_hard_emitted,
+                            );
+                            if warn {
+                                dict_soft_warned = true;
+                                crate::ffi::emit_event("dictation.long_warning", "{}");
+                            }
+                            if stop {
+                                dict_hard_emitted = true;
+                                crate::log("[Audio] dictation exceeded hard limit (10 min) — emitting dictation.max_duration for host to stop");
+                                crate::ffi::emit_event("dictation.max_duration", "{}");
+                            }
+                        }
                         let dead = AUDIO_STREAM_DEAD.load(Ordering::Relaxed);
                         // Default-output-follow (Windows): cpal raises no error
                         // when the default output merely CHANGES (the old device
@@ -638,6 +713,11 @@ pub fn spawn_audio_thread(
                             if let Ok(mut r) = aec_ref_ring.lock() {
                                 r.clear();
                             }
+                            // Fresh recording → re-arm the long-dictation
+                            // guardrail latches (a recovery start continues the
+                            // same recording, so it must NOT reset them).
+                            dict_soft_warned = false;
+                            dict_hard_emitted = false;
                         }
                         is_recovery_start = false;
 
@@ -706,8 +786,13 @@ pub fn spawn_audio_thread(
                                                 mono_samples
                                             }
                                         };
-                                        if let Ok(mut b) = buf.lock() {
-                                            b.extend_from_slice(&to_push);
+                                        // Paused meeting: skip the append (gap-skip
+                                        // discards these at resume; keeping them only
+                                        // grows RAM). See MEETING_CAPTURE_GATED.
+                                        if !meeting_capture_gated() {
+                                            if let Ok(mut b) = buf.lock() {
+                                                b.extend_from_slice(&to_push);
+                                            }
                                         }
                                     },
                                     |err| notify_audio_stream_error("primary", "F32", &err),
@@ -745,8 +830,11 @@ pub fn spawn_audio_thread(
                                                 mono_samples
                                             }
                                         };
-                                        if let Ok(mut b) = buf2.lock() {
-                                            b.extend_from_slice(&to_push);
+                                        // Paused meeting: skip append (see F32 twin).
+                                        if !meeting_capture_gated() {
+                                            if let Ok(mut b) = buf2.lock() {
+                                                b.extend_from_slice(&to_push);
+                                            }
                                         }
                                     },
                                     |err| notify_audio_stream_error("primary", "I16", &err),
@@ -758,6 +846,16 @@ pub fn spawn_audio_thread(
                                     "[Audio] ERROR: Unsupported sample format: {:?}",
                                     config.sample_format()
                                 ));
+                                // Tell the USER too — without a stream this
+                                // recording captures pure silence and before
+                                // 2026-07-02 the only trace was dimmy.log.
+                                crate::ffi::emit_event(
+                                    "error",
+                                    &format!(
+                                        r#"{{"message":"Microphone format {:?} not supported — recording will be silent. Pick another input device in Settings."}}"#,
+                                        config.sample_format()
+                                    ),
+                                );
                                 continue;
                             }
                         };
@@ -894,14 +992,18 @@ pub fn spawn_audio_thread(
                         };
                         let out_len = canonical.len();
 
-                        if let Ok(mut b) = buffer_secondary.lock() {
-                            for &s in &canonical {
-                                b.push(s.clamp(-1.0, 1.0));
+                        // Paused meeting: skip appends (gap-skip discards
+                        // these at resume; keeping them only grows RAM).
+                        if !meeting_capture_gated() {
+                            if let Ok(mut b) = buffer_secondary.lock() {
+                                for &s in &canonical {
+                                    b.push(s.clamp(-1.0, 1.0));
+                                }
                             }
-                        }
-                        if let Ok(mut r) = aec_ref_ring.lock() {
-                            for &s in &canonical {
-                                r.push(s.clamp(-1.0, 1.0));
+                            if let Ok(mut r) = aec_ref_ring.lock() {
+                                for &s in &canonical {
+                                    r.push(s.clamp(-1.0, 1.0));
+                                }
                             }
                         }
 
@@ -1276,11 +1378,15 @@ fn build_secondary_stream(
                             mono_samples
                         }
                     };
-                    if let Ok(mut b) = buf.lock() {
-                        b.extend_from_slice(&to_push);
-                    }
-                    if let Some(ref aec) = aec_ref {
-                        crate::aec::push_to_ring(aec, &to_push);
+                    // Paused meeting: skip appends (gap-skip discards these
+                    // at resume; keeping them only grows RAM).
+                    if !meeting_capture_gated() {
+                        if let Ok(mut b) = buf.lock() {
+                            b.extend_from_slice(&to_push);
+                        }
+                        if let Some(ref aec) = aec_ref {
+                            crate::aec::push_to_ring(aec, &to_push);
+                        }
                     }
                 },
                 |err| notify_audio_stream_error("secondary", "F32", &err),
@@ -1356,11 +1462,14 @@ fn build_secondary_stream(
                             mono_samples
                         }
                     };
-                    if let Ok(mut b) = buf.lock() {
-                        b.extend_from_slice(&to_push);
-                    }
-                    if let Some(ref aec) = aec_ref {
-                        crate::aec::push_to_ring(aec, &to_push);
+                    // Paused meeting: skip appends (see F32 twin).
+                    if !meeting_capture_gated() {
+                        if let Ok(mut b) = buf.lock() {
+                            b.extend_from_slice(&to_push);
+                        }
+                        if let Some(ref aec) = aec_ref {
+                            crate::aec::push_to_ring(aec, &to_push);
+                        }
                     }
                 },
                 |err| notify_audio_stream_error("secondary", "I16", &err),
@@ -1699,6 +1808,42 @@ pub fn encode_wav(samples: &[f32], sample_rate: u32) -> Result<Vec<u8>, crate::e
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dictation_duration_events_fire_once_at_thresholds() {
+        let r = MEETING_CANONICAL_RATE;
+        let at = |secs: f64| (secs * r as f64) as usize;
+        // Below the soft threshold: nothing fires.
+        assert_eq!(
+            dictation_duration_events(at(100.0), r, false, false),
+            (false, false)
+        );
+        // At the soft threshold, not yet warned: warn only.
+        assert_eq!(
+            dictation_duration_events(at(300.0), r, false, false),
+            (true, false)
+        );
+        // Past soft but already warned: no repeat, hard not yet reached.
+        assert_eq!(
+            dictation_duration_events(at(350.0), r, true, false),
+            (false, false)
+        );
+        // At the hard threshold, warned already: hard-stop fires once.
+        assert_eq!(
+            dictation_duration_events(at(600.0), r, true, false),
+            (false, true)
+        );
+        // Past hard, both already emitted: nothing repeats.
+        assert_eq!(
+            dictation_duration_events(at(700.0), r, true, true),
+            (false, false)
+        );
+        // Guards against a divide-by-zero on a bogus rate.
+        assert_eq!(
+            dictation_duration_events(1_000_000, 0, false, false),
+            (true, true)
+        );
+    }
 
     #[test]
     fn loopback_follows_default_when_output_changes_mid_meeting() {
