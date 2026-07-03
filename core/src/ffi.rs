@@ -5411,6 +5411,13 @@ fn categorize_llm_error_to_rc(err: &crate::error::LlmError) -> c_int {
         LlmError::Network(_) => -8,
         LlmError::NoApiKey(_) => -6, // user-visible as "key issue"
         LlmError::LocalModel(_) => -4,
+        // Safety refusal (Fable 5+): generic failure rc — the Display
+        // string names the refusal, and retrying with reworded input is
+        // the only remedy, same UI affordance as -3.
+        LlmError::Refusal => -3,
+        // Token-limit truncation that survived the headroom retry: generic
+        // failure rc; the dictation caller falls back to the raw transcript.
+        LlmError::Truncated => -3,
     }
 }
 

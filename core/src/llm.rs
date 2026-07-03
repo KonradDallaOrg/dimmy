@@ -62,9 +62,14 @@ fences, no preamble like \"Sure\" or \"Here is\".\n\
 2. NEVER answer questions and NEVER converse. You transform or replace text; you do not chat. If \
 SELECTED_TEXT contains a question and SPOKEN asks to e.g. \"make it polite\", you rewrite the \
 question politely — you do NOT answer it.\n\
-3. When unsure between CASE A and CASE B, treat SPOKEN as an INSTRUCTION only if it clearly \
-describes an operation to perform ON the text; otherwise treat it as REPLACEMENT content.\n\
-4. Keep the user's language unless the instruction explicitly asks to translate.\n\n\
+3. When unsure between CASE A and CASE B, DEFAULT TO CASE A: the user selected text and invoked \
+command mode, which almost always means SPOKEN is an instruction about the selection. Choose \
+CASE B only when SPOKEN clearly reads as dictated prose meant to stand in place of the selection \
+and names no operation on the text.\n\
+4. SPOKEN may be in ANY language. An instruction in any language is still an instruction \
+(\"rendilo più formale\" = \"make this more formal\", \"traduci in inglese\" = \"translate to \
+English\").\n\
+5. Keep the user's language unless the instruction explicitly asks to translate.\n\n\
 SELECTED_TEXT:\n[SELECTION]\n{selection}\n[/SELECTION]\n\n\
 SPOKEN:\n[SPOKEN]\n{spoken}\n[/SPOKEN]",
         selection = selection,
@@ -73,10 +78,14 @@ SPOKEN:\n[SPOKEN]\n{spoken}\n[/SPOKEN]",
 }
 
 /// Command-mode prompt for the NO-SELECTION case: the user invoked command
-/// mode with nothing selected, so the spoken words are an instruction to
-/// GENERATE text that gets INSERTED at the cursor (not a transform of an
-/// existing selection). Same hard "output only the text" contract as the
-/// transform prompt so the host can paste it straight in.
+/// mode with nothing selected, so the spoken words are ALWAYS an instruction
+/// to GENERATE text that gets INSERTED at the cursor. There is deliberately
+/// NO "echo the spoken words" case here: dictating literal content is what
+/// the plain dictation hotkey does, and the old echo tie-breaker made a
+/// mis-classified instruction come back as a plain transcription — the
+/// "command mode just transcribed me" report (2026-07-03). Same hard
+/// "output only the text" contract as the transform prompt so the host can
+/// paste it straight in.
 pub fn build_command_generate_prompt(spoken: &str) -> String {
     assert!(
         !spoken.is_empty(),
@@ -84,23 +93,24 @@ pub fn build_command_generate_prompt(spoken: &str) -> String {
     );
     format!(
         "\
-You are a text-generation engine inside a dictation app. The user has placed their cursor in an \
-application (nothing is selected) and SPOKEN out loud. Your job is to produce the text that should \
-be INSERTED at the cursor.\n\n\
-Decide which case applies:\n\
-CASE A — SPOKEN is an INSTRUCTION to produce something (e.g. \"write a polite decline to this \
-meeting\", \"draft a tweet about our launch\", \"give me three subject line ideas\", \"a haiku \
-about rain\"). → Output the requested content, ready to paste.\n\
-CASE B — SPOKEN is literal CONTENT the user dictated to insert as-is (e.g. \"the quick brown fox\"). \
-→ Output SPOKEN, lightly cleaned up (capitalization + punctuation only), nothing else.\n\n\
+You are a text-generation engine inside a dictation app. The user invoked COMMAND MODE — not \
+plain dictation — with nothing selected, and SPOKEN out loud. Your job is to produce the text \
+that should be INSERTED at the cursor.\n\n\
+SPOKEN is ALWAYS an instruction describing the text to produce (e.g. \"write a polite decline \
+to this meeting\", \"draft a tweet about our launch\", \"scrivi una mail di ringraziamento a \
+Marco\", \"give me three subject line ideas\"). Execute it and output the requested content, \
+ready to paste.\n\n\
 ABSOLUTE RULES — violating any is a critical failure:\n\
 1. Output ONLY the resulting text. Nothing before it, nothing after it. No quotes, no markdown \
 fences, no preamble like \"Sure\" or \"Here is\".\n\
 2. NEVER converse and NEVER add commentary about what you produced. You generate insertable text; \
 you do not chat.\n\
-3. When unsure between CASE A and CASE B, treat SPOKEN as an INSTRUCTION only if it clearly asks \
-you to produce or draft something; otherwise output it as literal content.\n\
-4. Keep the user's language unless the instruction explicitly asks for another one.\n\n\
+3. NEVER just repeat SPOKEN back cleaned up. The user chose command mode because they want the \
+instruction EXECUTED — plain dictation is a different hotkey. If SPOKEN directly describes \
+content (e.g. \"a two-line thank-you note to the team\"), write that content, not the words of \
+the request.\n\
+4. SPOKEN may be in ANY language. An instruction in any language is still an instruction.\n\
+5. Write the output in SPOKEN's language unless the instruction asks for another one.\n\n\
 SPOKEN:\n[SPOKEN]\n{spoken}\n[/SPOKEN]",
         spoken = spoken,
     )
@@ -477,7 +487,9 @@ pub fn build_system_prompt(
         ),
         Some(lang) => format!(
             "Then translate the ENTIRE result into {name}. The final output MUST \
-             be written in {name} only — never leave it in the source language.",
+             be written in {name} only — never leave it in the source language. \
+             This is a TRANSLATION, not a summary: preserve EVERY sentence and \
+             detail of the input.",
             name = lang_name(lang)
         ),
         None => String::new(),
@@ -528,6 +540,8 @@ struct ChatResponse {
 #[derive(serde::Deserialize)]
 struct ChatChoice {
     message: ChatMessage,
+    #[serde(default)]
+    finish_reason: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -686,6 +700,75 @@ pub async fn process_text(
     // Route to Anthropic Messages API if URL points to anthropic.com
     let is_anthropic = crate::provider::Provider::from_url(api_url).is_anthropic();
 
+    // Providers REPORT when the answer was cut at the token limit
+    // (finish_reason="length" / stop_reason="max_tokens"). Ignoring that
+    // signal pasted half an email into the user's mail client — burned
+    // 2026-07-03 (gemini-3.5-flash translate, 264→83 chars, cut
+    // mid-sentence: the thinking trace ate the tight (input*3) budget).
+    // On truncation: retry ONCE with 4× headroom; if even that is cut,
+    // ERROR — the caller falls back to the raw transcript, which is
+    // complete. Never silently return a half answer.
+    let (content, truncated) = send_process_text_request(
+        &client,
+        api_url,
+        model,
+        api_key,
+        &system_prompt,
+        &user_message,
+        max_tokens,
+        is_anthropic,
+        text,
+    )
+    .await?;
+    let content = if truncated {
+        let retry_budget = (max_tokens * 4).clamp(16_384, 99_000);
+        crate::log(&format!(
+            "[LLM] WARN: output truncated at the token limit (budget={}) — retrying once with budget={}",
+            max_tokens, retry_budget
+        ));
+        let (retry_content, still_truncated) = send_process_text_request(
+            &client,
+            api_url,
+            model,
+            api_key,
+            &system_prompt,
+            &user_message,
+            retry_budget,
+            is_anthropic,
+            text,
+        )
+        .await?;
+        if still_truncated {
+            crate::log("[LLM] ERROR: output truncated even after the headroom retry — refusing to return a partial answer");
+            return Err(crate::error::LlmError::Truncated);
+        }
+        retry_content
+    } else {
+        content
+    };
+
+    Ok(strip_output_scaffolding(&content))
+}
+
+/// One dispatch of the enhancement/translate request. Returns the answer
+/// text plus whether the provider reported it was TRUNCATED at the token
+/// limit (finish_reason="length" on OpenAI-compat, stop_reason="max_tokens"
+/// on Anthropic) — the caller decides whether to retry with more headroom.
+/// `fallback_text` preserves the historic pass-through when the response
+/// carries no content field at all.
+#[allow(clippy::too_many_arguments)]
+async fn send_process_text_request(
+    client: &reqwest::Client,
+    api_url: &str,
+    model: &str,
+    api_key: &str,
+    system_prompt: &str,
+    user_message: &str,
+    max_tokens: u64,
+    is_anthropic: bool,
+    fallback_text: &str,
+) -> Result<(String, bool), crate::error::LlmError> {
+    let model_lc = model.to_ascii_lowercase();
     let response = if is_anthropic {
         let body = serde_json::json!({
             "model": model,
@@ -708,7 +791,7 @@ pub async fn process_text(
             { "role": "system", "content": system_prompt },
             { "role": "user", "content": user_message },
         ]);
-        let body = if openai_reasoning_shape(api_url, &model.to_ascii_lowercase()) {
+        let body = if openai_reasoning_shape(api_url, &model_lc) {
             // gpt-5 / o-series: max_completion_tokens, no temperature. Reasoning
             // models spend tokens on an internal trace BEFORE the visible answer,
             // so the (input*3).max(512) budget gets entirely consumed by reasoning
@@ -718,6 +801,17 @@ pub async fn process_text(
             serde_json::json!({
                 "model": model,
                 "max_completion_tokens": max_tokens.max(8192),
+                "messages": msgs,
+            })
+        } else if gemini_proxy_reasoning_shape(api_url, &model_lc) {
+            // Gemini 3.x / Pro via the OpenAI-compat proxy: same reasoning-tax
+            // problem as gpt-5 — the model's internal thinking counts against
+            // max_tokens, so the tight (input*3) budget truncates the visible
+            // answer mid-sentence. Burned 2026-07-03 (translate 264→83 chars).
+            serde_json::json!({
+                "model": model,
+                "temperature": 0.3,
+                "max_tokens": max_tokens.max(8192),
                 "messages": msgs,
             })
         } else {
@@ -749,24 +843,30 @@ pub async fn process_text(
         });
     }
 
-    let content = if is_anthropic {
-        // Anthropic: { "content": [{ "type": "text", "text": "..." }] }
+    if is_anthropic {
+        // Anthropic: { "content": [{ "type": "text", "text": "..." }], "stop_reason": "..." }
         let result: serde_json::Value = response.json().await?;
-        result["content"][0]["text"]
+        let truncated = result["stop_reason"].as_str() == Some("max_tokens");
+        let content = result["content"][0]["text"]
             .as_str()
-            .unwrap_or(text)
+            .unwrap_or(fallback_text)
             .trim()
-            .to_string()
+            .to_string();
+        Ok((content, truncated))
     } else {
         let result: ChatResponse = response.json().await?;
-        result
+        let truncated = result
+            .choices
+            .first()
+            .and_then(|c| c.finish_reason.as_deref())
+            == Some("length");
+        let content = result
             .choices
             .first()
             .map(|c| c.message.content.trim().to_string())
-            .unwrap_or_else(|| text.to_string())
-    };
-
-    Ok(strip_output_scaffolding(&content))
+            .unwrap_or_else(|| fallback_text.to_string());
+        Ok((content, truncated))
+    }
 }
 
 /// Strip prompt scaffolding a weak model sometimes echoes into its answer
@@ -835,12 +935,22 @@ fn anthropic_wants_thinking(model_lc: &str) -> bool {
         || model_lc.contains("sonnet-4")
         || model_lc.contains("sonnet-5")
         || model_lc.contains("sonnet-6")
+        || model_lc.contains("fable")
 }
 
 /// True for Gemini models that benefit from extended thinking. Caller
 /// already knows the URL is Gemini-native. Match on lowercased model id.
 fn gemini_wants_thinking(model_lc: &str) -> bool {
     model_lc.contains("pro") || model_lc.starts_with("gemini-3")
+}
+
+/// Gemini 3.x / Pro reached through Google's OPENAI-COMPAT proxy
+/// (`generativelanguage.googleapis.com/v1beta/openai/...`): the model still
+/// runs its internal thinking and it counts against `max_tokens`, exactly
+/// like the gpt-5 reasoning tax — so these models need the same output
+/// headroom or the visible answer truncates mid-sentence.
+fn gemini_proxy_reasoning_shape(api_url: &str, model_lc: &str) -> bool {
+    api_url.contains("generativelanguage.googleapis.com") && gemini_wants_thinking(model_lc)
 }
 
 /// Anthropic API split: Opus 4.7+ / Sonnet 5+ removed extended-thinking
@@ -858,12 +968,18 @@ fn anthropic_uses_adaptive_thinking(model_lc: &str) -> bool {
     // legacy budget_tokens form. Opus 4.8 (per the Anthropic model docs:
     // extended thinking = No, adaptive thinking = Yes) MUST be here or the
     // recap/rewrite call 400s with the wrong thinking shape.
+    // Fable 5 (claude-fable-5, Jun 2026): thinking is ALWAYS-ON — the API
+    // accepts {type:adaptive} (or no thinking field at all) and 400s on
+    // budget_tokens/disabled. It also needs the adaptive branch's 32k
+    // max_tokens headroom or the inline reasoning trace can eat a small
+    // command/recap budget and return truncated output.
     model_lc.contains("opus-4-7")
         || model_lc.contains("opus-4.7")
         || model_lc.contains("opus-4-8")
         || model_lc.contains("opus-4.8")
         || model_lc.contains("sonnet-5")
         || model_lc.contains("sonnet-6") // future-proof
+        || model_lc.contains("fable")
 }
 
 /// OpenAI's gpt-5 / o-series reasoning models reject the classic chat body:
@@ -1091,9 +1207,16 @@ pub async fn process_raw_prompt(
         // generationConfig.thinkingConfig per the May 2026 API:
         //   - Gemini 3.x: thinkingLevel "low" | "medium" | "high"
         //   - Gemini 2.5: thinkingBudget int (128..=32768) or -1 dynamic
+        // Thinking counts against maxOutputTokens on Gemini too — give
+        // thinking models room or a 4k command/recap budget truncates.
+        let gemini_max = if wants_thinking_gemini {
+            max_tokens.max(16_000)
+        } else {
+            max_tokens
+        };
         let mut gen_config = serde_json::json!({
             "temperature": 0.3,
-            "maxOutputTokens": max_tokens,
+            "maxOutputTokens": gemini_max,
         });
         if wants_thinking_gemini {
             if model_lc.starts_with("gemini-3") {
@@ -1181,6 +1304,8 @@ pub async fn process_raw_prompt(
         #[derive(serde::Deserialize)]
         struct AnthropicResponse {
             content: Vec<AnthropicContent>,
+            #[serde(default)]
+            stop_reason: Option<String>,
         }
         #[derive(serde::Deserialize)]
         struct AnthropicContent {
@@ -1190,6 +1315,13 @@ pub async fn process_raw_prompt(
             text: Option<String>,
         }
         let parsed: AnthropicResponse = response.json().await?;
+        // Fable 5+ can decline via stop_reason=refusal on HTTP 200. Pre-output
+        // refusals carry an EMPTY content array; a mid-generation refusal may
+        // carry partial text that must be discarded. Either way, Ok("") here
+        // would surface as a silently-empty command result / recap.
+        if parsed.stop_reason.as_deref() == Some("refusal") {
+            return Err(crate::error::LlmError::Refusal);
+        }
         Ok(parsed
             .content
             .into_iter()
@@ -1296,6 +1428,26 @@ mod tests {
     }
 
     #[test]
+    fn command_transform_prompt_defaults_to_instruction_and_is_language_agnostic() {
+        let p = build_command_transform_prompt("x", "y");
+        // The user pressed the COMMAND hotkey with a selection — that
+        // declared intent must win ties. The old tie-breaker defaulted to
+        // CASE B (echo the spoken words), which made a vague/short/Italian
+        // instruction come back as a plain transcription (colleague report,
+        // 2026-07-03). Pin the flipped default.
+        assert!(
+            p.contains("DEFAULT TO CASE A"),
+            "tie-breaker must default to the instruction case"
+        );
+        // Instructions arrive in the user's language, not English. The
+        // prompt must say an instruction in ANY language counts.
+        assert!(
+            p.contains("ANY language"),
+            "must declare instruction detection language-agnostic"
+        );
+    }
+
+    #[test]
     #[should_panic(expected = "empty selection")]
     fn command_transform_prompt_rejects_empty_selection() {
         // The TRANSFORM prompt is only ever built WITH a selection — the
@@ -1319,12 +1471,26 @@ mod tests {
     }
 
     #[test]
-    fn command_generate_prompt_states_both_cases_and_output_only_rule() {
+    fn command_generate_prompt_treats_spoken_as_instruction_always() {
         let p = build_command_generate_prompt("draft a tweet");
-        // Same dual-case framing (directive vs literal content) + the
-        // output-only contract that makes paste-at-cursor safe.
-        assert!(p.contains("CASE A"), "must keep the directive case");
-        assert!(p.contains("CASE B"), "must keep the literal-content case");
+        // The command hotkey DECLARED the intent: no selection + command
+        // hotkey = execute the instruction. The old CASE B ("echo the
+        // spoken words cleaned up") duplicated plain dictation and made
+        // command mode look broken whenever the model mis-classified —
+        // the "it just transcribed me" report (2026-07-03). Pin its removal.
+        assert!(
+            !p.contains("CASE B"),
+            "generate prompt must not offer an echo case"
+        );
+        assert!(
+            p.to_ascii_lowercase().contains("always an instruction"),
+            "spoken words must be declared an instruction unconditionally"
+        );
+        // Forbid the echo failure mode explicitly.
+        assert!(p.contains("NEVER just repeat"));
+        // Instructions arrive in the user's language, not English.
+        assert!(p.contains("ANY language"));
+        // Output-only contract keeps paste-at-cursor safe.
         assert!(p.to_ascii_lowercase().contains("output only"));
         assert!(p.to_ascii_lowercase().contains("inserted at the cursor"));
     }
@@ -1674,6 +1840,16 @@ mod tests {
         assert!(!prompt.contains("Translate the output to IT."));
     }
 
+    #[test]
+    fn translate_directive_forbids_summarization() {
+        // Fast models "translate" by compressing — gemini-3.5-flash turned
+        // a 264-char email into 83 chars (2026-07-03). The directive must
+        // say out loud that translation preserves everything.
+        let prompt = build_system_prompt(LlmStyle::Off, LlmTone::None, "", "en");
+        assert!(prompt.contains("not a summary"));
+        assert!(prompt.contains("EVERY sentence"));
+    }
+
     // ── Imbruttito + translate_to override ───────────────────────────
 
     #[test]
@@ -1761,6 +1937,7 @@ mod tests {
         assert!(anthropic_wants_thinking("claude-sonnet-4-6"));
         assert!(anthropic_wants_thinking("claude-sonnet-4-5"));
         assert!(anthropic_wants_thinking("claude-sonnet-5"));
+        assert!(anthropic_wants_thinking("claude-fable-5"));
     }
 
     #[test]
@@ -1781,7 +1958,8 @@ mod tests {
         assert!(anthropic_uses_adaptive_thinking("claude-opus-4.8"));
         assert!(anthropic_uses_adaptive_thinking("claude-sonnet-5"));
         assert!(anthropic_uses_adaptive_thinking("claude-sonnet-6")); // future
-                                                                      // Older models keep the budget_tokens form
+        assert!(anthropic_uses_adaptive_thinking("claude-fable-5"));
+        // Older models keep the budget_tokens form
         assert!(!anthropic_uses_adaptive_thinking("claude-opus-4-5"));
         assert!(!anthropic_uses_adaptive_thinking("claude-opus-3-5"));
         assert!(!anthropic_uses_adaptive_thinking("claude-sonnet-4-6"));
@@ -1802,6 +1980,7 @@ mod tests {
             "claude-opus-4.7",
             "claude-sonnet-5",
             "claude-sonnet-6",
+            "claude-fable-5",
         ] {
             assert!(anthropic_wants_thinking(m), "{} should want thinking", m);
             assert!(

@@ -36,10 +36,22 @@ pub enum TranscribeError {
 
 #[derive(Debug)]
 pub enum LlmError {
-    Api { status: u16, body: String },
+    Api {
+        status: u16,
+        body: String,
+    },
     Network(String),
     NoApiKey(String),
     LocalModel(String),
+    /// The model declined the request (Anthropic `stop_reason: "refusal"`,
+    /// Fable 5+). Not an infrastructure failure — retrying the same input
+    /// won't help, rewording it may.
+    Refusal,
+    /// The provider reported the answer was cut at the output-token limit
+    /// (finish_reason="length" / stop_reason="max_tokens") even after the
+    /// headroom retry. Returning the partial text would paste half an
+    /// answer — the caller must fall back to the raw transcript instead.
+    Truncated,
 }
 
 // ── Display implementations ────────────────────────────────────────
@@ -105,6 +117,11 @@ impl std::fmt::Display for LlmError {
             Self::Network(msg) => write!(f, "request failed: {}", msg),
             Self::NoApiKey(provider) => write!(f, "no API key for LLM provider {}", provider),
             Self::LocalModel(msg) => write!(f, "local LLM model: {}", msg),
+            Self::Refusal => write!(f, "the model declined this request (safety refusal)"),
+            Self::Truncated => write!(
+                f,
+                "the model hit its output token limit (response truncated)"
+            ),
         }
     }
 }

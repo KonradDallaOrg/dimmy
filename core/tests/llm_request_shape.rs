@@ -41,6 +41,10 @@ fn anthropic_response_body(text: &str) -> Value {
 /// proxies and Groq both speak this exact shape, so a single fixture
 /// covers the whole OpenAI-compat branch.
 fn openai_response_body(text: &str) -> Value {
+    openai_response_body_with_finish(text, "stop")
+}
+
+fn openai_response_body_with_finish(text: &str, finish_reason: &str) -> Value {
     serde_json::json!({
         "id": "cmpl_test",
         "object": "chat.completion",
@@ -48,7 +52,7 @@ fn openai_response_body(text: &str) -> Value {
         "choices": [{
             "index": 0,
             "message": { "role": "assistant", "content": text },
-            "finish_reason": "stop"
+            "finish_reason": finish_reason
         }],
         "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 }
     })
@@ -198,8 +202,13 @@ async fn process_text_anthropic_translate_directive_appears_in_system() {
     let server = boot().await;
     let url = format!("{}/anthropic.com/v1/messages", server.uri());
 
+    // The directive names the LANGUAGE ("into Italian"), not the bare ISO
+    // code — small models treated "to it." as the pronoun (lang_name fix,
+    // 2026-06-19). This test had gone stale on the old wording.
     Mock::given(method("POST"))
-        .and(body_string_contains("Translate the output to it."))
+        .and(body_string_contains(
+            "translate the ENTIRE result into Italian",
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(anthropic_response_body("ciao")))
         .expect(1)
         .mount(&server)
@@ -222,7 +231,7 @@ async fn process_text_anthropic_translate_directive_appears_in_system() {
     let received = server.received_requests().await.unwrap();
     let body = body_json(&received[0]);
     let system = body["system"].as_str().unwrap();
-    assert!(system.contains("Translate the output to it."));
+    assert!(system.contains("translate the ENTIRE result into Italian"));
     // Translate path must strip the "do not translate" rule (#6) from
     // the preamble — otherwise the LLM gets two contradictory directives.
     assert!(!system.contains("Do NOT translate"));
@@ -262,7 +271,8 @@ async fn process_text_anthropic_imbruttito_with_english_emits_override_directive
     // Without the override line, the LLM has to guess which rule wins.
     assert!(system.contains("Imbruttito"));
     assert!(system.contains("OVERRIDES"));
-    assert!(system.contains("Translate the output to en."));
+    // Language NAME, not ISO code (lang_name fix, 2026-06-19).
+    assert!(system.contains("translate the ENTIRE result into English"));
 }
 
 #[tokio::test]
@@ -373,7 +383,10 @@ async fn process_text_openai_compat_carries_tone_and_translate() {
 
     Mock::given(method("POST"))
         .and(body_string_contains("formal"))
-        .and(body_string_contains("Translate the output to de."))
+        // Language NAME, not ISO code (lang_name fix, 2026-06-19).
+        .and(body_string_contains(
+            "translate the ENTIRE result into German",
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(openai_response_body("ok")))
         .expect(1)
         .mount(&server)
@@ -392,6 +405,228 @@ async fn process_text_openai_compat_carries_tone_and_translate() {
     )
     .await
     .unwrap();
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// process_text — token-limit truncation guard (burned 2026-07-03:
+// gemini-3.5-flash translate pasted half an email, cut mid-sentence)
+// ─────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn process_text_gemini3_proxy_gets_reasoning_headroom() {
+    // Gemini 3.x via the OpenAI-compat proxy runs internal thinking that
+    // counts against max_tokens — same reasoning tax as gpt-5. The tight
+    // (input*3).max(512) budget got eaten by the trace and the visible
+    // translation truncated mid-sentence. These models need >= 8192.
+    let server = boot().await;
+    let url = format!(
+        "{}/generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        server.uri()
+    );
+
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(openai_response_body("ok")))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    process_text(
+        &url,
+        "gemini-3.5-flash",
+        "k",
+        "ciao thomas scusa per il ritardo",
+        LlmStyle::Off,
+        LlmTone::None,
+        "",
+        "en",
+        "api_key",
+    )
+    .await
+    .unwrap();
+
+    let received = server.received_requests().await.unwrap();
+    let body = body_json(&received[0]);
+    assert!(
+        body["max_tokens"].as_u64().unwrap() >= 8192,
+        "gemini-3.x via OAI proxy needs reasoning headroom, got: {}",
+        body["max_tokens"]
+    );
+}
+
+#[tokio::test]
+async fn process_text_retries_with_more_headroom_when_output_truncated() {
+    // finish_reason="length" means the provider CUT the answer at the
+    // token limit. The first response below is the exact truncated paste
+    // from the 2026-07-03 incident; the guard must retry once with a
+    // bigger budget and return the complete second answer.
+    let server = boot().await;
+    let url = format!("{}/v1/chat/completions", server.uri());
+
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            openai_response_body_with_finish(
+                "Hi Thomas, sorry for the delay. I'm adding my 2 colleagues who will be able to give",
+                "length",
+            ),
+        ))
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(openai_response_body(
+            "Hi Thomas, sorry for the delay. I'm adding my two colleagues who can give you a budget answer. Thanks!",
+        )))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let out = process_text(
+        &url,
+        "llama-3.3-70b",
+        "k",
+        "ciao thomas scusa per il ritardo aggiungo i miei due colleghi",
+        LlmStyle::Off,
+        LlmTone::None,
+        "",
+        "en",
+        "api_key",
+    )
+    .await
+    .expect("retry must succeed");
+
+    assert!(
+        out.ends_with("Thanks!"),
+        "must return the COMPLETE retry answer, got: {}",
+        out
+    );
+
+    let received = server.received_requests().await.unwrap();
+    assert_eq!(received.len(), 2, "exactly one retry");
+    let first_budget = body_json(&received[0])["max_tokens"].as_u64().unwrap();
+    let retry_budget = body_json(&received[1])["max_tokens"].as_u64().unwrap();
+    assert!(
+        retry_budget >= 16_384 && retry_budget > first_budget,
+        "retry must raise the budget: {} → {}",
+        first_budget,
+        retry_budget
+    );
+}
+
+#[tokio::test]
+async fn process_text_errors_when_truncated_even_after_retry() {
+    // Both attempts cut at the limit → returning the partial text would
+    // paste half an answer. Must error instead — the FFI caller then
+    // falls back to the raw transcript (complete content, no loss).
+    let server = boot().await;
+    let url = format!("{}/v1/chat/completions", server.uri());
+
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(openai_response_body_with_finish(
+                "Hi Thomas, sorry for the",
+                "length",
+            )),
+        )
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let err = process_text(
+        &url,
+        "llama-3.3-70b",
+        "k",
+        "ciao thomas scusa per il ritardo",
+        LlmStyle::Off,
+        LlmTone::None,
+        "",
+        "en",
+        "api_key",
+    )
+    .await
+    .expect_err("double truncation must be an error, not a half answer");
+    assert!(
+        format!("{}", err).contains("truncated"),
+        "error must name the truncation, got: {}",
+        err
+    );
+}
+
+#[tokio::test]
+async fn process_text_no_retry_on_normal_stop() {
+    // finish_reason="stop" with a short answer is a LEGITIMATE short
+    // answer (e.g. summarize style) — must NOT trigger the retry.
+    let server = boot().await;
+    let url = format!("{}/v1/chat/completions", server.uri());
+
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(openai_response_body("Ok.")))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let out = process_text(
+        &url,
+        "llama-3.3-70b",
+        "k",
+        "a long dictation that produces a short legitimate answer",
+        LlmStyle::Summarize,
+        LlmTone::None,
+        "",
+        "",
+        "api_key",
+    )
+    .await
+    .unwrap();
+    assert_eq!(out, "Ok.");
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn process_text_anthropic_max_tokens_stop_reason_triggers_retry() {
+    // Same guard on the Anthropic branch: stop_reason="max_tokens" is the
+    // truncation signal there.
+    let server = boot().await;
+    let url = format!("{}/anthropic.com/v1/messages", server.uri());
+
+    let truncated = serde_json::json!({
+        "id": "msg_test", "type": "message", "role": "assistant",
+        "model": "claude-irrelevant",
+        "content": [{ "type": "text", "text": "Hi Thomas, sorry for" }],
+        "stop_reason": "max_tokens",
+        "usage": { "input_tokens": 1, "output_tokens": 1 }
+    });
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(truncated))
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(anthropic_response_body(
+                "Hi Thomas, sorry for the delay. Done.",
+            )),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let out = process_text(
+        &url,
+        "claude-haiku-4-5",
+        "k",
+        "ciao thomas scusa per il ritardo",
+        LlmStyle::Off,
+        LlmTone::None,
+        "",
+        "en",
+        "api_key",
+    )
+    .await
+    .unwrap();
+    assert_eq!(out, "Hi Thomas, sorry for the delay. Done.");
+    assert_eq!(server.received_requests().await.unwrap().len(), 2);
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -442,6 +677,79 @@ async fn process_raw_prompt_anthropic_adaptive_uses_new_thinking_shape() {
     assert!(body.get("temperature").is_none());
     assert!(body.get("top_p").is_none());
     assert!(body.get("top_k").is_none());
+}
+
+#[tokio::test]
+async fn process_raw_prompt_anthropic_fable_uses_adaptive_shape() {
+    // Fable 5's thinking is always-on: the API accepts either NO thinking
+    // field or {type: adaptive}; `budget_tokens` and `disabled` both 400.
+    // It must ride the same adaptive branch as Opus 4.7+/Sonnet 5 so it
+    // gets the 32k max_tokens headroom (thinking spends output tokens) and
+    // effort control — without the headroom a 4k command/recap budget can
+    // be eaten by the reasoning trace and come back truncated or empty.
+    let server = boot().await;
+    let url = format!("{}/anthropic.com/v1/messages", server.uri());
+
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(anthropic_response_body("# Recap")))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    process_raw_prompt(&url, "claude-fable-5", "k", "Summarize.", 4096, "api_key")
+        .await
+        .expect("dispatch should succeed");
+
+    let received = server.received_requests().await.unwrap();
+    let body = body_json(&received[0]);
+
+    assert_eq!(
+        body["thinking"]["type"], "adaptive",
+        "Fable must use the adaptive thinking shape, got: {}",
+        body
+    );
+    assert!(body["thinking"].get("budget_tokens").is_none());
+    assert_eq!(body["output_config"]["effort"], "high");
+    assert!(
+        body["max_tokens"].as_u64().unwrap() >= 32_000,
+        "adaptive models need the 32k output headroom, got: {}",
+        body["max_tokens"]
+    );
+    assert!(body.get("temperature").is_none());
+}
+
+#[tokio::test]
+async fn process_raw_prompt_anthropic_refusal_is_an_error_not_empty_text() {
+    // Fable 5 can decline a request via stop_reason=refusal with an EMPTY
+    // content array (HTTP 200). Parsing that as Ok("") would silently
+    // produce an empty command result / recap — the caller must get a
+    // categorised error it can show instead.
+    let server = boot().await;
+    let url = format!("{}/anthropic.com/v1/messages", server.uri());
+
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "msg_test",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-fable-5",
+            "content": [],
+            "stop_reason": "refusal",
+            "stop_details": { "category": "safety" },
+            "usage": { "input_tokens": 1, "output_tokens": 0 }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let err = process_raw_prompt(&url, "claude-fable-5", "k", "Summarize.", 4096, "api_key")
+        .await
+        .expect_err("a refusal must surface as an error");
+    assert!(
+        format!("{}", err).contains("refus"),
+        "error must name the refusal so the UI message is actionable, got: {}",
+        err
+    );
 }
 
 #[tokio::test]

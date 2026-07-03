@@ -716,6 +716,19 @@ final class HotkeyManager {
         // (synthetic Cmd+C round-trip; nil when nothing is selected).
         let selection = await SelectionCaptureFlow.capture()
         NSLog("[CmdMode] captured selection: \(selection != nil ? "\(selection!.count) chars" : "none")")
+        if selection == nil {
+            // Say it out loud: without this, a selection that silently
+            // failed to capture (AX denied, slow app, secure input) is
+            // indistinguishable from intentional generate-at-cursor use,
+            // and the LLM result reads like a mis-fired dictation
+            // (colleague report, 2026-07-03). Mirror of Win
+            // ShowCommandNoSelection.
+            DictToastWindow.show(
+                kind: .workflowHint,
+                title: "Command Mode: no text selected",
+                body: "Executing your instruction and inserting the result at the cursor."
+            )
+        }
 
         DispatchQueue.global(qos: .userInitiated).async {
             // Always stop recording so the session ends even with no
@@ -764,14 +777,30 @@ final class HotkeyManager {
                     return
                 }
                 guard let text = finalText, !text.isEmpty else {
-                    if finalRc == -3 {
+                    // Every failure gets a toast — until 2026-07-03 only
+                    // rc -3 did, so a broken subscription CLI (rc -2) or a
+                    // missing local model (rc -4) silently pasted NOTHING
+                    // and users concluded command mode was broken.
+                    NSLog("[CmdMode] transform failed rc=\(finalRc)")
+                    switch finalRc {
+                    case -3:
                         DictToastWindow.show(
                             kind: .error,
                             title: "Command Mode needs an LLM key",
                             body: "Open Settings → Providers & keys and connect a provider."
                         )
-                    } else {
-                        NSLog("[CmdMode] transform failed rc=\(finalRc)")
+                    case -4:
+                        DictToastWindow.show(
+                            kind: .error,
+                            title: "Command Mode needs the local model",
+                            body: "The local AI model is not downloaded. Get it in Settings → AI cleanup, or switch to a cloud provider."
+                        )
+                    default:
+                        DictToastWindow.show(
+                            kind: .error,
+                            title: "Command Mode failed",
+                            body: "The AI request did not complete (code \(finalRc)). Check Settings → Providers & keys, your connection, or your subscription login."
+                        )
                     }
                     appState.recordingState = .idle
                     self.recordingTargetApp = nil

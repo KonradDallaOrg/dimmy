@@ -1255,10 +1255,13 @@ final class AppState: ObservableObject {
     /// HotkeyManager registers a Carbon hotkey only when this is set
     /// AND the combo is valid. Pressing it flips
     /// `oneShotCommandPending = true` and starts a recording cycle —
-    /// the next stop transforms the selection (or paste-falls-back to
-    /// the spoken text), then clears the flag. The sticky `commandMode`
-    /// menu toggle is independent and never auto-cleared by this path.
-    /// Mac-only knob; persisted to UserDefaults like `dictHotkey`.
+    /// the next stop transforms the selection (or, with nothing
+    /// selected, generates from the spoken instruction via
+    /// `dimmy_command_transform`; the old paste-raw-spoken fallback was
+    /// removed in d678061), then clears the flag. The sticky
+    /// `commandMode` menu toggle is independent and never auto-cleared
+    /// by this path. Mac-only knob; persisted to UserDefaults like
+    /// `dictHotkey`.
     @Published var commandHotkey: HotkeyCombo? = nil {
         didSet {
             if let h = commandHotkey {

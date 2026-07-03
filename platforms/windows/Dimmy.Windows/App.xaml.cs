@@ -1993,6 +1993,8 @@ public partial class App : Application
                 selection = await Services.SelectionCaptureService.CaptureAsync();
                 PttLog($"CommandMode: Ctrl+C fallback = {(selection == null ? "(none)" : $"{selection.Length} chars")}");
             }
+            if (string.IsNullOrWhiteSpace(selection))
+                Services.DictNotificationService.ShowCommandNoSelection();
 
             var result = await Services.TranscriptionService.StopAndCommandAsync(selection);
 
