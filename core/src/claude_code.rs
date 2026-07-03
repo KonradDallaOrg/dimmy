@@ -285,6 +285,15 @@ fn candidate_paths_for(binary: &str) -> Vec<PathBuf> {
             push_variants(&mut paths, lad.join("AnthropicClaude").join("bin"));
             push_variants(&mut paths, lad.join("Programs").join("claude").join("bin"));
         }
+        // winget portable packages (`winget install Anthropic.ClaudeCode`)
+        // land under %LOCALAPPDATA%\Microsoft\WinGet\{Links,Packages\*}.
+        // See win_paths.rs for the two layouts + the 2026-07-03 incident.
+        // BEFORE the npm dirs: an npm shim (`claude.cmd`) survives a Node
+        // uninstall and would otherwise shadow a fresh winget install —
+        // the wizard would show green against a dead .cmd.
+        for dir in crate::win_paths::winget_bin_dirs() {
+            push_variants(&mut paths, dir);
+        }
         // npm-global install on Win lives in two possible places
         // depending on whether the user used machine-wide install
         // or per-user `npm config set prefix`.
@@ -293,12 +302,6 @@ fn candidate_paths_for(binary: &str) -> Vec<PathBuf> {
         }
         if let Ok(app_data) = std::env::var("APPDATA") {
             push_variants(&mut paths, PathBuf::from(&app_data).join("npm"));
-        }
-        // winget portable packages (`winget install Anthropic.ClaudeCode`)
-        // land under %LOCALAPPDATA%\Microsoft\WinGet\{Links,Packages\*}.
-        // See win_paths.rs for the two layouts + the 2026-07-03 incident.
-        for dir in crate::win_paths::winget_bin_dirs() {
-            push_variants(&mut paths, dir);
         }
     }
 

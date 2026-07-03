@@ -215,16 +215,20 @@ fn candidate_paths() -> Vec<PathBuf> {
                     .join("Codex")
                     .join("bin"),
             );
-            push_variants(&mut paths, PathBuf::from(&local_app_data).join("npm"));
-        }
-        if let Ok(app_data) = std::env::var("APPDATA") {
-            push_variants(&mut paths, PathBuf::from(&app_data).join("npm"));
         }
         // winget portable packages (`winget install OpenAI.Codex`) land
         // under %LOCALAPPDATA%\Microsoft\WinGet\{Links,Packages\*}. See
         // win_paths.rs for the two layouts + the 2026-07-03 incident.
+        // BEFORE the npm dirs: an npm shim (`codex.cmd`) survives a Node
+        // uninstall and would otherwise shadow a fresh winget install.
         for dir in crate::win_paths::winget_bin_dirs() {
             push_variants(&mut paths, dir);
+        }
+        if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+            push_variants(&mut paths, PathBuf::from(&local_app_data).join("npm"));
+        }
+        if let Ok(app_data) = std::env::var("APPDATA") {
+            push_variants(&mut paths, PathBuf::from(&app_data).join("npm"));
         }
     }
 

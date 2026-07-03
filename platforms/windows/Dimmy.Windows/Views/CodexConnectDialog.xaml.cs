@@ -139,11 +139,30 @@ public sealed partial class CodexConnectDialog : ContentDialog
         CommandText.Text = SelectedCommand();
     }
 
+    /// <summary>Best-effort clipboard write. SetContent throws
+    /// CLIPBRD_E_CANT_OPEN when another process holds the clipboard
+    /// open (remote-desktop and clipboard managers do this routinely);
+    /// copying is a convenience here, never worth crashing a click
+    /// handler.</summary>
+    private static bool TrySetClipboard(string text)
+    {
+        try
+        {
+            var pkg = new DataPackage();
+            pkg.SetText(text);
+            Clipboard.SetContent(pkg);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            App.Log($"CodexWizard: clipboard set failed {ex.Message}", "Codex");
+            return false;
+        }
+    }
+
     private void CopyCmd_Click(object sender, RoutedEventArgs e)
     {
-        var pkg = new DataPackage();
-        pkg.SetText(SelectedCommand());
-        Clipboard.SetContent(pkg);
+        if (!TrySetClipboard(SelectedCommand())) return;
         // Brief checkmark feedback on the icon, web-style.
         CopyCmdGlyph.Glyph = GlyphSuccess;
         _copyFeedbackTimer?.Stop();
@@ -166,9 +185,7 @@ public sealed partial class CodexConnectDialog : ContentDialog
         var cmd = SelectedCommand();
         // The page-2 info flyout promises the command on the clipboard
         // as a fallback if the terminal fails — keep that promise.
-        var pkg = new DataPackage();
-        pkg.SetText(cmd);
-        Clipboard.SetContent(pkg);
+        TrySetClipboard(cmd);
         if (TabPwsh.IsChecked == true)
             TrySpawn("powershell.exe", $"-NoExit -Command \"{cmd}\"", home);
         else if (!TrySpawn("cmd.exe", $"/K {cmd}", home))

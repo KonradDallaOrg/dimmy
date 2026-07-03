@@ -142,7 +142,11 @@ mod tests {
     /// The machine PATH always contains System32 on any real Windows
     /// box (CI runners included). If this reads empty, the registry
     /// plumbing is broken and every just-installed CLI is invisible
-    /// until app restart again.
+    /// until app restart again. System32 arriving expanded (the raw
+    /// value is `%SystemRoot%\system32`, REG_EXPAND_SZ) also pins that
+    /// RegGetValueW expansion works. No blanket "no % anywhere" pin:
+    /// entries referencing DELETED variables (a stale `%JAVA_HOME%\bin`)
+    /// legitimately stay literal — they just never pass is_file().
     #[test]
     fn registry_path_dirs_sees_the_machine_path() {
         let dirs = registry_path_dirs();
@@ -160,16 +164,6 @@ mod tests {
             "machine PATH must include System32; got:\n{}",
             joined
         );
-    }
-
-    /// REG_EXPAND_SZ values (the HKCU Path is one) must come back
-    /// expanded — a literal `%USERPROFILE%` dir would never stat true.
-    #[test]
-    fn registry_path_dirs_are_expanded() {
-        for d in registry_path_dirs() {
-            let s = d.to_string_lossy();
-            assert!(!s.contains('%'), "registry PATH entry not expanded: {}", s);
-        }
     }
 
     #[test]

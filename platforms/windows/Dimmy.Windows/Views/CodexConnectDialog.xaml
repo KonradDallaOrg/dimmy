@@ -99,6 +99,7 @@
                     Background="Transparent" BorderThickness="0" Padding="6"
                     VerticalAlignment="Center"
                     Click="CopyCmd_Click"
+                    AutomationProperties.Name="Copy command"
                     ToolTipService.ToolTip="Copy command">
               <FontIcon x:Name="CopyCmdGlyph" Glyph="&#xE8C8;" FontSize="14"
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
