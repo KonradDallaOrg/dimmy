@@ -5415,6 +5415,9 @@ fn categorize_llm_error_to_rc(err: &crate::error::LlmError) -> c_int {
         // string names the refusal, and retrying with reworded input is
         // the only remedy, same UI affordance as -3.
         LlmError::Refusal => -3,
+        // Token-limit truncation that survived the headroom retry: generic
+        // failure rc; the dictation caller falls back to the raw transcript.
+        LlmError::Truncated => -3,
     }
 }
 

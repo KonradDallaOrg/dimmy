@@ -41,6 +41,10 @@ fn anthropic_response_body(text: &str) -> Value {
 /// proxies and Groq both speak this exact shape, so a single fixture
 /// covers the whole OpenAI-compat branch.
 fn openai_response_body(text: &str) -> Value {
+    openai_response_body_with_finish(text, "stop")
+}
+
+fn openai_response_body_with_finish(text: &str, finish_reason: &str) -> Value {
     serde_json::json!({
         "id": "cmpl_test",
         "object": "chat.completion",
@@ -48,7 +52,7 @@ fn openai_response_body(text: &str) -> Value {
         "choices": [{
             "index": 0,
             "message": { "role": "assistant", "content": text },
-            "finish_reason": "stop"
+            "finish_reason": finish_reason
         }],
         "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 }
     })
@@ -401,6 +405,228 @@ async fn process_text_openai_compat_carries_tone_and_translate() {
     )
     .await
     .unwrap();
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// process_text — token-limit truncation guard (burned 2026-07-03:
+// gemini-3.5-flash translate pasted half an email, cut mid-sentence)
+// ─────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn process_text_gemini3_proxy_gets_reasoning_headroom() {
+    // Gemini 3.x via the OpenAI-compat proxy runs internal thinking that
+    // counts against max_tokens — same reasoning tax as gpt-5. The tight
+    // (input*3).max(512) budget got eaten by the trace and the visible
+    // translation truncated mid-sentence. These models need >= 8192.
+    let server = boot().await;
+    let url = format!(
+        "{}/generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        server.uri()
+    );
+
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(openai_response_body("ok")))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    process_text(
+        &url,
+        "gemini-3.5-flash",
+        "k",
+        "ciao thomas scusa per il ritardo",
+        LlmStyle::Off,
+        LlmTone::None,
+        "",
+        "en",
+        "api_key",
+    )
+    .await
+    .unwrap();
+
+    let received = server.received_requests().await.unwrap();
+    let body = body_json(&received[0]);
+    assert!(
+        body["max_tokens"].as_u64().unwrap() >= 8192,
+        "gemini-3.x via OAI proxy needs reasoning headroom, got: {}",
+        body["max_tokens"]
+    );
+}
+
+#[tokio::test]
+async fn process_text_retries_with_more_headroom_when_output_truncated() {
+    // finish_reason="length" means the provider CUT the answer at the
+    // token limit. The first response below is the exact truncated paste
+    // from the 2026-07-03 incident; the guard must retry once with a
+    // bigger budget and return the complete second answer.
+    let server = boot().await;
+    let url = format!("{}/v1/chat/completions", server.uri());
+
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            openai_response_body_with_finish(
+                "Hi Thomas, sorry for the delay. I'm adding my 2 colleagues who will be able to give",
+                "length",
+            ),
+        ))
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(openai_response_body(
+            "Hi Thomas, sorry for the delay. I'm adding my two colleagues who can give you a budget answer. Thanks!",
+        )))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let out = process_text(
+        &url,
+        "llama-3.3-70b",
+        "k",
+        "ciao thomas scusa per il ritardo aggiungo i miei due colleghi",
+        LlmStyle::Off,
+        LlmTone::None,
+        "",
+        "en",
+        "api_key",
+    )
+    .await
+    .expect("retry must succeed");
+
+    assert!(
+        out.ends_with("Thanks!"),
+        "must return the COMPLETE retry answer, got: {}",
+        out
+    );
+
+    let received = server.received_requests().await.unwrap();
+    assert_eq!(received.len(), 2, "exactly one retry");
+    let first_budget = body_json(&received[0])["max_tokens"].as_u64().unwrap();
+    let retry_budget = body_json(&received[1])["max_tokens"].as_u64().unwrap();
+    assert!(
+        retry_budget >= 16_384 && retry_budget > first_budget,
+        "retry must raise the budget: {} → {}",
+        first_budget,
+        retry_budget
+    );
+}
+
+#[tokio::test]
+async fn process_text_errors_when_truncated_even_after_retry() {
+    // Both attempts cut at the limit → returning the partial text would
+    // paste half an answer. Must error instead — the FFI caller then
+    // falls back to the raw transcript (complete content, no loss).
+    let server = boot().await;
+    let url = format!("{}/v1/chat/completions", server.uri());
+
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(openai_response_body_with_finish(
+                "Hi Thomas, sorry for the",
+                "length",
+            )),
+        )
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let err = process_text(
+        &url,
+        "llama-3.3-70b",
+        "k",
+        "ciao thomas scusa per il ritardo",
+        LlmStyle::Off,
+        LlmTone::None,
+        "",
+        "en",
+        "api_key",
+    )
+    .await
+    .expect_err("double truncation must be an error, not a half answer");
+    assert!(
+        format!("{}", err).contains("truncated"),
+        "error must name the truncation, got: {}",
+        err
+    );
+}
+
+#[tokio::test]
+async fn process_text_no_retry_on_normal_stop() {
+    // finish_reason="stop" with a short answer is a LEGITIMATE short
+    // answer (e.g. summarize style) — must NOT trigger the retry.
+    let server = boot().await;
+    let url = format!("{}/v1/chat/completions", server.uri());
+
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(openai_response_body("Ok.")))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let out = process_text(
+        &url,
+        "llama-3.3-70b",
+        "k",
+        "a long dictation that produces a short legitimate answer",
+        LlmStyle::Summarize,
+        LlmTone::None,
+        "",
+        "",
+        "api_key",
+    )
+    .await
+    .unwrap();
+    assert_eq!(out, "Ok.");
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn process_text_anthropic_max_tokens_stop_reason_triggers_retry() {
+    // Same guard on the Anthropic branch: stop_reason="max_tokens" is the
+    // truncation signal there.
+    let server = boot().await;
+    let url = format!("{}/anthropic.com/v1/messages", server.uri());
+
+    let truncated = serde_json::json!({
+        "id": "msg_test", "type": "message", "role": "assistant",
+        "model": "claude-irrelevant",
+        "content": [{ "type": "text", "text": "Hi Thomas, sorry for" }],
+        "stop_reason": "max_tokens",
+        "usage": { "input_tokens": 1, "output_tokens": 1 }
+    });
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(truncated))
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(anthropic_response_body(
+                "Hi Thomas, sorry for the delay. Done.",
+            )),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let out = process_text(
+        &url,
+        "claude-haiku-4-5",
+        "k",
+        "ciao thomas scusa per il ritardo",
+        LlmStyle::Off,
+        LlmTone::None,
+        "",
+        "en",
+        "api_key",
+    )
+    .await
+    .unwrap();
+    assert_eq!(out, "Hi Thomas, sorry for the delay. Done.");
+    assert_eq!(server.received_requests().await.unwrap().len(), 2);
 }
 
 // ─────────────────────────────────────────────────────────────────────
