@@ -198,8 +198,13 @@ async fn process_text_anthropic_translate_directive_appears_in_system() {
     let server = boot().await;
     let url = format!("{}/anthropic.com/v1/messages", server.uri());
 
+    // The directive names the LANGUAGE ("into Italian"), not the bare ISO
+    // code — small models treated "to it." as the pronoun (lang_name fix,
+    // 2026-06-19). This test had gone stale on the old wording.
     Mock::given(method("POST"))
-        .and(body_string_contains("Translate the output to it."))
+        .and(body_string_contains(
+            "translate the ENTIRE result into Italian",
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(anthropic_response_body("ciao")))
         .expect(1)
         .mount(&server)
@@ -222,7 +227,7 @@ async fn process_text_anthropic_translate_directive_appears_in_system() {
     let received = server.received_requests().await.unwrap();
     let body = body_json(&received[0]);
     let system = body["system"].as_str().unwrap();
-    assert!(system.contains("Translate the output to it."));
+    assert!(system.contains("translate the ENTIRE result into Italian"));
     // Translate path must strip the "do not translate" rule (#6) from
     // the preamble — otherwise the LLM gets two contradictory directives.
     assert!(!system.contains("Do NOT translate"));
@@ -262,7 +267,8 @@ async fn process_text_anthropic_imbruttito_with_english_emits_override_directive
     // Without the override line, the LLM has to guess which rule wins.
     assert!(system.contains("Imbruttito"));
     assert!(system.contains("OVERRIDES"));
-    assert!(system.contains("Translate the output to en."));
+    // Language NAME, not ISO code (lang_name fix, 2026-06-19).
+    assert!(system.contains("translate the ENTIRE result into English"));
 }
 
 #[tokio::test]
@@ -373,7 +379,10 @@ async fn process_text_openai_compat_carries_tone_and_translate() {
 
     Mock::given(method("POST"))
         .and(body_string_contains("formal"))
-        .and(body_string_contains("Translate the output to de."))
+        // Language NAME, not ISO code (lang_name fix, 2026-06-19).
+        .and(body_string_contains(
+            "translate the ENTIRE result into German",
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(openai_response_body("ok")))
         .expect(1)
         .mount(&server)
