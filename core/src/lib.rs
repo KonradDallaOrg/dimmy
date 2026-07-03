@@ -66,6 +66,8 @@ pub mod process_loopback;
 pub mod provider;
 pub mod telemetry;
 pub mod transcribe;
+#[cfg(target_os = "windows")]
+mod win_paths;
 
 use audio::AudioCommand;
 use std::sync::atomic::{AtomicBool, Ordering};

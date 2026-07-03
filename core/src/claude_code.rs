@@ -294,6 +294,12 @@ fn candidate_paths_for(binary: &str) -> Vec<PathBuf> {
         if let Ok(app_data) = std::env::var("APPDATA") {
             push_variants(&mut paths, PathBuf::from(&app_data).join("npm"));
         }
+        // winget portable packages (`winget install Anthropic.ClaudeCode`)
+        // land under %LOCALAPPDATA%\Microsoft\WinGet\{Links,Packages\*}.
+        // See win_paths.rs for the two layouts + the 2026-07-03 incident.
+        for dir in crate::win_paths::winget_bin_dirs() {
+            push_variants(&mut paths, dir);
+        }
     }
 
     // PATH walk — last resort because each PATH entry is stat'd.
@@ -302,6 +308,16 @@ fn candidate_paths_for(binary: &str) -> Vec<PathBuf> {
         for dir in std::env::split_paths(&path) {
             push_variants(&mut paths, dir);
         }
+    }
+
+    // Windows equivalent of the Mac login-shell fallback: the LIVE
+    // registry PATH. Installers append there + broadcast
+    // WM_SETTINGCHANGE, which never reaches this process's env — the
+    // wizard's recheck stayed blind until app restart. Walking the
+    // registry PATH catches ANY installer, present or future.
+    #[cfg(target_os = "windows")]
+    for dir in crate::win_paths::registry_path_dirs() {
+        push_variants(&mut paths, dir);
     }
 
     paths
@@ -1061,6 +1077,45 @@ mod tests {
             joined.contains(".local\\bin\\claude.exe"),
             "missing ~/.local/bin/claude.exe — native-installer users are invisible until app restart"
         );
+    }
+
+    /// `winget install Anthropic.ClaudeCode` lands under
+    /// `%LOCALAPPDATA%\Microsoft\WinGet\{Links,Packages\*}` and only
+    /// touches the registry PATH — the setup wizard's recheck froze on
+    /// "Looking for the Claude Code CLI..." until app restart
+    /// (2026-07-03). Pin that the WinGet dirs are enumerated.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn candidate_paths_includes_winget_dirs_on_windows() {
+        if std::env::var("LOCALAPPDATA").is_err() {
+            return;
+        }
+        let joined = candidate_paths()
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            joined.contains("WinGet\\Links\\claude.exe"),
+            "missing WinGet Links dir — winget-installed claude is invisible until app restart"
+        );
+    }
+
+    /// The registry PATH is the Windows stand-in for the Mac
+    /// login-shell fallback: every dir a FRESH terminal would see must
+    /// be a candidate, otherwise any installer that only updates
+    /// HKCU\Environment stays invisible to a running Dimmy.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn candidate_paths_cover_the_live_registry_path() {
+        let candidates = candidate_paths();
+        for dir in crate::win_paths::registry_path_dirs() {
+            assert!(
+                candidates.contains(&dir.join("claude.exe")),
+                "registry PATH dir {:?} missing from candidates — restart-required bug is back",
+                dir
+            );
+        }
     }
 
     #[test]
