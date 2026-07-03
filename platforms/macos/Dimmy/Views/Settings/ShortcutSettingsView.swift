@@ -5,6 +5,7 @@ struct ShortcutSettingsView: View {
     @State private var isRecording = false
     @State private var localMonitor: Any?
     @State private var globalMonitor: Any?
+    @State private var conflictError: String?
 
     /// Preset shortcuts the user can pick with a click
     private let presets: [(label: String, shortcut: ModifierShortcut)] = [
@@ -61,13 +62,18 @@ struct ShortcutSettingsView: View {
                         .foregroundColor(.secondary)
                     ForEach(presets, id: \.label) { preset in
                         Button(preset.label) {
-                            appState.shortcut = preset.shortcut
-                            syncShortcutToRust()
+                            commitShortcut(preset.shortcut)
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
                         .tint(appState.shortcut == preset.shortcut ? .accentColor : nil)
                     }
+                }
+
+                if let err = conflictError {
+                    Label(err, systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.orange)
                 }
 
                 Text("Hold the shortcut to start dictating, release to paste")
@@ -121,10 +127,48 @@ struct ShortcutSettingsView: View {
             shift: flags.contains(.shift)
         )
         if candidate.isValid {
-            appState.shortcut = candidate
-            syncShortcutToRust()
+            commitShortcut(candidate)
             stopRecording()
         }
+    }
+
+    /// Apply the new dictation chord only if it doesn't collide with the
+    /// command / dictionary / meeting hotkeys. Until 2026-07-03 this side
+    /// committed unchecked — the command recorder validates against the
+    /// dictation chord, but changing the DICTATION chord afterwards could
+    /// silently create the same overlap (dictation fires first in
+    /// HotkeyManager.handleFlagsAll, so an overlapped command chord
+    /// degrades into plain dictation of the spoken instruction).
+    private func commitShortcut(_ candidate: ModifierShortcut) {
+        if let clash = conflictLabel(candidate) {
+            conflictError = "This combo overlaps the \(clash). Pick another."
+            return
+        }
+        conflictError = nil
+        appState.shortcut = candidate
+        syncShortcutToRust()
+    }
+
+    /// Human name of the colliding hotkey, nil when the candidate is free.
+    /// fn-only chords have no Rust grammar (fn is not a std modifier) and
+    /// are skipped — same inherent limit as the command recorder's check.
+    private func conflictLabel(_ candidate: ModifierShortcut) -> String? {
+        let grammar = candidate.rustGrammar
+        guard !grammar.isEmpty else { return nil }
+        if let cmd = appState.commandHotkey, !cmd.rustGrammar.isEmpty,
+           DimmyCore.shared.hotkeyCombosConflict(grammar, cmd.rustGrammar) {
+            return "Command Mode hotkey"
+        }
+        let dictGrammar = appState.dictHotkey.rustGrammar
+        if !dictGrammar.isEmpty,
+           DimmyCore.shared.hotkeyCombosConflict(grammar, dictGrammar) {
+            return "Add-to-dictionary hotkey"
+        }
+        if let mtg = appState.meetingHotkey, !mtg.rustGrammar.isEmpty,
+           DimmyCore.shared.hotkeyCombosConflict(grammar, mtg.rustGrammar) {
+            return "Meeting hotkey"
+        }
+        return nil
     }
 
     private func stopRecording() {

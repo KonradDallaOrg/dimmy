@@ -62,9 +62,14 @@ fences, no preamble like \"Sure\" or \"Here is\".\n\
 2. NEVER answer questions and NEVER converse. You transform or replace text; you do not chat. If \
 SELECTED_TEXT contains a question and SPOKEN asks to e.g. \"make it polite\", you rewrite the \
 question politely — you do NOT answer it.\n\
-3. When unsure between CASE A and CASE B, treat SPOKEN as an INSTRUCTION only if it clearly \
-describes an operation to perform ON the text; otherwise treat it as REPLACEMENT content.\n\
-4. Keep the user's language unless the instruction explicitly asks to translate.\n\n\
+3. When unsure between CASE A and CASE B, DEFAULT TO CASE A: the user selected text and invoked \
+command mode, which almost always means SPOKEN is an instruction about the selection. Choose \
+CASE B only when SPOKEN clearly reads as dictated prose meant to stand in place of the selection \
+and names no operation on the text.\n\
+4. SPOKEN may be in ANY language. An instruction in any language is still an instruction \
+(\"rendilo più formale\" = \"make this more formal\", \"traduci in inglese\" = \"translate to \
+English\").\n\
+5. Keep the user's language unless the instruction explicitly asks to translate.\n\n\
 SELECTED_TEXT:\n[SELECTION]\n{selection}\n[/SELECTION]\n\n\
 SPOKEN:\n[SPOKEN]\n{spoken}\n[/SPOKEN]",
         selection = selection,
@@ -73,10 +78,14 @@ SPOKEN:\n[SPOKEN]\n{spoken}\n[/SPOKEN]",
 }
 
 /// Command-mode prompt for the NO-SELECTION case: the user invoked command
-/// mode with nothing selected, so the spoken words are an instruction to
-/// GENERATE text that gets INSERTED at the cursor (not a transform of an
-/// existing selection). Same hard "output only the text" contract as the
-/// transform prompt so the host can paste it straight in.
+/// mode with nothing selected, so the spoken words are ALWAYS an instruction
+/// to GENERATE text that gets INSERTED at the cursor. There is deliberately
+/// NO "echo the spoken words" case here: dictating literal content is what
+/// the plain dictation hotkey does, and the old echo tie-breaker made a
+/// mis-classified instruction come back as a plain transcription — the
+/// "command mode just transcribed me" report (2026-07-03). Same hard
+/// "output only the text" contract as the transform prompt so the host can
+/// paste it straight in.
 pub fn build_command_generate_prompt(spoken: &str) -> String {
     assert!(
         !spoken.is_empty(),
@@ -84,23 +93,24 @@ pub fn build_command_generate_prompt(spoken: &str) -> String {
     );
     format!(
         "\
-You are a text-generation engine inside a dictation app. The user has placed their cursor in an \
-application (nothing is selected) and SPOKEN out loud. Your job is to produce the text that should \
-be INSERTED at the cursor.\n\n\
-Decide which case applies:\n\
-CASE A — SPOKEN is an INSTRUCTION to produce something (e.g. \"write a polite decline to this \
-meeting\", \"draft a tweet about our launch\", \"give me three subject line ideas\", \"a haiku \
-about rain\"). → Output the requested content, ready to paste.\n\
-CASE B — SPOKEN is literal CONTENT the user dictated to insert as-is (e.g. \"the quick brown fox\"). \
-→ Output SPOKEN, lightly cleaned up (capitalization + punctuation only), nothing else.\n\n\
+You are a text-generation engine inside a dictation app. The user invoked COMMAND MODE — not \
+plain dictation — with nothing selected, and SPOKEN out loud. Your job is to produce the text \
+that should be INSERTED at the cursor.\n\n\
+SPOKEN is ALWAYS an instruction describing the text to produce (e.g. \"write a polite decline \
+to this meeting\", \"draft a tweet about our launch\", \"scrivi una mail di ringraziamento a \
+Marco\", \"give me three subject line ideas\"). Execute it and output the requested content, \
+ready to paste.\n\n\
 ABSOLUTE RULES — violating any is a critical failure:\n\
 1. Output ONLY the resulting text. Nothing before it, nothing after it. No quotes, no markdown \
 fences, no preamble like \"Sure\" or \"Here is\".\n\
 2. NEVER converse and NEVER add commentary about what you produced. You generate insertable text; \
 you do not chat.\n\
-3. When unsure between CASE A and CASE B, treat SPOKEN as an INSTRUCTION only if it clearly asks \
-you to produce or draft something; otherwise output it as literal content.\n\
-4. Keep the user's language unless the instruction explicitly asks for another one.\n\n\
+3. NEVER just repeat SPOKEN back cleaned up. The user chose command mode because they want the \
+instruction EXECUTED — plain dictation is a different hotkey. If SPOKEN directly describes \
+content (e.g. \"a two-line thank-you note to the team\"), write that content, not the words of \
+the request.\n\
+4. SPOKEN may be in ANY language. An instruction in any language is still an instruction.\n\
+5. Write the output in SPOKEN's language unless the instruction asks for another one.\n\n\
 SPOKEN:\n[SPOKEN]\n{spoken}\n[/SPOKEN]",
         spoken = spoken,
     )
@@ -1312,6 +1322,26 @@ mod tests {
     }
 
     #[test]
+    fn command_transform_prompt_defaults_to_instruction_and_is_language_agnostic() {
+        let p = build_command_transform_prompt("x", "y");
+        // The user pressed the COMMAND hotkey with a selection — that
+        // declared intent must win ties. The old tie-breaker defaulted to
+        // CASE B (echo the spoken words), which made a vague/short/Italian
+        // instruction come back as a plain transcription (colleague report,
+        // 2026-07-03). Pin the flipped default.
+        assert!(
+            p.contains("DEFAULT TO CASE A"),
+            "tie-breaker must default to the instruction case"
+        );
+        // Instructions arrive in the user's language, not English. The
+        // prompt must say an instruction in ANY language counts.
+        assert!(
+            p.contains("ANY language"),
+            "must declare instruction detection language-agnostic"
+        );
+    }
+
+    #[test]
     #[should_panic(expected = "empty selection")]
     fn command_transform_prompt_rejects_empty_selection() {
         // The TRANSFORM prompt is only ever built WITH a selection — the
@@ -1335,12 +1365,26 @@ mod tests {
     }
 
     #[test]
-    fn command_generate_prompt_states_both_cases_and_output_only_rule() {
+    fn command_generate_prompt_treats_spoken_as_instruction_always() {
         let p = build_command_generate_prompt("draft a tweet");
-        // Same dual-case framing (directive vs literal content) + the
-        // output-only contract that makes paste-at-cursor safe.
-        assert!(p.contains("CASE A"), "must keep the directive case");
-        assert!(p.contains("CASE B"), "must keep the literal-content case");
+        // The command hotkey DECLARED the intent: no selection + command
+        // hotkey = execute the instruction. The old CASE B ("echo the
+        // spoken words cleaned up") duplicated plain dictation and made
+        // command mode look broken whenever the model mis-classified —
+        // the "it just transcribed me" report (2026-07-03). Pin its removal.
+        assert!(
+            !p.contains("CASE B"),
+            "generate prompt must not offer an echo case"
+        );
+        assert!(
+            p.to_ascii_lowercase().contains("always an instruction"),
+            "spoken words must be declared an instruction unconditionally"
+        );
+        // Forbid the echo failure mode explicitly.
+        assert!(p.contains("NEVER just repeat"));
+        // Instructions arrive in the user's language, not English.
+        assert!(p.contains("ANY language"));
+        // Output-only contract keeps paste-at-cursor safe.
         assert!(p.to_ascii_lowercase().contains("output only"));
         assert!(p.to_ascii_lowercase().contains("inserted at the cursor"));
     }

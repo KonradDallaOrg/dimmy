@@ -73,6 +73,16 @@ public static class DictNotificationService
              $"The recording could not be finalised ({detail}). Check free disk space; the transcript may still be usable.");
     }
 
+    /// <summary>Command mode ran with no captured selection: the spoken
+    /// words are executed as a generate-at-cursor instruction. Saying so
+    /// kills the "it just transcribed me" confusion when a selection
+    /// silently failed to capture (colleague report, 2026-07-03).</summary>
+    public static void ShowCommandNoSelection()
+    {
+        Show("Command Mode: no text selected",
+             "Executing your instruction and inserting the result at the cursor.");
+    }
+
     /// <summary>Fired when a single dictation hits the 10 min hard cap and
     /// Dimmy auto-stops it (the audio so far is transcribed + pasted). Tells
     /// the user why it stopped and points at Meeting mode.</summary>
