@@ -454,6 +454,79 @@ async fn process_raw_prompt_anthropic_adaptive_uses_new_thinking_shape() {
 }
 
 #[tokio::test]
+async fn process_raw_prompt_anthropic_fable_uses_adaptive_shape() {
+    // Fable 5's thinking is always-on: the API accepts either NO thinking
+    // field or {type: adaptive}; `budget_tokens` and `disabled` both 400.
+    // It must ride the same adaptive branch as Opus 4.7+/Sonnet 5 so it
+    // gets the 32k max_tokens headroom (thinking spends output tokens) and
+    // effort control — without the headroom a 4k command/recap budget can
+    // be eaten by the reasoning trace and come back truncated or empty.
+    let server = boot().await;
+    let url = format!("{}/anthropic.com/v1/messages", server.uri());
+
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(anthropic_response_body("# Recap")))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    process_raw_prompt(&url, "claude-fable-5", "k", "Summarize.", 4096, "api_key")
+        .await
+        .expect("dispatch should succeed");
+
+    let received = server.received_requests().await.unwrap();
+    let body = body_json(&received[0]);
+
+    assert_eq!(
+        body["thinking"]["type"], "adaptive",
+        "Fable must use the adaptive thinking shape, got: {}",
+        body
+    );
+    assert!(body["thinking"].get("budget_tokens").is_none());
+    assert_eq!(body["output_config"]["effort"], "high");
+    assert!(
+        body["max_tokens"].as_u64().unwrap() >= 32_000,
+        "adaptive models need the 32k output headroom, got: {}",
+        body["max_tokens"]
+    );
+    assert!(body.get("temperature").is_none());
+}
+
+#[tokio::test]
+async fn process_raw_prompt_anthropic_refusal_is_an_error_not_empty_text() {
+    // Fable 5 can decline a request via stop_reason=refusal with an EMPTY
+    // content array (HTTP 200). Parsing that as Ok("") would silently
+    // produce an empty command result / recap — the caller must get a
+    // categorised error it can show instead.
+    let server = boot().await;
+    let url = format!("{}/anthropic.com/v1/messages", server.uri());
+
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "msg_test",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-fable-5",
+            "content": [],
+            "stop_reason": "refusal",
+            "stop_details": { "category": "safety" },
+            "usage": { "input_tokens": 1, "output_tokens": 0 }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let err = process_raw_prompt(&url, "claude-fable-5", "k", "Summarize.", 4096, "api_key")
+        .await
+        .expect_err("a refusal must surface as an error");
+    assert!(
+        format!("{}", err).contains("refus"),
+        "error must name the refusal so the UI message is actionable, got: {}",
+        err
+    );
+}
+
+#[tokio::test]
 async fn process_raw_prompt_anthropic_legacy_uses_budget_tokens_shape() {
     let server = boot().await;
     let url = format!("{}/anthropic.com/v1/messages", server.uri());

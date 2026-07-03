@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "generated": "2026-06-03",
+  "generated": "2026-07-03",
   "note": "Single source of truth for the cloud models Dimmy offers per provider. Embedded into the Rust core via include_str! and served to every host UI through the dimmy_model_catalog_json() FFI — Windows (System.Text.Json) and macOS (Codable) read the SAME compiled bytes, so they cannot diverge. Validate it against each provider's live /models endpoint with scripts/dev/check-model-ids.py before a release. Fields: provider 'icon' = svg asset name (Assets/Providers/<icon>.svg on Win, provider-<icon> on Mac); 'llm_url'/'stt_url' = the per-task endpoint a selected model resolves to; per-model 'tasks' drives which picker shows it (stt = Voice input, llm = dictation rewrite, recap = meeting recap). NOTE: 'recap' is only valid on Anthropic/OpenAI/Gemini models — recap dispatch derives the endpoint from the model id via Provider::from_model_id, which recognises only claude-*/gpt-*/o-series/gemini-* prefixes. A recap tag on any other provider (groq/together/openrouter/fireworks) would mis-route to the dictation endpoint, so those carry 'llm' only. 'tier' (top/balanced/fast/fastest) drives ordering + the Auto-pick default. Local models (Whisper/Parakeet/Gemma/Phi) are NOT here — they have download/bundle/feature-flag semantics and stay in host code, injected alongside this list.",
   "providers": [
     {
@@ -38,8 +38,10 @@
       "auth": "anthropic",
       "models": [
         { "id": "claude-opus-4-8", "label": "Claude Opus 4.8", "tasks": ["llm", "recap"], "tier": "top" },
+        { "id": "claude-fable-5", "label": "Claude Fable 5", "tasks": ["llm", "recap"] },
+        { "id": "claude-sonnet-5", "label": "Claude Sonnet 5", "tasks": ["llm", "recap"], "tier": "balanced" },
         { "id": "claude-opus-4-7", "label": "Claude Opus 4.7", "tasks": ["llm", "recap"] },
-        { "id": "claude-sonnet-4-6", "label": "Claude Sonnet 4.6", "tasks": ["llm", "recap"], "tier": "balanced" },
+        { "id": "claude-sonnet-4-6", "label": "Claude Sonnet 4.6", "tasks": ["llm", "recap"] },
         { "id": "claude-haiku-4-5-20251001", "label": "Claude Haiku 4.5", "tasks": ["llm", "recap"], "tier": "fast" }
       ]
     },

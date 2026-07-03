@@ -36,10 +36,17 @@ pub enum TranscribeError {
 
 #[derive(Debug)]
 pub enum LlmError {
-    Api { status: u16, body: String },
+    Api {
+        status: u16,
+        body: String,
+    },
     Network(String),
     NoApiKey(String),
     LocalModel(String),
+    /// The model declined the request (Anthropic `stop_reason: "refusal"`,
+    /// Fable 5+). Not an infrastructure failure — retrying the same input
+    /// won't help, rewording it may.
+    Refusal,
 }
 
 // ── Display implementations ────────────────────────────────────────
@@ -105,6 +112,7 @@ impl std::fmt::Display for LlmError {
             Self::Network(msg) => write!(f, "request failed: {}", msg),
             Self::NoApiKey(provider) => write!(f, "no API key for LLM provider {}", provider),
             Self::LocalModel(msg) => write!(f, "local LLM model: {}", msg),
+            Self::Refusal => write!(f, "the model declined this request (safety refusal)"),
         }
     }
 }

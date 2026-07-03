@@ -835,6 +835,7 @@ fn anthropic_wants_thinking(model_lc: &str) -> bool {
         || model_lc.contains("sonnet-4")
         || model_lc.contains("sonnet-5")
         || model_lc.contains("sonnet-6")
+        || model_lc.contains("fable")
 }
 
 /// True for Gemini models that benefit from extended thinking. Caller
@@ -858,12 +859,18 @@ fn anthropic_uses_adaptive_thinking(model_lc: &str) -> bool {
     // legacy budget_tokens form. Opus 4.8 (per the Anthropic model docs:
     // extended thinking = No, adaptive thinking = Yes) MUST be here or the
     // recap/rewrite call 400s with the wrong thinking shape.
+    // Fable 5 (claude-fable-5, Jun 2026): thinking is ALWAYS-ON — the API
+    // accepts {type:adaptive} (or no thinking field at all) and 400s on
+    // budget_tokens/disabled. It also needs the adaptive branch's 32k
+    // max_tokens headroom or the inline reasoning trace can eat a small
+    // command/recap budget and return truncated output.
     model_lc.contains("opus-4-7")
         || model_lc.contains("opus-4.7")
         || model_lc.contains("opus-4-8")
         || model_lc.contains("opus-4.8")
         || model_lc.contains("sonnet-5")
         || model_lc.contains("sonnet-6") // future-proof
+        || model_lc.contains("fable")
 }
 
 /// OpenAI's gpt-5 / o-series reasoning models reject the classic chat body:
@@ -1181,6 +1188,8 @@ pub async fn process_raw_prompt(
         #[derive(serde::Deserialize)]
         struct AnthropicResponse {
             content: Vec<AnthropicContent>,
+            #[serde(default)]
+            stop_reason: Option<String>,
         }
         #[derive(serde::Deserialize)]
         struct AnthropicContent {
@@ -1190,6 +1199,13 @@ pub async fn process_raw_prompt(
             text: Option<String>,
         }
         let parsed: AnthropicResponse = response.json().await?;
+        // Fable 5+ can decline via stop_reason=refusal on HTTP 200. Pre-output
+        // refusals carry an EMPTY content array; a mid-generation refusal may
+        // carry partial text that must be discarded. Either way, Ok("") here
+        // would surface as a silently-empty command result / recap.
+        if parsed.stop_reason.as_deref() == Some("refusal") {
+            return Err(crate::error::LlmError::Refusal);
+        }
         Ok(parsed
             .content
             .into_iter()
@@ -1761,6 +1777,7 @@ mod tests {
         assert!(anthropic_wants_thinking("claude-sonnet-4-6"));
         assert!(anthropic_wants_thinking("claude-sonnet-4-5"));
         assert!(anthropic_wants_thinking("claude-sonnet-5"));
+        assert!(anthropic_wants_thinking("claude-fable-5"));
     }
 
     #[test]
@@ -1781,7 +1798,8 @@ mod tests {
         assert!(anthropic_uses_adaptive_thinking("claude-opus-4.8"));
         assert!(anthropic_uses_adaptive_thinking("claude-sonnet-5"));
         assert!(anthropic_uses_adaptive_thinking("claude-sonnet-6")); // future
-                                                                      // Older models keep the budget_tokens form
+        assert!(anthropic_uses_adaptive_thinking("claude-fable-5"));
+        // Older models keep the budget_tokens form
         assert!(!anthropic_uses_adaptive_thinking("claude-opus-4-5"));
         assert!(!anthropic_uses_adaptive_thinking("claude-opus-3-5"));
         assert!(!anthropic_uses_adaptive_thinking("claude-sonnet-4-6"));
@@ -1802,6 +1820,7 @@ mod tests {
             "claude-opus-4.7",
             "claude-sonnet-5",
             "claude-sonnet-6",
+            "claude-fable-5",
         ] {
             assert!(anthropic_wants_thinking(m), "{} should want thinking", m);
             assert!(
