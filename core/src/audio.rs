@@ -310,7 +310,35 @@ pub enum AudioCommand {
     PushLoopback(Vec<f32>, u32),
 }
 
-/// List available input device names.
+/// Cached input-device names, refreshed by every LIVE enumeration
+/// (`list_input_devices`) and seeded once at init. Exists so that
+/// `dimmy_get_config_json` — called on hot paths like the post-meeting
+/// recap kickoff — never touches the audio HAL: on macOS 26.x a CoreAudio
+/// enumeration issued while the meeting's streams + system-audio tap are
+/// tearing down can block FOREVER on the HAL's process-global lock, which
+/// froze the recap of every >10-min meeting (burned 2026-07-03).
+static INPUT_DEVICES_CACHE: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Non-blocking snapshot of the last enumerated input-device list.
+/// Config-JSON consumers read this; the pickers that must be current
+/// call `list_input_devices()` (user-driven, safe timing) which
+/// refreshes it.
+pub fn cached_input_devices() -> Vec<String> {
+    INPUT_DEVICES_CACHE
+        .lock()
+        .map(|c| c.clone())
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+pub(crate) fn set_cached_input_devices_for_test(devices: Vec<String>) {
+    if let Ok(mut c) = INPUT_DEVICES_CACHE.lock() {
+        *c = devices;
+    }
+}
+
+/// List available input device names (LIVE HAL enumeration; refreshes
+/// the cache above).
 ///
 /// Returns an empty list when `DIMMY_FORCE_CPU=1` is set: that flag marks
 /// a headless/CI environment where Windows WASAPI's `EnumAudioEndpoints`
@@ -323,9 +351,14 @@ pub fn list_input_devices() -> Vec<String> {
         return Vec::new();
     }
     let host = cpal::default_host();
-    host.input_devices()
+    let devices: Vec<String> = host
+        .input_devices()
         .map(|devs| devs.filter_map(|d| d.name().ok()).collect())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    if let Ok(mut c) = INPUT_DEVICES_CACHE.lock() {
+        *c = devices.clone();
+    }
+    devices
 }
 
 /// Spawn a dedicated audio capture thread.
@@ -443,11 +476,19 @@ pub fn spawn_audio_thread(
                         // Long-dictation guardrail. The pill dictation buffer
                         // has no draining worker, so a marathon dictation grows
                         // unbounded → memory pressure (macOS whole-system freeze,
-                        // 2026-06-30). Gated on meeting-inactive because a
-                        // meeting's `audio_buffer` also grows by design. Emit
-                        // host-facing events; the host stops + pastes + offers
-                        // Meeting mode. Event-driven — no host polling timer.
-                        if !crate::ffi::meeting_is_active() {
+                        // 2026-06-30). Gated on an actual LIVE DICTATION, not
+                        // just meeting-inactive: `dimmy_meeting_stop` takes the
+                        // MEETING option before the buffers are cleared, so a
+                        // meeting-inactive check alone saw a stale >10-min
+                        // meeting buffer during every long-meeting stop and
+                        // fired a spurious dictation.max_duration (burned
+                        // 2026-07-03). The recording flag is set only by
+                        // dictation starts, so it is false for the entire
+                        // meeting lifecycle including the stop window. The
+                        // meeting check stays as negative-space belt.
+                        if crate::ffi::dictation_recording_active()
+                            && !crate::ffi::meeting_is_active()
+                        {
                             let buf_len = buffer.lock().map(|b| b.len()).unwrap_or(0);
                             let (warn, stop) = dictation_duration_events(
                                 buf_len,

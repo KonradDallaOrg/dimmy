@@ -386,6 +386,11 @@ fn dimmy_init_inner() -> c_int {
         input_gain_atomic.clone(),
         loopback_gain_atomic.clone(),
     );
+    // Seed the device-name cache once, while nothing is capturing or
+    // tearing down — init is the one moment a live HAL enumeration is
+    // guaranteed safe. From here on, config snapshots read the cache
+    // and only the user-driven picker calls re-enumerate.
+    let _ = crate::audio::list_input_devices();
 
     let app_state = AppState {
         recording: Mutex::new(false),
@@ -1711,7 +1716,13 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         "shortcut_mode": *st.shortcut_mode.lock().unwrap_or_else(|e| e.into_inner()),
         "shortcut": *st.shortcut.lock().unwrap_or_else(|e| e.into_inner()),
         "selected_device": *st.selected_device.lock().unwrap_or_else(|e| e.into_inner()),
-        "devices": crate::audio::list_input_devices(),
+        // CACHED, never a live HAL call: this getter runs on hot paths
+        // (post-meeting recap model pick) where a live CoreAudio
+        // enumeration can wedge forever against in-flight stream/tap
+        // teardown on macOS 26.x — froze every >10-min meeting recap
+        // (burned 2026-07-03). Seeded at init; refreshed by the
+        // user-driven dimmy_list_devices_json / list_input_devices calls.
+        "devices": crate::audio::cached_input_devices(),
         "llm_enabled": *st.llm_enabled.lock().unwrap_or_else(|e| e.into_inner()),
         "llm_style": st.llm_style.lock().map(|s| s.as_str().to_string()).unwrap_or_default(),
         "llm_tone": st.llm_tone.lock().map(|t| t.as_str().to_string()).unwrap_or_default(),
@@ -3725,6 +3736,12 @@ pub unsafe extern "C" fn dimmy_meeting_stop(out_buf: *mut c_char, buf_len: c_int
     }
 
     let result = session.stop();
+    // Release the whole-meeting capture buffers NOW: nothing reads them
+    // after the worker join (AudioCommand::Stop tears down streams but
+    // never clears, and the next Start clears-then-fills). Leaving them
+    // kept ~0.6-1.3 GB resident after every long meeting AND left a
+    // stale giant buffer for anything that inspects buffer length.
+    clear_capture_buffers(st);
     let json = serde_json::json!({
         "id": result.id,
         "dir": result.dir.to_string_lossy(),
@@ -3735,6 +3752,19 @@ pub unsafe extern "C" fn dimmy_meeting_stop(out_buf: *mut c_char, buf_len: c_int
     })
     .to_string();
     write_to_buf(&json, out_buf, buf_len)
+}
+
+/// Drop the shared capture buffers' contents and reclaim their heap
+/// allocations. Called from `dimmy_meeting_stop` after the worker join;
+/// safe because the audio streams were already sent Stop and the meeting
+/// worker (sole consumer of the cursors) has exited.
+fn clear_capture_buffers(st: &AppState) {
+    for buf in [&st.audio_buffer, &st.audio_buffer_secondary] {
+        if let Ok(mut b) = buf.lock() {
+            b.clear();
+            b.shrink_to_fit();
+        }
+    }
 }
 
 /// Persist the post-process LLM artefacts (recap, actions JSON,
@@ -3822,6 +3852,23 @@ pub extern "C" fn dimmy_meeting_is_active() -> c_int {
 /// buffer-size guard has to skip while a meeting is live.
 pub fn meeting_is_active() -> bool {
     MEETING.lock().map(|g| g.is_some()).unwrap_or(false)
+}
+
+/// Is a DICTATION recording live right now? Reads the same `recording`
+/// flag `dimmy_start_recording` sets and `dimmy_stop_recording` clears.
+/// Meetings never touch that flag (dictation is blocked with rc -7 while
+/// a meeting runs), so this is false for the ENTIRE lifetime of a
+/// meeting — including the microseconds inside `dimmy_meeting_stop`
+/// after `MEETING.take()` where `meeting_is_active()` already reads
+/// false but the shared buffer still holds the whole meeting. Gating
+/// the long-dictation guardrail on this kills the spurious
+/// `dictation.max_duration` that fired on every >10-min meeting stop
+/// (burned 2026-07-03). Pre-init → false.
+pub fn dictation_recording_active() -> bool {
+    GLOBAL_STATE
+        .get()
+        .and_then(|st| st.recording.lock().ok().map(|r| *r))
+        .unwrap_or(false)
 }
 
 /// Pause the in-flight meeting. While paused, the meeting worker
@@ -10136,6 +10183,130 @@ mod tests {
         let state =
             last_meeting_state_event(&events).expect("meeting_state event must be in the capture");
         assert_eq!(state, (true, false), "running ⇒ active=true, paused=false");
+    }
+
+    // ── Long-dictation guardrail vs stale meeting buffer ───────────
+    // `dimmy_meeting_stop` takes MEETING before the shared buffer is
+    // cleared, so a meeting-inactive gate alone saw a stale >10-min
+    // meeting buffer during every long-meeting stop and emitted a
+    // spurious dictation.long_warning + dictation.max_duration pair
+    // (2026-07-03). The gate must require a LIVE dictation.
+
+    #[test]
+    #[serial]
+    fn guardrail_ignores_stale_meeting_buffer_and_fires_only_for_live_dictation() {
+        ensure_test_state();
+        reset_event_capture();
+
+        // >10 min of samples in the shared buffer, MEETING none, NO
+        // dictation live — the exact post-meeting-stop state.
+        let big = vec![0f32; 601 * crate::audio::MEETING_CANONICAL_RATE as usize];
+        let buffer = Arc::new(Mutex::new(big));
+        let secondary: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+        let gain = Arc::new(std::sync::atomic::AtomicU32::new(1.0f32.to_bits()));
+        let lgain = Arc::new(std::sync::atomic::AtomicU32::new(1.0f32.to_bits()));
+        if let Ok(mut r) = state().recording.lock() {
+            *r = false;
+        }
+        // No AudioCommand::Start is ever sent: the worker only runs its
+        // 1 s heartbeat (no cpal device is touched — CI-safe).
+        let tx = crate::audio::spawn_audio_thread(buffer.clone(), secondary, gain, lgain);
+        std::thread::sleep(std::time::Duration::from_millis(2500));
+        let quiet = captured_events_slot()
+            .lock()
+            .map(|v| v.clone())
+            .unwrap_or_default();
+        assert!(
+            !quiet
+                .iter()
+                .any(|e| e.contains("dictation.long_warning")
+                    || e.contains("dictation.max_duration")),
+            "guardrail fired on a stale meeting buffer with no live dictation: {:?}",
+            quiet
+        );
+
+        // Same giant buffer, but now a dictation IS live → both
+        // thresholds fire (one tick — both latches are cold).
+        if let Ok(mut r) = state().recording.lock() {
+            *r = true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1800));
+        if let Ok(mut r) = state().recording.lock() {
+            *r = false;
+        }
+        let events = drain_event_capture();
+        drop(tx); // channel disconnect → worker thread exits
+        assert!(
+            events.iter().any(|e| e.contains("dictation.long_warning")),
+            "live dictation past 5 min must warn: {:?}",
+            events
+        );
+        assert!(
+            events.iter().any(|e| e.contains("dictation.max_duration")),
+            "live dictation past 10 min must hard-stop: {:?}",
+            events
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn dictation_recording_active_tracks_the_recording_flag() {
+        ensure_test_state();
+        if let Ok(mut r) = state().recording.lock() {
+            *r = false;
+        }
+        assert!(!dictation_recording_active());
+        if let Ok(mut r) = state().recording.lock() {
+            *r = true;
+        }
+        assert!(dictation_recording_active());
+        if let Ok(mut r) = state().recording.lock() {
+            *r = false;
+        }
+    }
+
+    /// The config snapshot must NEVER enumerate the audio HAL: a live
+    /// CoreAudio enumeration during meeting-stream teardown wedged the
+    /// post-meeting recap forever on macOS 26.x (2026-07-03). Devices
+    /// come from the init-seeded cache.
+    #[test]
+    #[serial]
+    fn config_json_devices_come_from_cache_not_live_hal() {
+        ensure_test_state();
+        crate::audio::set_cached_input_devices_for_test(vec!["Cache Mic".to_string()]);
+        let mut buf = vec![0u8; 1 << 16];
+        let len = dimmy_get_config_json(buf.as_mut_ptr() as *mut c_char, buf.len() as c_int);
+        assert!(len > 0, "config json must serialize");
+        let json: serde_json::Value =
+            serde_json::from_slice(&buf[..len as usize]).expect("config json must parse");
+        assert_eq!(
+            json["devices"],
+            serde_json::json!(["Cache Mic"]),
+            "devices must come from the cache, not a live HAL enumeration"
+        );
+    }
+
+    /// Meeting stop must release the whole-meeting capture buffers —
+    /// they held 0.6-1.3 GB after every long meeting.
+    #[test]
+    #[serial]
+    fn clear_capture_buffers_releases_meeting_audio() {
+        ensure_test_state();
+        let st = state();
+        if let Ok(mut b) = st.audio_buffer.lock() {
+            b.extend_from_slice(&[0.1f32; 1000]);
+        }
+        if let Ok(mut b) = st.audio_buffer_secondary.lock() {
+            b.extend_from_slice(&[0.2f32; 1000]);
+        }
+        clear_capture_buffers(st);
+        assert_eq!(st.audio_buffer.lock().unwrap().len(), 0);
+        assert_eq!(st.audio_buffer_secondary.lock().unwrap().len(), 0);
+        assert_eq!(
+            st.audio_buffer.lock().unwrap().capacity(),
+            0,
+            "heap must be reclaimed, not just truncated"
+        );
     }
 
     #[test]

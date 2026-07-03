@@ -145,8 +145,9 @@ extension DimmyCore {
     }
 
     /// Stop the active meeting. Returns the parsed JSON dictionary, or
-    /// nil if no meeting is active. Blocking up to ~1s — call from a
-    /// background thread.
+    /// nil if no meeting is active. Blocking for the worker's final
+    /// chunk drain — typically ~1 s, but SECONDS-to-tens-of-seconds on
+    /// long meetings with slow STT. Call from a background thread only.
     func meetingStop() -> MeetingResult? {
         guard isInitialized else { return nil }
         let bufLen: Int32 = 1 << 22  // 4 MB transcript buffer

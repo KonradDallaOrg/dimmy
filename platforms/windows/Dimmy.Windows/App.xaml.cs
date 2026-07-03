@@ -129,7 +129,13 @@ public partial class App : Application
     /// nudge toward Meeting mode without interrupting the recording.</summary>
     private void OnDictationLongWarning()
     {
-        try { Services.DictNotificationService.ShowLongDictationWarning(); }
+        try
+        {
+            // Same live-dictation gate as OnDictationMaxDuration below.
+            if (!_appViewModel.IsRecording && !_pttStarted)
+                return;
+            Services.DictNotificationService.ShowLongDictationWarning();
+        }
         catch (Exception ex) { PttLog($"OnDictationLongWarning exc: {ex.Message}"); }
     }
 
@@ -141,9 +147,15 @@ public partial class App : Application
     {
         try
         {
+            // Toast + log only when a dictation is actually live: a
+            // spurious event (the pre-fix core raced this during every
+            // >10-min meeting stop) showed "Dictation stopped at 10 min"
+            // while the user was wrapping up a MEETING — wrong message,
+            // misleading ptt.log line (2026-07-03).
+            if (!_appViewModel.IsRecording && !_pttStarted)
+                return;
             PttLog("dictation.max_duration — auto-stopping the runaway dictation");
-            if (_appViewModel.IsRecording || _pttStarted)
-                await StopAndProcess();
+            await StopAndProcess();
             _pttStarted = false;
             Services.DictNotificationService.ShowLongDictationCapped();
         }
