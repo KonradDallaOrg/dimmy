@@ -6,8 +6,9 @@
   PageNPanel visibility + relabels the dialog buttons per page. Mirror of
   CodexConnectDialog.
 
-    Page 1 - Install : pick an install command (winget / PowerShell / npm),
-                       Copy -> auto-advance.
+    Page 1 - Install : pick an install command (winget / PowerShell / npm);
+                       the command updates with the tab, a copy icon sits
+                       next to it, footer "Next" advances.
     Page 2 - Run     : Install now -> opens a terminal that auto-runs the
                        command, then auto-advance.
     Page 3 - Finish  : poll for the claude binary, sign in if needed,
@@ -83,22 +84,32 @@
         </StackPanel>
 
         <Border Background="{ThemeResource ControlAltFillColorTertiaryBrush}"
-                CornerRadius="4" Padding="12,10,12,10">
-          <TextBlock x:Name="CommandText"
-                     Text="winget install Anthropic.ClaudeCode"
-                     FontFamily="Consolas, Menlo, monospace"
-                     FontSize="13" TextWrapping="Wrap"
-                     IsTextSelectionEnabled="True"/>
+                CornerRadius="4" Padding="12,6,6,6">
+          <Grid ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock x:Name="CommandText"
+                       Text="winget install Anthropic.ClaudeCode"
+                       FontFamily="Consolas, Menlo, monospace"
+                       FontSize="13" TextWrapping="Wrap"
+                       VerticalAlignment="Center"
+                       IsTextSelectionEnabled="True"/>
+            <Button x:Name="CopyCmdBtn" Grid.Column="1"
+                    Background="Transparent" BorderThickness="0" Padding="6"
+                    VerticalAlignment="Center"
+                    Click="CopyCmd_Click"
+                    ToolTipService.ToolTip="Copy command">
+              <FontIcon x:Name="CopyCmdGlyph" Glyph="&#xE8C8;" FontSize="14"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+            </Button>
+          </Grid>
         </Border>
 
         <HyperlinkButton Content="See Anthropic's official install page"
                          NavigateUri="https://github.com/anthropics/claude-code"
                          FontSize="12" Padding="0"/>
-
-        <Button x:Name="CopyCmdBtn" Content="Copy command and continue"
-                Click="CopyCommand_Click"
-                Style="{ThemeResource AccentButtonStyle}"
-                HorizontalAlignment="Left"/>
       </StackPanel>
 
       <!-- Page 2 - Run -->
