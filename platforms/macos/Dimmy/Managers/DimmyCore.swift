@@ -1060,12 +1060,19 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
         // Core hit the 5 min soft threshold on a single dictation. A pill
         // dictation buffers unbounded audio (no draining worker), so nudge
         // toward Meeting mode without interrupting the recording.
+        // Guarded on a live dictation: the core-side race that let this
+        // fire during a >10-min MEETING stop is fixed at the source, but
+        // a spurious event must never overwrite lastError with dictation
+        // advice mid-meeting-wrap-up (defense in depth, 2026-07-03).
+        guard appState.isRecording && !appState.meetingActive else { break }
         appState.lastError = "You have been dictating for a while. For long recordings, Meeting mode is the better tool."
 
     case "dictation.max_duration":
         // Core hit the 10 min hard cap. Stop it like a normal hotkey stop
         // (transcribes + pastes what was said), which bounds the otherwise
         // unbounded dictation buffer, then nudge toward Meeting mode.
+        // Same defense-in-depth guard as long_warning above.
+        guard appState.isRecording && !appState.meetingActive else { break }
         print("[DimmyCore] dictation.max_duration — auto-stopping the runaway dictation")
         DispatchQueue.main.async {
             HotkeyManager.shared.stopToggleRecording()
