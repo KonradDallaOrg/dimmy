@@ -14,7 +14,8 @@ namespace Dimmy.Windows.Views;
 /// modal, re-runnable. The Codex CLI is a native standalone binary (no
 /// Node.js); page 1 offers winget / PowerShell / npm install commands,
 /// defaulting to winget because it runs in plain cmd with no PowerShell 7
-/// or Node dependency. Copy and Open-terminal auto-advance; the Finish
+/// or Node dependency. Page 1 shows a copy icon next to the command and
+/// advances via the footer "Next"; Open-terminal auto-advances; the Finish
 /// page polls for the binary, drives the sign-in, and enables Done on a
 /// green status.
 /// </summary>
@@ -40,6 +41,7 @@ public sealed partial class CodexConnectDialog : ContentDialog
     private bool _codexOk;
     private bool _signInOk;
     private DispatcherQueueTimer? _pollTimer;
+    private DispatcherQueueTimer? _copyFeedbackTimer;
 
     public CodexConnectDialog()
     {
@@ -103,10 +105,11 @@ public sealed partial class CodexConnectDialog : ContentDialog
         switch (page)
         {
             case Page.Install:
-                // No footer "Next" — the blue in-content "Copy and continue"
-                // button is the single action, and it auto-advances. Keeps
-                // exactly one accent (blue) button per page.
-                PrimaryButtonText = "";
+                // Footer "Next" is the single way forward; the copy icon
+                // next to the command is optional (Install-now on page 2
+                // runs it without pasting anyway).
+                PrimaryButtonText = "Next";
+                IsPrimaryButtonEnabled = true;
                 break;
             case Page.Run:
                 PrimaryButtonText = "";
@@ -136,12 +139,39 @@ public sealed partial class CodexConnectDialog : ContentDialog
         CommandText.Text = SelectedCommand();
     }
 
-    private void CopyCommand_Click(object sender, RoutedEventArgs e)
+    /// <summary>Best-effort clipboard write. SetContent throws
+    /// CLIPBRD_E_CANT_OPEN when another process holds the clipboard
+    /// open (remote-desktop and clipboard managers do this routinely);
+    /// copying is a convenience here, never worth crashing a click
+    /// handler.</summary>
+    private static bool TrySetClipboard(string text)
     {
-        var pkg = new DataPackage();
-        pkg.SetText(SelectedCommand());
-        Clipboard.SetContent(pkg);
-        EnterPage(Page.Run);
+        try
+        {
+            var pkg = new DataPackage();
+            pkg.SetText(text);
+            Clipboard.SetContent(pkg);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            App.Log($"CodexWizard: clipboard set failed {ex.Message}", "Codex");
+            return false;
+        }
+    }
+
+    private void CopyCmd_Click(object sender, RoutedEventArgs e)
+    {
+        if (!TrySetClipboard(SelectedCommand())) return;
+        // Brief checkmark feedback on the icon, web-style.
+        CopyCmdGlyph.Glyph = GlyphSuccess;
+        _copyFeedbackTimer?.Stop();
+        var dq = DispatcherQueue.GetForCurrentThread();
+        _copyFeedbackTimer = dq.CreateTimer();
+        _copyFeedbackTimer.Interval = TimeSpan.FromSeconds(1.5);
+        _copyFeedbackTimer.IsRepeating = false;
+        _copyFeedbackTimer.Tick += (s, _) => CopyCmdGlyph.Glyph = "";
+        _copyFeedbackTimer.Start();
     }
 
     // ── Page 2 — Run ──────────────────────────────────────────────────
@@ -153,6 +183,9 @@ public sealed partial class CodexConnectDialog : ContentDialog
         // cmd for winget/npm (works everywhere), PowerShell for the irm tab.
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var cmd = SelectedCommand();
+        // The page-2 info flyout promises the command on the clipboard
+        // as a fallback if the terminal fails — keep that promise.
+        TrySetClipboard(cmd);
         if (TabPwsh.IsChecked == true)
             TrySpawn("powershell.exe", $"-NoExit -Command \"{cmd}\"", home);
         else if (!TrySpawn("cmd.exe", $"/K {cmd}", home))

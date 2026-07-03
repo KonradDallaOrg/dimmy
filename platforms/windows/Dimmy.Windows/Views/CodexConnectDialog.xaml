@@ -5,8 +5,9 @@
   Guided 3-page flow, one ContentDialog. Code-behind state machine flips
   PageNPanel visibility + relabels the dialog buttons per page.
 
-    Page 1 - Install : pick an install command (winget / PowerShell / npm),
-                       Copy -> auto-advance.
+    Page 1 - Install : pick an install command (winget / PowerShell / npm);
+                       the command updates with the tab, a copy icon sits
+                       next to it, footer "Next" advances.
     Page 2 - Run     : Open a terminal -> auto-advance. Paste + Enter there.
     Page 3 - Finish  : poll for the codex binary, sign in if needed,
                        green check -> Done.
@@ -82,22 +83,33 @@
         </StackPanel>
 
         <Border Background="{ThemeResource ControlAltFillColorTertiaryBrush}"
-                CornerRadius="4" Padding="12,10,12,10">
-          <TextBlock x:Name="CommandText"
-                     Text="winget install OpenAI.Codex"
-                     FontFamily="Consolas, Menlo, monospace"
-                     FontSize="13" TextWrapping="Wrap"
-                     IsTextSelectionEnabled="True"/>
+                CornerRadius="4" Padding="12,6,6,6">
+          <Grid ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock x:Name="CommandText"
+                       Text="winget install OpenAI.Codex"
+                       FontFamily="Consolas, Menlo, monospace"
+                       FontSize="13" TextWrapping="Wrap"
+                       VerticalAlignment="Center"
+                       IsTextSelectionEnabled="True"/>
+            <Button x:Name="CopyCmdBtn" Grid.Column="1"
+                    Background="Transparent" BorderThickness="0" Padding="6"
+                    VerticalAlignment="Center"
+                    Click="CopyCmd_Click"
+                    AutomationProperties.Name="Copy command"
+                    ToolTipService.ToolTip="Copy command">
+              <FontIcon x:Name="CopyCmdGlyph" Glyph="&#xE8C8;" FontSize="14"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+            </Button>
+          </Grid>
         </Border>
 
         <HyperlinkButton Content="See OpenAI's official install page"
                          NavigateUri="https://github.com/openai/codex"
                          FontSize="12" Padding="0"/>
-
-        <Button x:Name="CopyCmdBtn" Content="Copy command and continue"
-                Click="CopyCommand_Click"
-                Style="{ThemeResource AccentButtonStyle}"
-                HorizontalAlignment="Left"/>
       </StackPanel>
 
       <!-- Page 2 - Run -->

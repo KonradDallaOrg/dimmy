@@ -215,6 +215,16 @@ fn candidate_paths() -> Vec<PathBuf> {
                     .join("Codex")
                     .join("bin"),
             );
+        }
+        // winget portable packages (`winget install OpenAI.Codex`) land
+        // under %LOCALAPPDATA%\Microsoft\WinGet\{Links,Packages\*}. See
+        // win_paths.rs for the two layouts + the 2026-07-03 incident.
+        // BEFORE the npm dirs: an npm shim (`codex.cmd`) survives a Node
+        // uninstall and would otherwise shadow a fresh winget install.
+        for dir in crate::win_paths::winget_bin_dirs() {
+            push_variants(&mut paths, dir);
+        }
+        if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
             push_variants(&mut paths, PathBuf::from(&local_app_data).join("npm"));
         }
         if let Ok(app_data) = std::env::var("APPDATA") {
@@ -227,6 +237,15 @@ fn candidate_paths() -> Vec<PathBuf> {
         for dir in std::env::split_paths(&path) {
             push_variants(&mut paths, dir);
         }
+    }
+
+    // Windows equivalent of the Mac login-shell fallback: the LIVE
+    // registry PATH (HKCU + HKLM). Installers append there and this
+    // process's env never updates — walking the registry directly makes
+    // a just-installed codex resolve without an app restart.
+    #[cfg(target_os = "windows")]
+    for dir in crate::win_paths::registry_path_dirs() {
+        push_variants(&mut paths, dir);
     }
 
     paths
@@ -737,6 +756,33 @@ mod tests {
                 || std::env::var("LOCALAPPDATA").is_err(),
             "candidate_paths must enumerate the native Windows install dir"
         );
+    }
+
+    /// Same 2026-07-03 incident class as claude_code.rs: winget
+    /// portable packages live under WinGet\{Links,Packages\*} and only
+    /// touch the registry PATH. Pin both the WinGet enumeration and
+    /// the live-registry-PATH walk so a recheck after `winget install
+    /// OpenAI.Codex` resolves without an app restart.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn candidate_paths_includes_winget_and_registry_path() {
+        let candidates = candidate_paths();
+        let joined: String = candidates
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            joined.contains("WinGet\\Links\\codex.exe") || std::env::var("LOCALAPPDATA").is_err(),
+            "missing WinGet Links dir — winget-installed codex is invisible until app restart"
+        );
+        for dir in crate::win_paths::registry_path_dirs() {
+            assert!(
+                candidates.contains(&dir.join("codex.exe")),
+                "registry PATH dir {:?} missing from candidates — restart-required bug is back",
+                dir
+            );
+        }
     }
 
     #[test]
