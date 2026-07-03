@@ -310,6 +310,13 @@ final class PillWindowController {
             // the recap unconditionally — fixed for cross-path parity
             // with the meeting-window stop button (Win parity).
             let generateRecap = appState.meetingGenerateRecap
+            // Tear down the system-audio tap BEFORE the core stop, same
+            // ordering as the window path (MeetingViewModel.stopAndProcess).
+            // Without this, a pill/hotkey/nudge stop leaked a live tap
+            // (purple indicator stays on) AND left isRunning=true, which
+            // silently no-op'd the capture start of the NEXT meeting —
+            // burned 2026-07-03. Idempotent when capture never started.
+            SystemAudioCaptureService.shared.stop()
             await Task.detached(priority: .userInitiated) {
                 let stopResult = DimmyCore.shared.meetingStop()
                 let transcript = stopResult?.transcript

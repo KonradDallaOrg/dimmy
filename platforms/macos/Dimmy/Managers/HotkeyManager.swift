@@ -1157,6 +1157,22 @@ enum MeetingShortcut {
             // stop. Default to the app-wide intent (recap on).
             appState.meetingGenerateRecap = true
             DimmyCore.shared.trackMeetingAction(source: source)
+            // System-audio capture is HOST-driven on macOS (the Rust core
+            // only mixes what dimmy_push_loopback_audio delivers), and the
+            // "Mirror of the Windows toggle" shape above copied a platform
+            // where the core does its own WASAPI loopback. Without this
+            // kick, every background start (hotkey / status-bar / pill
+            // menu / Dock) recorded MIC-ONLY with zero [SystemAudio] log
+            // lines while the window/nudge path worked — burned 2026-07-03.
+            // Idempotent: SystemAudioCaptureService.start() no-ops when
+            // already running. On permission denial the meeting continues
+            // mic-only by contract; log it (the permission banner UI is
+            // window-only and this path has no window).
+            Task {
+                if await SystemAudioCaptureService.shared.start() == false {
+                    dimmyHostLog("[SystemAudio] background meeting: capture unavailable (permission?) — recording mic-only")
+                }
+            }
         }
     }
 }
