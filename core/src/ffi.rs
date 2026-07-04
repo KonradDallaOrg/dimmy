@@ -1634,12 +1634,20 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
                 },
                 truncated
             ));
-            emit_event(
-                "error",
-                &format!(r#"{{"message":"{}"}}"#, err_msg.replace('"', "\\\"")),
-            );
+            // The Api Display intentionally redacts the response body
+            // (privacy choke point for telemetry) — but the STT body is
+            // api-key-scrubbed and 200-char truncated at the call site
+            // and names the CAUSE (invalid key, decommissioned model).
+            // Log it here like the Deepgram path already does, or a bare
+            // "HTTP 403" is undiagnosable from dimmy.log. Burned
+            // 2026-07-04: four Groq 403s in a row, no way to tell why.
+            let http_status = if let crate::error::TranscribeError::Api { status, body } = &e {
+                log(&format!("[STT] http {} body={}", status, body));
+                Some(*status)
+            } else {
+                None
+            };
 
-            // Telemetry: transcription.failed + Sentry mirror.
             let mode_static: &'static str = if stt_mode == "local" {
                 "local"
             } else {
@@ -1650,7 +1658,22 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
             } else {
                 crate::telemetry::sanitize::provider_from_url(&api_url)
             };
-            let category = crate::telemetry::sanitize::error_category(&err_msg, None);
+            // Pass the real HTTP status so 401/403 buckets as "auth",
+            // 429 as "rate_limit", etc. — with None every HTTP failure
+            // fell through to the message-keyword fallback.
+            let category = crate::telemetry::sanitize::error_category(&err_msg, http_status);
+
+            // Structured failure event: hosts show a system toast for
+            // events carrying `source` (message-only `error` events
+            // stay pill-only — e.g. "No speech detected"). The pill
+            // flash alone proved invisible: 2026-07-04 the user retried
+            // a failing command 4x without ever seeing the reason.
+            emit_event(
+                "error",
+                &stt_error_event_payload(&err_msg, provider_static, category),
+            );
+
+            // Telemetry: transcription.failed + Sentry mirror.
             crate::telemetry::track(crate::telemetry::Event::TranscriptionFailed {
                 mode: mode_static,
                 provider: provider_static,
@@ -1661,6 +1684,19 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
             write_to_buf("", out_buf, buf_len)
         }
     }
+}
+
+/// Build the structured `error` event payload for an STT failure.
+/// `source`/`provider`/`category` are categorical (host uses them to
+/// pick a toast + hint); `message` is the redacted Display string
+/// (never the response body). JSON-escape quotes AND backslashes —
+/// provider error strings can contain either.
+fn stt_error_event_payload(message: &str, provider: &str, category: &str) -> String {
+    let escaped = message.replace('\\', "\\\\").replace('"', "\\\"");
+    format!(
+        r#"{{"message":"{}","source":"stt","provider":"{}","category":"{}"}}"#,
+        escaped, provider, category
+    )
 }
 
 /// Cancel recording without transcribing.
@@ -9477,6 +9513,25 @@ mod tests {
         }
         // Should not panic
         emit_event("test", "{}");
+    }
+
+    /// The structured STT-failure payload is a HOST CONTRACT: Win and
+    /// Mac key their failure toast off `source` and pick the hint from
+    /// `category`. Pin the shape + JSON escaping (provider error
+    /// strings can contain quotes and backslashes).
+    #[test]
+    fn stt_error_event_payload_shape_and_escaping() {
+        let p = stt_error_event_payload("HTTP 403", "groq", "auth");
+        let v: serde_json::Value = serde_json::from_str(&p).expect("payload must be valid JSON");
+        assert_eq!(v["message"], "HTTP 403");
+        assert_eq!(v["source"], "stt");
+        assert_eq!(v["provider"], "groq");
+        assert_eq!(v["category"], "auth");
+
+        let tricky = stt_error_event_payload(r#"path "C:\x" bad"#, "openai", "network");
+        let v: serde_json::Value =
+            serde_json::from_str(&tricky).expect("escaped payload must be valid JSON");
+        assert_eq!(v["message"], r#"path "C:\x" bad"#);
     }
 
     #[test]

@@ -214,6 +214,12 @@ public partial class AppViewModel : ObservableObject
         SetState(AppState.Error);
     }
 
+    /// Fires when the core emits a STRUCTURED failure (`error` event
+    /// carrying `source`): (source, provider, category, message).
+    /// Message-only `error` events (e.g. "No speech detected") stay
+    /// pill-only and do NOT fire this. Fired on the UI thread.
+    public event Action<string, string, string, string>? CoreFailure;
+
     public void UpdateChunkProgress(int current, int total)
     {
         ChunkCurrent = current;
@@ -460,6 +466,18 @@ public partial class AppViewModel : ObservableObject
                 case "error":
                     var msg = payload.GetProperty("message").GetString() ?? "Unknown error";
                     SetError(msg);
+                    // Structured failures also reach a system toast via
+                    // CoreFailure — the pill Error state alone proved
+                    // invisible (2026-07-04: four Groq HTTP 403 in a
+                    // row, the user never saw why).
+                    if (payload.TryGetProperty("source", out var srcEl))
+                    {
+                        var prov = payload.TryGetProperty("provider", out var pEl)
+                            ? (pEl.GetString() ?? "") : "";
+                        var cat = payload.TryGetProperty("category", out var cEl)
+                            ? (cEl.GetString() ?? "") : "";
+                        CoreFailure?.Invoke(srcEl.GetString() ?? "", prov, cat, msg);
+                    }
                     break;
                 case "dictation.long_warning":
                     // Core fired the 5 min soft threshold on a single dictation.
