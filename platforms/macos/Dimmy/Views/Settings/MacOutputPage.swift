@@ -286,13 +286,15 @@ struct MacOutputPage: View {
         return true
     }
 
-    /// Should we offer the "Use Anthropic subscription for recap"
-    /// toggle? Only when the recap model is Anthropic AND the user
-    /// has actually connected Claude Code. Otherwise the toggle is
-    /// either irrelevant (non-Anthropic recap) or non-actionable
-    /// (no subscription connection yet).
+    /// Should we offer the subscription Authentication picker for
+    /// recap? Only when the recap model's vendor has its CLI actually
+    /// connected: Anthropic model → Claude Code signed in, OpenAI
+    /// model → Codex signed in (Win parity: `canShowRecapSub`).
+    /// Otherwise the picker is either irrelevant (other vendor) or
+    /// non-actionable (no subscription connection yet).
     private var recapSubscriptionAvailable: Bool {
-        recapProviderTag == "anthropic" && appState.claudeCodeReady
+        (recapProviderTag == "anthropic" && appState.claudeCodeReady)
+            || (recapProviderTag == "openai" && appState.codexReady)
     }
 
     /// True when a Recap-scope key for the chosen vendor is already
@@ -505,16 +507,17 @@ struct MacOutputPage: View {
                     .frame(minWidth: 280)
                 }
 
-                // Subscription toggle for the recap call site , 
-                // only appears when (a) recap model is Anthropic AND
-                // (b) Claude Code integration is actually connected.
+                // Subscription toggle for the recap call site —
+                // only appears when the recap model's vendor has its
+                // CLI connected (Anthropic → claude, OpenAI → codex).
                 // For any other recap provider the toggle is hidden
                 // entirely (user's rule: "se uso modello diverso da
                 // antrop. non devo poter selezionare usa subs
                 // atropic sotto"). Writes `recap_auth_method` so the
-                // recap call routes through the local `claude` CLI
+                // recap call routes through the matching local CLI
                 // even when dictation stays on API key.
                 if recapSubscriptionAvailable {
+                    let recapSubIsOpenAI = recapProviderTag == "openai"
                     // Uniformed with the LLM "Authentication" picker in
                     // the LLM section below — same two-way segmented
                     // choice, same labels, same width. The previous
@@ -528,9 +531,13 @@ struct MacOutputPage: View {
                     MacRow(
                         "Authentication",
                         description: appState.recapAuthMethod == "subscription"
-                            ? "Claude Pro / Team / Max."
+                            ? (recapSubIsOpenAI
+                                ? "ChatGPT Plus / Pro / Team."
+                                : "Claude Pro / Team / Max.")
                             : "Direct API key, pay-as-you-go.",
-                        hint: "Sends the recap through your local Claude CLI instead of an API key. Dictation rewrite keeps its own auth method.",
+                        hint: recapSubIsOpenAI
+                            ? "Sends the recap through your local Codex CLI instead of an API key. Dictation rewrite keeps its own auth method."
+                            : "Sends the recap through your local Claude CLI instead of an API key. Dictation rewrite keeps its own auth method.",
                         hintURL: URL(string: "https://dimmy.app/help/integrations-claude-cli"),
                         showsDivider: recapKeyFieldShouldShow
                     ) {

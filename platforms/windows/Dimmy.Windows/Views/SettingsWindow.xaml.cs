@@ -1980,8 +1980,8 @@ public sealed partial class SettingsWindow : Window
         // the user actually has a key for (keys live in Providers & keys now).
         // Custom is always offered (inline URL+key); Anthropic stays offered
         // when the Claude CLI subscription is connected (keyless path).
-        FilterCloudProviderPickers(integrationReady);
-        FilterRecapModelPicker(integrationReady);
+        FilterCloudProviderPickers(integrationReady, codexReady);
+        FilterRecapModelPicker(integrationReady, codexReady);
 
         // The recap picker IS filtered now (FilterRecapModelPicker above) to
         // the vendors the user connected — Auto/Custom/local always stay,
@@ -2073,8 +2073,12 @@ public sealed partial class SettingsWindow : Window
     /// ANY scope (STT or LLM) — the same provider API key works for all of that
     /// vendor's capabilities, so a Groq key saved for speech also unlocks Groq's
     /// rewrite + recap models. Custom is always offered; Anthropic stays under
-    /// the Claude CLI subscription; the selected item is never removed.</summary>
-    private void FilterCloudProviderPickers(bool integrationReady)
+    /// the Claude CLI subscription and OpenAI under the Codex CLI subscription
+    /// (both are keyless CLI-routed paths — without these exceptions a user
+    /// whose ONLY connection is the subscription can never even select the
+    /// vendor, so the "Use ... subscription" toggle stays unreachable); the
+    /// selected item is never removed.</summary>
+    private void FilterCloudProviderPickers(bool integrationReady, bool codexReady)
     {
         RebuildCombo(ProviderComboBox, item =>
         {
@@ -2085,14 +2089,17 @@ public sealed partial class SettingsWindow : Window
         {
             var v = ((item.Tag as string) ?? "").Split('-')[0].ToLowerInvariant();
             return v == "custom" || HasAnyKeyForVendor(v)
-                   || (v == "anthropic" && integrationReady);
+                   || (v == "anthropic" && integrationReady)
+                   || (v == "openai" && codexReady);
         });
     }
 
     /// <summary>Trim the recap-model picker the same way. Recap tags are model
     /// IDs (claude-opus-4-7, gpt-5, gemini-3.1-pro), so the vendor is derived via
-    /// RecapVendorFromModel. Auto, Custom, and local models are always kept.</summary>
-    private void FilterRecapModelPicker(bool integrationReady)
+    /// RecapVendorFromModel. Auto, Custom, and local models are always kept;
+    /// Anthropic models stay under the Claude subscription and OpenAI models
+    /// under the Codex subscription (keyless CLI paths).</summary>
+    private void FilterRecapModelPicker(bool integrationReady, bool codexReady)
     {
         RebuildCombo(RecapModelComboBox, item =>
         {
@@ -2101,7 +2108,9 @@ public sealed partial class SettingsWindow : Window
                 || tag.StartsWith("local:", StringComparison.Ordinal))
                 return true; // Auto / custom / local LLM need no cloud key
             var v = RecapVendorFromModel(tag, "");
-            return HasAnyKeyForVendor(v) || (v == "anthropic" && integrationReady);
+            return HasAnyKeyForVendor(v)
+                   || (v == "anthropic" && integrationReady)
+                   || (v == "openai" && codexReady);
         });
     }
 
