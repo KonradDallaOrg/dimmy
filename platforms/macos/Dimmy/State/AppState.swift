@@ -1688,9 +1688,14 @@ final class AppState: ObservableObject {
                     || llmKeyByVendor["gemini"] == true
                     || hasGeminiKey
             case .openai:
+                // codexReady: the ChatGPT/Codex subscription is a keyless
+                // CLI-routed path — without it a codex-only user never
+                // sees the OpenAI recap models (Win parity:
+                // FilterRecapModelPicker's `openai && codexReady`).
                 return recapKeyByVendor["openai"] == true
                     || llmKeyByVendor["openai"] == true
                     || hasOpenaiKey
+                    || codexReady
             }
         }
     }
@@ -1701,6 +1706,7 @@ final class AppState: ObservableObject {
     /// `recapPickerNeedsSelectPrompt`.
     var hasAnyLlmCapableKey: Bool {
         if claudeCodeReady { return true }
+        if codexReady { return true }
         if llmKeyByVendor.values.contains(true) { return true }
         if recapKeyByVendor.values.contains(true) { return true }
         return hasOpenaiKey || hasGeminiKey || hasGroqKey
