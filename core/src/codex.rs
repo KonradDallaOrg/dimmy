@@ -101,6 +101,15 @@ fn codex_home() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".codex"))
 }
 
+/// True for the arch-suffixed CLI exe the winget `OpenAI.Codex` package
+/// ships (`codex-x86_64-pc-windows-msvc.exe`; aarch64 variant likewise);
+/// false for its non-CLI siblings in the same dir
+/// (`codex-command-runner.exe`, `codex-windows-sandbox-setup.exe`).
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn is_codex_dist_exe(name: &str) -> bool {
+    name.starts_with("codex-") && name.ends_with("-pc-windows-msvc.exe")
+}
+
 /// Common locations where the `codex` binary lives, cross-platform.
 /// Codex ships two ways: a self-contained native binary (install
 /// script / brew → `~/.codex/bin`, `/usr/local/bin`, `/opt/homebrew/bin`)
@@ -221,8 +230,25 @@ fn candidate_paths() -> Vec<PathBuf> {
         // win_paths.rs for the two layouts + the 2026-07-03 incident.
         // BEFORE the npm dirs: an npm shim (`codex.cmd`) survives a Node
         // uninstall and would otherwise shadow a fresh winget install.
+        //
+        // Unlike Anthropic.ClaudeCode (plain claude.exe), the
+        // OpenAI.Codex package ships the CLI under its DIST name only —
+        // codex-x86_64-pc-windows-msvc.exe — and the `codex` alias
+        // exists only as a WinGet\Links symlink, which winget silently
+        // skips when it can't create symlinks (non-admin, developer
+        // mode off). So besides the fixed-name variants, scan each
+        // winget dir for the dist pattern. Verified live 2026-07-04:
+        // package dir held only the dist exe + command-runner +
+        // sandbox-setup (neither is the CLI), Links empty.
         for dir in crate::win_paths::winget_bin_dirs() {
-            push_variants(&mut paths, dir);
+            push_variants(&mut paths, dir.clone());
+            if let Ok(entries) = std::fs::read_dir(&dir) {
+                for entry in entries.flatten() {
+                    if is_codex_dist_exe(&entry.file_name().to_string_lossy()) {
+                        paths.push(entry.path());
+                    }
+                }
+            }
         }
         if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
             push_variants(&mut paths, PathBuf::from(&local_app_data).join("npm"));
@@ -783,6 +809,21 @@ mod tests {
                 dir
             );
         }
+    }
+
+    /// winget's OpenAI.Codex ships ONLY the dist-named exe (no plain
+    /// codex.exe) and the alias symlink is skipped without developer
+    /// mode — the wizard froze on recheck again (2026-07-04, E: clean
+    /// install). Pin the dist-name pattern: CLI exe in, siblings out.
+    #[test]
+    fn codex_dist_exe_pattern_matches_cli_only() {
+        assert!(is_codex_dist_exe("codex-x86_64-pc-windows-msvc.exe"));
+        assert!(is_codex_dist_exe("codex-aarch64-pc-windows-msvc.exe"));
+        assert!(!is_codex_dist_exe("codex-command-runner.exe"));
+        assert!(!is_codex_dist_exe("codex-windows-sandbox-setup.exe"));
+        assert!(!is_codex_dist_exe("codex.exe"));
+        assert!(!is_codex_dist_exe("claude.exe"));
+        assert!(!is_codex_dist_exe(""));
     }
 
     #[test]
