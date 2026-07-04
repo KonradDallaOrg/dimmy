@@ -127,6 +127,19 @@ public partial class App : Application
 
     /// <summary>Core hit the 5 min soft threshold on a single dictation:
     /// nudge toward Meeting mode without interrupting the recording.</summary>
+    /// <summary>Structured core failure (error event with `source`). STT
+    /// failures get a toast naming provider + reason + next step; other
+    /// sources may be added later. Runs on the UI thread.</summary>
+    private void OnCoreFailure(string source, string provider, string category, string message)
+    {
+        try
+        {
+            if (source == "stt")
+                Services.DictNotificationService.ShowTranscriptionFailed(provider, message, category);
+        }
+        catch (Exception ex) { PttLog($"OnCoreFailure exc: {ex.Message}"); }
+    }
+
     private void OnDictationLongWarning()
     {
         try
@@ -520,6 +533,11 @@ public partial class App : Application
             // core emits a soft warning at 5 min and a hard cap at 10 min.
             _appViewModel.DictationLongWarning += OnDictationLongWarning;
             _appViewModel.DictationMaxDurationReached += OnDictationMaxDuration;
+
+            // 2e. Structured core failures get a system toast — the pill
+            // Error flash alone proved invisible (2026-07-04: four Groq
+            // HTTP 403 in a row, retried blind, cause found only in logs).
+            _appViewModel.CoreFailure += OnCoreFailure;
 
             // 3. Load config into ViewModel
             LoadConfigIntoViewModel();
@@ -1958,9 +1976,13 @@ public partial class App : Application
             }
             else
             {
-                // Empty transcription — always reset to idle
-                PttLog("StopAndProcess: empty result, resetting to Idle");
-                _appViewModel.SetState(AppState.Idle);
+                // Empty transcription — reset to idle UNLESS the core just
+                // flagged an error: an STT failure ALSO returns an empty
+                // transcript, and stomping the Error state here reduced
+                // the red pill to a milliseconds flash (2026-07-04).
+                PttLog("StopAndProcess: empty result");
+                if (_appViewModel.CurrentState != AppState.Error)
+                    _appViewModel.SetState(AppState.Idle);
             }
         }
         catch (Exception ex)
@@ -2012,8 +2034,13 @@ public partial class App : Application
 
             if (result.IsEmptyTranscript)
             {
-                PttLog("CommandMode: empty transcript — idle");
-                _appViewModel.SetState(AppState.Idle);
+                // Same non-stomp rule as StopAndProcess: an STT failure
+                // returns an empty transcript AND fires the error event;
+                // resetting to Idle here erased the Error state within
+                // milliseconds (2026-07-04, four blind retries).
+                PttLog("CommandMode: empty transcript");
+                if (_appViewModel.CurrentState != AppState.Error)
+                    _appViewModel.SetState(AppState.Idle);
                 return;
             }
             if (!result.IsSuccess)

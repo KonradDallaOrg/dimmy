@@ -1051,6 +1051,33 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
         if let message = payload["message"] as? String {
             appState.lastError = message
             print("[DimmyCore] error event: \(message)")
+            // Structured failures (payload carries `source`) also get a
+            // toast. The transient error state alone proved invisible
+            // (2026-07-04: four Groq HTTP 403 in a row on Win, retried
+            // blind). Win parity: AppViewModel.CoreFailure ->
+            // DictNotificationService.ShowTranscriptionFailed.
+            if let source = payload["source"] as? String, source == "stt" {
+                let rawProvider = payload["provider"] as? String ?? ""
+                let provider = (rawProvider.isEmpty || rawProvider == "other")
+                    ? "Cloud STT" : rawProvider
+                let hint: String
+                switch payload["category"] as? String ?? "" {
+                case "auth":
+                    hint = "Check your API key in Settings, Providers and keys."
+                case "rate_limit":
+                    hint = "Provider rate limit hit. Wait a moment and retry."
+                case "network", "timeout":
+                    hint = "Check your internet connection."
+                case "model_load":
+                    hint = "The local model failed to load. Re-download it in Settings."
+                default:
+                    hint = "Details are in the log."
+                }
+                DictToastWindow.show(
+                    kind: .error,
+                    title: "Transcription failed (\(provider))",
+                    body: "\(message). \(hint)")
+            }
         }
 
     case "recording_cancelled":

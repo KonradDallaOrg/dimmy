@@ -741,8 +741,10 @@ public sealed partial class PillWindow : Window
                 _rainbowTimer?.Stop();
                 AnimateToCapsule(ColorError, newPanel, oldPanel);
                 UpdateGlow(ColorError);
+                // 5 s, not 3: the error tag is the only pill surface that
+                // explains a failure; 3 s read as a "flash" in the field.
                 if (_errorTimer is null)
-                    _errorTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+                    _errorTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
                 if (!_errorHandlerAttached)
                 {
                     _errorTimer.Tick += (_, _) => { _errorTimer.Stop(); _vm.SetState(AppState.Idle); };

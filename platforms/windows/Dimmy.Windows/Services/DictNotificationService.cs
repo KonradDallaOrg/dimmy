@@ -92,6 +92,17 @@ public static class DictNotificationService
              "Dimmy stopped and transcribed what you said. For long recordings, use Meeting mode.");
     }
 
+    /// <summary>STT failed on a dictation or command capture. The pill
+    /// shows Error too, but a toast is the surface the user actually
+    /// sees; name the provider, the reason, and the next step so a
+    /// failing key does not read as "Dimmy is broken".</summary>
+    public static void ShowTranscriptionFailed(string provider, string detail, string category)
+    {
+        var who = string.IsNullOrEmpty(provider) || provider == "other"
+            ? "Cloud STT" : provider;
+        Show($"Transcription failed ({who})", $"{detail}. {DictFailureHints.For(category)}");
+    }
+
     private static void Show(string title, string body)
     {
         try

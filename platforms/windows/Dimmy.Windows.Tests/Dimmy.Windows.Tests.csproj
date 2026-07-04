@@ -32,6 +32,7 @@
     <Compile Include="..\Dimmy.Windows\Services\ModelCatalog.cs" Link="Services\ModelCatalog.cs" />
     <Compile Include="..\Dimmy.Windows\Services\ProviderCatalog.cs" Link="Services\ProviderCatalog.cs" />
     <Compile Include="..\Dimmy.Windows\Services\DictHotkeyParser.cs" Link="Services\DictHotkeyParser.cs" />
+    <Compile Include="..\Dimmy.Windows\Services\DictFailureHints.cs" Link="Services\DictFailureHints.cs" />
     <Compile Include="..\Dimmy.Windows\Services\TextInjectionService.cs" Link="Services\TextInjectionService.cs" />
     <Compile Include="..\Dimmy.Windows\Services\TranscriptionService.cs" Link="Services\TranscriptionService.cs" />
     <Compile Include="..\Dimmy.Windows\Interop\DimmyNative.cs" Link="Interop\DimmyNative.cs" />
