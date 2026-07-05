@@ -10265,8 +10265,29 @@ mod tests {
         }
         // No AudioCommand::Start is ever sent: the worker only runs its
         // 1 s heartbeat (no cpal device is touched — CI-safe).
+        //
+        // DEFLAKED (2026-07-05): assertions are keyed to OBSERVED
+        // heartbeat ticks (audio::HEARTBEAT_TICKS), not wall-clock
+        // sleeps. The old fixed 2500/1800 ms windows raced the 1 s
+        // heartbeat on loaded runners.
+        use std::sync::atomic::Ordering as AOrd;
+        let wait_ticks = |from: u64, n: u64| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            while crate::audio::HEARTBEAT_TICKS.load(AOrd::Relaxed) < from + n {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "audio worker heartbeat never ticked {} times",
+                    n
+                );
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        };
+        let ticks0 = crate::audio::HEARTBEAT_TICKS.load(AOrd::Relaxed);
         let tx = crate::audio::spawn_audio_thread(buffer.clone(), secondary, gain, lgain);
-        std::thread::sleep(std::time::Duration::from_millis(2500));
+
+        // Negative half: after >=2 full heartbeats with NO live
+        // dictation, the guardrail must not have fired.
+        wait_ticks(ticks0, 2);
         let quiet = captured_events_slot()
             .lock()
             .map(|v| v.clone())
@@ -10280,25 +10301,36 @@ mod tests {
             quiet
         );
 
-        // Same giant buffer, but now a dictation IS live → both
-        // thresholds fire (one tick — both latches are cold).
+        // Positive half: same giant buffer, dictation now live → both
+        // thresholds fire on the next tick (both latches are cold).
+        // Poll with a generous deadline, pass as soon as both arrive.
         if let Ok(mut r) = state().recording.lock() {
             *r = true;
         }
-        std::thread::sleep(std::time::Duration::from_millis(1800));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let both = loop {
+            let events = captured_events_slot()
+                .lock()
+                .map(|v| v.clone())
+                .unwrap_or_default();
+            let warn = events.iter().any(|e| e.contains("dictation.long_warning"));
+            let cap = events.iter().any(|e| e.contains("dictation.max_duration"));
+            if warn && cap {
+                break true;
+            }
+            if std::time::Instant::now() >= deadline {
+                break false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
         if let Ok(mut r) = state().recording.lock() {
             *r = false;
         }
         let events = drain_event_capture();
         drop(tx); // channel disconnect → worker thread exits
         assert!(
-            events.iter().any(|e| e.contains("dictation.long_warning")),
-            "live dictation past 5 min must warn: {:?}",
-            events
-        );
-        assert!(
-            events.iter().any(|e| e.contains("dictation.max_duration")),
-            "live dictation past 10 min must hard-stop: {:?}",
+            both,
+            "live dictation past the thresholds must emit both long_warning and max_duration: {:?}",
             events
         );
     }

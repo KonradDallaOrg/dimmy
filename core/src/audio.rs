@@ -34,6 +34,13 @@ pub const MEETING_CANONICAL_RATE: u32 = 48_000;
 pub const DICTATION_SOFT_WARN_SECS: f64 = 300.0; // 5 min
 pub const DICTATION_HARD_STOP_SECS: f64 = 600.0; // 10 min
 
+/// Test-only: incremented on every worker heartbeat tick (the 1 s
+/// recv_timeout branch). The guardrail integration test waits for
+/// tick DELTAS instead of sleeping fixed wall-clock windows — the
+/// sleeps flaked on loaded CI runners. Compiled out of production.
+#[cfg(any(test, feature = "test-ffi"))]
+pub static HEARTBEAT_TICKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// True while a meeting is PAUSED. Every append site into
 /// `audio_buffer` / `audio_buffer_secondary` (mic callback, loopback
 /// callback, PushLoopback worker path, AEC worker output) checks this
@@ -473,6 +480,12 @@ pub fn spawn_audio_thread(
                     Ok(c) => c,
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     Err(mpsc::RecvTimeoutError::Timeout) => {
+                        // Test-only heartbeat counter: lets the guardrail
+                        // integration test key its assertions to OBSERVED
+                        // ticks instead of wall-clock sleeps (which flaked
+                        // on loaded runners). Compiled out of production.
+                        #[cfg(any(test, feature = "test-ffi"))]
+                        HEARTBEAT_TICKS.fetch_add(1, Ordering::Relaxed);
                         // Long-dictation guardrail. The pill dictation buffer
                         // has no draining worker, so a marathon dictation grows
                         // unbounded → memory pressure (macOS whole-system freeze,
