@@ -242,6 +242,18 @@ fn candidate_paths() -> Vec<PathBuf> {
         // sandbox-setup (neither is the CLI), Links empty.
         for dir in crate::win_paths::winget_bin_dirs() {
             push_variants(&mut paths, dir.clone());
+            // Dist-name scan ONLY where the codex CLI can actually live:
+            // the OpenAI.Codex_* package dir and the Links farm. Scanning
+            // every winget package dir stat'd unrelated packages on each
+            // 2s wizard recheck (re-audit 2026-07-04 hygiene note).
+            let name = dir
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let relevant = name.starts_with("OpenAI.Codex") || name == "Links";
+            if !relevant {
+                continue;
+            }
             if let Ok(entries) = std::fs::read_dir(&dir) {
                 for entry in entries.flatten() {
                     if is_codex_dist_exe(&entry.file_name().to_string_lossy()) {

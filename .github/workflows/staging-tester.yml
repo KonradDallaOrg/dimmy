@@ -600,6 +600,39 @@ jobs:
           # backend.
           cargo build --lib --release --features local-stt-vulkan,local-stt-parakeet,local-llm-vulkan,local-dfn,license-client
 
+      # Added 2026-07-05: the REM comment above always claimed this gate
+      # existed, but only release.yml and staging-auto-update.yml had it;
+      # a stale-cache miscompile could reach the tester install AND get
+      # stored into the DLL cache. Verbatim copy of the staging-auto-update
+      # step, placed BEFORE the cache store so a bad DLL is never cached.
+      - name: Gate — verify dimmy_lib.dll linker version
+        shell: pwsh
+        run: |
+          # Hard gate: the whisper Vulkan backend miscompile lives in MSVC
+          # linker <= 14.44. Any DLL linked with an older toolchain must NOT
+          # ship. Extracts linker version from PE headers via dumpbin.
+          # dumpbin is not in PATH here (the previous step's vcvars
+          # activation was scoped to that cmd subshell), so locate it under
+          # VS2026_PATH.
+          $dll = "D:\t\release\dimmy_lib.dll"
+          if (-not (Test-Path $dll)) { throw "dimmy_lib.dll not found at $dll" }
+          $mscvDir = Join-Path $env:VS2026_PATH "VC\Tools\MSVC"
+          $tool = Get-ChildItem $mscvDir -Directory | Sort-Object Name -Descending | Select-Object -First 1
+          $dumpbin = Join-Path $tool.FullName "bin\Hostx64\x64\dumpbin.exe"
+          if (-not (Test-Path $dumpbin)) { throw "dumpbin.exe not found at $dumpbin" }
+          Write-Host "Using dumpbin at: $dumpbin"
+          $out = & $dumpbin /headers $dll
+          $line = $out | Select-String "linker version" | Select-Object -First 1
+          if (-not $line) { throw "Could not find linker version in dumpbin output" }
+          if ($line -notmatch '(\d+)\.(\d+)') { throw "Could not parse linker version from '$line'" }
+          $major = [int]$Matches[1]
+          $minor = [int]$Matches[2]
+          Write-Host "dimmy_lib.dll linker version: $major.$minor"
+          if ($major -lt 14 -or ($major -eq 14 -and $minor -lt 50)) {
+            throw "dimmy_lib.dll linked with MSVC $major.$minor. Known whisper.cpp Vulkan codegen bug in <14.50. Aborting release."
+          }
+          exit 0
+
       - name: Store prebuilt core DLL to cache
         if: env.DLL_REUSED != '1'
         shell: bash
