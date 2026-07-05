@@ -207,7 +207,7 @@ Not shipped. Would validate the whole stack including WASAPI capture via a virtu
 - `test-install.yml` — clean-Windows install test, triggered by release workflows
 
 **Additive testing pipeline**:
-- `e2e-tests.yml` — tier 1 FFI (matrix Win/Mac/Linux) + tier 2 Windows UI smoke + cross-platform FFI smoke (matrix Win/Mac/Linux). Triggers on `pull_request` and `workflow_dispatch`. Does not push to releases, does not overlap with production workflows.
+- `e2e-tests.yml` — tier 1 FFI (matrix Win/Mac/Linux) + tier 2 Windows UI smoke + cross-platform FFI smoke + the `integration-suites` job (windows-2025: ffi_e2e, v2_ffi, v2_followups, audio_hardening, meeting_pause_resume, llm_request_shape, stress_tests, abi_snapshot, preprocess_properties in one invocation, `--test-threads=1`). Triggers (since 2026-07-05): `push` to `staging` runs `integration-suites` + Windows UI smoke — the dev flow merges without PRs, so this is the actual gate; `pull_request` additionally runs the 3-OS matrices; plus `workflow_dispatch`. Does not push to releases, does not overlap with production workflows.
 
 **Fail-fast ordering**: `windows-ui-smoke` and `ffi-smoke` both have `needs: ffi-integration`, so cheap FFI tests run first; UI / smoke jobs skip if tier 1 fails.
 

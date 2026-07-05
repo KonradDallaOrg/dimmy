@@ -1,10 +1,19 @@
 name: E2E Tests
 
 # Additive workflow — does NOT touch staging-native / release / test-install / ci.yml.
-# Runs on pull_request (both branches) and manual trigger, never on push to staging.
 # The installer pipeline remains untouched.
+#
+# Trigger model (since 2026-07-05 — closes the re-audit's #1 gap):
+#   - push to staging  → `integration-suites` (windows-2025: EVERY integration
+#     suite incl. ffi_e2e) + `windows-ui-smoke`. The dev flow merges straight
+#     to staging without PRs, so PR-only gating meant the richest suites ran
+#     in NO CI at all (last tier-1 run before this change: 2026-06-27).
+#   - pull_request     → additionally the 3-OS `ffi-integration` + `ffi-smoke`
+#     matrices (cross-platform coverage where it's worth the runner cost).
 
 on:
+  push:
+    branches: [staging]
   pull_request:
     branches: [staging, main]
   workflow_dispatch:
@@ -14,8 +23,69 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ── The staging push gate: every integration suite on the product's
+  # primary OS. One cargo invocation compiles all targets; suites run
+  # sequentially with --test-threads=1 (FFI tests share process-global
+  # state and are isolated to DIMMY_TEST_CONFIG_DIR by the harnesses).
+  integration-suites:
+    name: Integration suites (windows-2025)
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust build cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+          shared-key: integration-suites-win
+
+      - name: Cache test fixtures (jfk.wav + ggml-tiny.en-q8_0.bin)
+        uses: actions/cache@v5
+        with:
+          path: core/target/test-fixtures
+          key: ffi-fixtures-v1-windows-2025
+
+      - name: Run integration suites
+        working-directory: core
+        env:
+          DIMMY_FORCE_CPU: "1"
+          RUST_BACKTRACE: "1"
+          GGML_NATIVE: "OFF"
+        # --release: debug whisper.cpp crashes on windows-2025 (see the
+        # ffi-integration job note). Suite list = every core/tests target
+        # that gates real behaviour; live-API tests inside them are
+        # #[ignore] and skipped automatically.
+        run: >
+          cargo test --release --features local-stt,test-ffi
+          --test ffi_e2e
+          --test v2_ffi
+          --test v2_followups
+          --test audio_hardening
+          --test meeting_pause_resume
+          --test llm_request_shape
+          --test stress_tests
+          --test abi_snapshot
+          --test preprocess_properties
+          -- --test-threads=1
+
+      - name: Upload debug artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: integration-suites-debug
+          path: core/target/release/deps/*.pdb
+          if-no-files-found: ignore
+          retention-days: 7
+
   ffi-integration:
     name: FFI integration (${{ matrix.os }})
+    # PR-only: the 3-OS matrix triples runner cost; the staging push gate
+    # is `integration-suites` (windows), which includes ffi_e2e.
+    if: github.event_name != 'push'
     strategy:
       fail-fast: false
       matrix:
@@ -89,7 +159,9 @@ jobs:
   windows-ui-smoke:
     name: Windows UI smoke (FlaUI)
     runs-on: windows-2025-vs2026
-    needs: ffi-integration
+    # Depends on the always-running gate (ffi-integration is PR-only and a
+    # skipped `needs` would skip this job on staging pushes too).
+    needs: integration-suites
     steps:
       - uses: actions/checkout@v5
 
@@ -145,6 +217,7 @@ jobs:
   # mirrors the FFI integration job.
   ffi-smoke:
     name: FFI smoke (${{ matrix.os }})
+    if: github.event_name != 'push'
     needs: ffi-integration
     strategy:
       fail-fast: false
