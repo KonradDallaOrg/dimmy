@@ -854,7 +854,14 @@ pub fn spawn_audio_thread(
                                 )
                             }
                             cpal::SampleFormat::I16 => {
-                                let buf2 = buffer.clone();
+                                // Same Mix-mode target as the F32 twin: the
+                                // mode-selected `buf` (aec_mic_ring in Mix,
+                                // audio_buffer otherwise). Cloning `buffer`
+                                // here bypassed the AEC entirely for I16-format
+                                // mics in Mix meetings: raw echoey mic went
+                                // straight into audio_buffer while the AEC
+                                // worker starved (re-audit 2026-07-04).
+                                let buf2 = buf.clone();
                                 let gain_ref2 = input_gain.clone();
                                 let sc2 = sample_count.clone();
                                 let pr = primary_resampler.clone();
