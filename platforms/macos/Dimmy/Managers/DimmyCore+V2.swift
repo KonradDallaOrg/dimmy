@@ -330,6 +330,8 @@ extension DimmyCore {
             case -6: return .failure(.unauthorized)
             case -7: return .failure(.rateLimited)
             case -8: return .failure(.networkError)
+            case -10: return .failure(.truncated)
+            case -11: return .failure(.refused)
             default: return .failure(.unknown(Int(rc)))
             }
         }
@@ -347,6 +349,8 @@ extension DimmyCore {
         case unauthorized       // -6: 401/403 — bad / missing recap key
         case rateLimited        // -7: 429 — too many requests
         case networkError       // -8: socket / DNS / TLS error
+        case truncated          // -10: output hit the token limit even after the 4x retry
+        case refused            // -11: model declined on safety grounds (stop_reason=refusal)
         case unknown(Int)
 
         var description: String {
@@ -361,6 +365,8 @@ extension DimmyCore {
             case .unauthorized: return "Recap API key is missing or unauthorized — open Settings → Recap"
             case .rateLimited: return "Recap rate limited (429) — try again in a minute"
             case .networkError: return "Network error reaching the recap endpoint — check connection"
+            case .truncated: return "The recap was cut off at the model token limit even after a retry. Pick a larger-context model."
+            case .refused: return "The model declined to process this content. Reword or pick a different model."
             case .unknown(let code): return "llm_call_raw failed (code \(code))"
             }
         }
