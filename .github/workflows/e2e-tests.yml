@@ -59,8 +59,13 @@ jobs:
         # ffi-integration job note). Suite list = every core/tests target
         # that gates real behaviour; live-API tests inside them are
         # #[ignore] and skipped automatically.
+        # abi_snapshot is EXCLUDED: its golden export list pins the DLL
+        # built with the FROZEN release feature set (vulkan+parakeet+llm);
+        # this gate builds a reduced-feature DLL, so the symbol set is
+        # structurally different (first live run failed on exactly this,
+        # 2026-07-05). --no-fail-fast so one red suite can't hide the rest.
         run: >
-          cargo test --release --features local-stt,test-ffi
+          cargo test --release --features local-stt,test-ffi --no-fail-fast
           --test ffi_e2e
           --test v2_ffi
           --test v2_followups
@@ -68,7 +73,6 @@ jobs:
           --test meeting_pause_resume
           --test llm_request_shape
           --test stress_tests
-          --test abi_snapshot
           --test preprocess_properties
           -- --test-threads=1
 
