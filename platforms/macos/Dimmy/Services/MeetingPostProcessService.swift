@@ -68,6 +68,15 @@ enum MeetingPostProcessService {
                     // -8: socket / DNS / TLS error reaching the
                     // recap endpoint. Network problem, not auth.
                     return "Network error reaching the recap endpoint. Check your connection and try again."
+                case .truncated:
+                    // -10: output hit the token limit even after the
+                    // core's 4x headroom retry. A retry-as-is cannot fix
+                    // it; the model or the input has to change.
+                    return "The recap was cut off at the model token limit even after a retry. Pick a larger-context model in Settings, Recap."
+                case .refused:
+                    // -11: model declined on safety grounds
+                    // (stop_reason=refusal). Rewording is the only remedy.
+                    return "The model declined to process this content. Pick a different model or adjust the meeting type; retrying unchanged will not help."
                 case .unknown(let code):
                     return "LLM call failed (rc=\(code)). See Console.app under \"dimmy\"."
                 }
