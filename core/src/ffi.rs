@@ -1603,10 +1603,7 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
                 }
             }
 
-            emit_event(
-                "transcript_ready",
-                &format!(r#"{{"text":"{}"}}"#, text.replace('"', "\\\"")),
-            );
+            emit_event("transcript_ready", &transcript_ready_payload(&text));
             write_to_buf(&text, out_buf, buf_len)
         }
         Err(e) => {
@@ -1686,16 +1683,54 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
     }
 }
 
+/// JSON string escaper for event payloads built with `format!`.
+/// Everything the JSON grammar forbids raw inside a string: backslash,
+/// quote, and control characters (transcripts can contain newlines;
+/// error messages can contain Windows paths). serde_json-built
+/// payloads don't need this — it exists for the simple sites that
+/// interpolate ONE string into a fixed shape. Naive quote-only
+/// escaping shipped an invalid-JSON class: a backslash or newline in
+/// the text silently killed the event at the host's JSON parser.
+fn json_escape_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 8);
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// `{"message":"<escaped>"}` — the message-only `error` event shape
+/// every host already parses. Single builder so no call site can
+/// regress to unescaped interpolation.
+fn message_error_payload(message: &str) -> String {
+    format!(r#"{{"message":"{}"}}"#, json_escape_str(message))
+}
+
+/// `{"text":"<escaped>"}` for `transcript_ready`.
+fn transcript_ready_payload(text: &str) -> String {
+    format!(r#"{{"text":"{}"}}"#, json_escape_str(text))
+}
+
 /// Build the structured `error` event payload for an STT failure.
 /// `source`/`provider`/`category` are categorical (host uses them to
 /// pick a toast + hint); `message` is the redacted Display string
-/// (never the response body). JSON-escape quotes AND backslashes —
-/// provider error strings can contain either.
+/// (never the response body).
 fn stt_error_event_payload(message: &str, provider: &str, category: &str) -> String {
-    let escaped = message.replace('\\', "\\\\").replace('"', "\\\"");
     format!(
         r#"{{"message":"{}","source":"stt","provider":"{}","category":"{}"}}"#,
-        escaped, provider, category
+        json_escape_str(message),
+        provider,
+        category
     )
 }
 
@@ -3197,7 +3232,7 @@ pub unsafe extern "C" fn dimmy_process_with_llm(
                     "error",
                     &format!(
                         r#"{{"message":"Local LLM: {}"}}"#,
-                        err_msg.replace('"', "\\\"")
+                        json_escape_str(&err_msg)
                     ),
                 );
                 return write_to_buf(text, out_buf, buf_len); // graceful degradation
@@ -5733,7 +5768,9 @@ pub unsafe extern "C" fn dimmy_download_model(filename_ptr: *const c_char) -> c_
         move |downloaded, total| {
             let payload = format!(
                 r#"{{"filename":"{}","downloaded":{},"total":{}}}"#,
-                fname_clone, downloaded, total
+                json_escape_str(&fname_clone),
+                downloaded,
+                total
             );
             emit_event("model_download_progress", &payload);
         },
@@ -5747,7 +5784,7 @@ pub unsafe extern "C" fn dimmy_download_model(filename_ptr: *const c_char) -> c_
         Ok(_) => 0,
         Err(e) => {
             let msg: String = format!("{}", e).chars().take(200).collect();
-            emit_event("error", &format!(r#"{{"message":"{}"}}"#, msg));
+            emit_event("error", &message_error_payload(&msg));
             -1
         }
     }
@@ -5824,7 +5861,9 @@ pub unsafe extern "C" fn dimmy_download_llm_model(filename_ptr: *const c_char) -
         move |downloaded, total| {
             let payload = format!(
                 r#"{{"filename":"{}","downloaded":{},"total":{}}}"#,
-                fname_clone, downloaded, total
+                json_escape_str(&fname_clone),
+                downloaded,
+                total
             );
             emit_event("llm_model_download_progress", &payload);
         },
@@ -5838,7 +5877,7 @@ pub unsafe extern "C" fn dimmy_download_llm_model(filename_ptr: *const c_char) -
         Ok(_) => 0,
         Err(e) => {
             let msg: String = format!("{}", e).chars().take(200).collect();
-            emit_event("error", &format!(r#"{{"message":"{}"}}"#, msg));
+            emit_event("error", &message_error_payload(&msg));
             -1
         }
     }
@@ -5905,7 +5944,7 @@ pub extern "C" fn dimmy_parakeet_download_bundle() -> c_int {
         Ok(()) => 0,
         Err(e) => {
             let msg: String = format!("{}", e).chars().take(200).collect();
-            emit_event("error", &format!(r#"{{"message":"{}"}}"#, msg));
+            emit_event("error", &message_error_payload(&msg));
             -1
         }
     }
@@ -5961,7 +6000,7 @@ pub unsafe extern "C" fn dimmy_parakeet_transcribe(
         Ok(text) => write_to_buf(&text, buf, buf_len),
         Err(e) => {
             let msg: String = format!("{}", e).chars().take(200).collect();
-            emit_event("error", &format!(r#"{{"message":"{}"}}"#, msg));
+            emit_event("error", &message_error_payload(&msg));
             -1
         }
     }
@@ -9506,6 +9545,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn emit_event_with_no_callback_does_not_panic() {
         // Reset callback to None
         if let Ok(mut guard) = EVENT_CALLBACK.lock() {
@@ -9513,6 +9553,44 @@ mod tests {
         }
         // Should not panic
         emit_event("test", "{}");
+    }
+
+    /// Every `format!`-built event payload goes through
+    /// `json_escape_str`. Pin the full escape table: a transcript
+    /// with a newline or a Windows path used to produce INVALID JSON
+    /// and the host silently dropped the event.
+    #[test]
+    fn json_escape_str_produces_parseable_json_for_hostile_strings() {
+        for hostile in [
+            r#"quote " inside"#,
+            r"back\slash and C:\Users\x",
+            "multi\nline\r\ntext",
+            "tab\there",
+            "control\u{1}char",
+            "unicode è ok 日本語 🎤",
+            "",
+        ] {
+            let payload = format!(r#"{{"v":"{}"}}"#, json_escape_str(hostile));
+            let v: serde_json::Value = serde_json::from_str(&payload)
+                .unwrap_or_else(|e| panic!("invalid JSON for {:?}: {} ({})", hostile, payload, e));
+            assert_eq!(v["v"], *hostile, "roundtrip must preserve the string");
+        }
+    }
+
+    /// Host-contract pins for the shared payload builders. The hosts
+    /// parse exactly these keys ({"message"}, {"text"}).
+    #[test]
+    fn message_and_transcript_payload_builders_roundtrip() {
+        let m = message_error_payload("Local LLM: model load failed at C:\\models\\x.gguf");
+        let v: serde_json::Value = serde_json::from_str(&m).expect("message payload valid JSON");
+        assert!(v["message"]
+            .as_str()
+            .unwrap()
+            .contains("C:\\models\\x.gguf"));
+
+        let t = transcript_ready_payload("line one\nline \"two\"");
+        let v: serde_json::Value = serde_json::from_str(&t).expect("text payload valid JSON");
+        assert_eq!(v["text"], "line one\nline \"two\"");
     }
 
     /// The structured STT-failure payload is a HOST CONTRACT: Win and
@@ -9535,6 +9613,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn emit_event_calls_registered_callback() {
         TEST_CB_CALLED.store(false, Ordering::SeqCst);
         unsafe {
@@ -10231,6 +10310,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn emit_meeting_state_event_emits_envelope_on_running() {
         reset_event_capture();
         emit_meeting_state_event(true, false);
@@ -10265,8 +10345,29 @@ mod tests {
         }
         // No AudioCommand::Start is ever sent: the worker only runs its
         // 1 s heartbeat (no cpal device is touched — CI-safe).
+        //
+        // DEFLAKED (2026-07-05): assertions are keyed to OBSERVED
+        // heartbeat ticks (audio::HEARTBEAT_TICKS), not wall-clock
+        // sleeps. The old fixed 2500/1800 ms windows raced the 1 s
+        // heartbeat on loaded runners.
+        use std::sync::atomic::Ordering as AOrd;
+        let wait_ticks = |from: u64, n: u64| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            while crate::audio::HEARTBEAT_TICKS.load(AOrd::Relaxed) < from + n {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "audio worker heartbeat never ticked {} times",
+                    n
+                );
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        };
+        let ticks0 = crate::audio::HEARTBEAT_TICKS.load(AOrd::Relaxed);
         let tx = crate::audio::spawn_audio_thread(buffer.clone(), secondary, gain, lgain);
-        std::thread::sleep(std::time::Duration::from_millis(2500));
+
+        // Negative half: after >=2 full heartbeats with NO live
+        // dictation, the guardrail must not have fired.
+        wait_ticks(ticks0, 2);
         let quiet = captured_events_slot()
             .lock()
             .map(|v| v.clone())
@@ -10280,25 +10381,36 @@ mod tests {
             quiet
         );
 
-        // Same giant buffer, but now a dictation IS live → both
-        // thresholds fire (one tick — both latches are cold).
+        // Positive half: same giant buffer, dictation now live → both
+        // thresholds fire on the next tick (both latches are cold).
+        // Poll with a generous deadline, pass as soon as both arrive.
         if let Ok(mut r) = state().recording.lock() {
             *r = true;
         }
-        std::thread::sleep(std::time::Duration::from_millis(1800));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let both = loop {
+            let events = captured_events_slot()
+                .lock()
+                .map(|v| v.clone())
+                .unwrap_or_default();
+            let warn = events.iter().any(|e| e.contains("dictation.long_warning"));
+            let cap = events.iter().any(|e| e.contains("dictation.max_duration"));
+            if warn && cap {
+                break true;
+            }
+            if std::time::Instant::now() >= deadline {
+                break false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
         if let Ok(mut r) = state().recording.lock() {
             *r = false;
         }
         let events = drain_event_capture();
         drop(tx); // channel disconnect → worker thread exits
         assert!(
-            events.iter().any(|e| e.contains("dictation.long_warning")),
-            "live dictation past 5 min must warn: {:?}",
-            events
-        );
-        assert!(
-            events.iter().any(|e| e.contains("dictation.max_duration")),
-            "live dictation past 10 min must hard-stop: {:?}",
+            both,
+            "live dictation past the thresholds must emit both long_warning and max_duration: {:?}",
             events
         );
     }
@@ -10365,6 +10477,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn emit_meeting_state_event_emits_envelope_on_paused() {
         reset_event_capture();
         emit_meeting_state_event(true, true);
@@ -10375,6 +10488,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn emit_meeting_state_event_emits_envelope_on_stopped() {
         reset_event_capture();
         emit_meeting_state_event(false, false);

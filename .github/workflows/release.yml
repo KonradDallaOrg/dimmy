@@ -47,7 +47,11 @@ jobs:
 
       - name: Test
         working-directory: core
-        run: cargo test --lib --features local-stt
+        # Same feature set as the Clippy step above and the CLAUDE.md
+        # pre-push checklist. Without local-llm the 24 feature-gated
+        # local_llm tests were silently skipped in the RELEASE gate of
+        # all places (re-audit 2026-07-04 finding).
+        run: cargo test --lib --features local-stt,local-llm
 
   # ── Create release placeholder ─────────────────────────────────────
   create-release:
