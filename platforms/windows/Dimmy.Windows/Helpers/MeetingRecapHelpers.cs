@@ -647,6 +647,8 @@ public static class MeetingRecapHelpers
             -7 => "Recap rate limited (429). Try again in a minute, or pick a faster model.",
             -8 => "Network error reaching the recap endpoint. Check your connection.",
             -9 => $"The recap is too large for '{modelHint}' (413). Pick a model with a bigger context, or a higher-tier provider.",
+            -10 => $"The recap was cut off at the token limit of '{modelHint}' even after a retry. Pick a larger-context model.",
+            -11 => "The model declined to process this content. Reword or pick a different model; retrying unchanged will not help.",
             _ => $"LLM call returned {rc} — see dimmy.log.",
         };
     }

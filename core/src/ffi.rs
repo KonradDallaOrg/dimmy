@@ -5497,6 +5497,12 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
 ///   context window or the plan's per-request / per-minute token limit
 ///   (common on Groq free tier). UI should suggest a larger-context
 ///   model or a higher-tier provider.
+/// - -10 truncated — the output hit the token limit even after the 4x
+///   headroom retry. UI should suggest a larger-context model or a
+///   shorter input; the partial answer is never returned.
+/// - -11 refusal — the model declined on safety grounds (Fable 5+
+///   stop_reason=refusal). UI should suggest rewording; retrying
+///   unchanged input cannot succeed.
 fn categorize_llm_error_to_rc(err: &crate::error::LlmError) -> c_int {
     use crate::error::LlmError;
     match err {
@@ -5529,13 +5535,16 @@ fn categorize_llm_error_to_rc(err: &crate::error::LlmError) -> c_int {
         LlmError::Network(_) => -8,
         LlmError::NoApiKey(_) => -6, // user-visible as "key issue"
         LlmError::LocalModel(_) => -4,
-        // Safety refusal (Fable 5+): generic failure rc — the Display
-        // string names the refusal, and retrying with reworded input is
-        // the only remedy, same UI affordance as -3.
-        LlmError::Refusal => -3,
-        // Token-limit truncation that survived the headroom retry: generic
-        // failure rc; the dictation caller falls back to the raw transcript.
-        LlmError::Truncated => -3,
+        // ADDITIVE codes (2026-07-05) — the -1..-9 table is contractual
+        // and unchanged; hosts that predate these fall through to their
+        // generic default message.
+        // Token-limit truncation that survived the 4x headroom retry:
+        // the answer would be incomplete — the remedy is a smaller
+        // input or a larger-context model, NOT a retry-as-is.
+        LlmError::Truncated => -10,
+        // Safety refusal (Fable 5+): rewording the input is the only
+        // remedy — very different advice from a generic HTTP failure.
+        LlmError::Refusal => -11,
     }
 }
 

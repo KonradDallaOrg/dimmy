@@ -1133,6 +1133,46 @@ pub async fn process_raw_prompt(
         .timeout(std::time::Duration::from_secs(600))
         .build()?;
 
+    // Providers REPORT truncation; the enhancement path has honoured that
+    // since rc2 while THIS path (recap + command mode) still ignored it —
+    // a truncated recap pasted/saved half an answer with no signal
+    // (re-audit 2026-07-04 finding). Same policy: retry ONCE with 4x
+    // headroom, then refuse with LlmError::Truncated rather than return a
+    // partial answer.
+    let (content, truncated) =
+        send_raw_prompt_request(&client, api_url, model, api_key, user_prompt, max_tokens).await?;
+    if !truncated {
+        return Ok(content);
+    }
+    let retry_budget = (max_tokens * 4).clamp(16_384, 99_000);
+    crate::log(&format!(
+        "[LLM] WARN: raw-prompt output truncated at the token limit (budget={}) — retrying once with budget={}",
+        max_tokens, retry_budget
+    ));
+    let (retry_content, still_truncated) =
+        send_raw_prompt_request(&client, api_url, model, api_key, user_prompt, retry_budget)
+            .await?;
+    if still_truncated {
+        crate::log("[LLM] ERROR: raw-prompt output truncated even after the headroom retry — refusing to return a partial answer");
+        return Err(crate::error::LlmError::Truncated);
+    }
+    Ok(retry_content)
+}
+
+/// One dispatch of the raw-prompt (recap / command) request. Returns the
+/// answer text plus whether the provider reported TRUNCATION at the token
+/// limit (stop_reason="max_tokens" Anthropic, finishReason="MAX_TOKENS"
+/// Gemini native, finish_reason="length" OpenAI-compat). Mirror of
+/// send_process_text_request for the enhancement path.
+#[allow(clippy::too_many_arguments)]
+async fn send_raw_prompt_request(
+    client: &reqwest::Client,
+    api_url: &str,
+    model: &str,
+    api_key: &str,
+    user_prompt: &str,
+    max_tokens: u64,
+) -> Result<(String, bool), crate::error::LlmError> {
     let is_anthropic = crate::provider::Provider::from_url(api_url).is_anthropic();
     let is_gemini_native = is_gemini_native_url(api_url);
 
@@ -1322,15 +1362,19 @@ pub async fn process_raw_prompt(
         if parsed.stop_reason.as_deref() == Some("refusal") {
             return Err(crate::error::LlmError::Refusal);
         }
-        Ok(parsed
-            .content
-            .into_iter()
-            .filter(|c| c.block_type == "text")
-            .filter_map(|c| c.text)
-            .collect::<Vec<_>>()
-            .join("\n")
-            .trim()
-            .to_string())
+        let truncated = parsed.stop_reason.as_deref() == Some("max_tokens");
+        Ok((
+            parsed
+                .content
+                .into_iter()
+                .filter(|c| c.block_type == "text")
+                .filter_map(|c| c.text)
+                .collect::<Vec<_>>()
+                .join("\n")
+                .trim()
+                .to_string(),
+            truncated,
+        ))
     } else if is_gemini_native {
         // Gemini native: { candidates: [{ content: { parts: [{ text }] } }] }
         let raw: serde_json::Value = response.json().await?;
@@ -1346,7 +1390,8 @@ pub async fn process_raw_prompt(
             .unwrap_or_default()
             .trim()
             .to_string();
-        Ok(text)
+        let truncated = raw["candidates"][0]["finishReason"].as_str() == Some("MAX_TOKENS");
+        Ok((text, truncated))
     } else {
         // OpenAI-compatible
         #[derive(serde::Deserialize)]
@@ -1356,18 +1401,22 @@ pub async fn process_raw_prompt(
         #[derive(serde::Deserialize)]
         struct ChatChoice {
             message: ChatMessage,
+            #[serde(default)]
+            finish_reason: Option<String>,
         }
         #[derive(serde::Deserialize)]
         struct ChatMessage {
             content: String,
         }
         let parsed: ChatResponse = response.json().await?;
-        Ok(parsed
-            .choices
-            .into_iter()
-            .next()
-            .map(|c| c.message.content.trim().to_string())
-            .unwrap_or_default())
+        let first = parsed.choices.into_iter().next();
+        let truncated = first.as_ref().and_then(|c| c.finish_reason.as_deref()) == Some("length");
+        Ok((
+            first
+                .map(|c| c.message.content.trim().to_string())
+                .unwrap_or_default(),
+            truncated,
+        ))
     }
 }
 

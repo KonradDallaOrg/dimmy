@@ -319,6 +319,20 @@ final class PillWindowController {
             SystemAudioCaptureService.shared.stop()
             await Task.detached(priority: .userInitiated) {
                 let stopResult = DimmyCore.shared.meetingStop()
+                // WAV finalize errors (disk full, IO) ride MeetingResult.
+                // The meeting-window stop path appends them to the done
+                // meta; this path (pill + hotkey + call-nudge all land
+                // here) swallowed them. Win parity: StopMeetingFromPill
+                // toast via ShowMeetingAudioIncomplete.
+                if let stopError = stopResult?.error {
+                    dimmyHostLog("[Pill stop] meeting stop reported error: \(stopError)")
+                    await MainActor.run {
+                        DictToastWindow.show(
+                            kind: .error,
+                            title: "Meeting audio incomplete",
+                            body: stopError)
+                    }
+                }
                 let transcript = stopResult?.transcript
                     .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 guard let stopResult, !transcript.isEmpty else {
