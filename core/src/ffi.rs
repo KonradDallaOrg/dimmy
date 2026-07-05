@@ -754,7 +754,10 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
     // preprocess interpret a 48 kHz buffer at 16 kHz — 3× slowdown,
     // Whisper hallucinated "Grazie per la visione" on every dictation.
     // Reported 2026-05-20 right after the canonical-rate refactor.
-    let _device_sr_diag = crate::audio::device_sample_rate(&selected_device);
+    // (An unused `device_sample_rate` diagnostic call lived here until
+    // 2026-07-05: a LIVE HAL enumeration on every dictation start,
+    // taken while holding the recording mutex — the exact call class
+    // whose teardown race wedged CoreAudio in the rc3 recap freeze.)
     if let Ok(mut sr) = st.audio_sample_rate.lock() {
         *sr = crate::audio::MEETING_CANONICAL_RATE;
     }

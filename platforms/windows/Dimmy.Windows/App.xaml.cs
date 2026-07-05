@@ -305,6 +305,12 @@ public partial class App : Application
     // cut at a line boundary.
     private const long MaxPttLogBytes = 1_048_576; // 1 MB
     private static int _logCallsSinceSizeCheck;
+    // Serializes the trim rewrite against concurrent appends: without it
+    // a Log() on another thread could append between the rotation's
+    // ReadAllText and WriteAllText and lose that line at the 1 MB
+    // boundary (re-audit 2026-07-04). Contention is negligible - both
+    // sections are sub-millisecond.
+    private static readonly object _logWriteLock = new();
 
     /// Public diagnostic logger callable from any window for ad-hoc
     /// debugging. Routes to the same ptt.log so output is one stream.
@@ -318,11 +324,15 @@ public partial class App : Application
             // Stat the file every 64th call — a per-append stat is cheap but
             // pointless at this cadence, and 64 lines (~6 KB) of overshoot
             // past the 1 MB cap is immaterial.
-            if (Interlocked.Increment(ref _logCallsSinceSizeCheck) % 64 == 1)
+            var doTrim = Interlocked.Increment(ref _logCallsSinceSizeCheck) % 64 == 1;
+            lock (_logWriteLock)
             {
-                Helpers.LogRotation.TrimToHalfIfOver(PttLogPath, MaxPttLogBytes);
+                if (doTrim)
+                {
+                    Helpers.LogRotation.TrimToHalfIfOver(PttLogPath, MaxPttLogBytes);
+                }
+                File.AppendAllText(PttLogPath, line + Environment.NewLine);
             }
-            File.AppendAllText(PttLogPath, line + Environment.NewLine);
         }
         catch { }
     }

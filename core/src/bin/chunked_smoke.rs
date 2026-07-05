@@ -130,11 +130,19 @@ fn main() {
             }
         });
 
+    // Parakeet backend, matching what this offline driver has always
+    // exercised (the bin is gated on local-stt-parakeet). The engine
+    // itself is backend-agnostic since the TranscribeFn parameter landed
+    // — this call site just never got the sixth argument (pre-existing
+    // compile break, gated out of CI; fixed 2026-07-05).
+    let transcribe_fn: Arc<dimmy_lib::chunked_stt::TranscribeFn> =
+        Arc::new(|pcm: &[f32]| dimmy_lib::parakeet::transcribe(pcm));
     let transcriber = dimmy_lib::chunked_stt::ChunkedTranscriber::start(
         audio_buffer.clone(),
         16_000,
         chunk_secs,
         overlap_ms,
+        transcribe_fn,
         on_chunk,
     );
 

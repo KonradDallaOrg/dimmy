@@ -214,6 +214,12 @@ public sealed partial class ClaudeConnectDialog : ContentDialog
 
     // ── Page 3 — Finish ───────────────────────────────────────────────
 
+    // Documented exception to the no-FFI-polling rule (CLAUDE.md): the
+    // condition being awaited is an EXTERNAL filesystem/registry change
+    // (the user finishing `winget install` / browser login in another
+    // process). The core cannot emit an event for something it hasn't
+    // observed; recheck+probe every 2 s while this page is open is the
+    // event source. The timer stops on sign-in success and dialog close.
     private void StartPoll()
     {
         StopPoll();
