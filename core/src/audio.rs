@@ -1639,22 +1639,26 @@ pub fn secondary_sample_rate(primary_fallback: u32) -> u32 {
     if override_rate != 0 {
         return override_rate;
     }
-    #[cfg(target_os = "windows")]
-    {
-        let _ = primary_fallback;
-        let host = cpal::default_host();
-        host.default_output_device()
-            .and_then(|d| d.default_output_config().ok())
-            .map(|c| c.sample_rate().0)
-            .unwrap_or(48_000)
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        if primary_fallback >= 8_000 {
-            primary_fallback
-        } else {
-            48_000
-        }
+    // Override unset (cold start) -> fall back to the primary rate, or the
+    // canonical 48 kHz if it's out of range. Cross-platform identical.
+    //
+    // The Windows branch USED to probe the default output device here via
+    // `cpal::default_host().default_output_device().default_output_config()`
+    // - a live WASAPI query that ACCESS-VIOLATES in the C++/COM layer on a
+    // machine with no default output device (headless CI runner, RDP with no
+    // audio redirection, a disabled audio stack). It crashed the whole v2_ffi
+    // test binary with STATUS_ACCESS_VIOLATION on windows-2025 (root-caused
+    // 2026-07-06: the `set_loopback_sample_rate_rejects_out_of_range` test
+    // cleared the override then called this, hitting the live query on the
+    // device-less runner). The real loopback rate is supplied by the host via
+    // `dimmy_set_loopback_sample_rate` (the override above) before a meeting,
+    // and the meeting pipeline resamples to canonical 48 kHz regardless, so
+    // this cold-start default is never load-bearing. Same rc3 principle:
+    // never do a live HAL enumeration from a snapshot-style call.
+    if primary_fallback >= 8_000 {
+        primary_fallback
+    } else {
+        48_000
     }
 }
 

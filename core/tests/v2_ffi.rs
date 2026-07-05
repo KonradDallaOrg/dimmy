@@ -1403,9 +1403,8 @@ fn push_loopback_audio_canonical_rate_passthrough() {
 // mic rate (BT-HFP common case: 16 kHz on both). Pre-fix this returned
 // a hardcoded 48 kHz and made playback run at 3× speed.
 #[test]
-#[cfg(not(target_os = "windows"))]
 #[serial]
-fn secondary_sample_rate_falls_back_to_primary_on_non_windows() {
+fn secondary_sample_rate_falls_back_to_primary() {
     ensure_init();
     assert_eq!(dimmy_set_loopback_sample_rate(0), 0);
     assert_eq!(dimmy_lib::audio::secondary_sample_rate(16_000), 16_000);
