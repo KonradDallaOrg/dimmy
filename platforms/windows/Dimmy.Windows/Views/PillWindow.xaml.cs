@@ -1290,11 +1290,11 @@ public sealed partial class PillWindow : Window
             // happened. Reverts to Idle in the finally block.
             _vm.SetState(AppState.Transcribing);
 
-            var (rc, dir, transcript) = await System.Threading.Tasks.Task.Run(() =>
+            var (rc, dir, transcript, stopError) = await System.Threading.Tasks.Task.Run(() =>
             {
                 var buf = new byte[1 << 22];
                 int code = DimmyNative.dimmy_meeting_stop(buf, buf.Length);
-                if (code <= 0) return (code, "", "");
+                if (code <= 0) return (code, "", "", (string?)null);
                 var json = System.Text.Encoding.UTF8.GetString(buf, 0, code);
                 try
                 {
@@ -1302,9 +1302,15 @@ public sealed partial class PillWindow : Window
                     var root = doc.RootElement;
                     var d = root.GetProperty("dir").GetString() ?? "";
                     var t = root.GetProperty("transcript").GetString() ?? "";
-                    return (code, d, t);
+                    // WAV finalize errors (disk full, IO) ride the same
+                    // payload. The MeetingWindow stop button surfaced
+                    // them; this path (pill + hotkey + call-nudge all
+                    // land here) swallowed them.
+                    var err = root.TryGetProperty("error", out var e)
+                        ? e.GetString() : null;
+                    return (code, d, t, string.IsNullOrWhiteSpace(err) ? null : err);
                 }
-                catch { return (code, "", ""); }
+                catch { return (code, "", "", (string?)null); }
             });
             App.Log($"Pill Stop meeting rc={rc} dir='{dir}' transcript={transcript.Length} chars", "Pill");
 
@@ -1312,6 +1318,11 @@ public sealed partial class PillWindow : Window
             {
                 _vm.SetError($"Meeting stop rc={rc}");
                 return;
+            }
+            if (stopError != null)
+            {
+                App.Log($"Pill Stop: meeting stop reported error: {stopError}", "Pill");
+                Services.DictNotificationService.ShowMeetingAudioIncomplete(stopError);
             }
 
             // Fire the recap pipeline. We AWAIT it here so the pill
