@@ -587,6 +587,11 @@ final class SystemAudioProcessTap {
         ioProcID = nil
         aggregateID = AudioObjectID(kAudioObjectUnknown)
         tapID = AudioObjectID(kAudioObjectUnknown)
+        // Verification markers (both land in dimmy.log): if the log shows
+        // "dispatched" then the app keeps running (and "[Meeting] stopped"
+        // appears), the Tahoe-freeze fix is working — even if "completed"
+        // never follows (that means the HAL wedged but we no longer block).
+        NSLog("[SystemAudio/tap] teardown: HAL destroy dispatched off-thread (caller unblocked)")
         SystemAudioProcessTap.teardownQueue.async {
             if let procID, aggID != AudioObjectID(kAudioObjectUnknown) {
                 AudioDeviceStop(aggID, procID)
@@ -598,6 +603,7 @@ final class SystemAudioProcessTap {
             if tID != AudioObjectID(kAudioObjectUnknown) {
                 AudioHardwareDestroyProcessTap(tID)
             }
+            NSLog("[SystemAudio/tap] teardown: HAL destroy completed off-thread")
         }
     }
 

@@ -570,6 +570,12 @@ pub fn spawn_audio_thread(
                                     pending_input_default = current_default.clone();
                                     input_stable_polls = 1;
                                 }
+                                if input_stable_polls < 2 {
+                                    crate::log(&format!(
+                                        "[Audio] default input changed to {:?} — debouncing (poll {}/2) before rebuild",
+                                        current_default, input_stable_polls
+                                    ));
+                                }
                                 input_stable_polls >= 2
                             } else {
                                 pending_input_default = None;
