@@ -554,24 +554,50 @@ final class SystemAudioProcessTap {
 
     // MARK: - Teardown
 
+    /// Dedicated serial queue for the blocking CoreAudio destroy calls in
+    /// `teardown()`. See the teardown comment: these HAL ops can wedge
+    /// forever on macOS 26 (Tahoe) and MUST NOT run on the caller's thread.
+    private static let teardownQueue = DispatchQueue(label: "com.dimmy.tap.teardown")
+
     private func teardown() {
         currentTapPidSet = []
         builtOutputUID = nil
         // Reset the diagnostic "first fire" latch so a rebuilt instance
         // logs its first frame again.
         receivedAudioFlag.withLock { $0 = false }
-        if let procID = ioProcID, aggregateID != AudioObjectID(kAudioObjectUnknown) {
-            AudioDeviceStop(aggregateID, procID)
-            AudioDeviceDestroyIOProcID(aggregateID, procID)
-        }
+
+        // Capture the HAL handles and null the instance fields SYNCHRONOUSLY
+        // so the object reads as fully torn-down the instant this returns,
+        // then perform the actual destroy OFF the caller's thread.
+        //
+        // The four AudioHardwareDestroy* / AudioDevice* calls serialize on
+        // CoreAudio's process-global HAL lock, which WEDGES (never returns)
+        // on macOS 26 (Tahoe) when a process tap is destroyed while the
+        // default input device is mid-transition. `stop()` is invoked from
+        // @MainActor SystemAudioCaptureService.stop() on every meeting stop
+        // (pill / hotkey / menu / window), so a wedge here froze the ENTIRE
+        // app — menu bar, windows, the red rec indicator that can never
+        // clear — until force-quit (Francesco, macOS 26, 2026-07-06).
+        // Running the destroys on a background serial queue degrades a HAL
+        // wedge to a leaked aggregate/tap object (+ a stuck bg thread) at
+        // worst; the caller — and the UI — never block.
+        let procID = ioProcID
+        let aggID = aggregateID
+        let tID = tapID
         ioProcID = nil
-        if aggregateID != AudioObjectID(kAudioObjectUnknown) {
-            AudioHardwareDestroyAggregateDevice(aggregateID)
-            aggregateID = AudioObjectID(kAudioObjectUnknown)
-        }
-        if tapID != AudioObjectID(kAudioObjectUnknown) {
-            AudioHardwareDestroyProcessTap(tapID)
-            tapID = AudioObjectID(kAudioObjectUnknown)
+        aggregateID = AudioObjectID(kAudioObjectUnknown)
+        tapID = AudioObjectID(kAudioObjectUnknown)
+        SystemAudioProcessTap.teardownQueue.async {
+            if let procID, aggID != AudioObjectID(kAudioObjectUnknown) {
+                AudioDeviceStop(aggID, procID)
+                AudioDeviceDestroyIOProcID(aggID, procID)
+            }
+            if aggID != AudioObjectID(kAudioObjectUnknown) {
+                AudioHardwareDestroyAggregateDevice(aggID)
+            }
+            if tID != AudioObjectID(kAudioObjectUnknown) {
+                AudioHardwareDestroyProcessTap(tID)
+            }
         }
     }
 

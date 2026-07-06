@@ -444,6 +444,16 @@ pub fn spawn_audio_thread(
             // meeting. Resampler state in the new callback is created
             // fresh; new samples are appended in coherent time order.
             let mut is_recovery_start = false;
+            // Device-change recovery debounce. On macOS 26 (Tahoe) a
+            // CoreAudio stream rebuild issued WHILE the default input is
+            // mid-transition (the None flicker during an unplug/replug)
+            // wedges the process-global HAL lock forever. Requiring the
+            // NEW default to be seen stable across 2 consecutive 1-Hz
+            // polls before rebuilding keeps the audio thread out of that
+            // transition window — a meeting froze exactly this way
+            // (Francesco, macOS 26, 2026-07-06).
+            let mut pending_input_default: Option<String> = None;
+            let mut input_stable_polls: u32 = 0;
 
             // Loopback resampler state. The external push path delivers
             // samples at whatever rate the macOS tap / ScreenCaptureKit /
@@ -540,13 +550,31 @@ pub fn spawn_audio_thread(
                             false
                         };
                         let input_changed = if !dead {
-                            match last_start_params {
+                            let current_default = current_default_input_name(&host);
+                            let raw_changed = match last_start_params {
                                 Some((ref dn, _)) => input_should_follow_default(
                                     dn.as_deref(),
                                     bound_input_name.as_deref(),
-                                    current_default_input_name(&host).as_deref(),
+                                    current_default.as_deref(),
                                 ),
                                 None => false,
+                            };
+                            if raw_changed {
+                                // Debounce: act only once the SAME new default
+                                // has been observed twice in a row, so the
+                                // rebuild never lands mid-transition (which
+                                // wedges the Tahoe HAL lock).
+                                if pending_input_default.as_deref() == current_default.as_deref() {
+                                    input_stable_polls += 1;
+                                } else {
+                                    pending_input_default = current_default.clone();
+                                    input_stable_polls = 1;
+                                }
+                                input_stable_polls >= 2
+                            } else {
+                                pending_input_default = None;
+                                input_stable_polls = 0;
+                                false
                             }
                         } else {
                             false
