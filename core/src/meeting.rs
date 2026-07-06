@@ -406,17 +406,52 @@ impl MeetingSession {
         crate::audio::MEETING_CAPTURE_GATED.store(false, Ordering::SeqCst);
         self.cancel.store(true, Ordering::SeqCst);
         let handle = self.handle.take();
-        let result = handle
-            .map(|h| h.join().ok())
-            .unwrap_or(None)
-            .unwrap_or(MeetingResult {
+        // Bounded join. The worker normally exits within one chunk's STT
+        // time after `cancel`, but on macOS 26 (Tahoe) a CoreAudio HAL
+        // wedge during stream teardown can pin any thread that touches the
+        // HAL indefinitely. A naked `h.join()` there would hang
+        // `dimmy_meeting_stop` forever and freeze the caller. Joining on a
+        // helper thread with a timeout guarantees stop ALWAYS returns: a
+        // truly wedged worker leaks one thread and yields a partial recap
+        // instead of freezing the app (Francesco, 2026-07-06).
+        let result = match handle {
+            Some(h) => {
+                let (tx, rx) = std::sync::mpsc::channel();
+                thread::spawn(move || {
+                    let _ = tx.send(h.join());
+                });
+                match rx.recv_timeout(std::time::Duration::from_secs(120)) {
+                    Ok(Ok(r)) => r,
+                    Ok(Err(_)) => MeetingResult {
+                        id: self.id.clone(),
+                        dir: self.dir.clone(),
+                        transcript: String::new(),
+                        duration_secs: 0.0,
+                        chunk_count: 0,
+                        error: Some("worker panicked".into()),
+                    },
+                    Err(_) => MeetingResult {
+                        id: self.id.clone(),
+                        dir: self.dir.clone(),
+                        transcript: String::new(),
+                        duration_secs: 0.0,
+                        chunk_count: 0,
+                        error: Some(
+                            "meeting stop timed out (audio subsystem wedged); recap may be incomplete"
+                                .into(),
+                        ),
+                    },
+                }
+            }
+            None => MeetingResult {
                 id: self.id.clone(),
                 dir: self.dir.clone(),
                 transcript: String::new(),
                 duration_secs: 0.0,
                 chunk_count: 0,
-                error: Some("worker panicked".into()),
-            });
+                error: Some("worker never started".into()),
+            },
+        };
         // Marker is removed only on clean exit so a crash leaves it.
         let _ = std::fs::remove_file(self.dir.join(".recording"));
         crate::log(&format!(
