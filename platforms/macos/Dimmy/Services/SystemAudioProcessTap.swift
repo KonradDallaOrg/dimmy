@@ -593,17 +593,37 @@ final class SystemAudioProcessTap {
         // never follows (that means the HAL wedged but we no longer block).
         NSLog("[SystemAudio/tap] teardown: HAL destroy dispatched off-thread (caller unblocked)")
         SystemAudioProcessTap.teardownQueue.async {
-            if let procID, aggID != AudioObjectID(kAudioObjectUnknown) {
-                AudioDeviceStop(aggID, procID)
-                AudioDeviceDestroyIOProcID(aggID, procID)
-            }
-            if aggID != AudioObjectID(kAudioObjectUnknown) {
-                AudioHardwareDestroyAggregateDevice(aggID)
-            }
-            if tID != AudioObjectID(kAudioObjectUnknown) {
-                AudioHardwareDestroyProcessTap(tID)
-            }
+            SystemAudioProcessTap.destroyHALHandles(procID: procID, aggID: aggID, tID: tID)
             NSLog("[SystemAudio/tap] teardown: HAL destroy completed off-thread")
+        }
+    }
+
+    /// Destroy the CoreAudio HAL handles. MUST run OFF the main thread:
+    /// these four calls serialize on the process-global HAL lock, which
+    /// wedges forever on macOS 26 (Tahoe) during a tap teardown that
+    /// races a device transition — a main-thread caller freezes the whole
+    /// app. The `assert` is the negative-space tripwire against ever
+    /// re-introducing a main-thread HAL teardown (exactly what commit
+    /// ab87dc1 did on 2026-07-03): it fires in Debug builds and the
+    /// preflight-mac launch the instant this runs on the main thread.
+    private static func destroyHALHandles(
+        procID: AudioDeviceIOProcID?,
+        aggID: AudioObjectID,
+        tID: AudioObjectID
+    ) {
+        assert(
+            !Thread.isMainThread,
+            "CoreAudio HAL destroy must never run on the main thread — it wedges on macOS 26 (Tahoe)"
+        )
+        if let procID, aggID != AudioObjectID(kAudioObjectUnknown) {
+            AudioDeviceStop(aggID, procID)
+            AudioDeviceDestroyIOProcID(aggID, procID)
+        }
+        if aggID != AudioObjectID(kAudioObjectUnknown) {
+            AudioHardwareDestroyAggregateDevice(aggID)
+        }
+        if tID != AudioObjectID(kAudioObjectUnknown) {
+            AudioHardwareDestroyProcessTap(tID)
         }
     }
 

@@ -559,29 +559,19 @@ pub fn spawn_audio_thread(
                                 ),
                                 None => false,
                             };
-                            if raw_changed {
-                                // Debounce: act only once the SAME new default
-                                // has been observed twice in a row, so the
-                                // rebuild never lands mid-transition (which
-                                // wedges the Tahoe HAL lock).
-                                if pending_input_default.as_deref() == current_default.as_deref() {
-                                    input_stable_polls += 1;
-                                } else {
-                                    pending_input_default = current_default.clone();
-                                    input_stable_polls = 1;
-                                }
-                                if input_stable_polls < 2 {
-                                    crate::log(&format!(
-                                        "[Audio] default input changed to {:?} — debouncing (poll {}/2) before rebuild",
-                                        current_default, input_stable_polls
-                                    ));
-                                }
-                                input_stable_polls >= 2
-                            } else {
-                                pending_input_default = None;
-                                input_stable_polls = 0;
-                                false
+                            let stable = debounce_input_change(
+                                raw_changed,
+                                current_default.as_deref(),
+                                &mut pending_input_default,
+                                &mut input_stable_polls,
+                            );
+                            if raw_changed && !stable {
+                                crate::log(&format!(
+                                    "[Audio] default input changed to {:?} — debouncing (poll {}/2) before rebuild",
+                                    current_default, input_stable_polls
+                                ));
                             }
+                            stable
                         } else {
                             false
                         };
@@ -1264,6 +1254,34 @@ fn loopback_should_follow_default(
 /// means "default"). `bound_input_name`: which device cpal actually
 /// resolved to and bound the stream to. `current_default_input`:
 /// the live system default input as seen from cpal right now.
+/// Debounce a default-input change so a stream rebuild never lands
+/// mid-transition. Returns `true` (rebuild now) only once the SAME new
+/// default has been observed across 2 consecutive polls; the caller owns
+/// the persistent `pending`/`streak` state. Rebuilding on the transient
+/// flicker of an unplug/replug is what wedged the macOS 26 CoreAudio HAL
+/// lock and froze a meeting (Francesco, 2026-07-06); this keeps the audio
+/// thread out of that window.
+fn debounce_input_change(
+    raw_changed: bool,
+    current_default: Option<&str>,
+    pending: &mut Option<String>,
+    streak: &mut u32,
+) -> bool {
+    if raw_changed {
+        if pending.as_deref() == current_default {
+            *streak += 1;
+        } else {
+            *pending = current_default.map(str::to_string);
+            *streak = 1;
+        }
+        *streak >= 2
+    } else {
+        *pending = None;
+        *streak = 0;
+        false
+    }
+}
+
 fn input_should_follow_default(
     requested_device_name: Option<&str>,
     bound_input_name: Option<&str>,
@@ -1907,6 +1925,65 @@ pub fn encode_wav(samples: &[f32], sample_rate: u32) -> Result<Vec<u8>, crate::e
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Device-change debounce (Tahoe HAL-wedge avoidance) ───────────
+    #[test]
+    fn debounce_fires_only_after_two_consecutive_stable_polls() {
+        let mut pending = None;
+        let mut streak = 0;
+        assert!(!debounce_input_change(
+            true,
+            Some("Mic"),
+            &mut pending,
+            &mut streak
+        ));
+        assert!(debounce_input_change(
+            true,
+            Some("Mic"),
+            &mut pending,
+            &mut streak
+        ));
+    }
+
+    #[test]
+    fn debounce_resets_when_the_new_default_keeps_flapping() {
+        let mut pending = None;
+        let mut streak = 0;
+        assert!(!debounce_input_change(
+            true,
+            Some("Mic"),
+            &mut pending,
+            &mut streak
+        ));
+        // A different device on the next poll (unplug flicker) must reset,
+        // never fire — this is the exact case that wedged the HAL.
+        assert!(!debounce_input_change(
+            true,
+            Some("Jabra"),
+            &mut pending,
+            &mut streak
+        ));
+        assert!(!debounce_input_change(
+            true,
+            Some("Mic"),
+            &mut pending,
+            &mut streak
+        ));
+    }
+
+    #[test]
+    fn debounce_clears_state_when_the_change_stops() {
+        let mut pending = Some("Mic".to_string());
+        let mut streak = 1;
+        assert!(!debounce_input_change(
+            false,
+            None,
+            &mut pending,
+            &mut streak
+        ));
+        assert_eq!(streak, 0);
+        assert!(pending.is_none());
+    }
 
     #[test]
     fn dictation_duration_events_fire_once_at_thresholds() {

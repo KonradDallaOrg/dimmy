@@ -42,6 +42,35 @@ const DEFAULT_OVERLAP_MS: u32 = 500;
 const FSYNC_INTERVAL: Duration = Duration::from_secs(1);
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
+/// Outcome of a time-bounded thread join.
+#[derive(Debug)]
+pub(crate) enum BoundedJoin<T> {
+    Done(T),
+    Panicked,
+    TimedOut,
+}
+
+/// Join `handle` but never block longer than `timeout`. If the joined
+/// thread is wedged — e.g. pinned on the macOS 26 CoreAudio HAL
+/// process-global lock during stream/tap teardown — this returns
+/// `TimedOut` and leaves the thread running detached instead of hanging
+/// the caller forever. This is the invariant that keeps `dimmy_meeting_stop`
+/// (and therefore the whole app) from freezing on a stuck meeting worker.
+pub(crate) fn join_bounded<T: Send + 'static>(
+    handle: JoinHandle<T>,
+    timeout: Duration,
+) -> BoundedJoin<T> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(handle.join());
+    });
+    match rx.recv_timeout(timeout) {
+        Ok(Ok(v)) => BoundedJoin::Done(v),
+        Ok(Err(_)) => BoundedJoin::Panicked,
+        Err(_) => BoundedJoin::TimedOut,
+    }
+}
+
 /// Snapshot of the user's STT preferences taken at meeting-start time.
 /// Worker uses this to route each chunk to the SAME backend the
 /// dictation pipeline would use (cloud or local), so meeting and
@@ -415,22 +444,20 @@ impl MeetingSession {
         // truly wedged worker leaks one thread and yields a partial recap
         // instead of freezing the app (Francesco, 2026-07-06).
         let result = match handle {
-            Some(h) => {
-                let (tx, rx) = std::sync::mpsc::channel();
-                thread::spawn(move || {
-                    let _ = tx.send(h.join());
-                });
-                match rx.recv_timeout(std::time::Duration::from_secs(120)) {
-                    Ok(Ok(r)) => r,
-                    Ok(Err(_)) => MeetingResult {
-                        id: self.id.clone(),
-                        dir: self.dir.clone(),
-                        transcript: String::new(),
-                        duration_secs: 0.0,
-                        chunk_count: 0,
-                        error: Some("worker panicked".into()),
-                    },
-                    Err(_) => MeetingResult {
+            Some(h) => match join_bounded(h, Duration::from_secs(120)) {
+                BoundedJoin::Done(r) => r,
+                BoundedJoin::Panicked => MeetingResult {
+                    id: self.id.clone(),
+                    dir: self.dir.clone(),
+                    transcript: String::new(),
+                    duration_secs: 0.0,
+                    chunk_count: 0,
+                    error: Some("worker panicked".into()),
+                },
+                BoundedJoin::TimedOut => {
+                    crate::log("[Meeting] stop join TIMED OUT — worker wedged (likely a CoreAudio HAL lock); returning partial result so the app never freezes");
+                    crate::telemetry::track(crate::telemetry::Event::MeetingStopTimeout);
+                    MeetingResult {
                         id: self.id.clone(),
                         dir: self.dir.clone(),
                         transcript: String::new(),
@@ -440,9 +467,9 @@ impl MeetingSession {
                             "meeting stop timed out (audio subsystem wedged); recap may be incomplete"
                                 .into(),
                         ),
-                    },
+                    }
                 }
-            }
+            },
             None => MeetingResult {
                 id: self.id.clone(),
                 dir: self.dir.clone(),
@@ -1476,6 +1503,46 @@ pub fn list_orphans() -> Vec<serde_json::Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Bounded join: stop() must NEVER hang on a wedged worker ──────
+    // Regression guard for the macOS 26 CoreAudio HAL wedge that froze
+    // the whole app on meeting stop (Francesco, 2026-07-06). We can't
+    // reproduce the OS wedge in a unit test, but we CAN pin the invariant
+    // that makes the app robust to it: the join returns promptly even
+    // when the joined thread is stuck.
+
+    #[test]
+    fn join_bounded_times_out_promptly_on_a_wedged_thread() {
+        let h = thread::spawn(|| {
+            thread::sleep(Duration::from_secs(30));
+            42
+        });
+        let start = Instant::now();
+        let outcome = join_bounded(h, Duration::from_millis(100));
+        assert!(matches!(outcome, BoundedJoin::TimedOut));
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "join_bounded must return on timeout, not wait out the wedged thread"
+        );
+    }
+
+    #[test]
+    fn join_bounded_returns_the_value_on_clean_exit() {
+        let h = thread::spawn(|| 42);
+        match join_bounded(h, Duration::from_secs(5)) {
+            BoundedJoin::Done(v) => assert_eq!(v, 42),
+            other => panic!("expected Done(42), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn join_bounded_reports_a_panicking_thread() {
+        let h = thread::spawn(|| -> i32 { panic!("boom") });
+        assert!(matches!(
+            join_bounded(h, Duration::from_secs(5)),
+            BoundedJoin::Panicked
+        ));
+    }
 
     // ── No-mic system-audio recording (mic-clock-driven worker fix) ──
 

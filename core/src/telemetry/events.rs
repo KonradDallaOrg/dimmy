@@ -278,6 +278,12 @@ pub enum Event {
     },
     MeetingPaused,
     MeetingResumed,
+    /// `dimmy_meeting_stop`'s bounded worker-join timed out: the worker
+    /// was pinned (typically a macOS 26 CoreAudio HAL wedge) so stop
+    /// returned a partial recap instead of freezing the whole app. A
+    /// field alarm for the freeze class that hit a user on 2026-07-06 —
+    /// any non-zero rate here means the audio subsystem is wedging.
+    MeetingStopTimeout,
     /// Fired when the LLM recap completes (success or fail). Lets us
     /// see how often the recap chain breaks vs how often users
     /// actually get a recap out the other end.
@@ -534,6 +540,7 @@ impl Event {
             Event::MeetingStopped { .. } => "meeting.stopped",
             Event::MeetingPaused => "meeting.paused",
             Event::MeetingResumed => "meeting.resumed",
+            Event::MeetingStopTimeout => "meeting.stop_timeout",
             Event::MeetingRecapCompleted { .. } => "meeting.recap_completed",
             Event::MeetingImportedFromFile => "meeting.imported_from_file",
             Event::FileLoadStarted { .. } => "file_load.started",

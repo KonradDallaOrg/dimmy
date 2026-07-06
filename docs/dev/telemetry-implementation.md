@@ -279,7 +279,7 @@ Feature        FeatureHotkeyTriggered  FeatureApiKeySet
 Licensing      LicenseActivated  LicenseActivationFailed  LicenseRefreshed  LicenseRefreshFailed
                LicenseScopeDenied  LicenseDeviceDeactivated
 Meeting        MeetingStarted  MeetingStopped  MeetingPaused  MeetingResumed
-               MeetingRecapCompleted  MeetingImportedFromFile
+               MeetingRecapCompleted  MeetingImportedFromFile  MeetingStopTimeout
 File load      FileLoadStarted  FileLoadCompleted
 Model download ModelDownloadCompleted
 Consent        ConsentLogged
