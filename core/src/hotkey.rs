@@ -1437,6 +1437,7 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     // Helper: read back the stored DICT key config after set_shortcut.
     fn stored_keys() -> (u32, u32, u32) {
@@ -1448,6 +1449,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn set_shortcut_two_modifiers_lowercase() {
         set_shortcut("win+alt");
         let (k1, k2, k3) = stored_keys();
@@ -1457,6 +1459,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn set_shortcut_two_modifiers_mixed_case() {
         set_shortcut("Win+Alt");
         let (k1, k2, k3) = stored_keys();
@@ -1466,6 +1469,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn set_shortcut_two_modifiers_uppercase() {
         set_shortcut("CTRL+SHIFT");
         let (k1, k2, k3) = stored_keys();
@@ -1475,6 +1479,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn set_shortcut_one_mod_one_key() {
         set_shortcut("Alt+X");
         let (k1, k2, k3) = stored_keys();
@@ -1484,6 +1489,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn set_shortcut_one_mod_one_key_lowercase() {
         set_shortcut("ctrl+z");
         let (k1, k2, k3) = stored_keys();
@@ -1493,6 +1499,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn set_shortcut_two_mods_one_key() {
         set_shortcut("Ctrl+Shift+Space");
         let (k1, k2, k3) = stored_keys();
@@ -1502,6 +1509,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn set_shortcut_two_mods_fkey() {
         set_shortcut("win+alt+f1");
         let (k1, k2, k3) = stored_keys();
@@ -1511,6 +1519,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn set_shortcut_invalid_falls_back() {
         set_shortcut("garbage+nonsense");
         let (k1, k2, _k3) = stored_keys();
@@ -1520,18 +1529,21 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     #[should_panic(expected = "shortcut combo must not be empty")]
     fn set_shortcut_empty_panics() {
         set_shortcut("");
     }
 
     #[test]
+    #[serial]
     #[should_panic(expected = "shortcut must contain '+' separator")]
     fn set_shortcut_no_separator_panics() {
         set_shortcut("winalt");
     }
 
     #[test]
+    #[serial]
     fn name_to_group_case_insensitive() {
         // name_to_group works on already-lowercased input (set_shortcut lowercases)
         assert_eq!(name_to_group("win"), GROUP_WIN);
@@ -1543,6 +1555,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn name_to_vk_letters_and_fkeys() {
         assert_eq!(name_to_vk("a"), 0x41);
         assert_eq!(name_to_vk("z"), 0x5A);
@@ -1556,6 +1569,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn take_event_returns_none_by_default() {
         // Clear any pending event
         take_event();
@@ -1563,6 +1577,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn current_label_reflects_set_shortcut() {
         set_shortcut("Ctrl+Shift+X");
         let label = current_label();
@@ -1576,6 +1591,7 @@ mod tests {
     // ── Binding state-machine (cross-platform pure logic) ──────────────
 
     #[test]
+    #[serial]
     fn binding_two_modifier_press_then_release() {
         let b = Binding::new();
         b.set_codes(group_to_packed(GROUP_CTRL), group_to_packed(GROUP_SHIFT), 0);
@@ -1591,6 +1607,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn binding_modifier_plus_key_press_then_release() {
         let b = Binding::new();
         b.set_codes(group_to_packed(GROUP_CTRL), 0, name_to_vk("space"));
@@ -1603,6 +1620,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn binding_unconfigured_ignores_all_events() {
         let b = Binding::new();
         assert_eq!(b.process(VK_LCONTROL, true, false), Transition::None);
@@ -1612,6 +1630,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn binding_pressed_is_idempotent_on_repeat_down() {
         // Auto-repeat keydowns must not re-fire PRESSED.
         let b = Binding::new();
@@ -1624,6 +1643,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn command_shortcut_set_clear_and_independent_of_dict() {
         set_shortcut("ctrl+space");
         set_command_shortcut("win+alt");
@@ -1655,6 +1675,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn combos_conflict_subset_equal_distinct() {
         assert!(combos_conflict("ctrl+space", "ctrl+space"), "equal");
         assert!(combos_conflict("ctrl+space", "ctrl+shift+space"), "subset");
@@ -1675,6 +1696,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn meeting_shortcut_set_and_clear() {
         // Only this test touches MTNG, so its global state is race-free.
         // (Independence from DICT/CMD is structural — they are separate
@@ -1702,6 +1724,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn combos_conflict_three_way() {
         // The host validates a candidate meeting combo against BOTH dictation
         // and command before binding it.
