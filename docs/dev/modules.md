@@ -1,6 +1,6 @@
 # Module reference
 
-One page per core module. For the top-down picture, read [`../ARCHITECTURE.md`](../ARCHITECTURE.md) first.
+One page per core module. For the top-down picture, read [`../ARCHITECTURE.md`](../ARCHITECTURE.md) first. For the **end-to-end as-built behavior + freeze invariants** of the load-bearing features that these modules implement (meeting/system-audio capture, recap, shortcuts, API/providers, dictation), see [`known-good-baseline.md`](known-good-baseline.md).
 
 ## `provider.rs` — the provider enum
 

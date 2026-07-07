@@ -19,6 +19,7 @@ Cross-platform voice-transcription overlay. Records audio via global hotkey, tra
 | Audio DSP pipeline, VAD, AGC rules | [`docs/dev/audio-pipeline.md`](docs/dev/audio-pipeline.md) |
 | Known bugs — read before touching audio, macOS FFI, Windows transparency | [`docs/dev/known-bugs.md`](docs/dev/known-bugs.md) |
 | Per-module reference (providers, STT, LLM, history, etc.) | [`docs/dev/modules.md`](docs/dev/modules.md) |
+| **Known-good baseline (v0.6.66) — as-built behavior + FREEZE invariants of the load-bearing features (meeting/system-audio, recap, shortcuts, API/providers, dictation)** | [`docs/dev/known-good-baseline.md`](docs/dev/known-good-baseline.md) |
 | **Windows CI invariants — MUST read before editing any workflow** | [`docs/dev/windows-ci.md`](docs/dev/windows-ci.md) |
 | **Testing strategy — tiers, fixtures, how to run + extend** | [`docs/dev/testing.md`](docs/dev/testing.md) |
 | Native UI status across platforms | [`docs/dev/native-ui-plan.md`](docs/dev/native-ui-plan.md) |
