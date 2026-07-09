@@ -2,6 +2,19 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!--
+	Bundle name — set EXPLICITLY (not left to GENERATE_INFOPLIST_FILE).
+	As an LSUIElement agent app with an explicit INFOPLIST_FILE, the
+	auto-injected CFBundleName was not reaching the built bundle, so
+	LaunchServices' "The application "" is already open" alert (shown
+	during a Sparkle update relaunch) rendered an EMPTY name. Pinning
+	both keys here removes the ambiguity; SelfTests.testBundleNameIsSet
+	guards against a regression.
+	-->
+	<key>CFBundleName</key>
+	<string>Dimmy</string>
+	<key>CFBundleDisplayName</key>
+	<string>Dimmy</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
