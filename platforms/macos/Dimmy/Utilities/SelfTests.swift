@@ -25,6 +25,7 @@ enum SelfTests {
         testPillCycleLanguageWrap()
         testPillCyclePresetsAreContiguous()
         testSparkleFeedUrlIsDurable()
+        testBundleNameIsSet()
         testProviderTagSamples()
         testSameKeyGating()
         print("[SelfTests] All \(testCount) tests passed.")
@@ -328,6 +329,22 @@ enum SelfTests {
                "SUFeedURL must NOT use /releases/latest/ — that path skips prereleases. " +
                "Use the `auto-update` durable tag instead. Current: \(url)")
         assert(url.hasPrefix("https://"), "SUFeedURL must be HTTPS, got: \(url)")
+    }
+
+    // MARK: - Bundle name is set (regression: empty-name "already open" alert)
+    //
+    // As an LSUIElement agent app with an explicit INFOPLIST_FILE, the
+    // CFBundleName that GENERATE_INFOPLIST_FILE would normally inject
+    // from PRODUCT_NAME did not reach the built bundle. Result:
+    // LaunchServices' "The application "" is already open" alert during
+    // a Sparkle update relaunch showed an EMPTY name. Both keys are now
+    // pinned explicitly in Info.plist; this asserts they never regress
+    // back to empty.
+    private static func testBundleNameIsSet() {
+        let name = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? ""
+        let display = Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? ""
+        assert(name == "Dimmy", "CFBundleName must be 'Dimmy', got '\(name)'")
+        assert(display == "Dimmy", "CFBundleDisplayName must be 'Dimmy', got '\(display)'")
     }
 
     // MARK: - Provider tagging + same-key gating
