@@ -454,6 +454,24 @@ pub fn spawn_audio_thread(
             // (Francesco, macOS 26, 2026-07-06).
             let mut pending_input_default: Option<String> = None;
             let mut input_stable_polls: u32 = 0;
+            // Rate-based device-change detection (complements the
+            // name-based input-follow above). The name check misses a
+            // device that KEEPS its name but changes sample rate — e.g. a
+            // Bluetooth headset flipping A2DP (44.1k) ↔ HFP (16k) while it
+            // is already the default, or a pinned USB interface whose rate
+            // is changed from its own control panel. Left undetected, the
+            // primary resampler keeps upsampling from the STALE source rate
+            // and the recording plays back at the wrong speed (3× on a
+            // 48k→16k flip). `bound_input_rate` is the device-native rate
+            // the live primary resampler was built from; the heartbeat
+            // re-probes the bound device each tick and rebuilds when it
+            // diverges. Set only for a mic primary (a loopback primary's
+            // rate follows the output-device path). Same 2-poll debounce as
+            // the name path so a transient flicker can't wedge the macOS 26
+            // HAL lock.
+            let mut bound_input_rate: Option<u32> = None;
+            let mut pending_input_rate: Option<u32> = None;
+            let mut input_rate_stable_polls: u32 = 0;
 
             // Loopback resampler state. The external push path delivers
             // samples at whatever rate the macOS tap / ScreenCaptureKit /
@@ -575,13 +593,45 @@ pub fn spawn_audio_thread(
                         } else {
                             false
                         };
-                        let default_changed = output_changed || input_changed;
+                        // Rate-change signal: re-probe the bound input
+                        // device's native rate and rebuild if it diverges
+                        // from what the live resampler was built with. Closes
+                        // the same-name-rate-flip + pinned-device gaps the
+                        // name check can't see. Debounced identically.
+                        let rate_changed = if !dead {
+                            match (&last_start_params, bound_input_rate) {
+                                (Some((dn, _)), Some(built_rate)) => {
+                                    let probed = probe_input_native_rate(&host, dn.as_deref());
+                                    let raw_changed =
+                                        rate_changed_requires_rebuild(built_rate, probed);
+                                    let stable = debounce_rate_change(
+                                        raw_changed,
+                                        probed,
+                                        &mut pending_input_rate,
+                                        &mut input_rate_stable_polls,
+                                    );
+                                    if raw_changed && !stable {
+                                        crate::log(&format!(
+                                            "[Audio] bound input rate changed {} Hz -> {:?} — debouncing (poll {}/2) before rebuild",
+                                            built_rate, probed, input_rate_stable_polls
+                                        ));
+                                    }
+                                    stable
+                                }
+                                _ => false,
+                            }
+                        } else {
+                            false
+                        };
+                        let default_changed = output_changed || input_changed || rate_changed;
                         if dead || default_changed {
                             if let Some((ref dn, src)) = last_start_params {
                                 let trigger = if dead {
                                     "stream_dead"
                                 } else if input_changed {
                                     "default_input_changed"
+                                } else if rate_changed {
+                                    "input_rate_changed"
                                 } else {
                                     "default_output_changed"
                                 };
@@ -745,6 +795,15 @@ pub fn spawn_audio_thread(
                         // the WAV writer + STT both see a stable rate.
                         ACTIVE_MIC_SAMPLE_RATE.store(MEETING_CANONICAL_RATE, Ordering::Relaxed);
                         ACTIVE_MIC_DEVICE_RATE.store(primary_actual_sr, Ordering::Relaxed);
+                        // Remember the device-native rate the resampler is
+                        // built from so the heartbeat can catch a same-name
+                        // rate renegotiation. Mic primary only — a loopback
+                        // primary's rate is owned by the output-follow path.
+                        bound_input_rate = if primary_is_loopback {
+                            None
+                        } else {
+                            Some(primary_actual_sr)
+                        };
                         crate::log(&format!(
                             "[Audio] Primary cpal config: device_sr={} ch={} → canonical_sr={} (resample={})",
                             primary_actual_sr,
@@ -1005,6 +1064,9 @@ pub fn spawn_audio_thread(
                         last_start_params = None;
                         bound_loopback_name = None;
                         bound_input_name = None;
+                        bound_input_rate = None;
+                        pending_input_rate = None;
+                        input_rate_stable_polls = 0;
                         AUDIO_STREAM_DEAD.store(false, Ordering::Relaxed);
                         // Clear the published mic rate so callers
                         // (e.g. SystemAudioCaptureService on Mac)
@@ -1167,6 +1229,24 @@ fn resolve_input_device(host: &cpal::Host, name: Option<&str>) -> Option<cpal::D
     host.default_input_device()
 }
 
+/// Probe the current device-native sample rate of the input device the
+/// mic stream is bound to, WITHOUT opening a stream. Resolves the device
+/// the same way `Start` does (by pinned name, else the live default) and
+/// reads its default input config. Returns `None` when the device is gone
+/// or its config can't be read (transient unplug window) — the caller
+/// treats `None` as "no rate-change signal", so a vanished device never
+/// spuriously triggers a rebuild here (stream-death recovery owns that
+/// case). Cross-platform: every host renegotiates rates on a BT profile
+/// flip, and reading a format property never opens/destroys a HAL object
+/// so it is safe on the 1 Hz heartbeat even on macOS 26.
+fn probe_input_native_rate(host: &cpal::Host, name: Option<&str>) -> Option<u32> {
+    let device = resolve_input_device(host, name)?;
+    device
+        .default_input_config()
+        .ok()
+        .map(|c| c.sample_rate().0)
+}
+
 /// Resolve the loopback (system audio) device. On Windows, cpal's
 /// default OUTPUT device exposes WASAPI loopback when treated as an
 /// INPUT — `device.build_input_stream()` on it captures whatever's
@@ -1293,6 +1373,50 @@ fn input_should_follow_default(
     match (bound_input_name, current_default_input) {
         (Some(bound), Some(current)) => bound != current,
         _ => false,
+    }
+}
+
+/// Pure decision: does a re-probed input rate warrant a stream rebuild?
+/// True only when the probe returned a sane audio rate that differs from
+/// the rate the live resampler was built with. A `None` probe (device
+/// gone / config unreadable mid-unplug) or an out-of-range value is
+/// treated as "no signal" so a transient read can't thrash the streams —
+/// stream-death recovery handles an actually-gone device. Unlike the
+/// name check this fires even for a PINNED device (we keep the same
+/// device, only rebuild for its new rate), which is what closes the
+/// pinned-mic gap. Pure so it can be unit-tested without cpal.
+fn rate_changed_requires_rebuild(built_rate: u32, probed: Option<u32>) -> bool {
+    match probed {
+        Some(r) if (8_000..=192_000).contains(&r) => r != built_rate,
+        _ => false,
+    }
+}
+
+/// Debounce a bound-input RATE change so a stream rebuild never lands
+/// mid-transition — the rate-side mirror of `debounce_input_change`.
+/// Returns `true` (rebuild now) only once the SAME new rate has been
+/// observed across 2 consecutive polls; the caller owns the persistent
+/// `pending`/`streak` state. Same rationale as the name-side debounce: a
+/// rebuild issued during the flicker of a BT renegotiation wedged the
+/// macOS 26 CoreAudio HAL lock (Francesco, 2026-07-06).
+fn debounce_rate_change(
+    raw_changed: bool,
+    current_rate: Option<u32>,
+    pending: &mut Option<u32>,
+    streak: &mut u32,
+) -> bool {
+    if raw_changed {
+        if *pending == current_rate {
+            *streak += 1;
+        } else {
+            *pending = current_rate;
+            *streak = 1;
+        }
+        *streak >= 2
+    } else {
+        *pending = None;
+        *streak = 0;
+        false
     }
 }
 
@@ -1978,6 +2102,86 @@ mod tests {
         assert!(!debounce_input_change(
             false,
             None,
+            &mut pending,
+            &mut streak
+        ));
+        assert_eq!(streak, 0);
+        assert!(pending.is_none());
+    }
+
+    #[test]
+    fn rate_change_rebuilds_on_a_real_same_name_flip() {
+        // The field bug: a BT headset already the default flips A2DP→HFP,
+        // dropping its native rate 44.1k → 16k without changing its NAME.
+        // The name check is blind to this; the rate check must fire.
+        assert!(rate_changed_requires_rebuild(44_100, Some(16_000)));
+        assert!(rate_changed_requires_rebuild(16_000, Some(48_000)));
+        // Identity: same rate, no rebuild.
+        assert!(!rate_changed_requires_rebuild(48_000, Some(48_000)));
+    }
+
+    #[test]
+    fn rate_change_ignores_missing_or_out_of_range_probe() {
+        // Device vanished mid-unplug (probe None) → no signal; stream-death
+        // recovery owns that case, we must not thrash here.
+        assert!(!rate_changed_requires_rebuild(48_000, None));
+        // A garbage / out-of-audio-range read must NOT trigger a rebuild.
+        assert!(!rate_changed_requires_rebuild(48_000, Some(0)));
+        assert!(!rate_changed_requires_rebuild(48_000, Some(4_000)));
+        assert!(!rate_changed_requires_rebuild(48_000, Some(384_000)));
+    }
+
+    #[test]
+    fn rate_debounce_fires_only_after_two_consecutive_stable_polls() {
+        let mut pending: Option<u32> = None;
+        let mut streak = 0;
+        // First observation of the new rate: arm, don't rebuild yet.
+        assert!(!debounce_rate_change(
+            true,
+            Some(16_000),
+            &mut pending,
+            &mut streak
+        ));
+        assert_eq!(streak, 1);
+        // Same new rate again: now stable → rebuild.
+        assert!(debounce_rate_change(
+            true,
+            Some(16_000),
+            &mut pending,
+            &mut streak
+        ));
+        assert_eq!(streak, 2);
+    }
+
+    #[test]
+    fn rate_debounce_resets_when_the_rate_keeps_flapping() {
+        let mut pending: Option<u32> = None;
+        let mut streak = 0;
+        assert!(!debounce_rate_change(
+            true,
+            Some(16_000),
+            &mut pending,
+            &mut streak
+        ));
+        // A DIFFERENT transient rate resets the streak — never rebuilds
+        // mid-flicker (the macOS 26 HAL-wedge guard).
+        assert!(!debounce_rate_change(
+            true,
+            Some(24_000),
+            &mut pending,
+            &mut streak
+        ));
+        assert_eq!(streak, 1);
+        assert_eq!(pending, Some(24_000));
+    }
+
+    #[test]
+    fn rate_debounce_clears_when_the_change_stops() {
+        let mut pending: Option<u32> = Some(16_000);
+        let mut streak = 1;
+        assert!(!debounce_rate_change(
+            false,
+            Some(48_000),
             &mut pending,
             &mut streak
         ));
