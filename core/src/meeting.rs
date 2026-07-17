@@ -822,6 +822,10 @@ fn worker_loop(
     // marker to transcripts.txt on resume.
     let mut was_paused = false;
     let mut pause_started_at: Option<Instant> = None;
+    // Sum of paused-window durations, so the stop-time capture-ratio
+    // guard compares audio-on-disk against REAL ACTIVE recording time
+    // (elapsed minus pauses) instead of raw wall-clock.
+    let mut total_paused_ms: u128 = 0;
 
     // Periodic diagnostic tick. Every 5 s log the state machine's view
     // of the worker:
@@ -917,6 +921,7 @@ fn worker_loop(
                 .map(|t| t.elapsed().as_millis())
                 .unwrap_or(0);
             pause_started_at = None;
+            total_paused_ms += dur_ms;
             let snap = effective_len(clock_on_secondary, &audio_buffer, &audio_buffer_secondary)
                 .unwrap_or_default();
             crate::log(&format!(
@@ -1247,6 +1252,39 @@ fn worker_loop(
         }
     }
     let duration_secs = started.elapsed().as_secs_f64();
+    // Capture-integrity guard — the meeting sibling of the dictation
+    // capture-ratio at StopRec (ffi.rs). Compares audio actually on disk
+    // (`samples_written` at the canonical rate) against the REAL ACTIVE
+    // recording time (elapsed minus paused windows). A healthy meeting is
+    // ~1.0; a low ratio means capture ran at the wrong rate and audio.wav
+    // is time-distorted — the "voce accelerata 3×" class (a BT headset
+    // flipping A2DP↔HFP mid-meeting → ratio ~0.33). The rate-based rebuild
+    // in audio.rs should keep this at ge_95; a low bucket in the field is
+    // the alarm that a gap slipped through. WARN-not-assert: rate drift is
+    // device-dependent, not a logic bug, and crashing at stop would lose
+    // the whole recording. Gated on >5 s active so startup jitter over a
+    // short meeting can't mis-bucket as unhealthy.
+    {
+        let active_secs = (duration_secs - total_paused_ms as f64 / 1000.0).max(0.0);
+        let captured_secs = samples_written as f64 / device_sample_rate.max(1) as f64;
+        if active_secs > 5.0 {
+            let ratio = captured_secs / active_secs;
+            if ratio.is_finite() {
+                if ratio < 0.85 {
+                    crate::log(&format!(
+                        "[Meeting] WARN capture ratio {:.0}% — {:.1}s audio of {:.1}s active recording; \
+                         playback may be time-distorted (input rate drift?)",
+                        ratio * 100.0,
+                        captured_secs,
+                        active_secs
+                    ));
+                }
+                crate::telemetry::track(crate::telemetry::Event::MeetingCaptureRatio {
+                    ratio_bucket: crate::telemetry::sanitize::bucket_capture_ratio(ratio),
+                });
+            }
+        }
+    }
     finalize_meeting_meta(&dir, &id, duration_secs, chunk_count);
 
     // Build the final transcript: time-ordered labeled stream read
