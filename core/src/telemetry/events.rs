@@ -297,15 +297,16 @@ pub enum Event {
         /// `lt_50` | `50_85` | `85_95` | `ge_95`
         ratio_bucket: &'static str,
     },
-    /// Fired when the core overrides a mis-reported loopback source rate with
-    /// the MEASURED delivery rate (raw samples / wall-clock). The macOS
-    /// system-audio tap can claim its anchor device's 48 kHz while a
-    /// Bluetooth-HFP source only delivers 16 kHz — passthrough would ship 3x
-    /// fast system audio + wrong STT (recovered offline for a user meeting,
-    /// 2026-07-21). A non-zero rate here is the field alarm that a host is
-    /// lying about the loopback rate in the wild. Both fields are standard
-    /// rate labels — device characteristics, never user content.
-    LoopbackRateCorrected {
+    /// CANARY: fired when the core MEASURES a loopback delivery rate (raw
+    /// samples / wall-clock) that diverges from the rate the host CLAIMED.
+    /// The macOS system-audio tap can claim its anchor device's 48 kHz while
+    /// a Bluetooth-HFP source only delivers 16 kHz — which shipped 3x fast
+    /// system audio + wrong STT (recovered offline for a user meeting,
+    /// 2026-07-21). The real fix is host-side (the tap now pins its aggregate
+    /// to 48 kHz; WASAPI is already canonical); this event does NOT alter the
+    /// audio, it only makes a field regression of that fix visible. Both
+    /// fields are standard rate labels — device characteristics, not content.
+    LoopbackRateMismatch {
         /// what the host claimed, e.g. "48000"
         claimed: &'static str,
         /// what the core measured + snapped to, e.g. "16000"
@@ -569,7 +570,7 @@ impl Event {
             Event::MeetingResumed => "meeting.resumed",
             Event::MeetingStopTimeout => "meeting.stop_timeout",
             Event::MeetingCaptureRatio { .. } => "meeting.capture_ratio",
-            Event::LoopbackRateCorrected { .. } => "audio.loopback_rate_corrected",
+            Event::LoopbackRateMismatch { .. } => "audio.loopback_rate_mismatch",
             Event::MeetingRecapCompleted { .. } => "meeting.recap_completed",
             Event::MeetingImportedFromFile => "meeting.imported_from_file",
             Event::FileLoadStarted { .. } => "file_load.started",
@@ -713,12 +714,12 @@ mod tests {
     }
 
     #[test]
-    fn loopback_rate_corrected_name_props_and_no_content() {
-        let e = Event::LoopbackRateCorrected {
+    fn loopback_rate_mismatch_name_props_and_no_content() {
+        let e = Event::LoopbackRateMismatch {
             claimed: "48000",
             measured: "16000",
         };
-        assert_eq!(e.name(), "audio.loopback_rate_corrected");
+        assert_eq!(e.name(), "audio.loopback_rate_mismatch");
         let p = e.properties();
         assert_eq!(p["claimed"], "48000");
         assert_eq!(p["measured"], "16000");
