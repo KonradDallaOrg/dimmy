@@ -297,6 +297,20 @@ pub enum Event {
         /// `lt_50` | `50_85` | `85_95` | `ge_95`
         ratio_bucket: &'static str,
     },
+    /// Fired when the core overrides a mis-reported loopback source rate with
+    /// the MEASURED delivery rate (raw samples / wall-clock). The macOS
+    /// system-audio tap can claim its anchor device's 48 kHz while a
+    /// Bluetooth-HFP source only delivers 16 kHz — passthrough would ship 3x
+    /// fast system audio + wrong STT (recovered offline for a user meeting,
+    /// 2026-07-21). A non-zero rate here is the field alarm that a host is
+    /// lying about the loopback rate in the wild. Both fields are standard
+    /// rate labels — device characteristics, never user content.
+    LoopbackRateCorrected {
+        /// what the host claimed, e.g. "48000"
+        claimed: &'static str,
+        /// what the core measured + snapped to, e.g. "16000"
+        measured: &'static str,
+    },
     /// Fired when the LLM recap completes (success or fail). Lets us
     /// see how often the recap chain breaks vs how often users
     /// actually get a recap out the other end.
@@ -555,6 +569,7 @@ impl Event {
             Event::MeetingResumed => "meeting.resumed",
             Event::MeetingStopTimeout => "meeting.stop_timeout",
             Event::MeetingCaptureRatio { .. } => "meeting.capture_ratio",
+            Event::LoopbackRateCorrected { .. } => "audio.loopback_rate_corrected",
             Event::MeetingRecapCompleted { .. } => "meeting.recap_completed",
             Event::MeetingImportedFromFile => "meeting.imported_from_file",
             Event::FileLoadStarted { .. } => "file_load.started",
@@ -695,6 +710,20 @@ mod tests {
         assert_eq!(p["ratio_bucket"], "lt_50");
         // Only the single categorical bucket — no duration, samples, or content.
         assert_eq!(p.as_object().map(|o| o.len()), Some(1));
+    }
+
+    #[test]
+    fn loopback_rate_corrected_name_props_and_no_content() {
+        let e = Event::LoopbackRateCorrected {
+            claimed: "48000",
+            measured: "16000",
+        };
+        assert_eq!(e.name(), "audio.loopback_rate_corrected");
+        let p = e.properties();
+        assert_eq!(p["claimed"], "48000");
+        assert_eq!(p["measured"], "16000");
+        // Only the two categorical rate labels — device characteristics.
+        assert_eq!(p.as_object().map(|o| o.len()), Some(2));
     }
 
     #[test]
