@@ -124,7 +124,10 @@ mod imp {
     use grammers_client::update::Update;
     use grammers_client::Client;
     use grammers_mtsender::SenderPool;
-    use grammers_session::storages::SqliteSession;
+    use grammers_session::types::{
+        ChannelState, DcOption, PeerId, PeerInfo, UpdateState, UpdatesState,
+    };
+    use grammers_session::{BoxFuture, Session, SessionData};
     use serde_json::json;
     use std::collections::{HashMap, HashSet};
     use std::sync::{Arc, Mutex};
@@ -328,7 +331,7 @@ mod imp {
     fn session_path() -> PathBuf {
         telegram_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("session")
+            .join("session.json")
     }
     fn inbox_dir() -> PathBuf {
         telegram_dir()
@@ -358,6 +361,155 @@ mod imp {
         }
     }
 
+    // ── File-backed session (JSON), replacing grammers' SqliteSession ──
+    // SqliteSession uses libsql, whose global sqlite init PANICS when
+    // Dimmy's history (rusqlite) has already initialized sqlite in the same
+    // process (`SQLITE_CONFIG_SERIALIZED` assert in libsql). We persist the
+    // session ourselves via serde so libsql is never opened. This carries the
+    // auth key + home DC + self peer across launches, so the user logs in once.
+    #[derive(serde::Serialize, serde::Deserialize)]
+    struct PersistedSession {
+        home_dc: i32,
+        dc_options: Vec<DcOption>,
+        peer_infos: Vec<PeerInfo>,
+        updates_state: UpdatesState,
+    }
+
+    impl PersistedSession {
+        fn from_data(d: &SessionData) -> Self {
+            Self {
+                home_dc: d.home_dc,
+                dc_options: d.dc_options.values().cloned().collect(),
+                peer_infos: d.peer_infos.values().cloned().collect(),
+                updates_state: d.updates_state.clone(),
+            }
+        }
+        fn into_data(self) -> SessionData {
+            SessionData {
+                home_dc: self.home_dc,
+                dc_options: self.dc_options.into_iter().map(|o| (o.id, o)).collect(),
+                peer_infos: self.peer_infos.into_iter().map(|i| (i.id(), i)).collect(),
+                updates_state: self.updates_state,
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    struct FileSessionError;
+    impl std::error::Error for FileSessionError {}
+    impl std::fmt::Display for FileSessionError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "telegram session lock poisoned")
+        }
+    }
+
+    struct FileSession {
+        data: Mutex<SessionData>,
+        path: PathBuf,
+    }
+
+    impl FileSession {
+        fn load(path: PathBuf) -> Self {
+            let data = std::fs::read(&path)
+                .ok()
+                .and_then(|b| serde_json::from_slice::<PersistedSession>(&b).ok())
+                .map(PersistedSession::into_data)
+                .unwrap_or_default();
+            Self {
+                data: Mutex::new(data),
+                path,
+            }
+        }
+        fn lock(&self) -> Result<std::sync::MutexGuard<'_, SessionData>, FileSessionError> {
+            self.data.lock().map_err(|_| FileSessionError)
+        }
+        fn save(&self, d: &SessionData) {
+            if let Ok(bytes) = serde_json::to_vec(&PersistedSession::from_data(d)) {
+                let _ = std::fs::write(&self.path, bytes);
+            }
+        }
+    }
+
+    impl Session for FileSession {
+        type Error = FileSessionError;
+
+        fn home_dc_id(&self) -> Result<i32, FileSessionError> {
+            Ok(self.lock()?.home_dc)
+        }
+
+        fn set_home_dc_id(&self, dc_id: i32) -> BoxFuture<'_, Result<(), FileSessionError>> {
+            Box::pin(async move {
+                let mut d = self.lock()?;
+                d.home_dc = dc_id;
+                self.save(&d);
+                Ok(())
+            })
+        }
+
+        fn dc_option(&self, dc_id: i32) -> Result<Option<DcOption>, FileSessionError> {
+            Ok(self.lock()?.dc_options.get(&dc_id).cloned())
+        }
+
+        fn set_dc_option(&self, dc_option: &DcOption) -> BoxFuture<'_, Result<(), FileSessionError>> {
+            let dc_option = dc_option.clone();
+            Box::pin(async move {
+                let mut d = self.lock()?;
+                d.dc_options.insert(dc_option.id, dc_option);
+                self.save(&d);
+                Ok(())
+            })
+        }
+
+        fn peer(&self, peer: PeerId) -> BoxFuture<'_, Result<Option<PeerInfo>, FileSessionError>> {
+            Box::pin(async move { Ok(self.lock()?.peer_infos.get(&peer).cloned()) })
+        }
+
+        fn cache_peer(&self, peer: &PeerInfo) -> BoxFuture<'_, Result<(), FileSessionError>> {
+            let peer = peer.clone();
+            Box::pin(async move {
+                let mut d = self.lock()?;
+                d.peer_infos
+                    .entry(peer.id())
+                    .or_insert_with(|| peer.clone())
+                    .extend_info(&peer);
+                self.save(&d);
+                Ok(())
+            })
+        }
+
+        fn updates_state(&self) -> BoxFuture<'_, Result<UpdatesState, FileSessionError>> {
+            Box::pin(async move { Ok(self.lock()?.updates_state.clone()) })
+        }
+
+        fn set_update_state(
+            &self,
+            update: UpdateState,
+        ) -> BoxFuture<'_, Result<(), FileSessionError>> {
+            Box::pin(async move {
+                let mut d = self.lock()?;
+                match update {
+                    UpdateState::All(updates_state) => {
+                        d.updates_state = updates_state;
+                    }
+                    UpdateState::Primary { pts, date, seq } => {
+                        d.updates_state.pts = pts;
+                        d.updates_state.date = date;
+                        d.updates_state.seq = seq;
+                    }
+                    UpdateState::Secondary { qts } => {
+                        d.updates_state.qts = qts;
+                    }
+                    UpdateState::Channel { id, pts } => {
+                        d.updates_state.channels.retain(|c| c.id != id);
+                        d.updates_state.channels.push(ChannelState { id, pts });
+                    }
+                }
+                self.save(&d);
+                Ok(())
+            })
+        }
+    }
+
     /// The worker: owns the grammers client + all mutable session state.
     async fn run(
         mut rx: UnboundedReceiver<Cmd>,
@@ -369,7 +521,7 @@ mod imp {
         }
         let _ = std::fs::create_dir_all(inbox_dir());
 
-        let session = Arc::new(SqliteSession::open(session_path()).await?);
+        let session = Arc::new(FileSession::load(session_path()));
         let SenderPool {
             runner,
             updates,
