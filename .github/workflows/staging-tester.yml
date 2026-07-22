@@ -542,7 +542,9 @@ jobs:
           DIMMY_CONFIG_NAMESPACE: dimmy-staging
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
-          FEAT: "local-stt-vulkan,local-stt-parakeet,local-llm-vulkan,local-dfn,license-client"
+          DIMMY_TELEGRAM_API_ID: ${{ secrets.DIMMY_TELEGRAM_API_ID }}
+          DIMMY_TELEGRAM_API_HASH: ${{ secrets.DIMMY_TELEGRAM_API_HASH }}
+          FEAT: "local-stt-vulkan,local-stt-parakeet,local-llm-vulkan,local-dfn,license-client,telegram"
         run: |
           res="$(scripts/dev/dll-cache.sh restore win-x64 "$FEAT" "D:/t/release/dimmy_lib.dll" || echo MISS)"
           echo "restore: $res"
@@ -569,6 +571,9 @@ jobs:
           # Side-by-side install with prod: distinct packId (Dimmy-Staging) +
           # distinct config dir.
           DIMMY_CONFIG_NAMESPACE: dimmy-staging
+          # Telegram api_id/hash baked via option_env! (core/src/telegram.rs).
+          DIMMY_TELEGRAM_API_ID: ${{ secrets.DIMMY_TELEGRAM_API_ID }}
+          DIMMY_TELEGRAM_API_HASH: ${{ secrets.DIMMY_TELEGRAM_API_HASH }}
         run: |
           call "%VS2026_PATH%\VC\Auxiliary\Build\vcvars64.bat"
           if errorlevel 1 exit /b 1
@@ -598,7 +603,7 @@ jobs:
           # Without it, AEC falls back to nnnoiseless. Frozen here so
           # staging testers always exercise the production-default
           # backend.
-          cargo build --lib --release --features local-stt-vulkan,local-stt-parakeet,local-llm-vulkan,local-dfn,license-client
+          cargo build --lib --release --features local-stt-vulkan,local-stt-parakeet,local-llm-vulkan,local-dfn,license-client,telegram
 
       # Added 2026-07-05: the REM comment above always claimed this gate
       # existed, but only release.yml and staging-auto-update.yml had it;
@@ -646,7 +651,9 @@ jobs:
           DIMMY_CONFIG_NAMESPACE: dimmy-staging
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
-          FEAT: "local-stt-vulkan,local-stt-parakeet,local-llm-vulkan,local-dfn,license-client"
+          DIMMY_TELEGRAM_API_ID: ${{ secrets.DIMMY_TELEGRAM_API_ID }}
+          DIMMY_TELEGRAM_API_HASH: ${{ secrets.DIMMY_TELEGRAM_API_HASH }}
+          FEAT: "local-stt-vulkan,local-stt-parakeet,local-llm-vulkan,local-dfn,license-client,telegram"
         run: scripts/dev/dll-cache.sh store win-x64 "$FEAT" "D:/t/release/dimmy_lib.dll" || true
 
       - name: Fetch onnxruntime win-x64 DLL (Parakeet ort path)

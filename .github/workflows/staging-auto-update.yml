@@ -565,6 +565,9 @@ jobs:
           # would write into the prod `dimmy` config dir (default when
           # DIMMY_CONFIG_NAMESPACE is unset) and mix data with prod.
           DIMMY_CONFIG_NAMESPACE: dimmy-staging
+          # Telegram api_id/hash baked via option_env! (core/src/telegram.rs).
+          DIMMY_TELEGRAM_API_ID: ${{ secrets.DIMMY_TELEGRAM_API_ID }}
+          DIMMY_TELEGRAM_API_HASH: ${{ secrets.DIMMY_TELEGRAM_API_HASH }}
         run: |
           REM Activate VS 2026 MSVC for this step only — PATH, INCLUDE,
           REM LIB point at the 14.50+ toolchain. Subsequent steps inherit
@@ -588,7 +591,7 @@ jobs:
           REM     gate fail, test-install red, user-reported Win crash),
           REM     FIRST diagnostic = re-add `cargo clean --release` and
           REM     re-run. Then investigate why the cache went stale.
-          cargo build --lib --release --features local-stt-vulkan,local-llm-vulkan,local-stt-parakeet,license-client
+          cargo build --lib --release --features local-stt-vulkan,local-llm-vulkan,local-stt-parakeet,license-client,telegram
 
       - name: Gate — verify dimmy_lib.dll linker version
         shell: pwsh

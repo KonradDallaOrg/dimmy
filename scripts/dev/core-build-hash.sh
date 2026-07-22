@@ -59,4 +59,8 @@ feat="${1:?usage: core-build-hash.sh \"<feature-string>\"}"
   printf 'pubkey=%s\n'  "$(printf '%s' "${DIMMY_LICENSE_PUBKEY:-}" | sha256sum)"
   printf 'posthog=%s\n' "$(printf '%s' "${POSTHOG_API_KEY:-}"      | sha256sum)"
   printf 'sentry=%s\n'  "$(printf '%s' "${SENTRY_DSN:-}"           | sha256sum)"
+  # Telegram api_id/hash are baked via option_env! (core/src/telegram.rs), so
+  # a credential change must invalidate the cached DLL just like the pubkey.
+  printf 'tg_id=%s\n'   "$(printf '%s' "${DIMMY_TELEGRAM_API_ID:-}"   | sha256sum)"
+  printf 'tg_hash=%s\n' "$(printf '%s' "${DIMMY_TELEGRAM_API_HASH:-}" | sha256sum)"
 } | sha256sum | cut -c1-16
