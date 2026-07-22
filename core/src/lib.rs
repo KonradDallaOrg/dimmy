@@ -64,6 +64,7 @@ pub mod parakeet_fluid;
 pub mod preprocess;
 pub mod process_loopback;
 pub mod provider;
+pub mod telegram;
 pub mod telemetry;
 pub mod transcribe;
 #[cfg(target_os = "windows")]
@@ -706,6 +707,14 @@ pub struct AppConfig {
     /// Requires a Deepgram STT key. Orthogonal to `stt_mode` — it takes
     /// over the dictation capture path when enabled and a key is present.
     pub streaming_dictation: bool,
+    /// Master switch for the Telegram inbox source (record on phone -> share to
+    /// Saved Messages -> Dimmy transcribes + recaps). Off by default; enabling
+    /// only starts the user-account client after the user connects an account.
+    /// Requires a build with the `telegram` cargo feature.
+    pub telegram_enabled: bool,
+    /// When true, a shared audio is downloaded + transcribed automatically;
+    /// when false (default) the host asks "transcribe + recap?" first.
+    pub telegram_auto_process: bool,
     pub preprocessing_enabled: bool,
     pub audio_debug_enabled: bool,
     /// When true, forward `[ggml DEBUG]` lines to dimmy.log. Default false:
@@ -877,6 +886,8 @@ impl Default for AppConfig {
             recap_model_override: String::new(),
             chunk_streaming_enabled: false,
             streaming_dictation: false,
+            telegram_enabled: false,
+            telegram_auto_process: false,
             preprocessing_enabled: true,
             audio_debug_enabled: false,
             ggml_debug_logging: false,
@@ -996,6 +1007,8 @@ pub fn save_config_file(cfg: &AppConfig) {
             "recap_model_override": cfg.recap_model_override,
             "chunk_streaming_enabled": cfg.chunk_streaming_enabled,
             "streaming_dictation": cfg.streaming_dictation,
+            "telegram_enabled": cfg.telegram_enabled,
+            "telegram_auto_process": cfg.telegram_auto_process,
             "preprocessing_enabled": cfg.preprocessing_enabled,
             "audio_debug_enabled": cfg.audio_debug_enabled,
             "ggml_debug_logging": cfg.ggml_debug_logging,
@@ -1138,6 +1151,12 @@ pub fn load_config_file() -> AppConfig {
                     streaming_dictation: v["streaming_dictation"]
                         .as_bool()
                         .unwrap_or(defaults.streaming_dictation),
+                    telegram_enabled: v["telegram_enabled"]
+                        .as_bool()
+                        .unwrap_or(defaults.telegram_enabled),
+                    telegram_auto_process: v["telegram_auto_process"]
+                        .as_bool()
+                        .unwrap_or(defaults.telegram_auto_process),
                     preprocessing_enabled: v["preprocessing_enabled"]
                         .as_bool()
                         .unwrap_or(defaults.preprocessing_enabled),
@@ -1534,6 +1553,8 @@ pub struct AppState {
     pub llm_log_enabled: Mutex<bool>,
     pub chunk_streaming_enabled: Mutex<bool>,
     pub streaming_dictation: Mutex<bool>,
+    pub telegram_enabled: Mutex<bool>,
+    pub telegram_auto_process: Mutex<bool>,
     pub preprocessing_enabled: Mutex<bool>,
     pub audio_debug_enabled: Mutex<bool>,
     pub ggml_debug_logging: Mutex<bool>,
@@ -1679,6 +1700,8 @@ impl AppState {
             llm_log_enabled: Mutex::new(file_cfg.llm_log_enabled),
             chunk_streaming_enabled: Mutex::new(file_cfg.chunk_streaming_enabled),
             streaming_dictation: Mutex::new(file_cfg.streaming_dictation),
+            telegram_enabled: Mutex::new(file_cfg.telegram_enabled),
+            telegram_auto_process: Mutex::new(file_cfg.telegram_auto_process),
             preprocessing_enabled: Mutex::new(file_cfg.preprocessing_enabled),
             audio_debug_enabled: Mutex::new(file_cfg.audio_debug_enabled),
             ggml_debug_logging: Mutex::new(file_cfg.ggml_debug_logging),
@@ -1812,6 +1835,11 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         .streaming_dictation
         .lock()
         .map_err(|e| e.to_string())?;
+    let telegram_enabled = *state.telegram_enabled.lock().map_err(|e| e.to_string())?;
+    let telegram_auto_process = *state
+        .telegram_auto_process
+        .lock()
+        .map_err(|e| e.to_string())?;
     let preprocessing_enabled = *state
         .preprocessing_enabled
         .lock()
@@ -1899,6 +1927,8 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         recap_model_override,
         chunk_streaming_enabled,
         streaming_dictation,
+        telegram_enabled,
+        telegram_auto_process,
         preprocessing_enabled,
         audio_debug_enabled,
         ggml_debug_logging,

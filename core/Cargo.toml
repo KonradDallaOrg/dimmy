@@ -138,12 +138,28 @@ license-cli = ["dep:clap", "dep:ed25519-dalek"]
 # for the production cdylib. Default ON so the released app can verify
 # tokens. Without it license.rs is a no-op stub returning Unrestricted.
 license-client = ["dep:ed25519-dalek"]
+# telegram: user-account MTProto client (grammers, pure-Rust — no libtdjson,
+# no OpenSSL) for the "share audio from phone -> Dimmy transcribes+recaps"
+# inbox source. Off by default so contributors/tests don't pull grammers;
+# the Windows dev/test + release builds enable it. Runtime is ALSO gated by
+# the `telegram_enabled` config (default false) + consent, so enabling the
+# cargo feature alone does nothing until the user connects an account.
+telegram = ["dep:grammers-client", "dep:grammers-session", "dep:grammers-mtsender"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", features = ["multipart", "json", "blocking"] }
 tokio = { version = "1", features = ["full"] }
+# Telegram user-client (pure-Rust MTProto — no libtdjson, no OpenSSL).
+# Optional, gated by the `telegram` feature. Pinned to 0.10.0: the classic
+# 0.7.0 high-level API is unusable (transitive `core2 0.4.0` is yanked) and
+# 0.8/0.9 hit dep conflicts in our tree, so 0.10.0 (SenderPool +
+# stream_updates + SqliteSession) is the only version that resolves + builds
+# here. MIT OR Apache-2.0. Home: codeberg.org/Lonami/grammers.
+grammers-client = { version = "=0.10.0", optional = true }
+grammers-session = { version = "=0.10.0", optional = true }
+grammers-mtsender = { version = "=0.10.0", optional = true }
 # Realtime streaming dictation WebSocket client (Deepgram and future
 # wss STT backends). native-tls feature on purpose: the cdylib already
 # standardised on native-tls (schannel on Windows) — a rustls WS client
