@@ -79,6 +79,7 @@ public sealed partial class SettingsWindow
         TelegramPasswordPanel.Visibility = Visibility.Collapsed;
         TelegramConnectedActions.Visibility = Visibility.Collapsed;
         TelegramAutoProcessCard.Visibility = Visibility.Collapsed;
+        TelegramStatusGlyph.Visibility = Visibility.Collapsed;
         TelegramPhoneRing.IsActive = false;
         TelegramPhoneRing.Visibility = Visibility.Collapsed;
 
@@ -112,6 +113,7 @@ public sealed partial class SettingsWindow
                         : $"{who} - waiting for shared audio";
                     TelegramConnectedActions.Visibility = Visibility.Visible;
                     TelegramAutoProcessCard.Visibility = Visibility.Visible;
+                    TelegramStatusGlyph.Visibility = Visibility.Visible; // green check when connected
                 }
                 break;
 

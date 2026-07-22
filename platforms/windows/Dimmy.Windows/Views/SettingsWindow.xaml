@@ -2376,9 +2376,14 @@
                     </Viewbox>
                     <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
                       <TextBlock Text="Telegram" FontSize="16" FontWeight="SemiBold"/>
-                      <TextBlock x:Name="TelegramStatusText" Text="Off" FontSize="13"
-                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                 TextWrapping="Wrap"/>
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon x:Name="TelegramStatusGlyph" Glyph="&#xE73E;" FontSize="13"
+                                  Foreground="{ThemeResource SystemFillColorSuccessBrush}"
+                                  VerticalAlignment="Center" Visibility="Collapsed"/>
+                        <TextBlock x:Name="TelegramStatusText" Text="Off" FontSize="13"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   TextWrapping="Wrap" VerticalAlignment="Center"/>
+                      </StackPanel>
                     </StackPanel>
                     <ToggleSwitch Grid.Column="2" IsOn="{Binding TelegramEnabled, Mode=TwoWay}"
                                   Toggled="TelegramEnabled_Toggled"
