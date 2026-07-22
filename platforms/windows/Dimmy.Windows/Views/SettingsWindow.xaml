@@ -2347,18 +2347,10 @@
                 </Button>
               </StackPanel>
 
-              <controls:SettingCard Glyph="&#xE724;" Label="Enable Telegram audio inbox"
-                                    Description="Pull voice notes you share to your Telegram Saved Messages.">
-                <ToggleSwitch IsOn="{Binding TelegramEnabled, Mode=TwoWay}"
-                              Toggled="TelegramEnabled_Toggled"
-                              Style="{StaticResource CompactToggleSwitch}" />
-              </controls:SettingCard>
-
               <Border x:Name="TelegramCard"
                       Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                       BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="8" Padding="16" Margin="0,8,0,0"
-                      Visibility="Collapsed">
+                      BorderThickness="1" CornerRadius="8" Padding="16">
                 <StackPanel Spacing="14">
                   <Grid ColumnSpacing="14">
                     <Grid.ColumnDefinitions>
@@ -2366,18 +2358,30 @@
                       <ColumnDefinition Width="*"/>
                       <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <FontIcon Grid.Column="0" Glyph="&#xE724;" FontSize="26"
-                              VerticalAlignment="Center"
-                              Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    <!-- Real Telegram logo (blue disc + white plane) - reads on light and dark. -->
+                    <Grid Grid.Column="0" Width="32" Height="32" VerticalAlignment="Center">
+                      <Ellipse>
+                        <Ellipse.Fill>
+                          <LinearGradientBrush StartPoint="0.5,0" EndPoint="0.5,1">
+                            <GradientStop Color="#2AABEE" Offset="0"/>
+                            <GradientStop Color="#229ED9" Offset="1"/>
+                          </LinearGradientBrush>
+                        </Ellipse.Fill>
+                      </Ellipse>
+                      <Viewbox Width="19" Height="19" HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <Path Fill="White" Data="M9.417 15.181l-.397 5.584c.568 0 .814-.244 1.109-.537l2.663-2.545 5.518 4.041c1.012.564 1.725.267 1.998-.931L23.93 3.821c.321-1.496-.541-2.081-1.527-1.714L1.334 10.207c-1.464.564-1.446 1.372-.242 1.74l5.443 1.693L19.243 5.55c.6-.394 1.146-.176.697.218z"/>
+                      </Viewbox>
+                    </Grid>
                     <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
                       <TextBlock Text="Telegram" FontSize="16" FontWeight="SemiBold"/>
-                      <TextBlock x:Name="TelegramStatusText" Text="Not connected" FontSize="13"
+                      <TextBlock x:Name="TelegramStatusText" Text="Off" FontSize="13"
                                  Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                  TextWrapping="Wrap"/>
                     </StackPanel>
-                    <FontIcon x:Name="TelegramStatusGlyph" Grid.Column="2" Glyph="&#xEA39;"
-                              FontSize="20" VerticalAlignment="Center"
-                              Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                    <ToggleSwitch Grid.Column="2" IsOn="{Binding TelegramEnabled, Mode=TwoWay}"
+                                  Toggled="TelegramEnabled_Toggled"
+                                  Style="{StaticResource CompactToggleSwitch}"
+                                  VerticalAlignment="Center"/>
                   </Grid>
 
                   <StackPanel x:Name="TelegramPhonePanel" Spacing="8" Visibility="Collapsed">
@@ -2423,8 +2427,8 @@
               </Border>
 
               <controls:SettingCard x:Name="TelegramAutoProcessCard" Glyph="&#xE945;"
-                                    Label="Transcribe automatically"
-                                    Description="Skip the prompt and transcribe + recap every shared audio."
+                                    Label="Transcribe and recap automatically"
+                                    Description="Skip the prompt and process every shared audio on its own."
                                     Visibility="Collapsed">
                 <ToggleSwitch IsOn="{Binding TelegramAutoProcess, Mode=TwoWay}"
                               Toggled="TelegramAutoProcess_Toggled"

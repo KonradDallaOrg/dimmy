@@ -72,16 +72,8 @@ public sealed partial class SettingsWindow
     {
         if (TelegramCard == null) return; // page not realized yet
 
-        if (!ViewModel.TelegramEnabled)
-        {
-            TelegramCard.Visibility = Visibility.Collapsed;
-            TelegramAutoProcessCard.Visibility = Visibility.Collapsed;
-            return;
-        }
-
-        TelegramCard.Visibility = Visibility.Visible;
-
-        // Reset every progressive panel, then reveal the one this phase needs.
+        // The card (icon + name + enable toggle) is always shown, like the other
+        // integrations. Everything below the header is state-driven.
         TelegramPhonePanel.Visibility = Visibility.Collapsed;
         TelegramCodePanel.Visibility = Visibility.Collapsed;
         TelegramPasswordPanel.Visibility = Visibility.Collapsed;
@@ -90,67 +82,50 @@ public sealed partial class SettingsWindow
         TelegramPhoneRing.IsActive = false;
         TelegramPhoneRing.Visibility = Visibility.Collapsed;
 
+        if (!ViewModel.TelegramEnabled)
+        {
+            TelegramStatusText.Text = "Off";
+            return;
+        }
+
         switch (phase)
         {
             case "no_credentials":
-                TelegramStatusText.Text =
-                    "This build has no Telegram API key. Set DIMMY_TELEGRAM_API_ID and DIMMY_TELEGRAM_API_HASH, then restart.";
-                SetTelegramGlyph(ok: false);
+                TelegramStatusText.Text = "This build has no Telegram API key.";
                 break;
 
             case "wait_code":
-                TelegramStatusText.Text = "We sent a code to your Telegram app. Enter it below.";
+                TelegramStatusText.Text = "Enter the code we sent to your Telegram app.";
                 TelegramCodePanel.Visibility = Visibility.Visible;
-                SetTelegramGlyph(ok: false);
                 break;
 
             case "wait_password":
-                TelegramStatusText.Text = "Two-step verification is on. Enter your Telegram password.";
+                TelegramStatusText.Text = "Two-step verification. Enter your Telegram password.";
                 TelegramPasswordPanel.Visibility = Visibility.Visible;
-                SetTelegramGlyph(ok: false);
                 break;
 
             case "connected":
                 {
                     var who = string.IsNullOrEmpty(account) ? "Connected" : $"Connected as {account}";
                     TelegramStatusText.Text = pending > 0
-                        ? $"{who}. {pending} waiting to transcribe."
-                        : $"{who}. Waiting for audio you share to Saved Messages.";
+                        ? $"{who} - {pending} waiting"
+                        : $"{who} - waiting for shared audio";
                     TelegramConnectedActions.Visibility = Visibility.Visible;
                     TelegramAutoProcessCard.Visibility = Visibility.Visible;
-                    SetTelegramGlyph(ok: true);
                 }
                 break;
 
             case "error":
-                TelegramStatusText.Text = "Something went wrong. Check your connection and try again.";
+                TelegramStatusText.Text = "Something went wrong. Try again.";
                 TelegramPhonePanel.Visibility = Visibility.Visible;
-                SetTelegramGlyph(ok: false);
                 break;
 
             case "logged_out":
             case "disabled":
             default:
-                TelegramStatusText.Text = "Log in with your Telegram account to start pulling shared audio.";
+                TelegramStatusText.Text = "Not connected. Log in to start.";
                 TelegramPhonePanel.Visibility = Visibility.Visible;
-                SetTelegramGlyph(ok: false);
                 break;
-        }
-    }
-
-    private void SetTelegramGlyph(bool ok)
-    {
-        if (ok)
-        {
-            TelegramStatusGlyph.Glyph = char.ConvertFromUtf32(0xE73E); // CheckMark
-            TelegramStatusGlyph.Foreground = (Microsoft.UI.Xaml.Media.Brush)
-                Application.Current.Resources["SystemFillColorSuccessBrush"];
-        }
-        else
-        {
-            TelegramStatusGlyph.Glyph = char.ConvertFromUtf32(0xEA39); // Info
-            TelegramStatusGlyph.Foreground = (Microsoft.UI.Xaml.Media.Brush)
-                Application.Current.Resources["TextFillColorTertiaryBrush"];
         }
     }
 

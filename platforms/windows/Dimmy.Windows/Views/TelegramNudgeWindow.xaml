@@ -64,8 +64,8 @@
                         FontSize="12"
                         Click="OnDismissClicked" />
                 <Button x:Name="AcceptButton"
-                        Content="Transcribe"
-                        MinWidth="100"
+                        Content="Transcribe + recap"
+                        MinWidth="130"
                         Padding="10,3,10,3"
                         FontSize="12"
                         FontWeight="SemiBold"
