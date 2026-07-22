@@ -273,6 +273,7 @@ public partial class App : Application
     private DictHotkeyService? _dictHotkey;
     private CallNudgeWindow? _callNudgeWindow;
     private Services.CallDetectionService? _callDetection;
+    private Services.TelegramService? _telegram;
 
     /// <summary>Set on launch if `dimmy://activate?…` was the trigger
     /// AND no running instance was reachable to forward to. Picked up
@@ -382,6 +383,11 @@ public partial class App : Application
         _appViewModel.PillShowOnHotkey = settings.PillShowOnHotkey;
         _appViewModel.ShowTaskbarIcon = settings.ShowTaskbarIcon;
         _appViewModel.TrayIconAlwaysVisible = settings.TrayIconAlwaysVisible;
+
+        // Telegram enable/disable rides the config round-trip (Rust
+        // set_config_json → telegram::set_enabled); only the host-owned
+        // ask-vs-auto flag needs to be pushed into the live service.
+        _telegram?.SetAutoProcess(settings.TelegramAutoProcess);
     }
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
@@ -694,6 +700,7 @@ public partial class App : Application
         InitTaskbarAnchor();
         InitCommandPipeAndJumpList();
         InitCallDetection();
+        InitTelegram();
 
         // If the launch came from a `dimmy://activate?…` URL but no
         // running instance was around to handle it, we stashed the
@@ -2179,6 +2186,23 @@ public partial class App : Application
         }
     }
 
+    // ── Telegram audio inbox wiring ──────────────────────────────────
+
+    private void InitTelegram()
+    {
+        try
+        {
+            if (_telegram != null || _dispatcherQueue == null) return;
+            _telegram = new Services.TelegramService(_dispatcherQueue, _appViewModel);
+            _telegram.Start();
+            Log("Telegram inbox initialised", "Telegram");
+        }
+        catch (Exception ex)
+        {
+            Log($"InitTelegram EXC: {ex.Message}", "Telegram");
+        }
+    }
+
     private void OnCallDetected(string? appId, long sinceSeconds)
     {
         _dispatcherQueue?.TryEnqueue(() =>
@@ -2613,6 +2637,7 @@ public partial class App : Application
         _appViewModel.PropertyChanged -= OnAppViewModelPropertyChangedForTaskbar;
         _taskbarService?.Dispose();
         _callDetection?.Dispose();
+        _telegram?.Dispose();
         try { _callNudgeWindow?.Close(); } catch { }
         try { _taskbarAnchor?.Close(); } catch { }
 

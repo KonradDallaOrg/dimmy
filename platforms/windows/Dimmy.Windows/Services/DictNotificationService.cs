@@ -103,6 +103,37 @@ public static class DictNotificationService
         Show($"Transcription failed ({who})", $"{detail}. {DictFailureHints.For(category)}");
     }
 
+    /// <summary>A voice note shared to the user's Telegram Saved Messages
+    /// was transcribed and recapped on this PC. The recap lands in History /
+    /// the meetings folder; this toast is the only surface that tells the
+    /// user the background round-trip finished.</summary>
+    public static void ShowTelegramRecapReady(string filename)
+    {
+        var what = string.IsNullOrEmpty(filename) ? "Your Telegram audio" : filename;
+        Show("Telegram audio ready",
+             $"{what} was transcribed and recapped.");
+    }
+
+    /// <summary>A Telegram voice note was transcribed (and saved to History)
+    /// but the recap could not be generated - usually a missing LLM key.
+    /// Don't claim a recap that isn't there.</summary>
+    public static void ShowTelegramTranscribedNoRecap(string filename)
+    {
+        var what = string.IsNullOrEmpty(filename) ? "Your Telegram audio" : filename;
+        Show("Telegram audio transcribed",
+             $"{what} is saved to History. The recap could not be generated - check your LLM setup.");
+    }
+
+    /// <summary>Transcription of a Telegram voice note failed. It is left
+    /// unprocessed in the Telegram inbox so it can be retried, and we say so
+    /// rather than dropping it silently.</summary>
+    public static void ShowTelegramFailed(string filename)
+    {
+        var what = string.IsNullOrEmpty(filename) ? "A Telegram audio" : filename;
+        Show("Telegram audio failed",
+             $"{what} could not be transcribed. It stays in your inbox to retry.");
+    }
+
     private static void Show(string title, string body)
     {
         try

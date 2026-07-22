@@ -130,6 +130,8 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool _chunkStreamingEnabled;
     [ObservableProperty] private bool _streamingDictation;
     [ObservableProperty] private bool _liveCaptionsEnabled = true;
+    [ObservableProperty] private bool _telegramEnabled;
+    [ObservableProperty] private bool _telegramAutoProcess;
     [ObservableProperty] private bool _callDetectEnabled = true;
     public ObservableCollection<string> CallDetectExcludedApps { get; } = new();
     [ObservableProperty] private bool _saveAudioInHistory = false;
@@ -539,6 +541,8 @@ public partial class SettingsViewModel : ObservableObject
             ChunkStreamingEnabled = r.TryGetProperty("chunk_streaming_enabled", out var cs) && cs.GetBoolean();
             StreamingDictation = r.TryGetProperty("streaming_dictation", out var sd) && sd.GetBoolean();
             LiveCaptionsEnabled = !r.TryGetProperty("live_captions_enabled", out var lce) || lce.GetBoolean();
+            TelegramEnabled = r.TryGetProperty("telegram_enabled", out var tge) && tge.GetBoolean();
+            TelegramAutoProcess = r.TryGetProperty("telegram_auto_process", out var tgap) && tgap.GetBoolean();
             CallDetectEnabled = !r.TryGetProperty("call_detect_enabled", out var cde) || cde.GetBoolean();
             CallDetectExcludedApps.Clear();
             if (r.TryGetProperty("call_detect_excluded_apps", out var cdex)
@@ -742,6 +746,8 @@ public partial class SettingsViewModel : ObservableObject
             ["chunk_streaming_enabled"] = ChunkStreamingEnabled,
             ["streaming_dictation"] = StreamingDictation,
             ["live_captions_enabled"] = LiveCaptionsEnabled,
+            ["telegram_enabled"] = TelegramEnabled,
+            ["telegram_auto_process"] = TelegramAutoProcess,
             ["call_detect_enabled"] = CallDetectEnabled,
             ["call_detect_excluded_apps"] = CallDetectExcludedApps.ToList(),
             ["save_audio_in_history"] = SaveAudioInHistory,
