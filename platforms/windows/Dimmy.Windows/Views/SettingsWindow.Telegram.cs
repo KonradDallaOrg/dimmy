@@ -79,7 +79,7 @@ public sealed partial class SettingsWindow
         TelegramPasswordPanel.Visibility = Visibility.Collapsed;
         TelegramConnectedActions.Visibility = Visibility.Collapsed;
         TelegramAutoProcessCard.Visibility = Visibility.Collapsed;
-        TelegramStatusGlyph.Visibility = Visibility.Collapsed;
+        TelegramStatusText.Visibility = Visibility.Visible; // header subtitle; hidden only when connected
         TelegramPhoneRing.IsActive = false;
         TelegramPhoneRing.Visibility = Visibility.Collapsed;
 
@@ -108,12 +108,11 @@ public sealed partial class SettingsWindow
             case "connected":
                 {
                     var who = string.IsNullOrEmpty(account) ? "Connected" : $"Connected as {account}";
-                    TelegramStatusText.Text = pending > 0
-                        ? $"{who} - {pending} waiting"
-                        : $"{who} - waiting for shared audio";
+                    // Status + green check live in the Log out row (B layout), not the header.
+                    TelegramConnectedAccount.Text = pending > 0 ? $"{who} - {pending} waiting" : who;
+                    TelegramStatusText.Visibility = Visibility.Collapsed;
                     TelegramConnectedActions.Visibility = Visibility.Visible;
                     TelegramAutoProcessCard.Visibility = Visibility.Visible;
-                    TelegramStatusGlyph.Visibility = Visibility.Visible; // green check when connected
                 }
                 break;
 

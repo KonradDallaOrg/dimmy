@@ -2376,14 +2376,9 @@
                     </Viewbox>
                     <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
                       <TextBlock Text="Telegram" FontSize="16" FontWeight="SemiBold"/>
-                      <StackPanel Orientation="Horizontal" Spacing="6">
-                        <FontIcon x:Name="TelegramStatusGlyph" Glyph="&#xE73E;" FontSize="13"
-                                  Foreground="{ThemeResource SystemFillColorSuccessBrush}"
-                                  VerticalAlignment="Center" Visibility="Collapsed"/>
-                        <TextBlock x:Name="TelegramStatusText" Text="Off" FontSize="13"
-                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                   TextWrapping="Wrap" VerticalAlignment="Center"/>
-                      </StackPanel>
+                      <TextBlock x:Name="TelegramStatusText" Text="Off" FontSize="13"
+                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                 TextWrapping="Wrap"/>
                     </StackPanel>
                     <ToggleSwitch Grid.Column="2" IsOn="{Binding TelegramEnabled, Mode=TwoWay}"
                                   Toggled="TelegramEnabled_Toggled"
@@ -2426,10 +2421,22 @@
                     </StackPanel>
                   </StackPanel>
 
-                  <StackPanel x:Name="TelegramConnectedActions" Orientation="Horizontal"
-                              Spacing="8" Visibility="Collapsed">
-                    <Button Content="Log out" Click="TelegramLogout_Click"/>
-                  </StackPanel>
+                  <Grid x:Name="TelegramConnectedActions" ColumnSpacing="10" Visibility="Collapsed">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="Auto"/>
+                      <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Button Grid.Column="0" Content="Log out" Click="TelegramLogout_Click"/>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6"
+                                HorizontalAlignment="Right" VerticalAlignment="Center">
+                      <TextBlock x:Name="TelegramConnectedAccount" Text="Connected" FontSize="13"
+                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                 VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                      <FontIcon x:Name="TelegramStatusGlyph" Glyph="&#xE73E;" FontSize="20"
+                                Foreground="{ThemeResource SystemFillColorSuccessBrush}"
+                                VerticalAlignment="Center"/>
+                    </StackPanel>
+                  </Grid>
                 </StackPanel>
               </Border>
 
