@@ -450,7 +450,10 @@ mod imp {
             Ok(self.lock()?.dc_options.get(&dc_id).cloned())
         }
 
-        fn set_dc_option(&self, dc_option: &DcOption) -> BoxFuture<'_, Result<(), FileSessionError>> {
+        fn set_dc_option(
+            &self,
+            dc_option: &DcOption,
+        ) -> BoxFuture<'_, Result<(), FileSessionError>> {
             let dc_option = dc_option.clone();
             Box::pin(async move {
                 let mut d = self.lock()?;
