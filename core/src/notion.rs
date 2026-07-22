@@ -462,36 +462,51 @@ pub async fn send_meeting_recap(
     Ok(CreatedPage { id, url })
 }
 
-/// Best-effort title from a meeting directory: the directory name is
-/// already a UUID, but `meta.json` should have `start_ts`. Fallback to
-/// the directory leaf if parsing fails. The recap pipeline is
-/// independent of this — title is purely the Notion page label.
+/// Best-effort title for the Notion page from a meeting directory.
+///
+/// Priority: (1) the `title` field in `meta.json` — the exact name Dimmy
+/// shows in the History / Meeting list (user-renamed, or backfilled from
+/// the recap / source filename); (2) the start timestamp formatted as
+/// "Meeting YYYY-MM-DD HH:MM"; (3) the directory leaf name. Before this
+/// fix the function read a non-existent integer `start_ts` (the field is
+/// `started_at`, a float) and never looked at `title`, so every page
+/// landed on the UUID leaf. The recap pipeline is independent of this —
+/// title is purely the Notion page label.
 pub fn meeting_dir_to_title(meeting_dir: &std::path::Path, transcript: &str) -> String {
     use chrono::TimeZone;
-    // Try to read meta.json for the start timestamp; if available
-    // format as "Meeting YYYY-MM-DD HH:MM".
     let meta_path = meeting_dir.join("meta.json");
     if let Ok(content) = std::fs::read_to_string(&meta_path) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
-            if let Some(ts_secs) = v.get("start_ts").and_then(|t| t.as_i64()) {
+            // (1) Prefer the display title Dimmy itself uses, so the Notion
+            // page matches what the user sees in the app.
+            if let Some(t) = v.get("title").and_then(|t| t.as_str()) {
+                let t = t.trim();
+                if !t.is_empty() {
+                    return truncate_title(t, 80);
+                }
+            }
+            // (2) Fall back to the start timestamp. meta.json stores this as
+            // `started_at` (a float epoch); accept an int too for safety.
+            let ts_secs = v
+                .get("started_at")
+                .or_else(|| v.get("start_ts"))
+                .and_then(|t| t.as_i64().or_else(|| t.as_f64().map(|f| f as i64)));
+            if let Some(ts_secs) = ts_secs {
                 if let chrono::LocalResult::Single(dt) = chrono::Local.timestamp_opt(ts_secs, 0) {
                     let stamp = dt.format("%Y-%m-%d %H:%M").to_string();
-                    // If we have a transcript, append the first ~6
-                    // words of speech so the page title carries a hint
-                    // of what the meeting was about. Keep total under
-                    // 80 chars (Notion accepts up to 2000 but UX gets
-                    // ugly past 80).
+                    // Append the first ~6 words of speech so the title carries
+                    // a hint of the subject. Keep total under 80 chars.
                     let hint = transcript_first_words(transcript, 6);
                     if hint.is_empty() {
                         return format!("Meeting {stamp}");
                     } else {
-                        return truncate_title(&format!("Meeting {stamp} — {hint}"), 80);
+                        return truncate_title(&format!("Meeting {stamp} - {hint}"), 80);
                     }
                 }
             }
         }
     }
-    // Last resort: directory leaf name.
+    // (3) Last resort: directory leaf name.
     meeting_dir
         .file_name()
         .and_then(|n| n.to_str())
@@ -633,6 +648,45 @@ mod tests {
         assert!(title.starts_with("Meeting "));
         assert!(title.contains("dimmy-test-no-meta"));
         let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[test]
+    fn meeting_dir_to_title_prefers_meta_title() {
+        // The name Dimmy shows in the app must be the Notion page title,
+        // not the meeting-dir UUID (regression: 2026-07-22).
+        let tmp = std::env::temp_dir().join("dimmy-test-title-pref-0cc06b3a");
+        let _ = std::fs::create_dir_all(&tmp);
+        std::fs::write(
+            tmp.join("meta.json"),
+            r#"{"title":"Autenticazione tag NFC","started_at":1781870580.08,"id":"0cc06b3a"}"#,
+        )
+        .unwrap();
+        let title = meeting_dir_to_title(&tmp, "[0 ms] [mic] hello world");
+        assert_eq!(title, "Autenticazione tag NFC");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn meeting_dir_to_title_uses_started_at_float_when_no_title() {
+        // meta.json stores `started_at` as a float epoch; the old code read
+        // an integer `start_ts` and always missed, dropping to the UUID leaf.
+        let tmp = std::env::temp_dir().join("dimmy-test-started-at-float");
+        let _ = std::fs::create_dir_all(&tmp);
+        std::fs::write(
+            tmp.join("meta.json"),
+            r#"{"started_at":1781870580.08,"id":"uuid"}"#,
+        )
+        .unwrap();
+        let title = meeting_dir_to_title(&tmp, "");
+        assert!(
+            title.starts_with("Meeting 2"),
+            "expected a dated title, got: {title}"
+        );
+        assert!(
+            !title.contains("started-at-float"),
+            "must not fall back to the dir leaf: {title}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
