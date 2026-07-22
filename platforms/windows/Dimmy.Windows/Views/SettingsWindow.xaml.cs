@@ -76,12 +76,16 @@ public sealed partial class SettingsWindow : Window
             app.AppViewModel.FileTranscribeProgress += OnFileTranscribeProgress;
             app.AppViewModel.SttModelDownloadProgress += OnSttModelProgress;
             app.AppViewModel.LlmModelDownloadProgress += OnLlmModelProgress;
+            app.AppViewModel.TelegramStateChanged += OnTelegramStateChanged;
+            app.AppViewModel.TelegramError += OnTelegramError;
             this.Closed += (_, __) =>
             {
                 app.AppViewModel.ParakeetDownloadProgress -= OnParakeetProgress;
                 app.AppViewModel.FileTranscribeProgress -= OnFileTranscribeProgress;
                 app.AppViewModel.SttModelDownloadProgress -= OnSttModelProgress;
                 app.AppViewModel.LlmModelDownloadProgress -= OnLlmModelProgress;
+                app.AppViewModel.TelegramStateChanged -= OnTelegramStateChanged;
+                app.AppViewModel.TelegramError -= OnTelegramError;
             };
         }
 
@@ -111,6 +115,7 @@ public sealed partial class SettingsWindow : Window
         SyncLlmMode();
         PopulateStats();
         PopulateVersion();
+        RefreshTelegramSection();
 
         // A model download started in a previous Settings session keeps
         // running on its background thread; restore the in-flight bar so the

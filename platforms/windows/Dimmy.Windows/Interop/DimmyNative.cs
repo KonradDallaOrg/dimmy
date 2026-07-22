@@ -1025,4 +1025,42 @@ public static class DimmyNative
 
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_license_billing_portal_url(byte[] outBuf, int bufLen);
+
+    // ── Telegram inbox source ────────────────────────────────────────
+    // Record on phone -> share to Saved Messages -> Dimmy transcribes.
+    // See core/src/telegram.rs. All entries exist regardless of the Rust
+    // `telegram` feature (they return -100 when not compiled).
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void dimmy_telegram_set_enabled(int enabled);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_telegram_start_login(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string phone);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_telegram_submit_code(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string code);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_telegram_submit_password(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string password);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_telegram_logout();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_telegram_process(int msgId);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_telegram_dismiss(int msgId);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_telegram_mark_processed(int msgId);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_telegram_status(byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_telegram_pending(byte[] outBuf, int bufLen);
 }

@@ -2326,6 +2326,136 @@
                 </Grid>
               </Border>
 
+              <!-- Group: TELEGRAM -->
+              <StackPanel Orientation="Horizontal" Spacing="6" Margin="2,32,0,8">
+                <TextBlock Text="TELEGRAM" FontSize="12" FontWeight="SemiBold"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           CharacterSpacing="40" VerticalAlignment="Center" />
+                <Button Background="Transparent" BorderThickness="0" Padding="2"
+                        VerticalAlignment="Center"
+                        ToolTipService.ToolTip="Record a voice note on your phone, share it to your Telegram Saved Messages, and Dimmy transcribes + recaps it on this PC.">
+                  <FontIcon Glyph="&#xE946;" FontSize="12"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                  <Button.Flyout>
+                    <Flyout>
+                      <StackPanel MaxWidth="320" Spacing="10">
+                        <TextBlock TextWrapping="Wrap" FontSize="13"
+                                   Text="Log in with your own Telegram account. Then, from any phone, record an audio note and forward it to your Saved Messages - Dimmy picks it up, transcribes it, and writes a recap. No bot, no cloud drive." />
+                      </StackPanel>
+                    </Flyout>
+                  </Button.Flyout>
+                </Button>
+              </StackPanel>
+
+              <Border x:Name="TelegramCard"
+                      Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="16">
+                <StackPanel Spacing="14">
+                  <Grid ColumnSpacing="14">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="Auto"/>
+                      <ColumnDefinition Width="*"/>
+                      <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <!-- Official Telegram logo: gradient disc + official plane path,
+                         both in the real 240x240 brand coordinate space so the plane
+                         sits exactly where Telegram places it (Canvas = absolute). -->
+                    <Viewbox Grid.Column="0" Width="32" Height="32" VerticalAlignment="Center">
+                      <Canvas Width="240" Height="240">
+                        <Ellipse Width="240" Height="240">
+                          <Ellipse.Fill>
+                            <LinearGradientBrush StartPoint="0.5,0" EndPoint="0.5,1">
+                              <GradientStop Color="#2AABEE" Offset="0"/>
+                              <GradientStop Color="#229ED9" Offset="1"/>
+                            </LinearGradientBrush>
+                          </Ellipse.Fill>
+                        </Ellipse>
+                        <Path Fill="White" Data="M54.6 118.8c34.98-15.24 58.31-25.29 69.99-30.15 33.32-13.86 40.25-16.27 44.76-16.35 1-.02 3.22.23 4.66 1.4a5.07 5.07 0 0 1 1.71 3.25c.16.94.36 3.08.2 4.75-1.8 18.98-9.62 65.02-13.6 86.27-1.68 8.99-4.99 12-8.2 12.3-6.98.64-12.28-4.6-19.03-9.04-10.56-6.92-16.53-11.23-26.77-17.98-11.85-7.8-4.17-12.09 2.59-19.1 1.76-1.83 32.5-29.8 33.09-32.33.07-.32.14-1.5-.56-2.12s-1.74-.41-2.49-.24c-1.06.24-17.94 11.4-50.64 33.48-4.79 3.29-9.13 4.89-13.02 4.81-4.28-.09-12.52-2.42-18.65-4.41-7.52-2.44-13.49-3.73-12.97-7.87.27-2.16 3.24-4.37 8.92-6.63z"/>
+                      </Canvas>
+                    </Viewbox>
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                      <TextBlock Text="Telegram" FontSize="16" FontWeight="SemiBold"/>
+                      <TextBlock x:Name="TelegramStatusText" Text="Off" FontSize="13"
+                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                 TextWrapping="Wrap"/>
+                    </StackPanel>
+                    <ToggleSwitch Grid.Column="2" IsOn="{Binding TelegramEnabled, Mode=TwoWay}"
+                                  Toggled="TelegramEnabled_Toggled"
+                                  Style="{StaticResource CompactToggleSwitch}"
+                                  VerticalAlignment="Center"/>
+                  </Grid>
+
+                  <StackPanel x:Name="TelegramPhonePanel" Spacing="8" Visibility="Collapsed">
+                    <TextBlock Text="Enter your Telegram phone number, with country code."
+                               FontSize="13" TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <TextBox x:Name="TelegramPhoneBox" PlaceholderText="+39 333 1234567" Width="220"/>
+                      <Button x:Name="TelegramSendCodeBtn" Content="Send code"
+                              Click="TelegramSendCode_Click" Style="{ThemeResource AccentButtonStyle}"/>
+                      <ProgressRing x:Name="TelegramPhoneRing" Width="20" Height="20"
+                                    IsActive="False" Visibility="Collapsed" VerticalAlignment="Center"/>
+                    </StackPanel>
+                  </StackPanel>
+
+                  <StackPanel x:Name="TelegramCodePanel" Spacing="8" Visibility="Collapsed">
+                    <TextBlock Text="Enter the code Telegram sent to your other devices."
+                               FontSize="13" TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <TextBox x:Name="TelegramCodeBox" PlaceholderText="12345" Width="140"/>
+                      <Button x:Name="TelegramSubmitCodeBtn" Content="Confirm"
+                              Click="TelegramSubmitCode_Click" Style="{ThemeResource AccentButtonStyle}"/>
+                    </StackPanel>
+                  </StackPanel>
+
+                  <StackPanel x:Name="TelegramPasswordPanel" Spacing="8" Visibility="Collapsed">
+                    <TextBlock Text="Two-step verification is on. Enter your Telegram password."
+                               FontSize="13" TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <PasswordBox x:Name="TelegramPasswordBox" Width="220"/>
+                      <Button x:Name="TelegramSubmitPasswordBtn" Content="Confirm"
+                              Click="TelegramSubmitPassword_Click" Style="{ThemeResource AccentButtonStyle}"/>
+                    </StackPanel>
+                  </StackPanel>
+
+                  <Grid x:Name="TelegramConnectedActions" ColumnSpacing="10" Visibility="Collapsed">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="Auto"/>
+                      <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Button Grid.Column="0" Content="Log out" Click="TelegramLogout_Click"/>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6"
+                                HorizontalAlignment="Right" VerticalAlignment="Center">
+                      <TextBlock x:Name="TelegramConnectedAccount" Text="Connected" FontSize="13"
+                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                 VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                      <FontIcon x:Name="TelegramStatusGlyph" Glyph="&#xE73E;" FontSize="20"
+                                Foreground="{ThemeResource SystemFillColorSuccessBrush}"
+                                VerticalAlignment="Center"/>
+                    </StackPanel>
+                  </Grid>
+                </StackPanel>
+              </Border>
+
+              <controls:SettingCard x:Name="TelegramAutoProcessCard" Glyph="&#xE945;"
+                                    Label="Transcribe and recap automatically"
+                                    Description="Skip the prompt and process every shared audio on its own."
+                                    Visibility="Collapsed">
+                <ToggleSwitch IsOn="{Binding TelegramAutoProcess, Mode=TwoWay}"
+                              Toggled="TelegramAutoProcess_Toggled"
+                              Style="{StaticResource CompactToggleSwitch}" />
+              </controls:SettingCard>
+
+              <Border x:Name="TelegramMessageBar"
+                      Background="{ThemeResource SystemFillColorAttentionBackgroundBrush}"
+                      BorderThickness="0" CornerRadius="6" Padding="12,8" Margin="0,12,0,0"
+                      Visibility="Collapsed">
+                <TextBlock x:Name="TelegramMessageText" FontSize="13" TextWrapping="Wrap" />
+              </Border>
+
             </StackPanel>
 
             <!-- ═══ Privacy & data ═══ -->

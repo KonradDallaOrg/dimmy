@@ -315,6 +315,26 @@ public partial class AppViewModel : ObservableObject
     /// Pure observer — does NOT affect the paste flow in StopAndProcess.
     public event Action<string>? TranscriptReady;
 
+    // ── Telegram inbox source ────────────────────────────────────────
+    /// Auth/connection state changed. Args: (phase, account, pending).
+    /// phase ∈ disabled|no_credentials|logged_out|wait_code|wait_password|
+    /// connected|error. The Settings Telegram section drives its login UI
+    /// off this.
+    public event Action<string, string, int>? TelegramStateChanged;
+
+    /// A shared audio is waiting for a decision. Args: (msgId, filename,
+    /// dateEpoch, sizeBytes, isBacklog). Host asks "transcribe + recap?"
+    /// then calls dimmy_telegram_process(msgId) on accept, or _dismiss.
+    public event Action<int, string, long, long, bool>? TelegramPendingAudio;
+
+    /// A shared audio has been downloaded to a local path. Args: (msgId,
+    /// path, filename). Host runs its file-load transcribe (+ recap) on the
+    /// path, then calls dimmy_telegram_mark_processed(msgId).
+    public event Action<int, string, string>? TelegramAudioReady;
+
+    /// A Telegram worker error (login/download/etc.). Args: (message).
+    public event Action<string>? TelegramError;
+
     /// Fires when a single dictation crosses the 5 min soft threshold
     /// (core `dictation.long_warning`). Host shows a Meeting-mode nudge.
     public event Action? DictationLongWarning;
@@ -477,6 +497,40 @@ public partial class AppViewModel : ObservableObject
                         var cat = payload.TryGetProperty("category", out var cEl)
                             ? (cEl.GetString() ?? "") : "";
                         CoreFailure?.Invoke(srcEl.GetString() ?? "", prov, cat, msg);
+                    }
+                    break;
+                case "telegram_state":
+                    {
+                        var phase = payload.TryGetProperty("phase", out var ph) ? (ph.GetString() ?? "") : "";
+                        var account = payload.TryGetProperty("account", out var ac) ? (ac.GetString() ?? "") : "";
+                        var pending = payload.TryGetProperty("pending", out var pe) ? pe.GetInt32() : 0;
+                        TelegramStateChanged?.Invoke(phase, account, pending);
+                    }
+                    break;
+                case "telegram_pending":
+                    {
+                        var msgId = payload.TryGetProperty("msg_id", out var mi) ? mi.GetInt32() : 0;
+                        var filename = payload.TryGetProperty("filename", out var fn) ? (fn.GetString() ?? "") : "";
+                        var date = payload.TryGetProperty("date", out var dt) ? dt.GetInt64() : 0;
+                        var size = payload.TryGetProperty("size", out var sz) ? sz.GetInt64() : 0;
+                        var backlog = payload.TryGetProperty("backlog", out var bk) && bk.GetBoolean();
+                        TelegramPendingAudio?.Invoke(msgId, filename, date, size, backlog);
+                    }
+                    break;
+                case "telegram_audio":
+                    {
+                        var msgId = payload.TryGetProperty("msg_id", out var mi) ? mi.GetInt32() : 0;
+                        var path = payload.TryGetProperty("path", out var pa) ? (pa.GetString() ?? "") : "";
+                        var filename = payload.TryGetProperty("filename", out var fn) ? (fn.GetString() ?? "") : "";
+                        if (!string.IsNullOrEmpty(path))
+                            TelegramAudioReady?.Invoke(msgId, path, filename);
+                    }
+                    break;
+                case "telegram_error":
+                    {
+                        var tmsg = payload.TryGetProperty("message", out var em) ? (em.GetString() ?? "") : "";
+                        if (!string.IsNullOrEmpty(tmsg))
+                            TelegramError?.Invoke(tmsg);
                     }
                     break;
                 case "dictation.long_warning":

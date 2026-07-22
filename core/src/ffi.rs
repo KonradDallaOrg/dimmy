@@ -425,6 +425,8 @@ fn dimmy_init_inner() -> c_int {
         recap_model_override: Mutex::new(file_cfg.recap_model_override),
         chunk_streaming_enabled: Mutex::new(file_cfg.chunk_streaming_enabled),
         streaming_dictation: Mutex::new(file_cfg.streaming_dictation),
+        telegram_enabled: Mutex::new(file_cfg.telegram_enabled),
+        telegram_auto_process: Mutex::new(file_cfg.telegram_auto_process),
         preprocessing_enabled: Mutex::new(file_cfg.preprocessing_enabled),
         audio_debug_enabled: Mutex::new(file_cfg.audio_debug_enabled),
         ggml_debug_logging: Mutex::new(file_cfg.ggml_debug_logging),
@@ -1821,6 +1823,8 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         "recap_model_override": st.recap_model_override.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         "chunk_streaming_enabled": *st.chunk_streaming_enabled.lock().unwrap_or_else(|e| e.into_inner()),
         "streaming_dictation": *st.streaming_dictation.lock().unwrap_or_else(|e| e.into_inner()),
+        "telegram_enabled": *st.telegram_enabled.lock().unwrap_or_else(|e| e.into_inner()),
+        "telegram_auto_process": *st.telegram_auto_process.lock().unwrap_or_else(|e| e.into_inner()),
         "preprocessing_enabled": *st.preprocessing_enabled.lock().unwrap_or_else(|e| e.into_inner()),
         "audio_debug_enabled": *st.audio_debug_enabled.lock().unwrap_or_else(|e| e.into_inner()),
         "ggml_debug_logging": *st.ggml_debug_logging.lock().unwrap_or_else(|e| e.into_inner()),
@@ -2237,6 +2241,19 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
     }
     if let Some(b) = v["streaming_dictation"].as_bool() {
         if let Ok(mut c) = st.streaming_dictation.lock() {
+            *c = b;
+        }
+    }
+    if let Some(b) = v["telegram_enabled"].as_bool() {
+        if let Ok(mut c) = st.telegram_enabled.lock() {
+            *c = b;
+        }
+        // Wire the toggle to the worker: start it (it self-checks credentials +
+        // session) or stop it. Idempotent, so re-saving settings is a no-op.
+        crate::telegram::set_enabled(b);
+    }
+    if let Some(b) = v["telegram_auto_process"].as_bool() {
+        if let Ok(mut c) = st.telegram_auto_process.lock() {
             *c = b;
         }
     }
@@ -9202,6 +9219,116 @@ pub unsafe extern "C" fn dimmy_call_detector_state(out: *mut c_char, out_len: c_
     write_to_buf(&json, out, out_len)
 }
 
+// ── Telegram inbox source ───────────────────────────────────────────────
+// User-account MTProto client (grammers). All entries exist regardless of the
+// `telegram` cargo feature so the C ABI is stable; when the feature is off the
+// impls return -100 ("not compiled"). Runtime is also gated by
+// `telegram_enabled` + the user connecting — enabling the feature alone is
+// inert. The worker downloads shared Saved-Messages audio and hands the host a
+// path via the `telegram_audio` event; the host runs its existing file-load
+// transcribe + recap pipeline. See core/src/telegram.rs.
+
+/// Start (enabled != 0) or stop (0) the Telegram worker. Idempotent.
+#[no_mangle]
+pub extern "C" fn dimmy_telegram_set_enabled(enabled: c_int) {
+    crate::telegram::set_enabled(enabled != 0);
+}
+
+/// Begin login: request a code for `phone` (E.164, e.g. "+3934..."). The
+/// worker emits `telegram_state {phase:"wait_code"}` on success. 0 ok / -1 arg.
+///
+/// # Safety
+/// `phone_ptr` must be a valid NUL-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_telegram_start_login(phone_ptr: *const c_char) -> c_int {
+    if phone_ptr.is_null() {
+        return -1;
+    }
+    let phone = match CStr::from_ptr(phone_ptr).to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    crate::telegram::start_login(phone)
+}
+
+/// Submit the login code. On success emits `telegram_state {phase:"connected"}`
+/// or, if 2FA is on, `{phase:"wait_password"}`.
+///
+/// # Safety
+/// `code_ptr` must be a valid NUL-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_telegram_submit_code(code_ptr: *const c_char) -> c_int {
+    if code_ptr.is_null() {
+        return -1;
+    }
+    let code = match CStr::from_ptr(code_ptr).to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    crate::telegram::submit_code(code)
+}
+
+/// Submit the 2FA cloud password (only after `phase:"wait_password"`).
+///
+/// # Safety
+/// `pw_ptr` must be a valid NUL-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_telegram_submit_password(pw_ptr: *const c_char) -> c_int {
+    if pw_ptr.is_null() {
+        return -1;
+    }
+    let pw = match CStr::from_ptr(pw_ptr).to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    crate::telegram::submit_password(pw)
+}
+
+/// Log the account out, delete the local session, and clear pending.
+#[no_mangle]
+pub extern "C" fn dimmy_telegram_logout() -> c_int {
+    crate::telegram::logout()
+}
+
+/// Download + emit a pending audio (`telegram_audio {path}`) so the host can
+/// transcribe it. Call after the user accepts a `telegram_pending` prompt.
+#[no_mangle]
+pub extern "C" fn dimmy_telegram_process(msg_id: c_int) -> c_int {
+    crate::telegram::process(msg_id)
+}
+
+/// Drop a pending audio without processing (marks it handled so it won't
+/// re-appear on the next launch).
+#[no_mangle]
+pub extern "C" fn dimmy_telegram_dismiss(msg_id: c_int) -> c_int {
+    crate::telegram::dismiss(msg_id)
+}
+
+/// Mark an audio as fully processed (host calls this after transcription
+/// completes) so it isn't re-offered on the next launch.
+#[no_mangle]
+pub extern "C" fn dimmy_telegram_mark_processed(msg_id: c_int) -> c_int {
+    crate::telegram::mark_processed(msg_id)
+}
+
+/// Current status as JSON: `{compiled, has_credentials, phase, account, pending}`.
+///
+/// # Safety
+/// `out_buf` must be a writable buffer of `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_telegram_status(out_buf: *mut c_char, buf_len: c_int) -> c_int {
+    write_to_buf(&crate::telegram::status_json(), out_buf, buf_len)
+}
+
+/// Pending audio list as a JSON array of `{msg_id, filename, date, size}`.
+///
+/// # Safety
+/// `out_buf` must be a writable buffer of `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_telegram_pending(out_buf: *mut c_char, buf_len: c_int) -> c_int {
+    write_to_buf(&crate::telegram::list_pending_json(), out_buf, buf_len)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -9705,6 +9832,8 @@ mod tests {
                 recap_model_override: Mutex::new(String::new()),
                 chunk_streaming_enabled: Mutex::new(false),
                 streaming_dictation: Mutex::new(false),
+                telegram_enabled: Mutex::new(false),
+                telegram_auto_process: Mutex::new(false),
                 preprocessing_enabled: Mutex::new(true),
                 audio_debug_enabled: Mutex::new(false),
                 ggml_debug_logging: Mutex::new(false),
