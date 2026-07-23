@@ -550,28 +550,46 @@ pub fn spawn_audio_thread(
                             false
                         };
                         let input_changed = if !dead {
-                            let current_default = current_default_input_name(&host);
-                            let raw_changed = match last_start_params {
-                                Some((ref dn, _)) => input_should_follow_default(
-                                    dn.as_deref(),
-                                    bound_input_name.as_deref(),
-                                    current_default.as_deref(),
-                                ),
-                                None => false,
-                            };
-                            let stable = debounce_input_change(
-                                raw_changed,
-                                current_default.as_deref(),
-                                &mut pending_input_default,
-                                &mut input_stable_polls,
-                            );
-                            if raw_changed && !stable {
-                                crate::log(&format!(
-                                    "[Audio] default input changed to {:?} — debouncing (poll {}/2) before rebuild",
-                                    current_default, input_stable_polls
-                                ));
+                            // Only query the OS default-input device while a
+                            // recording is active (mirrors the output-follow
+                            // guard above). Querying it on EVERY idle 1-Hz poll
+                            // made the detached audio thread keep hitting WASAPI
+                            // even after Stop; on process exit that raced with
+                            // COM/WASAPI teardown and crashed the short-lived E2E
+                            // test binaries with STATUS_ACCESS_VIOLATION (all
+                            // tests pass; only the exit faulted). Prod is a
+                            // long-lived process so it never manifested there.
+                            match last_start_params {
+                                Some((ref dn, _)) => {
+                                    let current_default = current_default_input_name(&host);
+                                    let raw_changed = input_should_follow_default(
+                                        dn.as_deref(),
+                                        bound_input_name.as_deref(),
+                                        current_default.as_deref(),
+                                    );
+                                    let stable = debounce_input_change(
+                                        raw_changed,
+                                        current_default.as_deref(),
+                                        &mut pending_input_default,
+                                        &mut input_stable_polls,
+                                    );
+                                    if raw_changed && !stable {
+                                        crate::log(&format!(
+                                            "[Audio] default input changed to {:?} — debouncing (poll {}/2) before rebuild",
+                                            current_default, input_stable_polls
+                                        ));
+                                    }
+                                    stable
+                                }
+                                None => {
+                                    // Idle (not recording): nothing to follow,
+                                    // no WASAPI query. Reset the debounce so the
+                                    // next Start begins clean.
+                                    pending_input_default = None;
+                                    input_stable_polls = 0;
+                                    false
+                                }
                             }
-                            stable
                         } else {
                             false
                         };
