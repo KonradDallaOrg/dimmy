@@ -1,3 +1,4 @@
+import AppKit
 import AudioToolbox
 import CoreAudio
 import Foundation
@@ -64,6 +65,18 @@ final class SystemAudioProcessTap {
     /// output change) takes over without timer-driven probes.
     private let receivedAudioFlag = OSAllocatedUnfairLock(initialState: false)
     var hasReceivedAudio: Bool { receivedAudioFlag.withLock { $0 } }
+
+    /// Monotonic IO-proc fire counter, bumped on EVERY callback (even the
+    /// zero-filled buffers delivered during app silence). Unlike
+    /// `hasReceivedAudio` (latched once, diagnostic), this is a live
+    /// heartbeat: while the aggregate's clock device runs, the IO proc fires
+    /// every cycle and this advances; it FREEZES the instant the tap dies.
+    /// The liveness watchdog polls it to tell "nobody is playing audio"
+    /// (still advancing) apart from "the tap is dead" (frozen) — the latter is
+    /// what a sleep/wake HAL reset causes. RT-safe: the audio thread only
+    /// increments, under the same unfair-lock kind as `receivedAudioFlag`.
+    private let frameCounter = OSAllocatedUnfairLock<UInt64>(initialState: 0)
+    var frameCount: UInt64 { frameCounter.withLock { $0 } }
 
     private let ioQueue = DispatchQueue(
         label: "dimmy.systemaudio.tap.io", qos: .userInteractive)
@@ -215,9 +228,14 @@ final class SystemAudioProcessTap {
         let rate = sampleRate
         let channels = channelCount
         let receivedFlag = receivedAudioFlag
+        let frames = frameCounter
         var newProcID: AudioDeviceIOProcID?
         err = AudioDeviceCreateIOProcIDWithBlock(&newProcID, aggregateID, ioQueue) {
             _, inInputData, _, _, _ in
+            // Heartbeat: bump on EVERY fire (even silent/zero buffers) so the
+            // liveness watchdog can see the IO proc is alive and distinguish a
+            // quiet-but-healthy tap from a dead one.
+            frames.withLock { $0 &+= 1 }
             // Latch + detect the first fire so we can log "capture is live"
             // exactly once. Diagnostic only — no recovery logic keys on it.
             let firstFire = receivedFlag.withLock { (state: inout Bool) -> Bool in
@@ -302,6 +320,37 @@ final class SystemAudioProcessTap {
     private var rescanBackstop: DispatchSourceTimer?
     private let listenerLock = NSLock()
 
+    /// Liveness watchdog — rebuilds the tap when its IO proc STOPS firing
+    /// while we still expect audio (a target PID is captured). This is the
+    /// self-heal for the sleep/wake dead-tap bug: after wake, CoreAudio
+    /// re-publishes the default-output device the aggregate is clock-anchored
+    /// to WITHOUT changing its UID or the audio-active PID set, so the
+    /// change-based rebuild guard in `rescanAndRebuildIfNeeded` never fires
+    /// and the tap sits silent until an app restart. The watchdog keys off the
+    /// IO-proc heartbeat (`frameCounter`), not device/PID changes, so it
+    /// catches a silently-dead tap regardless of why it died.
+    private var watchdogTimer: DispatchSourceTimer?
+    private var watchdogLastCount: UInt64 = 0
+    private var watchdogLastAdvance = Date()
+    private var watchdogRebuilds = 0
+    /// Seconds of frozen heartbeat before the tap is declared dead. Long
+    /// enough to clear the brief start-up window before the first frame, short
+    /// enough to recover within a few seconds of a wake.
+    private static let tapStaleThreshold: TimeInterval = 4.0
+    /// Stop force-rebuilding after this many consecutive dead cycles: a tap
+    /// that won't recover after ~N*threshold s is a genuine failure (revoked
+    /// permission, no output device) a rebuild can't fix, and thrashing
+    /// coreaudiod only makes it worse. A single heartbeat advance resets the
+    /// counter, so a later recovery re-arms the watchdog.
+    private static let maxWatchdogRebuilds = 8
+
+    /// Re-arm the tap when the Mac wakes from sleep — immediate recovery on
+    /// top of the watchdog backstop. macOS tears down and re-publishes HAL
+    /// device objects across sleep, leaving the tap's aggregate clock-anchored
+    /// to a stale endpoint that delivers silence. Mirrors the CGEvent-tap wake
+    /// re-arm in HotkeyManager.
+    private var wakeObserver: NSObjectProtocol?
+
     private func startRescan() {
         // Idempotent: rescan handler runs `_ = start()` to rebuild the
         // tap, which re-enters `startRescan()`. Listeners survive tap
@@ -359,6 +408,41 @@ final class SystemAudioProcessTap {
         backstop.setEventHandler { [weak self] in self?.rescanAndRebuildIfNeeded() }
         backstop.resume()
         rescanBackstop = backstop
+
+        // Liveness watchdog (see property doc). Polls the IO-proc heartbeat
+        // and rebuilds a silently-dead tap that the change-based path misses —
+        // notably after sleep/wake, where the default-output UID + PID set are
+        // unchanged so no listener fires. Runs on ioQueue so it serializes with
+        // the IO proc + the listener-driven rebuilds. Armed once (this whole
+        // block is past the `alreadyArmed` guard), survives tap rebuilds.
+        watchdogLastCount = frameCount
+        watchdogLastAdvance = Date()
+        watchdogRebuilds = 0
+        let watchdog = DispatchSource.makeTimerSource(queue: ioQueue)
+        watchdog.schedule(
+            deadline: .now() + Self.tapStaleThreshold,
+            repeating: 2.0, leeway: .milliseconds(500))
+        watchdog.setEventHandler { [weak self] in self?.checkTapLiveness() }
+        watchdog.resume()
+        watchdogTimer = watchdog
+
+        // Immediate wake re-arm, mirroring HotkeyManager's didWakeNotification
+        // handler. The block hops to ioQueue so the rebuild serializes with
+        // everything else; the watchdog is the backstop if this fires before
+        // the HAL has settled and the freshly-rebuilt tap is itself born dead.
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            self.ioQueue.async {
+                guard self.running, !self.currentTapPidSet.isEmpty else { return }
+                NSLog("[SystemAudio/tap] system woke — rebuilding system-audio tap")
+                self.watchdogLastAdvance = Date()
+                self.watchdogLastCount = 0
+                self.watchdogRebuilds = 0
+                self.forceRebuild()
+            }
+        }
     }
 
     private func stopRescan() {
@@ -393,6 +477,12 @@ final class SystemAudioProcessTap {
                 mElement: kAudioObjectPropertyElementMain)
             _ = AudioObjectRemovePropertyListenerBlock(
                 AudioObjectID(kAudioObjectSystemObject), &defaultOutAddr, ioQueue, block)
+        }
+        watchdogTimer?.cancel()
+        watchdogTimer = nil
+        if let wakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+            self.wakeObserver = nil
         }
         rescanBackstop?.cancel()
         rescanBackstop = nil
@@ -486,11 +576,7 @@ final class SystemAudioProcessTap {
                 NSLog("[SystemAudio/tap] audio-active PID set changed (was %d, now %d) — rebuilding tap",
                       currentTapPidSet.count, newPidSet.count)
             }
-            let savedHandler = onSamples
-            teardown()
-            running = false
-            onSamples = savedHandler
-            _ = start()
+            forceRebuild()
         } else {
             // Deferred state: no tap created yet (no audio source at start).
             // Wait for ANY audio source, then promote to live. Avoids the
@@ -503,6 +589,68 @@ final class SystemAudioProcessTap {
                   activeObjects.count)
             _ = start()
         }
+    }
+
+    /// Full teardown + rebuild of the tap, BYPASSING the "did the PID set or
+    /// default output change" guard in `rescanAndRebuildIfNeeded`. Used by the
+    /// change-based rebuild, the liveness watchdog, and the wake observer —
+    /// the latter two fire when the tap went silent with NO observable
+    /// device/PID change (a sleep/wake HAL reset re-publishes the same
+    /// output-device UID). Runs on ioQueue, like every other rebuild path.
+    private func forceRebuild() {
+        guard running else { return }
+        let savedHandler = onSamples
+        teardown()
+        running = false
+        onSamples = savedHandler
+        _ = start()
+    }
+
+    /// Liveness watchdog tick (ioQueue). Rebuilds the tap if its IO proc has
+    /// stopped firing while a capture target is still expected. A healthy tap
+    /// fires every IO cycle (even during silence), so its heartbeat keeps
+    /// advancing and this never triggers; only a dead tap (frozen heartbeat)
+    /// does. Across sleep the wall-clock `watchdogLastAdvance` is hours stale,
+    /// so the first post-wake tick rebuilds immediately.
+    private func checkTapLiveness() {
+        // Only watch when live AND holding a target. A deferred tap (no audio
+        // source yet) legitimately produces no frames; the rescan path
+        // promotes it when a source appears — don't fight that here.
+        guard running, !currentTapPidSet.isEmpty else {
+            watchdogLastCount = frameCount
+            watchdogLastAdvance = Date()
+            watchdogRebuilds = 0
+            return
+        }
+        let count = frameCount
+        if count != watchdogLastCount {
+            // IO proc is firing — tap alive (even if the buffers are silent).
+            watchdogLastCount = count
+            watchdogLastAdvance = Date()
+            watchdogRebuilds = 0
+            return
+        }
+        // Heartbeat frozen — for how long?
+        let stalled = Date().timeIntervalSince(watchdogLastAdvance)
+        guard stalled >= Self.tapStaleThreshold else { return }
+        if watchdogRebuilds >= Self.maxWatchdogRebuilds {
+            // Give up: a rebuild won't fix a genuine failure and thrashing
+            // coreaudiod makes it worse. Log once (guarded by ==), then stay
+            // quiet until a heartbeat advance resets watchdogRebuilds.
+            if watchdogRebuilds == Self.maxWatchdogRebuilds {
+                NSLog("[SystemAudio/tap] watchdog: tap still dead after %d rebuilds — giving up until it recovers (restart Dimmy if system audio stays missing)",
+                      watchdogRebuilds)
+                watchdogRebuilds += 1
+            }
+            return
+        }
+        watchdogRebuilds += 1
+        NSLog("[SystemAudio/tap] watchdog: no IO-proc frames for %.1fs while capturing %d process(es) — tap is dead, rebuilding (attempt %d/%d)",
+              stalled, currentTapPidSet.count, watchdogRebuilds, Self.maxWatchdogRebuilds)
+        forceRebuild()
+        // Give the freshly-rebuilt tap a full grace window before re-judging.
+        watchdogLastAdvance = Date()
+        watchdogLastCount = frameCount
     }
 
     /// Sample count in the first buffer of an IO proc's input list.
