@@ -803,14 +803,17 @@ jobs:
           REM vcvars64.bat is a batch script.
           call "%VS2026_PATH%\VC\Auxiliary\Build\vcvars64.bat"
           if errorlevel 1 exit /b 1
-          REM ── DO NOT add `cargo clean --release` back here ──
-          REM     Dropped 2026-05-14 to reuse the Swatinem/rust-cache@v2
-          REM     restore — saves 20-25 min per Win build. Safety net:
-          REM     "Gate — verify dimmy_lib.dll linker version" runs
-          REM     dumpbin and aborts if linker < 14.50.
-          REM     Memory: feedback_cargo_clean_dropped_from_win_ci.md
-          REM     If a Win release ever ships a broken DLL, FIRST add
-          REM     `cargo clean --release` back and re-run.
+          REM ── cargo clean --release: RE-ADDED 2026-07-28 ──
+          REM     Dropped 2026-05-14 for speed (reuse Swatinem rust-cache),
+          REM     but v0.6.69-rc1 shipped a MISCOMPILED whisper.cpp: the
+          REM     Swatinem cache restored stale objects and, with no clean,
+          REM     they linked into a DLL that CRASHED whisper (0xc000001d)
+          REM     at runtime while still passing the >=14.50 linker gate.
+          REM     Per feedback_cargo_clean_dropped_from_win_ci.md this is the
+          REM     documented fix. This whole step is still SKIPPED entirely
+          REM     when the core is unchanged (DLL-reuse via dll-cache.sh),
+          REM     so `cargo clean` only runs on a real rebuild.
+          cargo clean --release
           cargo build --lib --release --features local-stt-vulkan,local-llm-vulkan,local-stt-parakeet,license-client,telegram
 
       - name: Store prebuilt core DLL to cache
