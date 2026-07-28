@@ -125,6 +125,10 @@
 		AA001000 /* ScreenCaptureKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AB001000 /* ScreenCaptureKit.framework */; };
 		AA001100 /* DimmyCore+CallDetect.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB001100 /* DimmyCore+CallDetect.swift */; };
 		AA001101 /* CallDetectionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB001101 /* CallDetectionManager.swift */; };
+		AA000908 /* DimmyCore+Telegram.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000908 /* DimmyCore+Telegram.swift */; };
+		AA000909 /* TelegramService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000909 /* TelegramService.swift */; };
+		AA00090A /* TelegramNudgeWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00090A /* TelegramNudgeWindowController.swift */; };
+		AA00090B /* TelegramConnectSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00090B /* TelegramConnectSheet.swift */; };
 		AA001102 /* CallNudgeWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB001102 /* CallNudgeWindowController.swift */; };
 		AA001200 /* ClaudeIconExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB001200 /* ClaudeIconExtractor.swift */; };
 		AA000901 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = XP000001 /* Sparkle */; };
@@ -158,6 +162,10 @@
 		AB000904 /* TelemetryBuckets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryBuckets.swift; sourceTree = "<group>"; };
 		AB000905 /* SystemAudioCaptureService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemAudioCaptureService.swift; sourceTree = "<group>"; };
 		AB001110 /* SystemAudioProcessTap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemAudioProcessTap.swift; sourceTree = "<group>"; };
+		AB000908 /* DimmyCore+Telegram.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DimmyCore+Telegram.swift"; sourceTree = "<group>"; };
+		AB000909 /* TelegramService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelegramService.swift; sourceTree = "<group>"; };
+		AB00090A /* TelegramNudgeWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelegramNudgeWindowController.swift; sourceTree = "<group>"; };
+		AB00090B /* TelegramConnectSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelegramConnectSheet.swift; sourceTree = "<group>"; };
 		AB001000 /* ScreenCaptureKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ScreenCaptureKit.framework; path = System/Library/Frameworks/ScreenCaptureKit.framework; sourceTree = SDKROOT; };
 		AB001100 /* DimmyCore+CallDetect.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DimmyCore+CallDetect.swift"; sourceTree = "<group>"; };
 		AB001101 /* CallDetectionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallDetectionManager.swift; sourceTree = "<group>"; };
@@ -347,6 +355,7 @@
 				AB000907 /* GroqKeyValidator.swift */,
 				AB001110 /* SystemAudioProcessTap.swift */,
 				AB001101 /* CallDetectionManager.swift */,
+				AB000909 /* TelegramService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -397,6 +406,7 @@
 			children = (
 				AB000004 /* StatusBarController.swift */,
 				AB000005 /* PillWindowController.swift */,
+				AB00090A /* TelegramNudgeWindowController.swift */,
 				AB000400 /* CaptionWindowController.swift */,
 				AB000504 /* MeetingWindowController.swift */,
 				AB001102 /* CallNudgeWindowController.swift */,
@@ -415,6 +425,7 @@
 				AB000500 /* DimmyCore+V2.swift */,
 				AB001100 /* DimmyCore+CallDetect.swift */,
 				AB000800 /* DictHotkeyManager.swift */,
+				AB000908 /* DimmyCore+Telegram.swift */,
 			);
 			path = Managers;
 			sourceTree = "<group>";
@@ -453,6 +464,7 @@
 			isa = PBXGroup;
 			children = (
 				AB000024 /* SettingsContainerView.swift */,
+				AB00090B /* TelegramConnectSheet.swift */,
 				AB000018 /* GeneralSettingsView.swift */,
 				AB000019 /* ShortcutSettingsView.swift */,
 				AB000025 /* OutputSettingsView.swift */,
@@ -787,6 +799,10 @@
 				AA001110 /* SystemAudioProcessTap.swift in Sources */,
 				AA001100 /* DimmyCore+CallDetect.swift in Sources */,
 				AA001101 /* CallDetectionManager.swift in Sources */,
+				AA000908 /* DimmyCore+Telegram.swift in Sources */,
+				AA000909 /* TelegramService.swift in Sources */,
+				AA00090A /* TelegramNudgeWindowController.swift in Sources */,
+				AA00090B /* TelegramConnectSheet.swift in Sources */,
 				AA001102 /* CallNudgeWindowController.swift in Sources */,
 				AA001200 /* ClaudeIconExtractor.swift in Sources */,
 			);

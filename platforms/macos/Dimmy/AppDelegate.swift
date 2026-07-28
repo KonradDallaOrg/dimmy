@@ -363,6 +363,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 CallDetectionManager.shared.setEnabled(self.appState.callDetectEnabled)
                 self.wireCallDetectToggle()
 
+                // Boot the Telegram inbox worker when the user enabled it.
+                // Restores the saved session and replays any Saved-Messages
+                // audio backlog received while the Mac was off. No-op (and
+                // phase=no_credentials) on a build without the feature.
+                TelegramService.shared.start(appState: self.appState)
+
                 // Preload Parakeet during onboarding so by the time the
                 // user reaches the model-download step the bundle is
                 // already on disk (or downloading). Mirrors the Win

@@ -21,6 +21,8 @@ struct MacIntegrationsPage: View {
     @State private var mcpRefreshTimer: Timer? = nil
     @State private var showMcpDisconnectConfirm: Bool = false
     @State private var claudeIconPath: String? = nil
+    @State private var showTelegramSheet: Bool = false
+    @State private var showTelegramLogoutConfirm: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -101,6 +103,51 @@ struct MacIntegrationsPage: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                 MacInfoButton(text: "Free Notion plans have no per-plan API limits, only the standard 3 requests/sec rate limit. Token + destination are stored locally; only the recap markdown leaves this Mac when you (or auto-send) trigger an upload.")
+            }
+            .fixedSize(horizontal: false, vertical: true)
+
+            Spacer().frame(height: 24)
+            MacGroupLabel(text: "Telegram")
+            telegramCard
+
+            // Auto-process toggle: skip the nudge and process every
+            // shared audio on its own. Only meaningful once connected.
+            Spacer().frame(height: 16)
+            MacGroupLabel(text: "Automation")
+            MacTile {
+                MacRow(
+                    "Transcribe and recap automatically",
+                    hint: "When on, every audio you forward to Saved Messages is transcribed and recapped on its own. When off, Dimmy asks first with a small prompt.",
+                    showsDivider: false
+                ) {
+                    Toggle("", isOn: Binding(
+                        get: { appState.telegramAutoProcess },
+                        set: { newValue in
+                            appState.telegramAutoProcess = newValue
+                            DimmyCore.shared.setConfig(appState.toRustConfig())
+                            TelegramService.shared.setAutoProcess(newValue)
+                        }
+                    ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .disabled(appState.telegramPhase != "connected")
+                }
+            }
+
+            if let err = appState.telegramError, !err.isEmpty {
+                Spacer().frame(height: 16)
+                MacNote(
+                    title: "Telegram",
+                    message: err,
+                    systemImage: "exclamationmark.triangle.fill")
+            }
+
+            Spacer().frame(height: 16)
+            HStack(spacing: 4) {
+                Text("Record on your phone, forward the audio to your own Saved Messages, and Dimmy transcribes + recaps it here.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                MacInfoButton(text: "Dimmy signs in as you via Telegram's official MTProto protocol and only reads audio you forward to your own Saved Messages. Nothing is posted; the login session stays on this Mac.")
             }
             .fixedSize(horizontal: false, vertical: true)
 
@@ -200,9 +247,31 @@ struct MacIntegrationsPage: View {
         } message: {
             Text("Dimmy will remove its entry from Claude Desktop's MCP config. Your other MCP servers stay in place. Restart Claude Desktop afterwards so it forgets the connection.")
         }
+        .sheet(isPresented: $showTelegramSheet) {
+            TelegramConnectSheet(
+                appState: appState,
+                onClose: {
+                    showTelegramSheet = false
+                    TelegramService.shared.refreshState(appState: appState)
+                }
+            )
+        }
+        .confirmationDialog(
+            "Log out of Telegram?",
+            isPresented: $showTelegramLogoutConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Log out", role: .destructive) {
+                _ = DimmyCore.shared.telegramLogout()
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Dimmy will sign out of your Telegram account on this Mac. Your messages stay untouched.")
+        }
         .onAppear {
             appState.refreshClaudeCodeStatus()
             refreshMcpStatus()
+            TelegramService.shared.refreshState(appState: appState)
             Task { claudeIconPath = await ClaudeIconExtractor.tryExtract() }
         }
         .onDisappear {
@@ -280,6 +349,64 @@ struct MacIntegrationsPage: View {
             return "Connected · pick a destination"
         }
         return "Not connected"
+    }
+
+    // MARK: - Telegram card
+
+    @ViewBuilder
+    private var telegramCard: some View {
+        HStack(alignment: .top, spacing: 14) {
+            Image(systemName: "paperplane.circle.fill")
+                .font(.system(size: 34))
+                .foregroundStyle(Color(red: 0.16, green: 0.63, blue: 0.86))
+                .frame(width: 40, height: 40)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Telegram").font(.system(size: 16, weight: .semibold))
+                Text(telegramHeaderText)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                HStack(spacing: 8) {
+                    switch appState.telegramPhase {
+                    case "connected":
+                        Button("Log out") { showTelegramLogoutConfirm = true }
+                    case "no_credentials":
+                        EmptyView()
+                    default:
+                        Button("Connect Telegram") { showTelegramSheet = true }
+                            .buttonStyle(.borderedProminent)
+                    }
+                }
+                .padding(.top, 4)
+            }
+            Spacer()
+            Image(systemName: appState.telegramPhase == "connected" ? "checkmark.circle.fill" : "circle")
+                .font(.system(size: 22))
+                .foregroundStyle(appState.telegramPhase == "connected" ? .green : .secondary)
+        }
+        .padding(16)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color(NSColor.controlBackgroundColor)))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.25), lineWidth: 1))
+    }
+
+    private var telegramHeaderText: String {
+        switch appState.telegramPhase {
+        case "connected":
+            let who = appState.telegramAccount.isEmpty
+                ? "Connected"
+                : "Connected as \(appState.telegramAccount)"
+            return appState.telegramPending > 0
+                ? "\(who) · \(appState.telegramPending) waiting"
+                : who
+        case "no_credentials":
+            return "This build has no Telegram API key."
+        case "wait_code", "wait_password":
+            return "Finishing sign-in…"
+        default:
+            return "Not connected. Log in to forward audio from your phone."
+        }
     }
 
     // MARK: - Actions
