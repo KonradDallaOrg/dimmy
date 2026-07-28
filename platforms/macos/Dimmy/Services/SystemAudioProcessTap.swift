@@ -222,6 +222,37 @@ final class SystemAudioProcessTap {
         }
         aggregateID = newAggregate
 
+        // Pin the aggregate to the canonical 48 kHz. THE fix for the
+        // "3x-fast / chopped system audio" bug: a Bluetooth-HFP output only
+        // clocks at 16 kHz, so a tap anchored to it delivered 16 kHz of
+        // content while `readTapFormat` still reported the nominal 48 kHz —
+        // the core trusted the claim, did passthrough, and the meeting
+        // worker zero-filled the 2/3 shortfall (the gated "a tratti" the
+        // recovery uncovered on 2026-07-21). Setting the aggregate's nominal
+        // rate makes CoreAudio sample-rate-convert the HFP sub-device UP to
+        // 48 kHz internally, so the IO proc ACTUALLY delivers 48 kHz and the
+        // core never has to guess a rate. This is what Windows gets for free
+        // via WASAPI shared-mode. If the set fails we keep the tap-format
+        // rate (previous behaviour) rather than abort the capture.
+        var nominalRateAddr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyNominalSampleRate,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var wantRate: Float64 = 48_000
+        let rateErr = AudioObjectSetPropertyData(
+            aggregateID, &nominalRateAddr, 0, nil,
+            UInt32(MemoryLayout<Float64>.size), &wantRate)
+        if rateErr == noErr {
+            sampleRate = 48_000
+            NSLog("[SystemAudio/tap] aggregate pinned to 48000 Hz (CoreAudio SRC handles the sub-device rate)")
+        } else {
+            NSLog("[SystemAudio/tap] could not pin aggregate to 48000 Hz (err %d) — using tap-format rate %d",
+                  rateErr, sampleRate)
+        }
+        // Re-publish the (now canonical) rate so the meeting worker sizes the
+        // system WAV header + STT downsample against what we actually deliver.
+        _ = dimmy_set_loopback_sample_rate(sampleRate)
+
         // Capture into the realtime block by value — no self capture, no
         // allocation on the mono fast path.
         let handler = onSamples
