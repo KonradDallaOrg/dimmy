@@ -14,7 +14,7 @@
 #       Best-effort upload of a freshly-built artifact under the core hash.
 #       Failures are non-fatal (logged, exit 0).
 #
-# Key:  s3://dimmy-sccache/dll-cache/<platform>/<core-hash>/<basename>
+# Key:  s3://dimmy-sccache/dll-cache/v2/<platform>/<core-hash>/<basename>
 # Env:  AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, SCCACHE_R2_ENDPOINT
 #
 # SAFETY: the core hash (scripts/dev/core-build-hash.sh) is over-inclusive —
@@ -40,7 +40,14 @@ if [ -z "$hash" ]; then
 fi
 
 base="$(basename "$file")"
-url="s3://$bucket/dll-cache/$platform/$hash/$base"
+# Namespace bumped v1 -> v2 on 2026-07-28: the v1 cache was POISONED by
+# v0.6.69-rc1, which stored a miscompiled dimmy_lib.dll (stale Swatinem
+# whisper.cpp objects, no cargo clean) under a valid content hash. Since a
+# version-only bump is normalized out of the hash by design, rc70 would
+# otherwise REUSE that broken DLL. Bumping the prefix makes every lookup
+# MISS v1 -> one clean rebuild -> repopulates a fresh v2. No R2 deletes,
+# reuse mechanism unchanged.
+url="s3://$bucket/dll-cache/v2/$platform/$hash/$base"
 common=(--endpoint-url "${SCCACHE_R2_ENDPOINT:-}" --region auto)
 echo "dll-cache: $action  hash=$hash  key=$url" >&2
 
