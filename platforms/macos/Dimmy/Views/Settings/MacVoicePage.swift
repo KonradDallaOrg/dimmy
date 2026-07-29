@@ -418,7 +418,7 @@ struct MacVoicePage: View {
 
                 MacRow(
                     "Language",
-                    hint: "Tells the speech engine what to expect. To translate into another language, use the pill's scroll wheel instead.",
+                    hint: "Tells the speech engine what to expect. Auto-detect works with cloud speech-to-text only; local models need a specific language. To translate into another language, use the pill's scroll wheel instead.",
                     hintURL: URL(string: "https://dimmy.app/help/language")
                 ) {
                     Picker("", selection: Binding(

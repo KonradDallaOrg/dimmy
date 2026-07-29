@@ -64,7 +64,7 @@ pub fn create_page(app_state: &Arc<AppState>, _show_advanced: &Rc<Cell<bool>>) -
     let lang_model = gtk4::StringList::new(&lang_items);
     let lang_row = adw::ComboRow::builder()
         .title("Language")
-        .subtitle("Speech recognition language")
+        .subtitle("Speech recognition language. Auto-detect works with cloud STT only.")
         .model(&lang_model)
         .build();
 

@@ -420,7 +420,7 @@
                          CharacterSpacing="40" Margin="2,16,0,8" />
               <controls:SettingCard Glyph="&#xF2B7;"
                                     Label="Native language (you speak)"
-                                    InfoTip="Tells the speech engine what to expect. To translate into another language, use the pill's scroll wheel instead."
+                                    InfoTip="Tells the speech engine what to expect. Auto-detect works with cloud speech-to-text only; local models need a specific language. To translate into another language, use the pill's scroll wheel instead."
                                     HelpUrl="https://dimmy.app/help/language">
                 <ComboBox x:Name="LanguageComboBox" MinWidth="{StaticResource SettingFieldWidth}"
                           DisplayMemberPath="Value"

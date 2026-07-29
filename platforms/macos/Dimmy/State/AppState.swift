@@ -1408,7 +1408,7 @@ final class AppState: ObservableObject {
             // detection is unreliable on short audio (<2s) and often misfires — a 1-second Italian
             // clip can be classified as Turkish, producing empty transcripts. Seed the language
             // from the system locale on first onboarding so new users get sensible results
-            // without digging into Settings. Users can still pick "Auto Detect" explicitly later.
+            // without digging into Settings. Users can still pick "Auto-detect" explicitly later.
             let effectiveLang = (lang.isEmpty && !isOnboardingComplete)
                 ? Self.systemPreferredLanguageCode()
                 : lang
@@ -1942,6 +1942,6 @@ final class AppState: ObservableObject {
     }
 
     nonisolated static func displayLanguage(for code: String) -> String {
-        languageMap.first(where: { $0.code == code })?.display ?? "Auto Detect"
+        languageMap.first(where: { $0.code == code })?.display ?? "Auto-detect"
     }
 }

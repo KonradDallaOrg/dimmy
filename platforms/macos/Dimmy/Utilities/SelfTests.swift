@@ -51,8 +51,8 @@ enum SelfTests {
             let code = AppState.languageCode(for: item.display)
             assert(code == item.code, "Display '\(item.display)' → '\(code)' expected '\(item.code)'")
         }
-        // Unknown code → Auto Detect
-        assert(AppState.displayLanguage(for: "xx") == "Auto Detect", "Unknown code must map to Auto Detect")
+        // Unknown code → Auto-detect
+        assert(AppState.displayLanguage(for: "xx") == "Auto-detect", "Unknown code must map to Auto-detect")
         // Unknown display → empty code
         assert(AppState.languageCode(for: "Klingon") == "", "Unknown display must map to empty code")
     }
