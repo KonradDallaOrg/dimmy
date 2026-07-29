@@ -472,10 +472,21 @@ public class SettingsViewModelTests
     }
 
     [Fact]
-    public void Languages_ContainsSixOptions()
+    public void Languages_StartWithAutoDetect_AndCoverCoreLanguages()
     {
         var langs = SettingsViewModel.Languages;
-        Assert.Equal(6, langs.Count);
+        // Auto-detect ("" code) is the first entry. NOTE: Auto-detect is
+        // reliable only with cloud STT; local whisper auto-detection is
+        // unreliable (empty output + confident misdetection), which the
+        // combo's info tip calls out.
+        Assert.Equal("", langs[0].Key);
+        Assert.Equal("Auto-detect", langs[0].Value);
+        Assert.Contains(langs, l => l.Key == "it");
+        Assert.Contains(langs, l => l.Key == "en");
+        Assert.Contains(langs, l => l.Key == "zh");
+        // Expanded world-language list (count is intentionally not pinned so
+        // adding a language does not break the test).
+        Assert.True(langs.Count >= 10, "expected the expanded language list");
     }
 
     [Fact]
