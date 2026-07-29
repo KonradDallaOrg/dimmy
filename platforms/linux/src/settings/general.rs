@@ -26,14 +26,26 @@ const STT_PRESETS: &[(&str, &str, &str)] = &[
     ("Custom", "", ""),
 ];
 
+// "" = auto-detect. First block = supported by BOTH local backends (whisper +
+// Parakeet TDT v3, all European); "(Whisper)" block = whisper-only. Auto-detect
+// covers whisper's other ~84 languages. Synced with Windows/macOS language lists.
 const LANGUAGES: &[(&str, &str)] = &[
-    ("Auto", ""),
+    ("Auto-detect", ""),
     ("Italiano", "it"),
     ("English", "en"),
     ("Español", "es"),
     ("Français", "fr"),
     ("Deutsch", "de"),
     ("Português", "pt"),
+    ("Nederlands", "nl"),
+    ("Polski", "pl"),
+    ("Русский", "ru"),
+    ("Українська", "uk"),
+    ("中文 (Whisper)", "zh"),
+    ("日本語 (Whisper)", "ja"),
+    ("한국어 (Whisper)", "ko"),
+    ("العربية (Whisper)", "ar"),
+    ("हिन्दी (Whisper)", "hi"),
 ];
 
 pub fn create_page(app_state: &Arc<AppState>, _show_advanced: &Rc<Cell<bool>>) -> adw::PreferencesPage {

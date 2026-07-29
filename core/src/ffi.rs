@@ -7153,12 +7153,10 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
         .lock()
         .map(|b| b.clone())
         .unwrap_or_else(|_| "whisper".to_string());
+    // Empty language = auto-detect (whisper `set_detect_language` / cloud
+    // provider auto). Do NOT force "en" — it garbles non-English files when
+    // the user picks "Auto-detect" in the language combo.
     let language = st.language.lock().map(|l| l.clone()).unwrap_or_default();
-    let language = if language.is_empty() {
-        "en".to_string()
-    } else {
-        language
-    };
     let model = st
         .local_model
         .lock()
@@ -7417,10 +7415,9 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
         .lock()
         .map(|b| b.clone())
         .unwrap_or_else(|_| "whisper".to_string());
-    let mut language = st.language.lock().map(|l| l.clone()).unwrap_or_default();
-    if language.is_empty() {
-        language = "en".to_string();
-    }
+    // Empty language = auto-detect; do not force "en" (see dimmy_transcribe_file).
+    // Meeting bands are long enough that per-chunk whisper auto-detect is reliable.
+    let language = st.language.lock().map(|l| l.clone()).unwrap_or_default();
     let model = st
         .local_model
         .lock()

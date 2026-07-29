@@ -38,14 +38,30 @@ public partial class SettingsViewModel : ObservableObject
         return list;
     }
 
+    // "" = auto-detect (whisper `set_detect_language` / cloud provider auto).
+    // Explicit entries are the world's most-spoken languages. The first block
+    // is supported by BOTH local backends (whisper + Parakeet TDT v3, all
+    // European); the "(Whisper)" block is whisper-only — Parakeet v3 does not
+    // cover them, so forcing one while on Parakeet degrades results. Auto-detect
+    // covers every other language whisper knows (99 total) without listing them.
     public static readonly List<KeyValuePair<string, string>> Languages =
     [
+        new("", "Auto-detect"),
         new("it", "Italiano"),
         new("en", "English"),
         new("es", "Español"),
         new("fr", "Français"),
         new("de", "Deutsch"),
         new("pt", "Português"),
+        new("nl", "Nederlands"),
+        new("pl", "Polski"),
+        new("ru", "Русский"),
+        new("uk", "Українська"),
+        new("zh", "中文 (Whisper)"),
+        new("ja", "日本語 (Whisper)"),
+        new("ko", "한국어 (Whisper)"),
+        new("ar", "العربية (Whisper)"),
+        new("hi", "हिन्दी (Whisper)"),
     ];
 
     public static readonly string[] LlmStyles =
