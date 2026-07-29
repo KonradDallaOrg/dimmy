@@ -1314,14 +1314,27 @@ final class AppState: ObservableObject {
 
     // MARK: - Language list (display name → language code for Rust)
 
+    // "" = auto-detect. The first block is supported by BOTH local backends
+    // (whisper + Parakeet TDT v3, all European); the "(Whisper)" block is
+    // whisper-only. Auto-detect covers whisper's other ~84 languages. Kept in
+    // sync with Windows `SettingsViewModel.Languages` + Linux `LANGUAGES`.
     static let languageMap: [(display: String, code: String)] = [
-        ("Auto Detect", ""),
+        ("Auto-detect", ""),
         ("Italiano", "it"),
         ("English", "en"),
         ("Español", "es"),
         ("Français", "fr"),
         ("Deutsch", "de"),
         ("Português", "pt"),
+        ("Nederlands", "nl"),
+        ("Polski", "pl"),
+        ("Русский", "ru"),
+        ("Українська", "uk"),
+        ("中文 (Whisper)", "zh"),
+        ("日本語 (Whisper)", "ja"),
+        ("한국어 (Whisper)", "ko"),
+        ("العربية (Whisper)", "ar"),
+        ("हिन्दी (Whisper)", "hi"),
     ]
 
     let languages: [String] = languageMap.map(\.display)
@@ -1395,7 +1408,7 @@ final class AppState: ObservableObject {
             // detection is unreliable on short audio (<2s) and often misfires — a 1-second Italian
             // clip can be classified as Turkish, producing empty transcripts. Seed the language
             // from the system locale on first onboarding so new users get sensible results
-            // without digging into Settings. Users can still pick "Auto Detect" explicitly later.
+            // without digging into Settings. Users can still pick "Auto-detect" explicitly later.
             let effectiveLang = (lang.isEmpty && !isOnboardingComplete)
                 ? Self.systemPreferredLanguageCode()
                 : lang
@@ -1929,6 +1942,6 @@ final class AppState: ObservableObject {
     }
 
     nonisolated static func displayLanguage(for code: String) -> String {
-        languageMap.first(where: { $0.code == code })?.display ?? "Auto Detect"
+        languageMap.first(where: { $0.code == code })?.display ?? "Auto-detect"
     }
 }

@@ -577,14 +577,17 @@ jobs:
         run: |
           call "%VS2026_PATH%\VC\Auxiliary\Build\vcvars64.bat"
           if errorlevel 1 exit /b 1
-          REM ── DO NOT add `cargo clean --release` back here ──
-          REM     Dropped 2026-05-14 to reuse the Swatinem/rust-cache@v2
-          REM     restore — saves 20-25 min per Win build. Safety net:
-          REM     "Gate — verify dimmy_lib.dll linker version" runs
-          REM     dumpbin and aborts if linker < 14.50.
+          REM ── cargo clean --release: RE-ADDED 2026-07-29 ──
+          REM     Mirrors the release.yml rc70 fix. v0.6.69-rc1 shipped a
+          REM     MISCOMPILED whisper.cpp: the Swatinem cache restored stale
+          REM     objects and, with no clean, they linked into a DLL that
+          REM     CRASHED whisper (0xc000001d) at runtime while STILL passing
+          REM     the >=14.50 linker gate (so the gate below is NOT a net for
+          REM     this failure). staging-tester uses its own `windows-staging`
+          REM     cache but the failure mode is identical. This whole step is
+          REM     SKIPPED when the core is unchanged (DLL-reuse via
+          REM     dll-cache.sh), so `cargo clean` only runs on a real rebuild.
           REM     Memory: feedback_cargo_clean_dropped_from_win_ci.md
-          REM     If a Win tester ever sees a broken signed DLL, FIRST
-          REM     add `cargo clean --release` back and re-run.
           # Feature set FROZEN — must always include local-stt-vulkan +
           # local-stt-parakeet + local-llm-vulkan + local-dfn. Dropping
           # ANY of these = silent runtime trap: dictation/meeting paths
@@ -603,6 +606,7 @@ jobs:
           # Without it, AEC falls back to nnnoiseless. Frozen here so
           # staging testers always exercise the production-default
           # backend.
+          cargo clean --release
           cargo build --lib --release --features local-stt-vulkan,local-stt-parakeet,local-llm-vulkan,local-dfn,license-client,telegram
 
       # Added 2026-07-05: the REM comment above always claimed this gate

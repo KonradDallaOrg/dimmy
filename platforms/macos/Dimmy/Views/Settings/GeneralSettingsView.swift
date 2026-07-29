@@ -137,7 +137,7 @@ struct GeneralSettingsView: View {
             appState.devices = DimmyCore.shared.listDevices()
             // Ensure initial language is valid
             if !appState.languages.contains(appState.selectedLanguage) {
-                appState.selectedLanguage = "Auto Detect"
+                appState.selectedLanguage = "Auto-detect"
             }
             // Init local STT preset from current config
             selectedSttPreset = SttPreset.find(url: appState.apiUrl, model: appState.apiModel)?.id ?? "custom"
