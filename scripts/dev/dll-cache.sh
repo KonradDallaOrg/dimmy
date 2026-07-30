@@ -56,6 +56,19 @@ echo "dll-cache: $action  hash=$hash  key=$url" >&2
 
 case "$action" in
   restore)
+    # Win reuse DISABLED 2026-07-30: the VS 2026 PREVIEW MSVC miscompiles the
+    # core NONDETERMINISTICALLY (rc3 whisper-crash, rc4 startup-crash, both
+    # under the SAME 14.51.36231 that built the good rc70). A miscompiled DLL
+    # that happens to pass the whisper gate still gets stored here and then
+    # REUSED forever (gate skipped on reuse) — test-install fails every time but
+    # the bad DLL never leaves the cache. Force every Windows release to rebuild
+    # fresh so the whisper gate + test-install actually re-validate it. Re-enable
+    # once the toolchain is reliable (mac reuse stays on — only Win miscompiles).
+    if [ "$platform" = "win-x64" ]; then
+      echo "MISS"
+      echo "dll-cache: win-x64 reuse disabled (unreliable preview MSVC) -> forcing fresh gated rebuild" >&2
+      exit 0
+    fi
     mkdir -p "$(dirname "$file")" 2>/dev/null || true
     if aws s3 cp "$url" "$file" "${common[@]}" >&2 2>&1 && [ -s "$file" ]; then
       echo "HIT"
