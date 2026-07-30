@@ -816,6 +816,30 @@ jobs:
           cargo clean --release
           cargo build --lib --release --features local-stt-vulkan,local-llm-vulkan,local-stt-parakeet,license-client,telegram
 
+      - name: Gate — whisper transcription smoke test (catch miscompiled whisper.cpp)
+        # The >=14.50 linker gate is NOT enough: v0.6.69-rc1 AND v0.6.71-rc3 both
+        # shipped a whisper.cpp that linked at 14.51 (gate green) but crashed
+        # 0xc000001d the instant whisper ran, on GPU AND CPU (nondeterministic
+        # miscompile — a sibling build of the same source was fine). This runs
+        # the REAL whisper path (tests/ffi_e2e -> tiny model + JFK sample ->
+        # assert transcript contains "ask not"), REUSING the whisper.cpp objects
+        # just built in D:\t. A miscompile crashes the transcription so this step
+        # fails BEFORE the Store below -> the bad DLL is never cached and the
+        # release does not publish. GitHub-hosted runner has no GPU, so this
+        # exercises the CPU whisper path (where rc3 also crashed). Fresh build
+        # only; a reused DLL already passed this gate when it was first built.
+        if: env.DLL_REUSED != '1'
+        working-directory: core
+        shell: cmd
+        env:
+          LIBCLANG_PATH: "C:\\Program Files\\LLVM\\bin"
+          CMAKE_GENERATOR: Ninja
+          CARGO_TARGET_DIR: "D:\\t"
+        run: |
+          call "%VS2026_PATH%\VC\Auxiliary\Build\vcvars64.bat"
+          if errorlevel 1 exit /b 1
+          cargo test --release --test ffi_e2e --features local-stt-vulkan,test-ffi -- --test-threads=1 --nocapture
+
       - name: Store prebuilt core DLL to cache
         if: env.DLL_REUSED != '1'
         shell: bash

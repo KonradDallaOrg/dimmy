@@ -40,14 +40,17 @@ if [ -z "$hash" ]; then
 fi
 
 base="$(basename "$file")"
-# Namespace bumped v1 -> v2 on 2026-07-28: the v1 cache was POISONED by
-# v0.6.69-rc1, which stored a miscompiled dimmy_lib.dll (stale Swatinem
-# whisper.cpp objects, no cargo clean) under a valid content hash. Since a
-# version-only bump is normalized out of the hash by design, rc70 would
-# otherwise REUSE that broken DLL. Bumping the prefix makes every lookup
-# MISS v1 -> one clean rebuild -> repopulates a fresh v2. No R2 deletes,
-# reuse mechanism unchanged.
-url="s3://$bucket/dll-cache/v2/$platform/$hash/$base"
+# Namespace bumped v2 -> v3 on 2026-07-30: v2 was POISONED by v0.6.71-rc3,
+# which stored ANOTHER miscompiled whisper.cpp DLL (crashed 0xc000001d on GPU
+# AND CPU) under a valid content hash — DESPITE the cargo clean added in the
+# v1->v2 bump. The miscompile is nondeterministic (a sibling build of the same
+# source was fine), so cargo clean alone cannot prevent it. The real safety net
+# is the "whisper transcription smoke test" gate in release.yml that RUNS
+# whisper on the freshly built objects and fails BEFORE this store, so a bad DLL
+# is never cached here again. This v2->v3 bump forces one fresh, gated rebuild
+# past the poisoned rc3 DLL (a version-only bump is normalized out of the hash).
+# (v1->v2 on 2026-07-28 was the same story for v0.6.69-rc1.)
+url="s3://$bucket/dll-cache/v3/$platform/$hash/$base"
 common=(--endpoint-url "${SCCACHE_R2_ENDPOINT:-}" --region auto)
 echo "dll-cache: $action  hash=$hash  key=$url" >&2
 
