@@ -103,6 +103,14 @@ public static class DictNotificationService
         Show($"Transcription failed ({who})", $"{detail}. {DictFailureHints.For(category)}");
     }
 
+    /// <summary>A dictation produced no audio (muted mic / wrong input device /
+    /// privacy-blocked). The core detects the all-zero buffer and asks us to
+    /// tell the user, since a silent dictation otherwise fails invisibly.</summary>
+    public static void ShowNoAudioCaptured(string detail)
+    {
+        Show("No audio captured", detail);
+    }
+
     /// <summary>A voice note shared to the user's Telegram Saved Messages
     /// was transcribed and recapped on this PC. The recap lands in History /
     /// the meetings folder; this toast is the only surface that tells the

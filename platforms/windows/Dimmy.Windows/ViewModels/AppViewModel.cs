@@ -41,6 +41,12 @@ public partial class AppViewModel : ObservableObject
     /// <summary>When true, ignore late "recording_started" callbacks from Rust.
     /// Set when PTT release initiates stop before Rust's callback arrives.</summary>
     public bool SuppressRecordingStarted { get; set; }
+
+    /// <summary>Wall-clock UTC when the current recording started (set on the
+    /// recording_started event). Used to scale the transcription timeout with
+    /// the recording length — a multi-minute local dictation legitimately takes
+    /// far longer than a flat 30s to transcribe.</summary>
+    public DateTime? RecordingStartedUtc { get; set; }
     [ObservableProperty] private string _statusText = "";
     [ObservableProperty] private string _errorMessage = "";
     [ObservableProperty] private float _amplitude;
@@ -449,6 +455,7 @@ public partial class AppViewModel : ObservableObject
                     }
                     else
                     {
+                        RecordingStartedUtc = DateTime.UtcNow;
                         SetState(AppState.Recording);
                     }
                     break;

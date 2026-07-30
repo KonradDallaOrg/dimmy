@@ -1118,9 +1118,14 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
     // Detect completely silent input (muted mic / privacy blocked)
     if peak < 1e-7 && buf_len_samples > 4800 {
         log("[StopRec] Microphone appears muted (all zeros) — check system settings");
+        // source:"capture" routes this to the same visible toast path as STT
+        // failures (host OnCoreFailure / handleEvent). Without a source it only
+        // set the pill Error state, which is invisible mid-dictation — the whole
+        // point of detecting a muted mic is to TELL the user (burned 2026-07-30:
+        // user dictated into a muted mic, saw nothing, no idea why).
         emit_event(
             "error",
-            r#"{"message":"Microphone is muted — check system sound settings"}"#,
+            r#"{"message":"No audio was captured. Your microphone may be muted, or the wrong input device is selected. Check your system sound settings.","source":"capture","category":"muted_mic"}"#,
         );
         return write_to_buf("", out_buf, buf_len);
     }

@@ -1078,6 +1078,14 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
                     title: "Transcription failed (\(provider))",
                     body: "\(message). \(hint)")
             }
+            // A muted mic / wrong input device: the core emits source:"capture"
+            // so the user is told instead of a silent dictation failing blind.
+            if let source = payload["source"] as? String, source == "capture" {
+                DictToastWindow.show(
+                    kind: .error,
+                    title: "No audio captured",
+                    body: message)
+            }
         }
 
     case "recording_cancelled":

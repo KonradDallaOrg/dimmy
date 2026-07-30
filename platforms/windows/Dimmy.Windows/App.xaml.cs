@@ -136,6 +136,8 @@ public partial class App : Application
         {
             if (source == "stt")
                 Services.DictNotificationService.ShowTranscriptionFailed(provider, message, category);
+            else if (source == "capture")
+                Services.DictNotificationService.ShowNoAudioCaptured(message);
         }
         catch (Exception ex) { PttLog($"OnCoreFailure exc: {ex.Message}"); }
     }
@@ -1910,7 +1912,9 @@ public partial class App : Application
             }
 
             PttLog("StopAndProcess: calling dimmy_stop_recording...");
-            var result = await Services.TranscriptionService.StopAndProcessAsync();
+            var recSecs = _appViewModel.RecordingStartedUtc is DateTime rs
+                ? (DateTime.UtcNow - rs).TotalSeconds : 0;
+            var result = await Services.TranscriptionService.StopAndProcessAsync(recSecs);
             PttLog($"StopAndProcess: IsSuccess={result.IsSuccess}, IsEmpty={result.IsEmpty}, IsSkipped={result.IsSkipped}, IsTimeout={result.IsTimeout}, Text={result.Text?.Length ?? 0} chars, Error={result.Error}");
             if (result.IsSkipped)
             {

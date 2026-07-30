@@ -12,17 +12,28 @@ namespace Dimmy.Windows.Services;
 public static class TranscriptionService
 {
     private const int BufSize = 65536;
-    private static readonly TimeSpan TranscribeTimeout = TimeSpan.FromSeconds(30);
-    private static readonly TimeSpan LlmTimeout = TimeSpan.FromSeconds(30);
+
+    // Timeouts scale with the work size. A flat 30s cut off multi-minute local
+    // dictations even though the core finished and SAVED the transcript (burned
+    // 2026-07-30: a 3-min dictation timed out at 30s while STT actually took
+    // ~82s on GPU — the text was lost from the paste path though it landed in
+    // History). Local whisper of an N-second buffer takes a large fraction of
+    // N; cloud STT is network-bound and the core applies its own HTTP timeout.
+    private const int TranscribeBaseSecs = 30;
+    private const int TranscribeMaxSecs = 900; // 15-min hard ceiling (safety net)
+    private const int LlmBaseSecs = 30;
+    private const int LlmMaxSecs = 300;
 
     /// <summary>
     /// Stop recording, transcribe, optionally run LLM enhancement, and return the final text.
     /// Returns null if transcription is empty or timed out.
     /// Throws on unexpected errors.
     /// </summary>
-    public static async Task<TranscriptionResult> StopAndProcessAsync()
+    public static async Task<TranscriptionResult> StopAndProcessAsync(double recordingSecs = 0)
     {
         var startedAt = DateTime.UtcNow;
+        var transcribeTimeout = TimeSpan.FromSeconds(
+            Math.Clamp(recordingSecs * 3 + TranscribeBaseSecs, TranscribeBaseSecs * 2, TranscribeMaxSecs));
         // Step 1: Stop recording + transcribe (blocking FFI, run on thread pool)
         var transcribeTask = Task.Run(() =>
         {
@@ -31,9 +42,9 @@ public static class TranscriptionService
             return (len, len > 0 ? Encoding.UTF8.GetString(buf, 0, len) : null);
         });
 
-        var completed = await Task.WhenAny(transcribeTask, Task.Delay(TranscribeTimeout));
+        var completed = await Task.WhenAny(transcribeTask, Task.Delay(transcribeTimeout));
         if (completed != transcribeTask)
-            return TranscriptionResult.Timeout("Transcription timed out (30s)");
+            return TranscriptionResult.Timeout($"Transcription timed out ({transcribeTimeout.TotalSeconds:0}s)");
 
         var (rc, transcript) = await transcribeTask;
         // rc -9 = a concurrent stop is already running (mashed toggle, or
@@ -53,7 +64,12 @@ public static class TranscriptionService
             return len > 0 ? Encoding.UTF8.GetString(buf, 0, len) : null;
         });
 
-        var llmCompleted = await Task.WhenAny(llmTask, Task.Delay(LlmTimeout));
+        // LLM timeout scales with transcript length; on timeout we fall back to
+        // the raw transcript below, so the text is never lost — this just lets
+        // long dictations still get filler removal / enhancement.
+        var llmTimeout = TimeSpan.FromSeconds(
+            Math.Clamp(transcript.Length / 40.0 + LlmBaseSecs, LlmBaseSecs, LlmMaxSecs));
+        var llmCompleted = await Task.WhenAny(llmTask, Task.Delay(llmTimeout));
         if (llmCompleted != llmTask)
         {
             // LLM timed out → use raw transcript (graceful degradation)
@@ -124,9 +140,11 @@ public static class TranscriptionService
             int len = DimmyNative.dimmy_stop_recording(buf, buf.Length);
             return len > 0 ? Encoding.UTF8.GetString(buf, 0, len) : null;
         });
-        var completed = await Task.WhenAny(transcribeTask, Task.Delay(TranscribeTimeout));
+        // A spoken command instruction is short, so a fixed guard is fine here.
+        var cmdTranscribeTimeout = TimeSpan.FromSeconds(TranscribeBaseSecs * 2);
+        var completed = await Task.WhenAny(transcribeTask, Task.Delay(cmdTranscribeTimeout));
         if (completed != transcribeTask)
-            return CommandResult.Fail("Transcription timed out (30s)");
+            return CommandResult.Fail($"Transcription timed out ({cmdTranscribeTimeout.TotalSeconds:0}s)");
         var spoken = (await transcribeTask)?.Trim();
         if (string.IsNullOrEmpty(spoken))
             return CommandResult.EmptyTranscript();
@@ -141,7 +159,10 @@ public static class TranscriptionService
             int rc = DimmyNative.dimmy_command_transform(sel, spoken, buf, buf.Length);
             return (rc, rc > 0 ? Encoding.UTF8.GetString(buf, 0, rc) : null);
         });
-        var tCompleted = await Task.WhenAny(transformTask, Task.Delay(LlmTimeout));
+        // Transform can act on a long selection, so scale with its length.
+        var cmdLlmTimeout = TimeSpan.FromSeconds(
+            Math.Clamp(sel.Length / 40.0 + LlmBaseSecs, LlmBaseSecs, LlmMaxSecs));
+        var tCompleted = await Task.WhenAny(transformTask, Task.Delay(cmdLlmTimeout));
         if (tCompleted != transformTask)
             return CommandResult.Fail("Command transform timed out", spoken);
         var (rc, text) = await transformTask;
