@@ -581,6 +581,11 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           files: platforms/macos/build/Dimmy-macos-arm64.dmg
+          # Keep the release DRAFT: only the Publish job (after test-install +
+          # sign gates) flips it visible. softprops defaults to draft:false, so
+          # without this an early build upload publishes the release and clients
+          # auto-update to a gate-failing build (burned by v0.6.71-rc4).
+          draft: true
 
       - name: Upload appcast.xml to release
         if: hashFiles('platforms/macos/build/appcast.xml') != ''
@@ -588,6 +593,7 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           files: platforms/macos/build/appcast.xml
+          draft: true
 
       # Durable auto-update channel — Sparkle's SUFeedURL in
       # Info.plist points to `releases/download/auto-update/appcast.xml`.
@@ -1015,6 +1021,10 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
+          # Keep DRAFT until the Publish job (after gates). This step uploads
+          # releases.win.json (the Velopack auto-update manifest); publishing it
+          # early is exactly what auto-updated users into the broken rc4.
+          draft: true
           files: |
             platforms/windows/velopack-output/Dimmy-win-Setup.exe
             platforms/windows/velopack-output/Dimmy-win-Portable.zip
@@ -1215,6 +1225,7 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           files: Dimmy-linux-x86_64.AppImage
+          draft: true
 
   # ── Clean-machine install test ──────────────────────────────────────
   # Gates publish: a broken installer must never leave draft state on a real v-tag.
