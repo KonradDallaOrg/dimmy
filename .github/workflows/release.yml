@@ -821,19 +821,36 @@ jobs:
           REM     so `cargo clean` only runs on a real rebuild.
           cargo clean --release
           cargo build --lib --release --features local-stt-vulkan,local-llm-vulkan,local-stt-parakeet,license-client,telegram
+          if errorlevel 1 exit /b 1
+          REM ── PRESERVE the production DLL before the whisper gate ──
+          REM The gate below runs `cargo test --features ...,test-ffi` in THIS
+          REM SAME target dir (D:\t). Because the core is crate-type cdylib,
+          REM that re-emits dimmy_lib.dll with the test-ffi feature + the WRONG
+          REM feature set (no parakeet/llm/license-client) and OVERWRITES this
+          REM freshly built production DLL. Shipping that DLL makes dimmy_init
+          REM REFUSE ("test-ffi without DIMMY_TEST_CONFIG_DIR") and the app
+          REM aborts at startup (0xc0000409). Burned rc4/rc5/rc6 on 2026-07-30
+          REM (misdiagnosed as a "nondeterministic MSVC miscompile" — it was
+          REM 100% deterministic self-poisoning). Stash the good DLL; the
+          REM "Restore production DLL" step puts it back after the gate.
+          copy /Y "D:\t\release\dimmy_lib.dll" "D:\t\dimmy_lib.prod.dll"
+          if errorlevel 1 exit /b 1
 
       - name: Gate — whisper transcription smoke test (catch miscompiled whisper.cpp)
-        # The >=14.50 linker gate is NOT enough: v0.6.69-rc1 AND v0.6.71-rc3 both
-        # shipped a whisper.cpp that linked at 14.51 (gate green) but crashed
-        # 0xc000001d the instant whisper ran, on GPU AND CPU (nondeterministic
-        # miscompile — a sibling build of the same source was fine). This runs
-        # the REAL whisper path (tests/ffi_e2e -> tiny model + JFK sample ->
-        # assert transcript contains "ask not"), REUSING the whisper.cpp objects
-        # just built in D:\t. A miscompile crashes the transcription so this step
-        # fails BEFORE the Store below -> the bad DLL is never cached and the
-        # release does not publish. GitHub-hosted runner has no GPU, so this
-        # exercises the CPU whisper path (where rc3 also crashed). Fresh build
-        # only; a reused DLL already passed this gate when it was first built.
+        # The >=14.50 linker gate is NOT enough on its own: v0.6.69-rc1 and
+        # v0.6.71-rc3 shipped a whisper.cpp that linked at 14.51 (gate green) but
+        # crashed 0xc000001d the instant whisper ran. This runs the REAL whisper
+        # path (tests/ffi_e2e -> tiny model + JFK sample -> assert transcript
+        # contains "ask not"), REUSING the whisper.cpp objects just built in D:\t.
+        # A broken whisper crashes the transcription so this step fails BEFORE the
+        # Store below -> the bad DLL is never cached and the release does not
+        # publish. GitHub-hosted runner has no GPU, so this exercises the CPU
+        # whisper path. Fresh build only.
+        #
+        # ⚠️ SIDE EFFECT: `cargo test` with `test-ffi` re-emits the cdylib
+        # dimmy_lib.dll into D:\t\release with the WRONG feature set. The
+        # "Restore production DLL" step immediately below undoes that. Do NOT
+        # move packaging before the restore. (See the Build step's PRESERVE note.)
         if: env.DLL_REUSED != '1'
         working-directory: core
         shell: cmd
@@ -845,6 +862,19 @@ jobs:
           call "%VS2026_PATH%\VC\Auxiliary\Build\vcvars64.bat"
           if errorlevel 1 exit /b 1
           cargo test --release --test ffi_e2e --features local-stt-vulkan,test-ffi -- --test-threads=1 --nocapture
+
+      - name: Restore production DLL (undo the gate's test-ffi clobber)
+        # The whisper gate above rebuilt dimmy_lib.dll with test-ffi + the wrong
+        # feature set in the shared D:\t target dir. Put the real production DLL
+        # (stashed by the Build step) back so the Store, linker gate, and
+        # packaging all ship the frozen-feature build — NOT the test-ffi one that
+        # aborts at startup (0xc0000409). This step only runs if the gate passed;
+        # a gate failure fails the job honestly (no masking). Burned rc4/rc5/rc6.
+        if: env.DLL_REUSED != '1'
+        shell: cmd
+        run: |
+          copy /Y "D:\t\dimmy_lib.prod.dll" "D:\t\release\dimmy_lib.dll"
+          if errorlevel 1 exit /b 1
 
       - name: Store prebuilt core DLL to cache
         if: env.DLL_REUSED != '1'
