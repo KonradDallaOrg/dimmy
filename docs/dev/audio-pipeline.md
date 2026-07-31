@@ -207,13 +207,26 @@ Three chunk-only rules, all paid for on 2026-07-31 with a real meeting:
    real speech and the untrimmed window is handed back. Real speech measures
    40-60 %, the offending idle mic measured 4 %.
 
-Whisper's own `no_speech_probability()` is read and logged per segment
-(`local_stt.rs`), with a 0.6 drop threshold (whisper.cpp's own default).
-**Empirically it never fires on large-v3-turbo**: 84 segments in one meeting all
-reported 0.000, including a hallucinated "Grazie." — whisper's hallucinations
-are high-confidence, so a confidence filter cannot see them. Kept for now only
-because the per-segment log is the calibration data; delete it if a second
-recording confirms it is inert.
+**Whisper's own `no_speech_probability()` does NOT work as a filter here — do
+not re-add it.** It is the standard second net (OpenAI's reference decoder and
+faster-whisper both threshold it at 0.6), and it was wired up and measured on
+2026-07-31: over 45 segments of two real meetings it never exceeded 0.00002,
+and the hallucinated "Grazie a tutti" segments reported exactly 0.00000.
+Whisper is most confident precisely when it is inventing, so a confidence
+filter cannot see hallucinations. It was removed as dead code. `suppress_nst`
+is still set (one free line). Silence has to leave the AUDIO before whisper
+sees it.
+
+A/B measured the same evening, same machine, same model, six minutes apart,
+only the `preprocessing_enabled` toggle differing:
+
+| | toggle ON | toggle OFF |
+|---|---|---|
+| silent chunks blocked before whisper | 21 | 0 |
+| phantom "Grazie a tutti" in the transcript | 0 | 3 |
+
+The `sustained_energy_fraction` fallback never fired in either run, i.e. the
+VAD never emptied a window that actually held speech.
 
 **Why cloud is highpass-only (BUG B):** Groq/OpenAI/Deepgram run their own
 VAD + normalization server-side. Ours is redundant and can only degrade —

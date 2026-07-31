@@ -796,15 +796,6 @@ mod whisper_cache {
     use std::sync::Mutex;
     use whisper_rs::{WhisperContext, WhisperContextParameters};
 
-    /// Drop a segment whose no-speech probability exceeds this.
-    ///
-    /// 0.6 is whisper.cpp's own `no_speech_thold` default and the value
-    /// OpenAI's reference decoder and faster-whisper both use. Kept
-    /// deliberately at the upstream default rather than tuned by feel: every
-    /// segment's actual value is logged, so a real recording tells us whether
-    /// it wants moving instead of us guessing.
-    const NO_SPEECH_DROP_THRESHOLD: f32 = 0.6;
-
     struct CachedModel {
         // Retained for the lifetime of the cache entry so the loaded model
         // unambiguously outlives the reused `state`. Not read after the
@@ -990,7 +981,6 @@ mod whisper_cache {
         let n_segments = state.full_n_segments();
         crate::log(&format!("[LocalSTT] Extracting {} segment(s)", n_segments));
         let mut text = String::new();
-        let mut dropped = 0usize;
         for i in 0..n_segments {
             let segment = state.get_segment(i).ok_or_else(|| {
                 crate::error::TranscribeError::LocalModel(format!("segment {} out of bounds", i))
@@ -1001,33 +991,20 @@ mod whisper_cache {
                     i, e
                 ))
             })?;
-            // whisper's own estimate that this segment is NOT speech. On real
-            // speech it sits near 0; on the sign-off phrases it hallucinates
-            // over noise ("Grazie", "Thank you") it is high. Logged for every
-            // segment so the threshold can be tuned on real recordings rather
-            // than guessed.
-            let no_speech = segment.no_speech_probability();
-            crate::log(&format!(
-                "[LocalSTT] seg {} no_speech={:.5} chars={} text={:?}",
-                i,
-                no_speech,
-                seg_text.trim().len(),
-                seg_text.trim()
-            ));
-            if no_speech > NO_SPEECH_DROP_THRESHOLD {
-                dropped += 1;
-                continue;
-            }
+            // NOTE: `segment.no_speech_probability()` is deliberately NOT used
+            // as a filter. It is the standard second net (OpenAI's reference
+            // decoder and faster-whisper both threshold it at 0.6), but it is
+            // useless on large-v3-turbo: measured over 45 segments of two real
+            // meetings on 2026-07-31 it never exceeded 0.00002, and the
+            // hallucinated "Grazie a tutti" segments reported exactly 0.00000.
+            // Whisper is most confident precisely when it is inventing, so a
+            // confidence filter cannot see hallucinations. Silence has to be
+            // removed from the AUDIO before it gets here — see
+            // `preprocess::process_chunk_vad_only`.
             if !text.is_empty() {
                 text.push(' ');
             }
             text.push_str(seg_text.trim());
-        }
-        if dropped > 0 {
-            crate::log(&format!(
-                "[LocalSTT] dropped {}/{} segment(s) above no_speech {}",
-                dropped, n_segments, NO_SPEECH_DROP_THRESHOLD
-            ));
         }
 
         let final_text = text.trim().to_string();
