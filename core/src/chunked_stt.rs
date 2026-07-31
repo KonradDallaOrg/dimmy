@@ -61,11 +61,16 @@ impl ChunkedTranscriber {
     /// the cpal callback writes into. `device_sample_rate` is the
     /// sample rate at which the buffer is being filled (cpal native
     /// rate, NOT 16 kHz).
+    /// `vad_trim` runs each window through the RNNoise VAD before the model
+    /// sees it (see `preprocess::process_chunk_vad_only`). Caller passes the
+    /// batch path's own decision, i.e. `preprocess_route(..) == Full`.
+    #[allow(clippy::too_many_arguments)]
     pub fn start(
         audio_buffer: Arc<Mutex<Vec<f32>>>,
         device_sample_rate: u32,
         chunk_secs: f32,
         overlap_ms: u32,
+        vad_trim: bool,
         transcribe_fn: Arc<TranscribeFn>,
         on_chunk: Arc<ChunkCallback>,
     ) -> Self {
@@ -89,6 +94,7 @@ impl ChunkedTranscriber {
                     device_sample_rate,
                     chunk_secs,
                     overlap_ms,
+                    vad_trim,
                     cancel_w,
                     final_w,
                     transcribe_fn,
@@ -126,6 +132,7 @@ fn worker_loop(
     device_sample_rate: u32,
     chunk_secs: f32,
     overlap_ms: u32,
+    vad_trim: bool,
     cancel: Arc<AtomicBool>,
     final_text: Arc<Mutex<String>>,
     transcribe_fn: Arc<TranscribeFn>,
@@ -181,7 +188,16 @@ fn worker_loop(
         };
 
         let t0 = Instant::now();
-        let pcm_16k = downsample_if_needed(&snapshot, device_sample_rate);
+        let window = maybe_vad_trim(snapshot, device_sample_rate, vad_trim);
+        if window.is_empty() {
+            // No speech in this window. Skipping the model call is the whole
+            // point: it removes the silence hallucination at the source and
+            // saves a full whisper encoder pass.
+            crate::log("[chunked] silent window — skipped (VAD)");
+            last_processed = end;
+            continue;
+        }
+        let pcm_16k = downsample_if_needed(&window, device_sample_rate);
         let transcribed = match transcribe_fn(&pcm_16k) {
             Ok(t) => t,
             Err(e) => {
@@ -227,6 +243,8 @@ fn worker_loop(
         Err(_) => Vec::new(),
     };
 
+    let trailing = maybe_vad_trim(trailing, device_sample_rate, vad_trim);
+
     if !trailing.is_empty() {
         let pcm_16k = downsample_if_needed(&trailing, device_sample_rate);
         match transcribe_fn(&pcm_16k) {
@@ -252,6 +270,15 @@ fn worker_loop(
     if let Ok(mut s) = final_text.lock() {
         *s = cumulative;
     }
+}
+
+/// Trim silence out of one window before the model sees it, when the caller
+/// asked for it. Takes ownership so the pass-through case costs nothing.
+fn maybe_vad_trim(samples: Vec<f32>, source_rate: u32, enabled: bool) -> Vec<f32> {
+    if !enabled {
+        return samples;
+    }
+    crate::preprocess::process_chunk_vad_only(&samples, source_rate)
 }
 
 fn downsample_if_needed(samples: &[f32], source_rate: u32) -> Vec<f32> {

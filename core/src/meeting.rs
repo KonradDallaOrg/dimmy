@@ -91,6 +91,11 @@ pub struct SttSnapshot {
     /// User-configurable chunk window — falls back to DEFAULT_CHUNK_SECS
     /// when None (e.g. older callers).
     pub chunk_secs: Option<f32>,
+    /// Mirrors the `preprocessing_enabled` config knob. Combined with `mode`
+    /// it decides whether each chunk gets the RNNoise VAD trim before the
+    /// model sees it — the same rule the batch dictation path applies
+    /// (`preprocess_route(..) == Full`).
+    pub preprocessing_enabled: bool,
 }
 
 /// Encode 16 kHz mono f32 PCM into an in-memory WAV byte buffer suitable
@@ -597,6 +602,14 @@ fn worker_loop(
     let chunk_samples = (chunk_secs * device_sample_rate as f32) as usize;
     let overlap_samples =
         ((DEFAULT_OVERLAP_MS as f32 / 1000.0) * device_sample_rate as f32) as usize;
+    // Trim silence out of each chunk only on the local route. Cloud STT runs
+    // its own VAD server-side and our pipeline provably degrades quiet audio
+    // for it (AUDIO-004), so the decision is delegated to the same pure
+    // function the batch dictation path uses.
+    let vad_trim = matches!(
+        crate::preprocess::preprocess_route(stt.preprocessing_enabled, &stt.mode),
+        crate::preprocess::PreprocessRoute::Full
+    );
     let mix_active = matches!(source, crate::audio::AudioSource::Mix);
     let local_model_filename = stt.local_model.clone();
     let language = stt.language.clone();
@@ -1044,6 +1057,17 @@ fn worker_loop(
             // header to the cloud STT, which Gemini returns as empty
             // because the speech is 3x compressed and unintelligible.
             let transcribe = |slice: Vec<f32>, source_sr: u32| -> String {
+                if slice.is_empty() {
+                    return String::new();
+                }
+                // Silence trim before the model sees the window. An idle
+                // chunk collapses to empty here and never reaches whisper,
+                // which is what stops the phantom "grazie" on the mic track.
+                let slice = if vad_trim {
+                    crate::preprocess::process_chunk_vad_only(&slice, source_sr)
+                } else {
+                    slice
+                };
                 if slice.is_empty() {
                     return String::new();
                 }

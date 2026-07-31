@@ -80,10 +80,51 @@ pub struct AudioPreprocessor {
     vad_enabled: bool,
     /// Device sample rate
     sample_rate: u32,
+    /// Whether the AGC stage runs. False for the realtime chunk workers:
+    /// dagc is adaptive, so a per-chunk instance would settle on a different
+    /// gain for each window and adjacent chunks would come out at different
+    /// levels; and it produces permanent NaN on all-silence input (AUDIO-001),
+    /// which is exactly what an idle chunk is.
+    apply_agc: bool,
+    /// Whether a frame must ALSO carry speech-level energy to count as speech.
+    ///
+    /// nnnoiseless scores voice likelihood from spectral shape, not level, so a
+    /// keyboard click or a breath at -60 dBFS can score above the onset
+    /// threshold and open a speech window. On the batch path that is harmless
+    /// (the recording really does contain speech somewhere). On a realtime
+    /// chunk of an idle mic it is the whole problem: the window survives with
+    /// ~1 s of clicks, whisper is handed a second of unintelligible noise, and
+    /// it emits a training-set sign-off ("Grazie", "Thank you"). Measured
+    /// 2026-07-31 on a real meeting: mic track median level 0.00028, 50x below
+    /// ENERGY_FLOOR, yet every 15 s chunk produced a phantom "Grazie".
+    require_frame_energy: bool,
 }
 
 impl AudioPreprocessor {
+    /// Full pipeline: highpass + VAD + AGC. Logs a one-line banner.
     pub fn new(sample_rate: u32) -> Self {
+        let proc = Self::build(sample_rate, true);
+        crate::log(&format!(
+            "AudioPreprocessor: sr={}, highpass={}, vad={}, agc=dagc(target={}, distortion={})",
+            sample_rate,
+            proc.highpass.is_some(),
+            proc.vad_enabled,
+            TARGET_RMS,
+            AGC_DISTORTION,
+        ));
+        proc
+    }
+
+    /// Highpass + VAD, no AGC. For the realtime chunk workers, which build one
+    /// per chunk (every 3 s in dictation, every 15 s per track in a meeting) —
+    /// hence no banner, it would drown the log.
+    pub fn new_vad_trim(sample_rate: u32) -> Self {
+        let mut proc = Self::build(sample_rate, false);
+        proc.require_frame_energy = true;
+        proc
+    }
+
+    fn build(sample_rate: u32, apply_agc: bool) -> Self {
         // Invariant: sample rate must be positive (0 would cause division-by-zero downstream)
         assert!(
             sample_rate > 0,
@@ -126,15 +167,6 @@ impl AudioPreprocessor {
         // dagc AGC — unwrap is safe: 0.2 and 0.001 are valid params
         let agc = MonoAgc::new(TARGET_RMS, AGC_DISTORTION).unwrap();
 
-        crate::log(&format!(
-            "AudioPreprocessor: sr={}, highpass={}, vad={}, agc=dagc(target={}, distortion={})",
-            sample_rate,
-            highpass.is_some(),
-            vad_enabled,
-            TARGET_RMS,
-            AGC_DISTORTION,
-        ));
-
         Self {
             highpass,
             denoise,
@@ -147,6 +179,8 @@ impl AudioPreprocessor {
             has_spoken: false,
             vad_enabled,
             sample_rate,
+            apply_agc,
+            require_frame_energy: false,
         }
     }
 
@@ -188,9 +222,12 @@ impl AudioPreprocessor {
             return Vec::new();
         }
 
-        // Step 3: Adaptive gain control (replaces static RMS normalization)
+        // Step 3: Adaptive gain control (replaces static RMS normalization).
+        // Skipped on the VAD-trim path — see the `apply_agc` field.
         let mut output = speech;
-        self.agc.process(&mut output);
+        if self.apply_agc {
+            self.agc.process(&mut output);
+        }
 
         // Clamp to [-1.0, 1.0] after AGC (safety net).
         // AGC can produce NaN on long recordings — treat as silence.
@@ -281,7 +318,17 @@ impl AudioPreprocessor {
                     VAD_ONSET_THRESHOLD
                 };
 
-                if voice_prob > effective_onset || energy_override {
+                // On the chunk path, spectral likeness alone is not enough:
+                // the frame must also carry speech-level energy. Without this
+                // a click at -60 dBFS opens a speech window on an idle mic.
+                let voice_like = voice_prob > effective_onset || energy_override;
+                let is_speech = if self.require_frame_energy {
+                    voice_like && rms > ENERGY_FLOOR
+                } else {
+                    voice_like
+                };
+
+                if is_speech {
                     // Speech detected (by probability or energy)
                     self.speech_frames += 1;
                     self.silence_frames = 0;
@@ -368,7 +415,9 @@ impl AudioPreprocessor {
         self.frame_buf.clear();
 
         // Apply AGC to maintain consistent volume with the rest of the output
-        self.agc.process(&mut tail);
+        if self.apply_agc {
+            self.agc.process(&mut tail);
+        }
 
         // Clamp after AGC (same safety net as process())
         for s in tail.iter_mut() {
@@ -638,6 +687,128 @@ pub fn process_buffer_guarded(samples: &[f32], sample_rate: u32) -> Vec<f32> {
         return fallback;
     }
     full
+}
+
+/// Fraction of 10 ms frames that must clear `ENERGY_FLOOR` before a chunk
+/// whose VAD output collapsed is handed back untrimmed.
+///
+/// Measured 2026-07-31 on a real meeting: the offending mic track had ~4 % of
+/// frames above the floor (keyboard clicks, breath), while genuine speech
+/// retains 40-60 %. The two populations are far apart, so 10 % sits in the gap
+/// with room on both sides.
+const CHUNK_SUSTAINED_ENERGY_FRACTION: f32 = 0.10;
+
+/// Below this much retained speech a chunk is not worth a model call: no word
+/// fits in it, and whisper pads any input to a full 30 s encoder window, so a
+/// sliver costs a complete pass to return nothing.
+const CHUNK_MIN_SPEECH_MS: usize = 200;
+
+/// Fraction of 10 ms frames whose RMS clears `ENERGY_FLOOR`. Distinguishes
+/// sustained speech energy from isolated transients, which a whole-window RMS
+/// cannot: a single loud click lifts the window average without producing a
+/// single audible frame of speech.
+fn sustained_energy_fraction(samples: &[f32], sample_rate: u32) -> f32 {
+    assert!(
+        sample_rate > 0,
+        "sustained_energy_fraction: sample_rate must be > 0"
+    );
+    let frame = (sample_rate as usize / 100).max(1);
+    if samples.len() < frame {
+        return 0.0;
+    }
+    let frames = samples.len() / frame;
+    let loud = (0..frames)
+        .filter(|i| rms(&samples[i * frame..(i + 1) * frame]) > ENERGY_FLOOR)
+        .count();
+    loud as f32 / frames as f32
+}
+
+/// Chunk preprocess for the realtime workers: highpass + VAD trim, NO AGC.
+///
+/// The chunked-dictation worker (`chunked_stt.rs`) and the meeting chunk
+/// worker (`meeting.rs`) hand whisper short windows *while* capture is still
+/// running. Both used to hand it the raw buffer, silence included — which is
+/// precisely the input whisper hallucinates on, emitting the sign-off phrases
+/// from its YouTube training data ("thank you", "grazie per la visione"). This
+/// trims the silence first, with the same RNNoise VAD the batch dictation path
+/// has always used.
+///
+/// AGC is deliberately not applied (see `AudioPreprocessor::new_vad_trim`).
+/// The make-it-worse guard from the batch path is reused verbatim: if the VAD
+/// collapses a chunk that clearly had speech in it, the untrimmed chunk is
+/// returned, so a quiet speaker can never lose words. An all-silence chunk
+/// sits below `ENERGY_FLOOR`, so the guard stays out of the way and the caller
+/// gets an empty vec — which is the whole point: no audio, no whisper call, no
+/// phantom "grazie".
+pub fn process_chunk_vad_only(samples: &[f32], sample_rate: u32) -> Vec<f32> {
+    assert!(
+        sample_rate > 0,
+        "process_chunk_vad_only: sample_rate must be > 0, got {}",
+        sample_rate
+    );
+    if samples.is_empty() {
+        return Vec::new();
+    }
+    // No VAD below 48 kHz (nnnoiseless requires it). Trimming is the only
+    // reason this function exists, so hand the window back untouched rather
+    // than silently applying a highpass the caller never asked for.
+    if sample_rate != REQUIRED_SAMPLE_RATE {
+        return samples.to_vec();
+    }
+
+    let mut proc = AudioPreprocessor::new_vad_trim(sample_rate);
+    let mut trimmed = proc.process(samples);
+    trimmed.extend(proc.flush());
+
+    // NOTE: deliberately NOT `preprocess_made_it_worse` here. That guard is
+    // built for the batch path and treats "retained < 5 % of the input" as a
+    // collapse — which on a 15 s chunk is any utterance shorter than 750 ms.
+    // A real short "sì" in an otherwise quiet window would trip it and be
+    // handed to whisper untrimmed, silence included, i.e. exactly the input we
+    // are trying to remove. If the VAD kept anything at all, trust it.
+    if trimmed.is_empty() {
+        // Nothing survived. Two very different reasons: the VAD failed on
+        // real continuous speech (hand the window back — never lose words),
+        // or the window is an idle mic whose loud moments are transients
+        // (clicks, a chair) that a whole-window RMS cannot tell from speech.
+        // Burned 2026-07-31: the old guard fired at 16:48:13, handed whisper
+        // the untrimmed 15 s of an idle mic, and out came "Grazie.".
+        let sustained = sustained_energy_fraction(samples, sample_rate);
+        if sustained >= CHUNK_SUSTAINED_ENERGY_FRACTION {
+            crate::log(&format!(
+                "[Preprocess] WARN VAD emptied a chunk with {:.0}% sustained energy — passing it through untrimmed",
+                sustained * 100.0
+            ));
+            return samples.to_vec();
+        }
+        crate::log(&format!(
+            "[Preprocess] chunk empty after VAD, {:.0}% sustained energy — transients, treating as silence",
+            sustained * 100.0
+        ));
+        return Vec::new();
+    }
+
+    // A sliver of audio cannot hold a word, and whisper pads anything to a
+    // full 30 s encoder window — so a 0.1 s chunk costs a whole pass to return
+    // nothing. Observed 2026-07-31: a 1760-sample window (0.11 s) produced
+    // zero segments and a "[Meeting] whisper error: empty transcription".
+    if trimmed.len() < (sample_rate as usize * CHUNK_MIN_SPEECH_MS) / 1000 {
+        return Vec::new();
+    }
+
+    // Postconditions: a trim can only ever remove samples, and it must never
+    // hand non-finite audio to the model.
+    assert!(
+        trimmed.len() <= samples.len(),
+        "process_chunk_vad_only: produced {} samples from an input of {}",
+        trimmed.len(),
+        samples.len()
+    );
+    assert!(
+        trimmed.iter().all(|s| s.is_finite()),
+        "process_chunk_vad_only: output contains non-finite samples"
+    );
+    trimmed
 }
 
 /// Downsample audio to 16kHz for Whisper (which internally resamples to 16kHz anyway).
@@ -1535,6 +1706,176 @@ mod tests {
         assert!(
             out.iter().all(|s| s.is_finite()),
             "process_buffer emitted non-finite samples on near-zero input"
+        );
+    }
+
+    // ── Chunk VAD trim: realtime chunked dictation + meeting chunks ──────
+    // These paths used to hand whisper the raw buffer, silence included,
+    // which is the input it hallucinates "thank you" / "grazie" on.
+
+    #[test]
+    fn chunk_vad_only_drops_an_all_silence_window() {
+        // The reason the function exists: an idle window must never reach
+        // the model.
+        let sr = 48_000u32;
+        let silence = vec![0.0f32; (sr as f32 * 3.5) as usize];
+        let out = process_chunk_vad_only(&silence, sr);
+        assert!(
+            out.is_empty(),
+            "a silent window must collapse to empty, kept {} samples",
+            out.len()
+        );
+    }
+
+    #[test]
+    fn chunk_vad_only_keeps_speech() {
+        let sr = 48_000u32;
+        let speech = generate_speech_like(sr, 3.5, 0.3);
+        let out = process_chunk_vad_only(&speech, sr);
+        assert!(!out.is_empty(), "a speech window must survive the trim");
+        assert!(out.len() <= speech.len(), "a trim can only remove samples");
+        assert!(out.iter().all(|s| s.is_finite()));
+    }
+
+    #[test]
+    fn chunk_vad_only_trims_silence_around_speech() {
+        // 1 s silence + 2 s speech + 4 s silence. The trailing silence
+        // outlasts the 3 s grace, so the window must shrink a lot.
+        let sr = 48_000u32;
+        let mut window = vec![0.0f32; sr as usize];
+        window.extend(generate_speech_like(sr, 2.0, 0.3));
+        window.extend(vec![0.0f32; sr as usize * 4]);
+        let out = process_chunk_vad_only(&window, sr);
+        assert!(!out.is_empty(), "the speech in the middle must survive");
+        assert!(
+            out.len() < window.len() / 2,
+            "expected a real trim, kept {}/{}",
+            out.len(),
+            window.len()
+        );
+    }
+
+    #[test]
+    fn chunk_vad_only_does_not_apply_agc() {
+        // AGC must stay off here: one instance per chunk would settle on a
+        // different gain per window and adjacent chunks would come out at
+        // different levels. A quiet window must stay quiet.
+        let sr = 48_000u32;
+        let quiet = generate_speech_like(sr, 3.0, 0.05);
+        let out = process_chunk_vad_only(&quiet, sr);
+        assert!(!out.is_empty());
+        let out_rms = rms(&out);
+        assert!(
+            out_rms < TARGET_RMS * 0.5,
+            "output RMS {} looks normalised toward the AGC target {}",
+            out_rms,
+            TARGET_RMS
+        );
+    }
+
+    #[test]
+    fn chunk_collapse_guard_drops_transients_but_keeps_sustained_energy() {
+        // The 2026-07-31 regression: a mostly-silent 15 s mic window with a
+        // couple of loud clicks lifted the WINDOW rms above the floor, the
+        // guard handed whisper the untrimmed window, and out came "Grazie.".
+        // Isolated transients must now collapse to nothing.
+        let sr = 48_000u32;
+        let mut clicky = vec![0.0f32; sr as usize * 3];
+        for c in 0..3 {
+            let at = (c + 1) * sr as usize * 3 / 4;
+            for k in 0..(sr as usize / 200) {
+                clicky[at + k] = if k % 2 == 0 { 0.6 } else { -0.6 };
+            }
+        }
+        assert!(
+            rms(&clicky) > ENERGY_FLOOR,
+            "fixture must trip the old guard: window rms above the floor"
+        );
+        assert!(
+            sustained_energy_fraction(&clicky, sr) < CHUNK_SUSTAINED_ENERGY_FRACTION,
+            "fixture must be transient-shaped, not sustained"
+        );
+        assert!(
+            process_chunk_vad_only(&clicky, sr).is_empty(),
+            "a window of isolated clicks must never reach the model"
+        );
+
+        // The other side of the split: sustained speech-level energy still
+        // gets handed back rather than silently dropped.
+        let speech = generate_speech_like(sr, 3.0, 0.3);
+        assert!(
+            sustained_energy_fraction(&speech, sr) >= CHUNK_SUSTAINED_ENERGY_FRACTION,
+            "real speech must read as sustained"
+        );
+        assert!(!process_chunk_vad_only(&speech, sr).is_empty());
+    }
+
+    #[test]
+    fn chunk_vad_only_drops_slivers_too_short_to_hold_a_word() {
+        // 0.11 s reached whisper on 2026-07-31 and cost a full encoder window
+        // to return zero segments.
+        let sr = 48_000u32;
+        let mut window = generate_speech_like(sr, 0.1, 0.3);
+        window.extend(vec![0.0f32; sr as usize * 3]);
+        let out = process_chunk_vad_only(&window, sr);
+        assert!(
+            out.is_empty(),
+            "a sub-{}ms sliver must not reach the model, kept {} samples ({} ms)",
+            CHUNK_MIN_SPEECH_MS,
+            out.len(),
+            out.len() * 1000 / sr as usize
+        );
+    }
+
+    #[test]
+    fn chunk_vad_only_never_empties_a_loud_window() {
+        // Safety invariant for the user: a window with clear energy in it
+        // must never come back empty, whatever the VAD makes of it. Either
+        // the VAD keeps it, or the make-it-worse guard hands the raw window
+        // back. A pure tone is the awkward case — loud, but not speech.
+        let sr = 48_000u32;
+        let tone: Vec<f32> = (0..(sr as usize * 3))
+            .map(|i| (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / sr as f32).sin() * 0.4)
+            .collect();
+        let out = process_chunk_vad_only(&tone, sr);
+        assert!(!out.is_empty(), "a loud window must never be dropped");
+    }
+
+    #[test]
+    fn chunk_vad_only_passes_through_below_48k() {
+        // nnnoiseless needs 48 kHz. Below it there is nothing to trim, so
+        // the window must come back byte-identical rather than picking up a
+        // highpass the caller never asked for.
+        let sr = 16_000u32;
+        let speech = generate_speech_like(sr, 1.0, 0.3);
+        let out = process_chunk_vad_only(&speech, sr);
+        assert_eq!(out, speech, "below 48 kHz the window must be untouched");
+    }
+
+    #[test]
+    fn chunk_vad_only_empty_input_is_empty() {
+        assert!(process_chunk_vad_only(&[], 48_000).is_empty());
+    }
+
+    #[test]
+    fn chunk_vad_only_drops_speech_shaped_noise_below_the_energy_floor() {
+        // The real-world failure, 2026-07-31: an idle meeting mic whose median
+        // level was 0.00028 still produced a phantom "Grazie" every 15 s.
+        // nnnoiseless scores voice likelihood from spectral shape, so quiet
+        // clicks and breath look like speech to it. On the chunk path a frame
+        // must ALSO clear ENERGY_FLOOR, so a whole window of speech-SHAPED but
+        // inaudible audio must collapse to nothing and never reach the model.
+        let sr = 48_000u32;
+        let whisper_quiet = generate_speech_like(sr, 3.5, 0.003);
+        assert!(
+            rms(&whisper_quiet) < ENERGY_FLOOR,
+            "test fixture must sit below the energy floor"
+        );
+        let out = process_chunk_vad_only(&whisper_quiet, sr);
+        assert!(
+            out.is_empty(),
+            "speech-shaped noise under the energy floor must not reach the model, kept {} samples",
+            out.len()
         );
     }
 }

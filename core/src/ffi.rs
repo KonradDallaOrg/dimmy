@@ -925,12 +925,21 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
                 .to_string();
                 emit_event("stt_chunk", &payload);
             });
+        // Both chunked modes require `is_local`, so the route decision here
+        // reduces to the preprocessing toggle — but go through the same pure
+        // function the batch path uses so the two can never drift apart.
+        let preprocessing_on = st.preprocessing_enabled.lock().map(|b| *b).unwrap_or(true);
+        let vad_trim = matches!(
+            crate::preprocess::preprocess_route(preprocessing_on, "local"),
+            crate::preprocess::PreprocessRoute::Full
+        );
         // 3 s chunks + 500 ms overlap (chunked_smoke A/B 2026-05-06).
         let transcriber = crate::chunked_stt::ChunkedTranscriber::start(
             st.audio_buffer.clone(),
             crate::audio::MEETING_CANONICAL_RATE,
             3.0,
             500,
+            vad_trim,
             transcribe_fn,
             on_chunk,
         );
@@ -3746,6 +3755,7 @@ pub unsafe extern "C" fn dimmy_meeting_start(out_buf: *mut c_char, buf_len: c_in
             .map(|s| s.clone())
             .unwrap_or_else(|| "auto".to_string()),
         chunk_secs: st.meeting_chunk_secs.lock().ok().map(|s| *s),
+        preprocessing_enabled: st.preprocessing_enabled.lock().map(|b| *b).unwrap_or(true),
     };
     // Both buffers always run at the canonical 48 kHz (see device_sr
     // comment above) — secondary cpal callback resamples too.
@@ -11070,6 +11080,7 @@ mod tests {
             local_backend: "whisper".to_string(),
             language: "en".to_string(),
             chunk_secs: Some(15.0),
+            preprocessing_enabled: true,
         };
         let primary: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
         let secondary: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
