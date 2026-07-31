@@ -142,6 +142,7 @@ fn main() {
         16_000,
         chunk_secs,
         overlap_ms,
+        false, // vad_trim: the smoke bin feeds 16 kHz, where VAD can't run anyway
         transcribe_fn,
         on_chunk,
     );

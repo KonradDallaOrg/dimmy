@@ -953,6 +953,10 @@ mod whisper_cache {
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
 
+        // Suppress the non-speech token class. Free, and it is the cheap half
+        // of the anti-hallucination pair with the no-speech filter below.
+        params.set_suppress_nst(true);
+
         // Intentionally not calling `set_single_segment(true)`. It interacts badly with
         // language detection: whisper returns Ok with zero segments even when the audio is
         // clear speech and the detected language is confident (observed p=0.97 Italian,
@@ -987,6 +991,16 @@ mod whisper_cache {
                     i, e
                 ))
             })?;
+            // NOTE: `segment.no_speech_probability()` is deliberately NOT used
+            // as a filter. It is the standard second net (OpenAI's reference
+            // decoder and faster-whisper both threshold it at 0.6), but it is
+            // useless on large-v3-turbo: measured over 45 segments of two real
+            // meetings on 2026-07-31 it never exceeded 0.00002, and the
+            // hallucinated "Grazie a tutti" segments reported exactly 0.00000.
+            // Whisper is most confident precisely when it is inventing, so a
+            // confidence filter cannot see hallucinations. Silence has to be
+            // removed from the AUDIO before it gets here — see
+            // `preprocess::process_chunk_vad_only`.
             if !text.is_empty() {
                 text.push(' ');
             }

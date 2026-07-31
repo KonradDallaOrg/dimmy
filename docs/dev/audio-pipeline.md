@@ -177,6 +177,57 @@ stt_mode)` (single source of truth, unit-tested so the mapping can't drift):
 | enabled + `stt_mode == "local"` | `Full` | `process_buffer_guarded` (VAD+AGC, guarded) |
 | enabled + cloud (anything else) | `HighpassOnly` | `process_buffer_for_file_load` (80 Hz highpass only) |
 
+### Chunk paths: VAD trim only (since 2026-07-31)
+
+The table above is the route for the **batch** buffer at `dimmy_stop_recording`.
+The realtime chunk workers — `chunked_stt.rs` (dictation) and `meeting.rs` (one
+15 s window per track) — used to hand whisper the raw buffer, silence included,
+which is the input it hallucinates YouTube sign-offs on ("Grazie", "Thank you").
+They now call `preprocess::process_chunk_vad_only` whenever the same
+`preprocess_route(..)` returns `Full`, i.e. preprocessing on AND local STT.
+
+That function is highpass + VAD, **never AGC**: dagc is adaptive, so a
+per-chunk instance settles on a different gain per window (adjacent chunks come
+out at different levels), and it NaNs on all-silence input (AUDIO-001) — which
+is exactly what an idle chunk is.
+
+Three chunk-only rules, all paid for on 2026-07-31 with a real meeting:
+
+1. **A frame must clear `ENERGY_FLOOR` to count as speech.** nnnoiseless scores
+   voice likelihood from spectral shape, not level, so a keyboard click at
+   -60 dBFS opens a speech window. Measured: an idle mic track with median
+   level 0.00028 (50x under the floor) still produced a "Grazie" every 15 s.
+2. **`preprocess_made_it_worse` is NOT used here.** It treats "retained < 5 %"
+   as a collapse, which on a 15 s window is any utterance shorter than 750 ms —
+   a short "sì" would be handed to the model with all its surrounding silence.
+   If the VAD kept anything, trust it.
+3. **When the VAD empties a chunk, `sustained_energy_fraction` decides.**
+   Fraction of 10 ms frames over the floor: under 10 % it is transients (clicks,
+   a chair) and the chunk is dropped; at or over 10 % the VAD probably misjudged
+   real speech and the untrimmed window is handed back. Real speech measures
+   40-60 %, the offending idle mic measured 4 %.
+
+**Whisper's own `no_speech_probability()` does NOT work as a filter here — do
+not re-add it.** It is the standard second net (OpenAI's reference decoder and
+faster-whisper both threshold it at 0.6), and it was wired up and measured on
+2026-07-31: over 45 segments of two real meetings it never exceeded 0.00002,
+and the hallucinated "Grazie a tutti" segments reported exactly 0.00000.
+Whisper is most confident precisely when it is inventing, so a confidence
+filter cannot see hallucinations. It was removed as dead code. `suppress_nst`
+is still set (one free line). Silence has to leave the AUDIO before whisper
+sees it.
+
+A/B measured the same evening, same machine, same model, six minutes apart,
+only the `preprocessing_enabled` toggle differing:
+
+| | toggle ON | toggle OFF |
+|---|---|---|
+| silent chunks blocked before whisper | 21 | 0 |
+| phantom "Grazie a tutti" in the transcript | 0 | 3 |
+
+The `sustained_energy_fraction` fallback never fired in either run, i.e. the
+VAD never emptied a window that actually held speech.
+
 **Why cloud is highpass-only (BUG B):** Groq/OpenAI/Deepgram run their own
 VAD + normalization server-side. Ours is redundant and can only degrade —
 on a quiet mic our VAD trimmed the speech and dagc amplified the residual
@@ -342,8 +393,9 @@ shared "cleaned mic" buffer. Wave glyphs below are stylised:
    text typed live at cursor                          STT -> final text
 
  MEETING : CLEANED MIC(1-5) + RAW system  ->  MIX (soft-limit) + 3 tracks
-           (NO step 6 — meeting writes raw buffers; that is why toggling
-            "preprocessing" does not change meeting audio)
+           (the WAV/Ogg tracks on disk are still raw — "preprocessing" does
+            not change what is recorded. Since 2026-07-31 it DOES change what
+            each 15 s chunk hands to the model: a VAD trim, see below)
  FILE LOAD: no capture  ->  high-pass ONLY (no AGC, protects long files)  -> STT
 ```
 
