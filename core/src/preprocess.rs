@@ -767,23 +767,31 @@ fn sustained_energy_fraction(samples: &[f32], sample_rate: u32) -> f32 {
     loud as f32 / frames as f32
 }
 
-/// Chunk preprocess for the realtime workers: highpass + VAD trim, NO AGC.
+/// Chunk gate for the realtime workers: decide whether a window is worth a
+/// model call, and hand it over WHOLE. Never trims, never applies AGC.
 ///
 /// The chunked-dictation worker (`chunked_stt.rs`) and the meeting chunk
-/// worker (`meeting.rs`) hand whisper short windows *while* capture is still
-/// running. Both used to hand it the raw buffer, silence included — which is
-/// precisely the input whisper hallucinates on, emitting the sign-off phrases
-/// from its YouTube training data ("thank you", "grazie per la visione"). This
-/// trims the silence first, with the same RNNoise VAD the batch dictation path
-/// has always used.
+/// worker (`meeting.rs`) feed whisper short windows *while* capture is still
+/// running. Handing it raw idle audio makes it emit the sign-off phrases from
+/// its training data ("thank you", "grazie per la visione"), which is what the
+/// 2026-07-31 work set out to stop.
 ///
-/// AGC is deliberately not applied (see `AudioPreprocessor::new_vad_trim`).
-/// The make-it-worse guard from the batch path is reused verbatim: if the VAD
-/// collapses a chunk that clearly had speech in it, the untrimmed chunk is
-/// returned, so a quiet speaker can never lose words. An all-silence chunk
-/// sits below `ENERGY_FLOOR`, so the guard stays out of the way and the caller
-/// gets an empty vec — which is the whole point: no audio, no whisper call, no
-/// phantom "grazie".
+/// That work removed the silence *inside* every window. It is the right cure
+/// for an idle mic and the wrong one for speech: on real dictation the VAD
+/// kept a fraction of each 3 s window, whisper received sub-second fragments
+/// with no context, and hallucinated just as badly in the other direction —
+/// Italian speech came back as invented Spanish, and a 9 s dictation as
+/// "Yeah. Yeah. Yeah." (measured 2026-08-05). One hallucination class was
+/// traded for another.
+///
+/// So the VAD is used as a GATE, not a scalpel. It answers one question —
+/// *is there speech in this window?* — and the window then goes to the model
+/// untouched, pauses and all, which is exactly what the batch path does and
+/// what whisper needs for punctuation and segmentation.
+///
+/// The anti-hallucination guarantee is not weakened by this, it is
+/// strengthened: a window without speech never reaches the model at all,
+/// where before it could still arrive as a second of trimmed clicks.
 pub fn process_chunk_vad_only(samples: &[f32], sample_rate: u32) -> Vec<f32> {
     assert!(
         sample_rate > 0,
@@ -793,66 +801,40 @@ pub fn process_chunk_vad_only(samples: &[f32], sample_rate: u32) -> Vec<f32> {
     if samples.is_empty() {
         return Vec::new();
     }
-    // No VAD below 48 kHz (nnnoiseless requires it). Trimming is the only
-    // reason this function exists, so hand the window back untouched rather
-    // than silently applying a highpass the caller never asked for.
+    // No VAD below 48 kHz (nnnoiseless requires it) — nothing to gate on, so
+    // pass the window through rather than dropping audio we cannot judge.
     if sample_rate != REQUIRED_SAMPLE_RATE {
         return samples.to_vec();
     }
 
+    // How much of this window does the VAD consider speech? `new_vad_trim`
+    // requires each frame to clear ENERGY_FLOOR as well as look like speech,
+    // so quiet clicks and breath — which score high on spectral shape alone —
+    // do not count. The OUTPUT LENGTH is the signal; the output itself is
+    // discarded.
     let mut proc = AudioPreprocessor::new_vad_trim(sample_rate);
-    let mut trimmed = proc.process(samples);
-    trimmed.extend(proc.flush());
+    let mut speech = proc.process(samples);
+    speech.extend(proc.flush());
+    let speech_ms = (speech.len() * 1000) / sample_rate as usize;
 
-    // NOTE: deliberately NOT `preprocess_made_it_worse` here. That guard is
-    // built for the batch path and treats "retained < 5 % of the input" as a
-    // collapse — which on a 15 s chunk is any utterance shorter than 750 ms.
-    // A real short "sì" in an otherwise quiet window would trip it and be
-    // handed to whisper untrimmed, silence included, i.e. exactly the input we
-    // are trying to remove. If the VAD kept anything at all, trust it.
-    if trimmed.is_empty() {
-        // Nothing survived. Two very different reasons: the VAD failed on
-        // real continuous speech (hand the window back — never lose words),
-        // or the window is an idle mic whose loud moments are transients
-        // (clicks, a chair) that a whole-window RMS cannot tell from speech.
-        // Burned 2026-07-31: the old guard fired at 16:48:13, handed whisper
-        // the untrimmed 15 s of an idle mic, and out came "Grazie.".
-        let sustained = sustained_energy_fraction(samples, sample_rate);
-        if sustained >= CHUNK_SUSTAINED_ENERGY_FRACTION {
-            crate::log(&format!(
-                "[Preprocess] WARN VAD emptied a chunk with {:.0}% sustained energy — passing it through untrimmed",
-                sustained * 100.0
-            ));
-            return samples.to_vec();
-        }
+    if speech_ms >= CHUNK_MIN_SPEECH_MS {
+        return samples.to_vec();
+    }
+
+    // The VAD found little or nothing. Two very different causes: a quiet
+    // room (drop it), or the VAD failing on speech that is plainly there
+    // (never lose the user's words). Sustained frame energy tells them apart —
+    // a whole-window RMS cannot, because one loud click lifts the average
+    // without producing a single audible frame of speech.
+    let sustained = sustained_energy_fraction(samples, sample_rate);
+    if sustained >= CHUNK_SUSTAINED_ENERGY_FRACTION {
         crate::log(&format!(
-            "[Preprocess] chunk empty after VAD, {:.0}% sustained energy — transients, treating as silence",
+            "[Preprocess] VAD found only {speech_ms} ms of speech but {:.0}% sustained energy — passing the window through",
             sustained * 100.0
         ));
-        return Vec::new();
+        return samples.to_vec();
     }
-
-    // A sliver of audio cannot hold a word, and whisper pads anything to a
-    // full 30 s encoder window — so a 0.1 s chunk costs a whole pass to return
-    // nothing. Observed 2026-07-31: a 1760-sample window (0.11 s) produced
-    // zero segments and a "[Meeting] whisper error: empty transcription".
-    if trimmed.len() < (sample_rate as usize * CHUNK_MIN_SPEECH_MS) / 1000 {
-        return Vec::new();
-    }
-
-    // Postconditions: a trim can only ever remove samples, and it must never
-    // hand non-finite audio to the model.
-    assert!(
-        trimmed.len() <= samples.len(),
-        "process_chunk_vad_only: produced {} samples from an input of {}",
-        trimmed.len(),
-        samples.len()
-    );
-    assert!(
-        trimmed.iter().all(|s| s.is_finite()),
-        "process_chunk_vad_only: output contains non-finite samples"
-    );
-    trimmed
+    Vec::new()
 }
 
 /// Downsample audio to 16kHz for Whisper (which internally resamples to 16kHz anyway).
@@ -1931,26 +1913,45 @@ mod tests {
         let sr = 48_000u32;
         let speech = generate_speech_like(sr, 3.5, 0.3);
         let out = process_chunk_vad_only(&speech, sr);
-        assert!(!out.is_empty(), "a speech window must survive the trim");
-        assert!(out.len() <= speech.len(), "a trim can only remove samples");
+        assert!(!out.is_empty(), "a speech window must reach the model");
         assert!(out.iter().all(|s| s.is_finite()));
     }
 
     #[test]
-    fn chunk_vad_only_trims_silence_around_speech() {
-        // 1 s silence + 2 s speech + 4 s silence. The trailing silence
-        // outlasts the 3 s grace, so the window must shrink a lot.
+    fn chunk_vad_only_hands_a_speech_window_over_untouched() {
+        // The gate decides WHETHER the model is called, never what it hears.
+        //
+        // Trimming inside the window is what broke local dictation on
+        // 2026-08-05: whisper got sub-second fragments stripped of their
+        // pauses, lost the context it needs for punctuation and segmentation,
+        // and returned invented Spanish for Italian speech. The pauses are
+        // signal, not waste.
+        let sr = 48_000u32;
+        let speech = generate_speech_like(sr, 3.5, 0.3);
+        let out = process_chunk_vad_only(&speech, sr);
+        assert_eq!(
+            out.len(),
+            speech.len(),
+            "a window that passes the gate must go to the model whole"
+        );
+        assert_eq!(out, speech, "the gate must not modify a single sample");
+    }
+
+    #[test]
+    fn chunk_vad_only_keeps_the_pauses_around_speech() {
+        // 1 s silence + 2 s speech + 4 s silence: exactly the shape the old
+        // trim shrank to a fragment. The window carries speech, so it goes to
+        // the model as-is — a natural pause is what tells whisper a sentence
+        // ended.
         let sr = 48_000u32;
         let mut window = vec![0.0f32; sr as usize];
         window.extend(generate_speech_like(sr, 2.0, 0.3));
         window.extend(vec![0.0f32; sr as usize * 4]);
         let out = process_chunk_vad_only(&window, sr);
-        assert!(!out.is_empty(), "the speech in the middle must survive");
-        assert!(
-            out.len() < window.len() / 2,
-            "expected a real trim, kept {}/{}",
+        assert_eq!(
             out.len(),
-            window.len()
+            window.len(),
+            "the window holds speech, so it must survive intact"
         );
     }
 
@@ -2010,19 +2011,20 @@ mod tests {
     }
 
     #[test]
-    fn chunk_vad_only_drops_slivers_too_short_to_hold_a_word() {
-        // 0.11 s reached whisper on 2026-07-31 and cost a full encoder window
-        // to return zero segments.
+    fn chunk_vad_only_drops_a_window_holding_only_a_sliver_of_speech() {
+        // 0.1 s of speech in an otherwise silent window. Whisper pads any
+        // input to a full 30 s encoder window, so this costs a whole pass to
+        // return nothing — and on 2026-07-31 it returned a phantom sign-off
+        // instead. The gate keeps the model out of it entirely.
         let sr = 48_000u32;
         let mut window = generate_speech_like(sr, 0.1, 0.3);
         window.extend(vec![0.0f32; sr as usize * 3]);
         let out = process_chunk_vad_only(&window, sr);
         assert!(
             out.is_empty(),
-            "a sub-{}ms sliver must not reach the model, kept {} samples ({} ms)",
+            "under {}ms of speech must not open the gate, kept {} samples",
             CHUNK_MIN_SPEECH_MS,
-            out.len(),
-            out.len() * 1000 / sr as usize
+            out.len()
         );
     }
 
