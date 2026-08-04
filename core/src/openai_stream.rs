@@ -55,19 +55,31 @@ const DRAIN_TIMEOUT: Duration = Duration::from_secs(6);
 /// committing every ~1.5 s produced "Ha trascrivere" for "a trascrivere" and
 /// "l''ultimo" (measured 2026-08-05, 30 turns in 45 s). Long enough to hold a
 /// clause, short enough that text still lands while the user speaks.
-const MIN_COMMIT_MS: usize = 2_500;
+///
+/// 2 500 was accurate but read as sluggish; 800 felt live but shredded the
+/// text. This is the middle the user asked for, biased toward responsiveness
+/// because dictation is watched while it happens.
+const MIN_COMMIT_MS: usize = 1_400;
 
 /// Consecutive quiet windows ([`SEND_INTERVAL`] each) that make a pause real.
 ///
 /// The gap between two words is under ~150 ms; the pause between sentences is
 /// 300-700 ms. Requiring sustained quiet is what separates the two — a single
-/// quiet tick fires between words and cuts the sentence in half.
-const PAUSE_TICKS: usize = 4;
+/// quiet tick fires between words and cuts the sentence in half. 3 ticks
+/// (~300 ms) sits just above the word gap, which keeps turns intact without
+/// making the user wait out a full sentence pause.
+const PAUSE_TICKS: usize = 3;
 
-/// Hard ceiling on turn length. Reached only when no pause is detected — a
-/// noisy room, or someone who does not stop for breath. Bounds how long text
-/// can lag behind speech.
-const MAX_COMMIT_MS: usize = 8_000;
+/// Hard ceiling on turn length, reached when no pause is detected.
+///
+/// This is the knob that governs perceived latency, NOT [`MIN_COMMIT_MS`]:
+/// someone dictating continuously produces few 300 ms gaps, so the ceiling
+/// ends up closing almost every turn. Measured at 8 s it gave 3 turns in
+/// 19 s — one every ~6 s — which reads as sluggish however low the minimum
+/// is set. 2 s is the floor worth going to: below it turns stop holding a
+/// whole clause and the seam errors the pause logic exists to prevent start
+/// coming back.
+const MAX_COMMIT_MS: usize = 2_000;
 
 /// RMS below which a just-captured window counts as a pause.
 ///
