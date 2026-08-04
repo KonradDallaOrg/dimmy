@@ -48,20 +48,49 @@ const SEND_INTERVAL: Duration = Duration::from_millis(100);
 /// [`TRAILING_SILENCE_MS`]) and only then transcribes it.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(6);
 
-/// How much audio to accumulate before committing a turn.
+/// Minimum audio in a turn before a pause is allowed to close it. The API
+/// rejects a commit carrying under 100 ms; this leaves margin and stops a
+/// hesitant speaker from producing a turn per syllable.
+const MIN_COMMIT_MS: usize = 800;
+
+/// Hard ceiling on turn length. Reached only when no pause is detected — a
+/// noisy room, or someone who does not stop for breath. Bounds how long text
+/// can lag behind speech.
+const MAX_COMMIT_MS: usize = 8_000;
+
+/// RMS below which a just-captured window counts as a pause.
+///
+/// `preprocess::ENERGY_FLOOR` (0.015) is the wrong constant here: it sits at
+/// -36 dBFS, which is ABOVE the measured median speech level of this
+/// project's own captures (0.019), so it would read most speech as silence.
+/// -48 dBFS sits under quiet speech and above room tone.
+const PAUSE_RMS: f32 = 0.004;
+
+/// Commit when the speaker pauses, not on a timer.
 ///
 /// A transcription session runs with `turn_detection` null (the live model
-/// rejects anything else), which means the server performs NO voice activity
-/// detection and never closes a turn on its own — the client owns the
-/// boundaries. Without a commit the server simply holds the audio: an 18 s
-/// dictation produced zero frames after `session.updated` (measured
-/// 2026-08-04).
+/// rejects anything else), so the server performs no voice activity detection
+/// and never closes a turn by itself: the client owns the boundaries, and
+/// without a commit the server simply holds the audio.
 ///
-/// 2 s trades latency against sentence integrity: short enough that text
-/// lands while the user is still speaking, long enough that commits usually
-/// fall between words rather than inside them. The API rejects a commit
-/// carrying under 100 ms, which this comfortably clears.
-const COMMIT_INTERVAL_MS: usize = 2_000;
+/// Committing on a fixed 2 s clock cut words in half — "tempo reale" came
+/// back as "Temporeale", "mi incolli" as "e mail con lì" (observed
+/// 2026-08-05). Each turn is also transcribed in isolation, so a boundary
+/// inside a phrase costs the model the context that would have disambiguated
+/// it. Cutting where the speaker already stopped avoids both.
+fn is_pause(samples: &[f32]) -> bool {
+    if samples.is_empty() {
+        return false;
+    }
+    let sum: f64 = samples
+        .iter()
+        .map(|&s| {
+            let s = if s.is_finite() { s as f64 } else { 0.0 };
+            s * s
+        })
+        .sum();
+    ((sum / samples.len() as f64).sqrt() as f32) < PAUSE_RMS
+}
 
 /// Latency setting for the live model: `minimal` | `low` | `medium` | `high`
 /// | `xhigh`. Lower emits partial text sooner, higher gives the model room to
@@ -272,7 +301,20 @@ async fn run_stream(
                         } else {
                             format!("{} {}", acc.trim_end(), partial)
                         };
-                        on_chunk_r("", &preview, false);
+                        // The delta goes out as an INJECTABLE delta, not just
+                        // a caption update. The host injects at the cursor
+                        // only when this field is non-empty, so sending ""
+                        // here (as the Deepgram path does for its interim
+                        // results) meant text streamed into the caption strip
+                        // and never reached the document — the user watched a
+                        // working transcription produce nothing where they
+                        // were typing.
+                        //
+                        // Safe to inject because these deltas are additive:
+                        // each carries newly available text, not a rewrite of
+                        // what came before. The `completed` that closes the
+                        // turn therefore must NOT inject again.
+                        on_chunk_r(&d, &preview, false);
                     }
                     Some(StreamEvent::Completed(text)) => {
                         completions += 1;
@@ -291,8 +333,12 @@ async fn run_stream(
                         acc.push_str(&text);
                         let cum = acc.clone();
                         drop(acc);
-                        // delta carries the stable turn -> injectable at the cursor.
-                        on_chunk_r(&text, &cum, false);
+                        // Empty delta ON PURPOSE: every word of this turn has
+                        // already been injected as it arrived. Re-sending the
+                        // polished text here would paste the whole turn a
+                        // second time. The authoritative version still lands
+                        // in `committed`, which is what history stores.
+                        on_chunk_r("", &cum, false);
                     }
                     Some(StreamEvent::Error(e)) => {
                         crate::log(&format!("[oai-stream] server error: {e}"));
@@ -358,6 +404,7 @@ async fn run_stream(
     // `session.updated`. The client owns turn boundaries here.
     let mut last_sent: usize = 0;
     let mut uncommitted_ms: usize = 0;
+    let mut quiet_now = false;
     loop {
         if cancel.load(Ordering::SeqCst) {
             break;
@@ -366,18 +413,23 @@ async fn run_stream(
         let slice = drain_new_samples(&audio_buffer, &mut last_sent);
         if !slice.is_empty() {
             uncommitted_ms += (slice.len() * 1000) / device_sample_rate as usize;
+            quiet_now = is_pause(&slice);
             let frame = compose_audio_append(&slice, device_sample_rate);
             if let Err(e) = write.send(Message::Text(frame)).await {
                 crate::log(&format!("[oai-stream] send error: {e}"));
                 break;
             }
         }
-        if uncommitted_ms >= COMMIT_INTERVAL_MS {
+        // Close the turn where the speaker already stopped; fall back to the
+        // ceiling when no pause ever comes.
+        let due = (quiet_now && uncommitted_ms >= MIN_COMMIT_MS) || uncommitted_ms >= MAX_COMMIT_MS;
+        if due {
             if let Err(e) = write.send(Message::Text(commit_frame())).await {
                 crate::log(&format!("[oai-stream] commit error: {e}"));
                 break;
             }
             uncommitted_ms = 0;
+            quiet_now = false;
         }
     }
 
@@ -799,6 +851,35 @@ mod tests {
         ] {
             assert_eq!(parse_oai_message(frame), None, "frame: {frame}");
         }
+    }
+
+    #[test]
+    fn is_pause_separates_speech_from_room_tone() {
+        // Levels taken from this project's own audio_debug captures: median
+        // speech RMS 0.019, and the pauses between words sit far below it.
+        let speech: Vec<f32> = (0..2400).map(|i| (i as f32 * 0.05).sin() * 0.06).collect();
+        assert!(!is_pause(&speech), "speech must not read as a pause");
+
+        let room_tone: Vec<f32> = (0..2400)
+            .map(|i| (i as f32 * 0.37).sin() * 0.0015)
+            .collect();
+        assert!(is_pause(&room_tone), "room tone must read as a pause");
+
+        assert!(is_pause(&vec![0.0f32; 2400]), "silence is a pause");
+        assert!(
+            !is_pause(&[]),
+            "no audio is not a pause — nothing to commit"
+        );
+    }
+
+    #[test]
+    fn is_pause_survives_non_finite_samples() {
+        // A NaN must not poison the RMS into deciding the speaker stopped
+        // (or never stops) — it is coerced to silence like everywhere else.
+        let mut s = vec![0.06f32; 2400];
+        s[0] = f32::NAN;
+        s[1] = f32::INFINITY;
+        assert!(!is_pause(&s));
     }
 
     #[test]
