@@ -249,10 +249,19 @@ async fn run_stream(
         // it arrived under a name we don't match. Only the `type` field is
         // logged — never payload text, which is user speech.
         let mut unseen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        // Counters for the handled events. Without these the log only shows
+        // what we DIDN'T understand, so a session where transcription works
+        // but is dropped downstream looks identical to one where the server
+        // sent nothing at all.
+        let (mut deltas, mut completions) = (0usize, 0usize);
         while let Some(msg) = read.next().await {
             match msg {
                 Ok(Message::Text(txt)) => match parse_oai_message(&txt) {
                     Some(StreamEvent::Delta(d)) => {
+                        deltas += 1;
+                        if deltas == 1 {
+                            crate::log("[oai-stream] transcript deltas flowing");
+                        }
                         partial.push_str(&d);
                         let acc = match committed_r.lock() {
                             Ok(a) => a.clone(),
@@ -266,6 +275,7 @@ async fn run_stream(
                         on_chunk_r("", &preview, false);
                     }
                     Some(StreamEvent::Completed(text)) => {
+                        completions += 1;
                         partial.clear();
                         let text = text.trim().to_string();
                         if text.is_empty() {
@@ -318,6 +328,25 @@ async fn run_stream(
                 _ => {}
             }
         }
+        // A turn whose deltas arrived but whose `completed` never did is still
+        // real transcript. Dropping it made a session that had visibly
+        // produced text return the empty string, which trips the host's
+        // work-loss fallback and re-transcribes the whole recording in batch —
+        // the user sees the live caption fill in and then the result arrive
+        // seconds late from somewhere else.
+        if !partial.trim().is_empty() {
+            let mut acc = match committed_r.lock() {
+                Ok(a) => a,
+                Err(p) => p.into_inner(),
+            };
+            if !acc.is_empty() && !acc.ends_with(' ') {
+                acc.push(' ');
+            }
+            acc.push_str(partial.trim());
+        }
+        crate::log(&format!(
+            "[oai-stream] reader done: {deltas} delta(s), {completions} completion(s)"
+        ));
     });
 
     // Sender loop: drain newly-captured audio to the socket until cancelled,
