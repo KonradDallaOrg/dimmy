@@ -48,10 +48,21 @@ const SEND_INTERVAL: Duration = Duration::from_millis(100);
 /// [`TRAILING_SILENCE_MS`]) and only then transcribes it.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(6);
 
-/// Minimum audio in a turn before a pause is allowed to close it. The API
-/// rejects a commit carrying under 100 ms; this leaves margin and stops a
-/// hesitant speaker from producing a turn per syllable.
-const MIN_COMMIT_MS: usize = 800;
+/// Minimum audio in a turn before a pause is allowed to close it.
+///
+/// Each turn is transcribed in isolation, so short turns cost the model the
+/// context it needs to get grammar and punctuation right at the seams:
+/// committing every ~1.5 s produced "Ha trascrivere" for "a trascrivere" and
+/// "l''ultimo" (measured 2026-08-05, 30 turns in 45 s). Long enough to hold a
+/// clause, short enough that text still lands while the user speaks.
+const MIN_COMMIT_MS: usize = 2_500;
+
+/// Consecutive quiet windows ([`SEND_INTERVAL`] each) that make a pause real.
+///
+/// The gap between two words is under ~150 ms; the pause between sentences is
+/// 300-700 ms. Requiring sustained quiet is what separates the two — a single
+/// quiet tick fires between words and cuts the sentence in half.
+const PAUSE_TICKS: usize = 4;
 
 /// Hard ceiling on turn length. Reached only when no pause is detected — a
 /// noisy room, or someone who does not stop for breath. Bounds how long text
@@ -407,7 +418,7 @@ async fn run_stream(
     // `session.updated`. The client owns turn boundaries here.
     let mut last_sent: usize = 0;
     let mut uncommitted_ms: usize = 0;
-    let mut quiet_now = false;
+    let mut quiet_ticks: usize = 0;
     loop {
         if cancel.load(Ordering::SeqCst) {
             break;
@@ -416,23 +427,29 @@ async fn run_stream(
         let slice = drain_new_samples(&audio_buffer, &mut last_sent);
         if !slice.is_empty() {
             uncommitted_ms += (slice.len() * 1000) / device_sample_rate as usize;
-            quiet_now = is_pause(&slice);
+            if is_pause(&slice) {
+                quiet_ticks += 1;
+            } else {
+                quiet_ticks = 0;
+            }
             let frame = compose_audio_append(&slice, device_sample_rate);
             if let Err(e) = write.send(Message::Text(frame)).await {
                 crate::log(&format!("[oai-stream] send error: {e}"));
                 break;
             }
         }
-        // Close the turn where the speaker already stopped; fall back to the
+        // Close the turn on a SUSTAINED pause — a single quiet tick is the gap
+        // between two words, not the end of a thought. Fall back to the
         // ceiling when no pause ever comes.
-        let due = (quiet_now && uncommitted_ms >= MIN_COMMIT_MS) || uncommitted_ms >= MAX_COMMIT_MS;
+        let due = (quiet_ticks >= PAUSE_TICKS && uncommitted_ms >= MIN_COMMIT_MS)
+            || uncommitted_ms >= MAX_COMMIT_MS;
         if due {
             if let Err(e) = write.send(Message::Text(commit_frame())).await {
                 crate::log(&format!("[oai-stream] commit error: {e}"));
                 break;
             }
             uncommitted_ms = 0;
-            quiet_now = false;
+            quiet_ticks = 0;
         }
     }
 
