@@ -45,8 +45,28 @@ const SILENCE_GRACE_FRAMES: usize = 300;
 /// killing loud speech when the RNN model drifts after long recordings.
 const ENERGY_FLOOR: f32 = 0.015;
 
-/// Target RMS level for AGC. 0.2 ≈ -14dBFS — loud enough for clear STT input.
-const TARGET_RMS: f32 = 0.2;
+/// Target RMS level for AGC. 0.05 ≈ -26 dBFS.
+///
+/// Speech carries a large peak-to-RMS ratio: measured over 38 real dictation
+/// captures from this project's `audio_debug` (2026-07-28 → 2026-08-04), the
+/// median crest factor is **19.6 dB**. An RMS target therefore implies a peak
+/// target 19.6 dB above it. The previous 0.2 (-14 dBFS) implied peaks at
+/// **+5.6 dBFS** — above full scale — so every single one of those 38 captures
+/// came out hard-clipped at exactly 1.000. -26 dBFS puts the peaks near
+/// -6 dBFS, comfortably inside the rail, and whisper normalises internally
+/// anyway so the absolute level costs nothing.
+const TARGET_RMS: f32 = 0.05;
+
+/// True-peak ceiling applied after the AGC, -1 dBFS.
+///
+/// The gain stage targets RMS, so on unusually dynamic speech it can still ask
+/// for peaks above full scale even with a conservative target. Clamping those
+/// (what used to happen) is hard clipping: it squares off the waveform and
+/// sprays broadband harmonics across the spectrum whisper builds its mel
+/// features from. Scaling the whole buffer by one factor instead changes the
+/// level but not the shape, so it is inaudible to the model. This makes
+/// clipping impossible by construction rather than unlikely.
+const PEAK_CEILING: f32 = 0.89;
 
 /// AGC distortion factor — controls how fast gain adapts.
 /// Lower = smoother adaptation, less distortion. 0.001 is typical for speech.
@@ -227,6 +247,10 @@ impl AudioPreprocessor {
         let mut output = speech;
         if self.apply_agc {
             self.agc.process(&mut output);
+            // The gain stage is the only thing that can push samples past the
+            // rail, so the ceiling belongs here and not on the VAD-trim path,
+            // which never applies gain and must hand back untouched levels.
+            limit_peak(&mut output);
         }
 
         // Clamp to [-1.0, 1.0] after AGC (safety net).
@@ -417,6 +441,7 @@ impl AudioPreprocessor {
         // Apply AGC to maintain consistent volume with the rest of the output
         if self.apply_agc {
             self.agc.process(&mut tail);
+            limit_peak(&mut tail);
         }
 
         // Clamp after AGC (same safety net as process())
@@ -456,6 +481,25 @@ impl AudioPreprocessor {
             .ok()
             .map(DirectForm2Transposed::<f32>::new);
         }
+    }
+}
+
+/// Scale `samples` down uniformly if any peak exceeds [`PEAK_CEILING`].
+///
+/// Uniform scaling preserves waveform shape, so unlike clipping it introduces
+/// no harmonics — the model sees the same sound, quieter. A no-op when the
+/// buffer already fits inside the ceiling, which is the common case once the
+/// AGC target leaves headroom. Non-finite samples are ignored by the peak
+/// search (`f32::max` propagates the operand, not the NaN) and are zeroed by
+/// the caller's clamp immediately afterwards.
+fn limit_peak(samples: &mut [f32]) {
+    let peak = samples.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
+    if !peak.is_finite() || peak <= PEAK_CEILING {
+        return;
+    }
+    let gain = PEAK_CEILING / peak;
+    for s in samples.iter_mut() {
+        *s *= gain;
     }
 }
 
@@ -898,6 +942,140 @@ mod tests {
             "AGC should boost quiet audio: before={:.4} after={:.4}",
             rms_before,
             rms_after
+        );
+    }
+
+    /// Speech-shaped signal with a REALISTIC crest factor.
+    ///
+    /// `generate_speech_like` sits around 8 dB peak-to-RMS, which is far below
+    /// real speech and hides every headroom bug. Measured on 38 real dictation
+    /// sessions from this project's own `audio_debug` captures (2026-07-28 →
+    /// 2026-08-04): median crest factor **19.6 dB**, median RMS 0.019
+    /// (-34.4 dBFS). This builds a signal in that band — loud vowels, quiet
+    /// consonants, short plosive transients, inter-word gaps — and rescales it
+    /// to the requested RMS.
+    fn speech_with_real_crest(sample_rate: u32, duration_secs: f32, target_rms: f32) -> Vec<f32> {
+        let n = (sample_rate as f32 * duration_secs) as usize;
+        let sr = sample_rate as f32;
+        // Per-syllable gains: vowels are ~20x louder than the quiet consonants
+        // between them. This spread is what produces the real crest factor.
+        let syllable_gain = [1.0f32, 0.22, 0.6, 0.05, 0.85, 0.12, 0.45, 0.08];
+        let mut rng_state: u32 = 1234;
+        let mut out: Vec<f32> = (0..n)
+            .map(|i| {
+                let t = i as f32 / sr;
+                // 5 syllables/second, with a 25 % silent gap between words.
+                let syl = (t * 5.0) as usize;
+                let phase = (t * 5.0).fract();
+                let gain = if phase > 0.75 {
+                    0.01 // inter-word gap, not digital silence
+                } else {
+                    syllable_gain[syl % syllable_gain.len()]
+                };
+                rng_state ^= rng_state << 13;
+                rng_state ^= rng_state >> 17;
+                rng_state ^= rng_state << 5;
+                let noise = (rng_state as f32 / u32::MAX as f32) * 2.0 - 1.0;
+                let f0 = 2.0 * std::f32::consts::PI * 150.0 * t;
+                let voiced = f0.sin() * 0.6 + (2.0 * f0).sin() * 0.25 + (3.0 * f0).sin() * 0.15;
+                // Plosive: a 4 ms full-scale transient at each syllable onset.
+                let plosive = if phase < 0.02 { noise * 1.0 } else { 0.0 };
+                (voiced * 0.8 + noise * 0.2) * gain + plosive * gain
+            })
+            .collect();
+        let cur = rms(&out);
+        assert!(cur > 0.0, "fixture generated silence");
+        let scale = target_rms / cur;
+        for s in out.iter_mut() {
+            *s *= scale;
+        }
+        out
+    }
+
+    /// The clipping bug, reproduced from field data (2026-08-04).
+    ///
+    /// `TARGET_RMS` is 0.2 (-14 dBFS). Real speech carries ~19.6 dB of crest
+    /// factor, so normalising its RMS to -14 dBFS puts the peaks at +5.6 dBFS —
+    /// i.e. 5.6 dB ABOVE full scale. The post-AGC clamp then hard-clips them
+    /// into a square wave, which is what whisper actually receives.
+    ///
+    /// This is not an edge case: all 38 preprocessing-ON sessions in
+    /// `audio_debug` peaked at exactly 1.000 with a median 3.14 % of samples
+    /// pinned to full scale. Clipping is GUARANTEED by the constant, not
+    /// triggered by unlucky input.
+    ///
+    /// 44.1 kHz keeps the VAD out of the picture (nnnoiseless needs exactly
+    /// 48 kHz) so this pins the gain stage alone — which is correct here: the
+    /// field data clears the VAD, whose retention was a healthy 67 % median.
+    #[test]
+    fn agc_must_not_clip_real_speech_levels() {
+        let sr = 44_100u32;
+        let input = speech_with_real_crest(sr, 4.0, 0.019);
+
+        let in_rms = rms(&input);
+        let in_peak = input.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
+        let crest_db = 20.0 * (in_peak / in_rms).log10();
+        assert!(
+            (15.0..=24.0).contains(&crest_db),
+            "fixture must sit in the measured 15-24 dB crest band, got {:.1} dB",
+            crest_db
+        );
+        assert!(in_peak < 1.0, "fixture must not clip before preprocessing");
+
+        let out = process_buffer(&input, sr);
+        assert!(!out.is_empty(), "pipeline dropped everything");
+
+        let clipped = out.iter().filter(|s| s.abs() >= 0.999).count();
+        let clipped_pct = 100.0 * clipped as f32 / out.len() as f32;
+        assert!(
+            clipped_pct < 0.1,
+            "preprocessing hard-clipped {:.2} % of a {:.1} dB-crest speech input \
+             (in: rms={:.5} peak={:.3} -> out: rms={:.5} peak={:.3}). \
+             Hard clipping is broadband distortion; it destroys the mel features \
+             whisper transcribes from.",
+            clipped_pct,
+            crest_db,
+            in_rms,
+            in_peak,
+            rms(&out),
+            out.iter().fold(0.0f32, |m, &s| m.max(s.abs())),
+        );
+    }
+
+    #[test]
+    fn limit_peak_is_transparent_and_bounded() {
+        // Uniform scaling is the whole point: it must change the LEVEL and
+        // leave the SHAPE alone, otherwise it would be a distortion stage
+        // rather than a safety rail.
+        let mut loud: Vec<f32> = (0..1000).map(|i| (i as f32 * 0.1).sin() * 2.5).collect();
+        let before = loud.clone();
+        limit_peak(&mut loud);
+
+        let peak = loud.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
+        assert!(
+            (peak - PEAK_CEILING).abs() < 1e-4,
+            "peak must land exactly on the ceiling, got {peak}"
+        );
+        // Shape check: every sample kept the same ratio to its neighbour.
+        let ratio = loud[10] / before[10];
+        for (a, b) in loud.iter().zip(before.iter()) {
+            if b.abs() > 1e-6 {
+                assert!(
+                    ((a / b) - ratio).abs() < 1e-4,
+                    "scaling must be uniform — waveform shape changed"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn limit_peak_leaves_quiet_audio_untouched() {
+        let mut quiet: Vec<f32> = (0..500).map(|i| (i as f32 * 0.1).sin() * 0.3).collect();
+        let before = quiet.clone();
+        limit_peak(&mut quiet);
+        assert_eq!(
+            quiet, before,
+            "audio inside the ceiling must not be touched"
         );
     }
 
