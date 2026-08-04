@@ -859,23 +859,44 @@ pub fn process_chunk_vad_only(samples: &[f32], sample_rate: u32) -> Vec<f32> {
 /// Uses a lowpass anti-aliasing filter + linear interpolation.
 /// Returns samples at 16kHz. If source is already 16kHz, returns a clone.
 pub fn downsample_to_16k(samples: &[f32], source_rate: u32) -> Vec<f32> {
-    // Invariant: source rate must be positive (0 would cause division-by-zero)
+    downsample_to(samples, source_rate, WHISPER_SAMPLE_RATE)
+}
+
+/// Downsample to an arbitrary `target_rate`.
+///
+/// Generalisation of [`downsample_to_16k`], which is now a thin wrapper: every
+/// STT route in this codebase wanted 16 kHz until OpenAI's Realtime API turned
+/// up demanding exactly 24 kHz (see `openai_stream::REQUIRED_INPUT_RATE`).
+/// Rather than a second copy of the same DSP, the rate is a parameter.
+///
+/// Returns a clone when the source is already at or below the target — this
+/// only ever downsamples, it will not invent bandwidth that is not there.
+pub fn downsample_to(samples: &[f32], source_rate: u32, target_rate: u32) -> Vec<f32> {
+    // Invariant: rates must be positive (0 would cause division-by-zero)
     assert!(
         source_rate > 0,
-        "downsample_to_16k: source_rate must be > 0, got {}",
+        "downsample_to: source_rate must be > 0, got {}",
         source_rate
     );
+    assert!(
+        target_rate > 0,
+        "downsample_to: target_rate must be > 0, got {}",
+        target_rate
+    );
 
-    if source_rate <= WHISPER_SAMPLE_RATE {
+    if source_rate <= target_rate {
         return samples.to_vec();
     }
 
-    // Step 1: Anti-aliasing lowpass filter at 7kHz (Nyquist for 16kHz is 8kHz, use 7kHz margin)
+    // Step 1: anti-aliasing lowpass a little under the target's Nyquist
+    // (7/8 of it, i.e. 7 kHz for a 16 kHz target, 10.5 kHz for 24 kHz) so the
+    // filter's transition band lands below the fold-over point.
+    let cutoff = target_rate as f32 * 0.4375;
     let filtered = if source_rate >= 1000 {
         if let Ok(coeffs) = Coefficients::<f32>::from_params(
             FilterType::LowPass,
             (source_rate as f32).hz(),
-            7000.0.hz(),
+            cutoff.hz(),
             Q_BUTTERWORTH_F32,
         ) {
             let mut lp = DirectForm2Transposed::<f32>::new(coeffs);
@@ -887,8 +908,8 @@ pub fn downsample_to_16k(samples: &[f32], source_rate: u32) -> Vec<f32> {
         samples.to_vec()
     };
 
-    // Step 2: Linear interpolation to 16kHz
-    let ratio = source_rate as f64 / WHISPER_SAMPLE_RATE as f64;
+    // Step 2: linear interpolation to the target rate
+    let ratio = source_rate as f64 / target_rate as f64;
     let output_len = (filtered.len() as f64 / ratio).floor() as usize;
     if output_len == 0 {
         return Vec::new();
@@ -904,9 +925,9 @@ pub fn downsample_to_16k(samples: &[f32], source_rate: u32) -> Vec<f32> {
         output.push(s0 + (s1 - s0) * frac);
     }
 
-    // Invariant: output length should be approximately input_length * 16000 / source_rate (within 1 sample)
+    // Invariant: output length ≈ input_length * target_rate / source_rate (within 1 sample)
     let expected_len =
-        (samples.len() as f64 * WHISPER_SAMPLE_RATE as f64 / source_rate as f64).floor() as usize;
+        (samples.len() as f64 * target_rate as f64 / source_rate as f64).floor() as usize;
     assert!(
         (output.len() as isize - expected_len as isize).unsigned_abs() <= 1,
         "downsample output length {} deviates from expected {} by more than 1 sample",

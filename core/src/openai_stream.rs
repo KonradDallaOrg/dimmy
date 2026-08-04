@@ -43,14 +43,45 @@ use tokio_tungstenite::tungstenite::Message;
 const SEND_INTERVAL: Duration = Duration::from_millis(100);
 
 /// How long, after `stop()`, to wait for OpenAI to flush the trailing
-/// `completed` events before giving up with whatever has arrived.
-const DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
+/// turn before giving up with whatever has arrived. Generous because the
+/// server VAD has to close the final turn first (see
+/// [`TRAILING_SILENCE_MS`]) and only then transcribes it.
+const DRAIN_TIMEOUT: Duration = Duration::from_secs(6);
 
-/// Sample rate we declare and send. The Realtime API takes the rate as an
-/// explicit field, and 16 kHz is what the rest of the pipeline already
-/// produces (`downsample_to_16k`), so there is no reason to ship 50 % more
-/// bytes at 24 kHz for a model that resamples internally anyway.
-const STREAM_SAMPLE_RATE: u32 = 16_000;
+/// How much audio to accumulate before committing a turn.
+///
+/// A transcription session runs with `turn_detection` null (the live model
+/// rejects anything else), which means the server performs NO voice activity
+/// detection and never closes a turn on its own — the client owns the
+/// boundaries. Without a commit the server simply holds the audio: an 18 s
+/// dictation produced zero frames after `session.updated` (measured
+/// 2026-08-04).
+///
+/// 2 s trades latency against sentence integrity: short enough that text
+/// lands while the user is still speaking, long enough that commits usually
+/// fall between words rather than inside them. The API rejects a commit
+/// carrying under 100 ms, which this comfortably clears.
+const COMMIT_INTERVAL_MS: usize = 2_000;
+
+/// Latency setting for the live model: `minimal` | `low` | `medium` | `high`
+/// | `xhigh`. Lower emits partial text sooner, higher gives the model room to
+/// revise before committing. Dictation shows words as they land, so it wants
+/// the fast end without going to the noisiest extreme.
+const TRANSCRIPTION_DELAY: &str = "low";
+
+/// The ONLY input rate the Realtime API accepts. Not a minimum, not a
+/// suggestion — the server rejects `session.update` on both sides of it, and
+/// a rejected session accepts no audio at all, which then surfaces later and
+/// misleadingly as "buffer only has 0.00ms of audio":
+///
+/// > 16000 → integer below minimum value. Expected a value >= 24000
+/// > 48000 → integer above maximum value. Expected a value <= 24000
+///
+/// Both observed against the live endpoint 2026-08-04. This is why the rate
+/// is a hard constant rather than "whatever capture produces": every other
+/// STT route here wants 16 kHz, so 24 kHz is the odd one out and must not be
+/// quietly "improved" to match its neighbours.
+const REQUIRED_INPUT_RATE: u32 = 24_000;
 
 /// Default realtime endpoint. `intent=transcription` selects a
 /// transcription-only session (no model responses, no audio out).
@@ -70,9 +101,10 @@ pub struct OpenAiStreamer {
 impl OpenAiStreamer {
     /// Spawn the streaming worker. `audio_buffer` is the shared PCM buffer the
     /// cpal callback writes into and `device_sample_rate` the rate it is
-    /// filled at (NOT [`STREAM_SAMPLE_RATE`] — we downsample on the way out).
-    /// `language` is an ISO code (empty = let the model decide), `keywords`
-    /// are literal vocabulary terms and `prompt` is free-form context.
+    /// filled at; audio is resampled from there to [`REQUIRED_INPUT_RATE`] on
+    /// the way out. `language` is an ISO code (empty = let the model decide),
+    /// `keywords` are literal vocabulary terms and `prompt` is free-form
+    /// context.
     #[allow(clippy::too_many_arguments)]
     pub fn start(
         audio_buffer: Arc<Mutex<Vec<f32>>>,
@@ -85,8 +117,11 @@ impl OpenAiStreamer {
         on_chunk: Arc<StreamCallback>,
     ) -> Self {
         assert!(
-            device_sample_rate > 0,
-            "device_sample_rate must be positive"
+            device_sample_rate >= REQUIRED_INPUT_RATE,
+            "capture rate {} is below the {} Hz this API requires — it can only \
+             be downsampled to, never up",
+            device_sample_rate,
+            REQUIRED_INPUT_RATE
         );
         assert!(!api_key.is_empty(), "OpenAI api_key must not be empty");
 
@@ -180,7 +215,12 @@ async fn run_stream(
             HeaderValue::from_str(&format!("Bearer {api_key}"))
                 .map_err(|e| format!("bad auth header: {e}"))?,
         );
-        headers.insert("OpenAI-Beta", HeaderValue::from_static("realtime=v1"));
+        // NO `OpenAI-Beta: realtime=v1` header. Sending it selects the retired
+        // Beta surface and the server closes the socket immediately with
+        // "The Realtime Beta API is no longer supported. Please use
+        // /v1/realtime for the GA API." Most tutorials and answers still show
+        // that header — it was mandatory until the API went GA. Observed
+        // against the live endpoint 2026-08-04.
     }
 
     let (ws, _resp) = connect_async(request)
@@ -191,7 +231,8 @@ async fn run_stream(
 
     // Configure the session before any audio: the server needs to know the
     // wire format, which model to run and what context to bias with.
-    let session = compose_session_update(&model, &language, &prompt, &keywords, STREAM_SAMPLE_RATE);
+    let session =
+        compose_session_update(&model, &language, &prompt, &keywords, REQUIRED_INPUT_RATE);
     write
         .send(Message::Text(session))
         .await
@@ -202,6 +243,12 @@ async fn run_stream(
     let reader = tokio::spawn(async move {
         // Text of the turn currently being spoken, replaced as deltas arrive.
         let mut partial = String::new();
+        // Frame types we don't act on, logged ONCE each. Without this a
+        // protocol change is invisible: the socket connects, no error is
+        // raised, and every transcription frame is silently dropped because
+        // it arrived under a name we don't match. Only the `type` field is
+        // logged — never payload text, which is user speech.
+        let mut unseen: std::collections::HashSet<String> = std::collections::HashSet::new();
         while let Some(msg) = read.next().await {
             match msg {
                 Ok(Message::Text(txt)) => match parse_oai_message(&txt) {
@@ -240,7 +287,28 @@ async fn run_stream(
                     Some(StreamEvent::Error(e)) => {
                         crate::log(&format!("[oai-stream] server error: {e}"));
                     }
-                    None => {}
+                    None => {
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&txt) {
+                            if let Some(t) =
+                                v.get("type").and_then(|t| t.as_str()).map(str::to_string)
+                            {
+                                if unseen.insert(t.clone()) {
+                                    // Shape, not content, for the frames that
+                                    // decide whether transcription is on and
+                                    // where the text lives.
+                                    if t == "session.updated" || t.starts_with("conversation.item")
+                                    {
+                                        crate::log(&format!(
+                                            "[oai-stream] unhandled frame: {t} shape={}",
+                                            describe_shape(&v)
+                                        ));
+                                    } else {
+                                        crate::log(&format!("[oai-stream] unhandled frame: {t}"));
+                                    }
+                                }
+                            }
+                        }
+                    }
                 },
                 Ok(Message::Close(_)) => break,
                 Err(e) => {
@@ -252,8 +320,15 @@ async fn run_stream(
         }
     });
 
-    // Sender loop: drain newly-captured audio to the socket until cancelled.
+    // Sender loop: drain newly-captured audio to the socket until cancelled,
+    // committing a turn every COMMIT_INTERVAL_MS.
+    //
+    // The commit is what produces text. With `turn_detection` null (which the
+    // live model requires) the server runs no VAD of its own and will sit on
+    // audio indefinitely: an 18 s dictation produced not one frame after
+    // `session.updated`. The client owns turn boundaries here.
     let mut last_sent: usize = 0;
+    let mut uncommitted_ms: usize = 0;
     loop {
         if cancel.load(Ordering::SeqCst) {
             break;
@@ -261,11 +336,19 @@ async fn run_stream(
         tokio::time::sleep(SEND_INTERVAL).await;
         let slice = drain_new_samples(&audio_buffer, &mut last_sent);
         if !slice.is_empty() {
+            uncommitted_ms += (slice.len() * 1000) / device_sample_rate as usize;
             let frame = compose_audio_append(&slice, device_sample_rate);
             if let Err(e) = write.send(Message::Text(frame)).await {
                 crate::log(&format!("[oai-stream] send error: {e}"));
                 break;
             }
+        }
+        if uncommitted_ms >= COMMIT_INTERVAL_MS {
+            if let Err(e) = write.send(Message::Text(commit_frame())).await {
+                crate::log(&format!("[oai-stream] commit error: {e}"));
+                break;
+            }
+            uncommitted_ms = 0;
         }
     }
 
@@ -280,11 +363,9 @@ async fn run_stream(
             )))
             .await;
     }
-    let _ = write
-        .send(Message::Text(
-            "{\"type\":\"input_audio_buffer.commit\"}".to_string(),
-        ))
-        .await;
+    // Close the final turn. Without this the tail of the dictation is audio
+    // the server has received but never been told to transcribe.
+    let _ = write.send(Message::Text(commit_frame())).await;
 
     // Bounded window for the trailing `completed` events. The single terminal
     // emit happens in the worker after this returns.
@@ -309,15 +390,12 @@ fn drain_new_samples(buffer: &Arc<Mutex<Vec<f32>>>, last_sent: &mut usize) -> Ve
     }
 }
 
-/// Build one `input_audio_buffer.append` frame: downsample to the declared
-/// rate, convert to PCM16 LE, base64 it. Reuses the Deepgram streamer's
-/// PCM conversion so both engines clamp and NaN-guard identically.
+/// Build one `input_audio_buffer.append` frame: resample to
+/// [`REQUIRED_INPUT_RATE`], convert to PCM16 LE, base64 it. Reuses the
+/// Deepgram streamer's PCM conversion so both engines clamp and NaN-guard
+/// identically.
 fn compose_audio_append(samples: &[f32], source_rate: u32) -> String {
-    let pcm = if source_rate == STREAM_SAMPLE_RATE {
-        samples.to_vec()
-    } else {
-        crate::preprocess::downsample_to_16k(samples, source_rate)
-    };
+    let pcm = crate::preprocess::downsample_to(samples, source_rate, REQUIRED_INPUT_RATE);
     let bytes = crate::deepgram_stream::pcm_f32_to_i16le(&pcm);
     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
     serde_json::json!({
@@ -325,6 +403,11 @@ fn compose_audio_append(samples: &[f32], source_rate: u32) -> String {
         "audio": b64,
     })
     .to_string()
+}
+
+/// The frame that closes a turn and asks for its transcript.
+fn commit_frame() -> String {
+    "{\"type\":\"input_audio_buffer.commit\"}".to_string()
 }
 
 /// Build the `session.update` frame that configures a transcription session.
@@ -358,6 +441,10 @@ pub fn compose_session_update(
     if !language.trim().is_empty() {
         transcription["languages"] = serde_json::json!([language.trim()]);
     }
+    // Latency/quality knob for the live model: lower delay emits partial text
+    // sooner, higher delay lets the model revise before committing. `low` is
+    // the dictation trade-off — the user is watching words appear.
+    transcription["delay"] = serde_json::json!(TRANSCRIPTION_DELAY);
     serde_json::json!({
         "type": "session.update",
         "session": {
@@ -366,15 +453,47 @@ pub fn compose_session_update(
                 "input": {
                     "format": { "type": "audio/pcm", "rate": sample_rate },
                     "transcription": transcription,
-                    // Server-side VAD segments the turns for us; one
-                    // `completed` per utterance is exactly the granularity
-                    // the host injects at the cursor.
-                    "turn_detection": { "type": "server_vad" },
+                    // MUST be null. The live transcription model does its own
+                    // segmentation and rejects the whole session.update with
+                    // "Turn detection is not supported for this transcription
+                    // model." — and a rejected update is silent: no
+                    // `session.updated` arrives, the session keeps its
+                    // defaults, and every turn comes back with a null
+                    // transcript. Observed live 2026-08-04.
+                    "turn_detection": serde_json::Value::Null,
                 }
             }
         }
     })
     .to_string()
+}
+
+/// Render the SHAPE of a JSON value: keys and types, never values. Strings
+/// collapse to `str(len)` and numbers to `num`, so a frame can be inspected
+/// in the log without any of it being user speech.
+///
+/// Exists because two protocol mismatches in a row were invisible from the
+/// outside — the socket connected, raised no error, and dropped every
+/// transcript because it arrived under a key we did not read. Names alone
+/// were not enough to find it; the shape is.
+pub fn describe_shape(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::Object(m) => {
+            let inner: Vec<String> = m
+                .iter()
+                .map(|(k, val)| format!("{k}:{}", describe_shape(val)))
+                .collect();
+            format!("{{{}}}", inner.join(","))
+        }
+        serde_json::Value::Array(a) => match a.first() {
+            Some(first) => format!("[{}x{}]", a.len(), describe_shape(first)),
+            None => "[]".to_string(),
+        },
+        serde_json::Value::String(s) => format!("str({})", s.chars().count()),
+        serde_json::Value::Number(_) => "num".to_string(),
+        serde_json::Value::Bool(_) => "bool".to_string(),
+        serde_json::Value::Null => "null".to_string(),
+    }
 }
 
 /// The subset of server events this engine acts on.
@@ -399,6 +518,27 @@ pub fn parse_oai_message(json: &str) -> Option<StreamEvent> {
         "conversation.item.input_audio_transcription.completed" => Some(StreamEvent::Completed(
             v.get("transcript")?.as_str()?.to_string(),
         )),
+        // The GA surface delivers the finished turn inside the conversation
+        // item rather than as a standalone transcription event: the socket
+        // emits added -> done, and `done` carries the text on
+        // `item.content[].transcript`. Observed live 2026-08-04 — a session
+        // that only listened for the transcription events above connected,
+        // received audio, produced turns, and transcribed nothing.
+        "conversation.item.done" => {
+            let text = v
+                .get("item")?
+                .get("content")?
+                .as_array()?
+                .iter()
+                .filter_map(|c| c.get("transcript").and_then(|t| t.as_str()))
+                .collect::<Vec<_>>()
+                .join(" ");
+            if text.trim().is_empty() {
+                None
+            } else {
+                Some(StreamEvent::Completed(text))
+            }
+        }
         "error" => {
             // The payload nests the human-readable reason; fall back to the
             // whole object so an unexpected shape still reaches the log.
@@ -432,7 +572,29 @@ mod tests {
         assert_eq!(input["format"]["type"], "audio/pcm");
         assert_eq!(input["format"]["rate"], 16_000);
         assert_eq!(input["transcription"]["model"], "gpt-live-transcribe");
-        assert_eq!(input["turn_detection"]["type"], "server_vad");
+    }
+
+    #[test]
+    fn session_update_never_sends_turn_detection() {
+        // Regression: `{"type":"server_vad"}` here is rejected with "Turn
+        // detection is not supported for this transcription model", and the
+        // rejection is SILENT — no session.updated, defaults retained, every
+        // transcript null. The live model segments on its own.
+        let v = parse(&compose_session_update("m", "it", "p", &[], 24_000));
+        assert!(
+            v["session"]["audio"]["input"]["turn_detection"].is_null(),
+            "turn_detection must be null, got {}",
+            v["session"]["audio"]["input"]["turn_detection"]
+        );
+    }
+
+    #[test]
+    fn session_update_sets_the_latency_knob() {
+        let v = parse(&compose_session_update("m", "", "", &[], 24_000));
+        assert_eq!(
+            v["session"]["audio"]["input"]["transcription"]["delay"],
+            "low"
+        );
     }
 
     #[test]
@@ -492,9 +654,9 @@ mod tests {
 
     #[test]
     fn audio_append_is_base64_pcm16() {
-        // 16 kHz in, 16 kHz declared -> no resample, 2 bytes per sample.
+        // Source already at the required rate -> straight through, 2 bytes/sample.
         let samples = vec![0.0f32, 0.5, -0.5, 1.0];
-        let v = parse(&compose_audio_append(&samples, 16_000));
+        let v = parse(&compose_audio_append(&samples, REQUIRED_INPUT_RATE));
         assert_eq!(v["type"], "input_audio_buffer.append");
         let decoded = base64::engine::general_purpose::STANDARD
             .decode(v["audio"].as_str().expect("audio must be a string"))
@@ -506,18 +668,42 @@ mod tests {
     }
 
     #[test]
-    fn audio_append_downsamples_when_the_device_rate_differs() {
+    fn audio_append_resamples_capture_to_the_required_rate() {
+        // 48 kHz capture -> 24 kHz on the wire. Sending 48 kHz is rejected
+        // ("integer above maximum value. Expected a value <= 24000"), so the
+        // 2:1 decimation here is load-bearing, not an optimisation.
         let samples = vec![0.1f32; 48_000]; // 1 s at 48 kHz
         let v = parse(&compose_audio_append(&samples, 48_000));
         let decoded = base64::engine::general_purpose::STANDARD
             .decode(v["audio"].as_str().unwrap())
             .unwrap();
-        // 1 s at 16 kHz = 16 000 samples = 32 000 bytes, give or take the
-        // resampler's edge handling.
         let produced = decoded.len() / 2;
         assert!(
-            (15_000..=17_000).contains(&produced),
-            "expected ~16 000 samples at 16 kHz, got {produced}"
+            (produced as i64 - 24_000).abs() <= 1,
+            "1 s of 48 kHz capture must become ~24 000 samples, got {produced}"
+        );
+    }
+
+    #[test]
+    fn session_update_declares_exactly_the_required_rate() {
+        // Regression, both directions, both seen live 2026-08-04:
+        //   16 000 -> "integer below minimum value. Expected >= 24000"
+        //   48 000 -> "integer above maximum value. Expected <= 24000"
+        // 24 kHz is a point, not a range, and a rejected session.update means
+        // the socket silently accepts no audio at all.
+        let v = parse(&compose_session_update(
+            "m",
+            "",
+            "",
+            &[],
+            REQUIRED_INPUT_RATE,
+        ));
+        assert_eq!(
+            v["session"]["audio"]["input"]["format"]["rate"]
+                .as_u64()
+                .expect("rate must be an integer"),
+            24_000,
+            "the Realtime API accepts 24 kHz and nothing else"
         );
     }
 
@@ -552,8 +738,35 @@ mod tests {
             r#"{"type":"session.updated","session":{}}"#,
             r#"{"type":"input_audio_buffer.speech_started"}"#,
             r#"{"type":"input_audio_buffer.committed"}"#,
+            r#"{"type":"conversation.item.added","item":{"content":[]}}"#,
             "{}",
             "not json",
+        ] {
+            assert_eq!(parse_oai_message(frame), None, "frame: {frame}");
+        }
+    }
+
+    #[test]
+    fn parse_takes_the_transcript_out_of_conversation_item_done() {
+        // The GA surface carries the finished turn here rather than in a
+        // standalone transcription event. Missing this means a session that
+        // connects, receives audio and yields nothing.
+        let frame = r#"{"type":"conversation.item.done","item":{"id":"x","role":"user",
+            "content":[{"type":"input_audio","transcript":"ciao mondo"}]}}"#;
+        assert_eq!(
+            parse_oai_message(frame),
+            Some(StreamEvent::Completed("ciao mondo".into()))
+        );
+    }
+
+    #[test]
+    fn parse_ignores_a_done_item_with_no_text() {
+        // An empty turn must not emit — it would push a blank segment at the
+        // user's cursor.
+        for frame in [
+            r#"{"type":"conversation.item.done","item":{"content":[{"type":"input_audio"}]}}"#,
+            r#"{"type":"conversation.item.done","item":{"content":[{"transcript":"  "}]}}"#,
+            r#"{"type":"conversation.item.done","item":{}}"#,
         ] {
             assert_eq!(parse_oai_message(frame), None, "frame: {frame}");
         }

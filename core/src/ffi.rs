@@ -58,20 +58,25 @@ impl ActiveStreamer {
     }
 }
 
-/// Which model a realtime OpenAI session should run, given the STT model the
-/// user picked for batch.
+/// Which model a realtime OpenAI session should run.
 ///
-/// `whisper-1` has no realtime deployment, so selecting it and turning on
-/// streaming would open a session the server immediately rejects — the user
-/// would see silence with the reason buried in the log. Everything else in
-/// the transcribe family works over the Realtime socket, so it is passed
-/// through and only the unusable case falls back. Pure for unit testing.
+/// Deliberately NOT the model picked in the STT dropdown. That choice governs
+/// BATCH transcription — quality and cost per minute of a finished recording.
+/// A realtime socket is a different job with exactly one right answer, and
+/// passing the batch pick through was a design mistake that cost an evening:
+/// `gpt-transcribe` opens a session the server happily accepts, then creates
+/// turns whose `transcript` is `null` forever, because it is not the model
+/// that transcribes incrementally (observed live 2026-08-04, confirmed from
+/// the `conversation.item.done` payload shape).
+///
+/// Only an explicitly live model is honoured; everything else resolves to the
+/// one built for this endpoint. Pure for unit testing.
 fn realtime_model_for(configured: &str) -> String {
     let m = configured.trim();
-    if m.is_empty() || m.eq_ignore_ascii_case("whisper-1") {
-        "gpt-live-transcribe".to_string()
-    } else {
+    if m.to_ascii_lowercase().starts_with("gpt-live-") {
         m.to_string()
+    } else {
+        "gpt-live-transcribe".to_string()
     }
 }
 
@@ -9456,32 +9461,37 @@ mod tests {
     // ── realtime engine model selection ──────────────────────────
 
     #[test]
-    fn realtime_model_passes_through_realtime_capable_ids() {
-        for m in ["gpt-live-transcribe", "gpt-4o-transcribe", "gpt-transcribe"] {
+    fn realtime_model_honours_an_explicit_live_model() {
+        for m in ["gpt-live-transcribe", "gpt-live-transcribe-2026-07-31"] {
             assert_eq!(realtime_model_for(m), m, "{m} should be used as-is");
         }
+        assert_eq!(
+            realtime_model_for("  gpt-live-transcribe "),
+            "gpt-live-transcribe",
+            "surrounding whitespace must not defeat the match"
+        );
     }
 
     #[test]
-    fn realtime_model_falls_back_for_whisper_and_empty() {
-        // whisper-1 has no realtime deployment: opening a session with it
-        // would be rejected by the server and the user would just see
-        // nothing appear as they speak.
-        for m in ["whisper-1", "WHISPER-1", "  ", ""] {
+    fn realtime_model_ignores_the_batch_stt_pick() {
+        // The STT dropdown chooses the BATCH model. Handing a batch model to
+        // the realtime socket is not an error the server reports: it accepts
+        // the session, creates turns, and leaves every `transcript` null. So
+        // the batch pick must never reach this endpoint.
+        for m in [
+            "gpt-transcribe",
+            "gpt-4o-transcribe",
+            "gpt-4o-mini-transcribe",
+            "whisper-1",
+            "",
+            "   ",
+        ] {
             assert_eq!(
                 realtime_model_for(m),
                 "gpt-live-transcribe",
-                "{m:?} should fall back"
+                "{m:?} is a batch pick and must resolve to the live model"
             );
         }
-    }
-
-    #[test]
-    fn realtime_model_trims_surrounding_whitespace() {
-        assert_eq!(
-            realtime_model_for("  gpt-4o-transcribe "),
-            "gpt-4o-transcribe"
-        );
     }
 
     // ── categorize_llm_error_to_rc tests ─────────────────────────
