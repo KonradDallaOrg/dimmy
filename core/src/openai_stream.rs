@@ -267,11 +267,24 @@ async fn run_stream(
         .await
         .map_err(|e| format!("session.update failed: {e}"))?;
 
+    // Reader state that MUST outlive the task.
+    //
+    // The drain below is `timeout(DRAIN_TIMEOUT, reader)`, and dropping a
+    // JoinHandle aborts the task — so anything owned by the reader is lost
+    // the moment the timeout wins, which is every session that ends while
+    // the socket is still open. Keeping it out here is what makes the
+    // end-of-session accounting possible at all: the first version logged
+    // its counters from inside the task and printed nothing, ever.
+    let partial = Arc::new(Mutex::new(String::new()));
+    let deltas_n = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let completions_n = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
     let committed_r = committed.clone();
     let on_chunk_r = on_chunk.clone();
+    let partial_r = partial.clone();
+    let deltas_r = deltas_n.clone();
+    let completions_r = completions_n.clone();
     let reader = tokio::spawn(async move {
-        // Text of the turn currently being spoken, replaced as deltas arrive.
-        let mut partial = String::new();
         // Frame types we don't act on, logged ONCE each. Without this a
         // protocol change is invisible: the socket connects, no error is
         // raised, and every transcription frame is silently dropped because
@@ -282,43 +295,53 @@ async fn run_stream(
         // what we DIDN'T understand, so a session where transcription works
         // but is dropped downstream looks identical to one where the server
         // sent nothing at all.
-        let (mut deltas, mut completions) = (0usize, 0usize);
+        use std::sync::atomic::Ordering as AtomicOrdering;
         while let Some(msg) = read.next().await {
             match msg {
                 Ok(Message::Text(txt)) => match parse_oai_message(&txt) {
                     Some(StreamEvent::Delta(d)) => {
-                        deltas += 1;
-                        if deltas == 1 {
+                        if deltas_r.fetch_add(1, AtomicOrdering::SeqCst) == 0 {
                             crate::log("[oai-stream] transcript deltas flowing");
                         }
-                        partial.push_str(&d);
+                        let partial_now = {
+                            let mut p = match partial_r.lock() {
+                                Ok(p) => p,
+                                Err(e) => e.into_inner(),
+                            };
+                            p.push_str(&d);
+                            p.clone()
+                        };
                         let acc = match committed_r.lock() {
                             Ok(a) => a.clone(),
                             Err(p) => p.into_inner().clone(),
                         };
                         let preview = if acc.is_empty() {
-                            partial.clone()
+                            partial_now
                         } else {
-                            format!("{} {}", acc.trim_end(), partial)
+                            format!("{} {}", acc.trim_end(), partial_now)
                         };
-                        // The delta goes out as an INJECTABLE delta, not just
-                        // a caption update. The host injects at the cursor
-                        // only when this field is non-empty, so sending ""
-                        // here (as the Deepgram path does for its interim
-                        // results) meant text streamed into the caption strip
-                        // and never reached the document — the user watched a
-                        // working transcription produce nothing where they
-                        // were typing.
+                        // Caption only — deliberately NOT injected.
                         //
-                        // Safe to inject because these deltas are additive:
-                        // each carries newly available text, not a rewrite of
-                        // what came before. The `completed` that closes the
-                        // turn therefore must NOT inject again.
-                        on_chunk_r(&d, &preview, false);
+                        // The guide is explicit that deltas are provisional:
+                        // "Decide how your UI should revise partial text when
+                        // later deltas correct earlier text", and it points at
+                        // the completion event for the authoritative text.
+                        // Injection at a cursor cannot revise what it already
+                        // typed, so deltas belong in the caption, which can
+                        // rewrite freely.
+                        //
+                        // They are also sub-word BPE tokens ("Abb", "iamo",
+                        // " En"), and the host injects each segment as
+                        // `segment.TrimEnd() + " "` — so injecting them put a
+                        // space inside every word: "Abb iamo  En es ima"
+                        // (observed 2026-08-05).
+                        on_chunk_r("", &preview, false);
                     }
                     Some(StreamEvent::Completed(text)) => {
-                        completions += 1;
-                        partial.clear();
+                        completions_r.fetch_add(1, AtomicOrdering::SeqCst);
+                        if let Ok(mut p) = partial_r.lock() {
+                            p.clear();
+                        }
                         let text = text.trim().to_string();
                         if text.is_empty() {
                             continue;
@@ -333,12 +356,11 @@ async fn run_stream(
                         acc.push_str(&text);
                         let cum = acc.clone();
                         drop(acc);
-                        // Empty delta ON PURPOSE: every word of this turn has
-                        // already been injected as it arrived. Re-sending the
-                        // polished text here would paste the whole turn a
-                        // second time. The authoritative version still lands
-                        // in `committed`, which is what history stores.
-                        on_chunk_r("", &cum, false);
+                        // THIS is the injection point. The completion event
+                        // carries the authoritative transcript for the item,
+                        // already whole-worded and punctuated, and nothing
+                        // downstream will revise it. Deltas only previewed it.
+                        on_chunk_r(&text, &cum, false);
                     }
                     Some(StreamEvent::Error(e)) => {
                         crate::log(&format!("[oai-stream] server error: {e}"));
@@ -374,25 +396,6 @@ async fn run_stream(
                 _ => {}
             }
         }
-        // A turn whose deltas arrived but whose `completed` never did is still
-        // real transcript. Dropping it made a session that had visibly
-        // produced text return the empty string, which trips the host's
-        // work-loss fallback and re-transcribes the whole recording in batch —
-        // the user sees the live caption fill in and then the result arrive
-        // seconds late from somewhere else.
-        if !partial.trim().is_empty() {
-            let mut acc = match committed_r.lock() {
-                Ok(a) => a,
-                Err(p) => p.into_inner(),
-            };
-            if !acc.is_empty() && !acc.ends_with(' ') {
-                acc.push(' ');
-            }
-            acc.push_str(partial.trim());
-        }
-        crate::log(&format!(
-            "[oai-stream] reader done: {deltas} delta(s), {completions} completion(s)"
-        ));
     });
 
     // Sender loop: drain newly-captured audio to the socket until cancelled,
@@ -437,6 +440,7 @@ async fn run_stream(
     // in-flight turn instead of discarding it with the socket.
     let tail = drain_new_samples(&audio_buffer, &mut last_sent);
     if !tail.is_empty() {
+        uncommitted_ms += (tail.len() * 1000) / device_sample_rate as usize;
         let _ = write
             .send(Message::Text(compose_audio_append(
                 &tail,
@@ -444,13 +448,56 @@ async fn run_stream(
             )))
             .await;
     }
-    // Close the final turn. Without this the tail of the dictation is audio
-    // the server has received but never been told to transcribe.
-    let _ = write.send(Message::Text(commit_frame())).await;
+    // Close the final turn — but only if there IS one. When the user stops
+    // just after a pause the loop has already committed everything, and a
+    // commit on the drained buffer is rejected with "buffer too small ...
+    // only has 0.00ms of audio". Harmless, but it puts a server error in the
+    // log of a perfectly healthy session, which is exactly the kind of noise
+    // that costs an hour the next time something really is wrong.
+    if uncommitted_ms >= MIN_COMMIT_MS {
+        let _ = write.send(Message::Text(commit_frame())).await;
+    }
 
     // Bounded window for the trailing `completed` events. The single terminal
     // emit happens in the worker after this returns.
+    //
+    // NOTE this ABORTS the reader when it wins, which is the common case: the
+    // socket is still open, so the task never returns on its own. Everything
+    // below therefore reads shared state, not task-local state.
     let _ = tokio::time::timeout(DRAIN_TIMEOUT, reader).await;
+
+    use std::sync::atomic::Ordering as AtomicOrdering;
+    let n_deltas = deltas_n.load(AtomicOrdering::SeqCst);
+    let n_completions = completions_n.load(AtomicOrdering::SeqCst);
+
+    // A last turn that produced deltas but never its `completed` is still real
+    // transcript: it was on screen in the caption. Injecting it here keeps it,
+    // and keeps the returned text non-empty so the host does not fall back to
+    // re-transcribing the whole recording in batch.
+    let leftover = partial
+        .lock()
+        .map(|p| p.trim().to_string())
+        .unwrap_or_default();
+    if !leftover.is_empty() {
+        let cum = {
+            let mut acc = match committed.lock() {
+                Ok(a) => a,
+                Err(p) => p.into_inner(),
+            };
+            if !acc.is_empty() && !acc.ends_with(' ') {
+                acc.push(' ');
+            }
+            acc.push_str(&leftover);
+            acc.clone()
+        };
+        on_chunk(&leftover, &cum, false);
+    }
+
+    crate::log(&format!(
+        "[oai-stream] session done: {n_deltas} delta(s), {n_completions} completion(s), \
+         {} leftover char(s)",
+        leftover.chars().count()
+    ));
     Ok(())
 }
 
@@ -851,6 +898,53 @@ mod tests {
         ] {
             assert_eq!(parse_oai_message(frame), None, "frame: {frame}");
         }
+    }
+
+    /// The word-boundary split the delta branch performs, in isolation.
+    /// Returns `(injectable, remaining_buffer)`.
+    fn split_at_word_boundary(buf: &str) -> (String, String) {
+        match buf.rfind(char::is_whitespace) {
+            Some(idx) => (
+                buf[..idx].trim().to_string(),
+                buf[idx..].trim_start().to_string(),
+            ),
+            None => (String::new(), buf.to_string()),
+        }
+    }
+
+    #[test]
+    fn sub_word_tokens_are_held_until_the_word_is_complete() {
+        // Real token stream shape from gpt-live-transcribe. The host injects
+        // `segment + " "`, so releasing any of these fragments early is what
+        // produced "Abb iamo  En es ima" in the user's document.
+        let mut buf = String::new();
+        let mut injected: Vec<String> = Vec::new();
+        for tok in ["Abb", "iamo", " En", "es", "ima", " volta"] {
+            buf.push_str(tok);
+            let (ready, rest) = split_at_word_boundary(&buf);
+            buf = rest;
+            if !ready.is_empty() {
+                injected.push(ready);
+            }
+        }
+        // "Abbiamo" and "Enesima" complete; "volta" is still open.
+        assert_eq!(injected, vec!["Abbiamo", "Enesima"]);
+        assert_eq!(buf, "volta", "the unfinished word must stay buffered");
+    }
+
+    #[test]
+    fn a_token_holding_several_words_releases_all_but_the_last() {
+        let (ready, rest) = split_at_word_boundary("le parole che sto dic");
+        assert_eq!(ready, "le parole che sto");
+        assert_eq!(rest, "dic");
+    }
+
+    #[test]
+    fn punctuation_stays_attached_to_its_word() {
+        // "po'." must not be split off from the word it terminates.
+        let (ready, rest) = split_at_word_boundary("un po'. Un");
+        assert_eq!(ready, "un po'.");
+        assert_eq!(rest, "Un");
     }
 
     #[test]
