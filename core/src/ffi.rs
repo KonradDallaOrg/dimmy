@@ -6640,7 +6640,12 @@ fn decode_wav_via_hound(path: &str) -> Result<(Vec<f32>, u32), String> {
 /// codec features picked in `core/Cargo.toml`. Multi-track files: pick
 /// the first decodable audio track; this matches what users expect
 /// from a Voice Memo / podcast export.
-fn decode_via_symphonia(path: &str) -> Result<(Vec<f32>, u32), String> {
+///
+/// `pub` only so the offline measurement bins can read the Ogg meeting
+/// tracks. Those recordings are the ONLY silence-heavy material we have:
+/// `audio_debug` stores dictations, which are almost all speech, so a gate
+/// measured on them alone never sees the case the gate exists for.
+pub fn decode_via_symphonia(path: &str) -> Result<(Vec<f32>, u32), String> {
     use symphonia::core::audio::SampleBuffer;
     use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
     use symphonia::core::errors::Error as SymphoniaError;
