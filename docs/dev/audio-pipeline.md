@@ -193,10 +193,44 @@ is exactly what an idle chunk is.
 
 Three chunk-only rules, all paid for on 2026-07-31 with a real meeting:
 
-1. **A frame must clear `ENERGY_FLOOR` to count as speech.** nnnoiseless scores
-   voice likelihood from spectral shape, not level, so a keyboard click at
+1. **A frame must clear `CHUNK_GATE_ENERGY_FLOOR` to count as speech.**
+   nnnoiseless is trained to be indifferent to level, so a keyboard click at
    -60 dBFS opens a speech window. Measured: an idle mic track with median
-   level 0.00028 (50x under the floor) still produced a "Grazie" every 15 s.
+   level 0.00028 still produced a "Grazie" every 15 s.
+
+   (Do not repeat the claim, which stood here until 2026-08-05, that RNNoise
+   "scores spectral shape, not level". It is wrong: RNNoise keeps the first
+   cepstral coefficient — energy — and deliberately skips cepstral mean
+   normalisation, so its features are level-DEPENDENT. The indifference comes
+   from training on "audio at all realistic levels". Source: Valin,
+   jmvalin.ca/demo/rnnoise. The distinction matters: the energy term exists to
+   compensate for a *trained* behaviour, which is why the industry instead
+   thresholds a level-robust model score — Silero at a fixed 0.5 — and carries
+   no energy term at all. See the note below.)
+
+   **The floor is NOT `ENERGY_FLOOR`.** Measured 2026-08-05 over 38 real
+   captures with confirmed transcripts (~17k speech frames): `ENERGY_FLOOR`
+   (0.015) sits 12 dB INSIDE the speech distribution and rejected 37% of real
+   speech frames. Two genuine quiet dictations carried 10 ms and 0 ms of
+   qualifying audio in their entire length and would have been discarded whole.
+   `CHUNK_GATE_ENERGY_FLOOR` (0.0025) is the geometric mean of the gap between
+   the noisiest room (0.0018) and the quietest speech (0.0037) in that dataset.
+   Re-measured with `chunk_vad_ab` afterwards: 17 windows, 3 dropped, and all
+   three were genuinely empty (whisper on the whole window produced "" or
+   "Grazie."). Median retention 100%.
+
+   **Known limit.** That margin is only ~6 dB and it has to span SESSIONS —
+   within any one recording speech stands ~24 dB over its own noise. A fixed
+   absolute energy threshold is the fragile part of this design. Adaptive
+   noise-floor tracking (Martin's minimum statistics, Cohen's MCRA) is the
+   textbook answer but its documented weakness is adaptation lag of one to two
+   search windows, and ours are 3 s with no state carried between them, so it
+   would be wrong at the start of every dictation. The industry answer is to
+   stop thresholding energy at all and threshold a level-robust model score
+   instead: faster-whisper and whisper.cpp both ship Silero with a FIXED 0.5
+   probability threshold and no energy term. That is the real fix if this floor
+   ever proves fragile, and it is measurable against the existing captures with
+   `chunk_vad_ab` before committing to it.
 2. **`preprocess_made_it_worse` is NOT used here.** It treats "retained < 5 %"
    as a collapse, which on a 15 s window is any utterance shorter than 750 ms —
    a short "sì" would be handed to the model with all its surrounding silence.
