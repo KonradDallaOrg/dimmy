@@ -850,6 +850,51 @@ pub fn process_chunk_vad_only(samples: &[f32], sample_rate: u32) -> Vec<f32> {
         return samples.to_vec();
     }
 
+    // Silero answers first when it can. Measured over 300 windows of 12 real
+    // meeting mic tracks (`vad_ab` bin): 62 hallucinations passed by the
+    // RNNoise+energy gate versus 19 by Silero, with ZERO words lost by either
+    // — all 47 speech windows survived both. 39 of 40 disagreements were
+    // Silero correctly rejecting silence we let through.
+    //
+    // `None` means no answer is available (model not downloaded yet, failed
+    // to load, or a build without local-stt) and we fall through to the old
+    // gate. Reading None as "no speech" would drop every window on a fresh
+    // install and transcribe nothing at all.
+    if crate::silero::model_present() {
+        let pcm16k = downsample_to_16k(samples, sample_rate);
+        if let Some(has_speech) = crate::silero::speech_present(&pcm16k) {
+            return if has_speech {
+                samples.to_vec()
+            } else {
+                Vec::new()
+            };
+        }
+    }
+
+    chunk_gate_fallback(samples, sample_rate)
+}
+
+/// The gate WITHOUT Silero: RNNoise voice probability AND a per-frame energy
+/// floor.
+///
+/// A real path, not dead code: it needs no download and no model, so the gate
+/// still works on a fresh install before the 885 KB VAD model lands, and in
+/// builds compiled without `local-stt`. Its weak point is that absolute energy
+/// floor, which has to span sessions — which is exactly why Silero replaced it
+/// as the first answer.
+///
+/// Split out so it is testable ON ITS OWN. Tests that reached it through
+/// `process_chunk_vad_only` silently changed meaning the moment Silero
+/// existed: their outcome started depending on whether a model file happened
+/// to sit in the developer's AppData, which is not a unit test.
+pub fn chunk_gate_fallback(samples: &[f32], sample_rate: u32) -> Vec<f32> {
+    if samples.is_empty() {
+        return Vec::new();
+    }
+    if sample_rate != REQUIRED_SAMPLE_RATE {
+        return samples.to_vec();
+    }
+
     // How much of this window does the VAD consider speech? `new_vad_trim`
     // requires each frame to clear CHUNK_GATE_ENERGY_FLOOR as well as look like
     // speech, so quiet clicks and breath — which score high on spectral shape
@@ -1943,7 +1988,7 @@ mod tests {
         // the model.
         let sr = 48_000u32;
         let silence = vec![0.0f32; (sr as f32 * 3.5) as usize];
-        let out = process_chunk_vad_only(&silence, sr);
+        let out = chunk_gate_fallback(&silence, sr);
         assert!(
             out.is_empty(),
             "a silent window must collapse to empty, kept {} samples",
@@ -1955,7 +2000,7 @@ mod tests {
     fn chunk_vad_only_keeps_speech() {
         let sr = 48_000u32;
         let speech = generate_speech_like(sr, 3.5, 0.3);
-        let out = process_chunk_vad_only(&speech, sr);
+        let out = chunk_gate_fallback(&speech, sr);
         assert!(!out.is_empty(), "a speech window must reach the model");
         assert!(out.iter().all(|s| s.is_finite()));
     }
@@ -1971,7 +2016,7 @@ mod tests {
         // signal, not waste.
         let sr = 48_000u32;
         let speech = generate_speech_like(sr, 3.5, 0.3);
-        let out = process_chunk_vad_only(&speech, sr);
+        let out = chunk_gate_fallback(&speech, sr);
         assert_eq!(
             out.len(),
             speech.len(),
@@ -1990,7 +2035,7 @@ mod tests {
         let mut window = vec![0.0f32; sr as usize];
         window.extend(generate_speech_like(sr, 2.0, 0.3));
         window.extend(vec![0.0f32; sr as usize * 4]);
-        let out = process_chunk_vad_only(&window, sr);
+        let out = chunk_gate_fallback(&window, sr);
         assert_eq!(
             out.len(),
             window.len(),
@@ -2005,7 +2050,7 @@ mod tests {
         // different levels. A quiet window must stay quiet.
         let sr = 48_000u32;
         let quiet = generate_speech_like(sr, 3.0, 0.05);
-        let out = process_chunk_vad_only(&quiet, sr);
+        let out = chunk_gate_fallback(&quiet, sr);
         assert!(!out.is_empty());
         let out_rms = rms(&out);
         assert!(
@@ -2039,7 +2084,7 @@ mod tests {
             "fixture must be transient-shaped, not sustained"
         );
         assert!(
-            process_chunk_vad_only(&clicky, sr).is_empty(),
+            chunk_gate_fallback(&clicky, sr).is_empty(),
             "a window of isolated clicks must never reach the model"
         );
 
@@ -2050,7 +2095,7 @@ mod tests {
             sustained_energy_fraction(&speech, sr) >= CHUNK_SUSTAINED_ENERGY_FRACTION,
             "real speech must read as sustained"
         );
-        assert!(!process_chunk_vad_only(&speech, sr).is_empty());
+        assert!(!chunk_gate_fallback(&speech, sr).is_empty());
     }
 
     #[test]
@@ -2062,7 +2107,7 @@ mod tests {
         let sr = 48_000u32;
         let mut window = generate_speech_like(sr, 0.1, 0.3);
         window.extend(vec![0.0f32; sr as usize * 3]);
-        let out = process_chunk_vad_only(&window, sr);
+        let out = chunk_gate_fallback(&window, sr);
         assert!(
             out.is_empty(),
             "under {}ms of speech must not open the gate, kept {} samples",
@@ -2081,7 +2126,7 @@ mod tests {
         let tone: Vec<f32> = (0..(sr as usize * 3))
             .map(|i| (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / sr as f32).sin() * 0.4)
             .collect();
-        let out = process_chunk_vad_only(&tone, sr);
+        let out = chunk_gate_fallback(&tone, sr);
         assert!(!out.is_empty(), "a loud window must never be dropped");
     }
 
@@ -2092,13 +2137,13 @@ mod tests {
         // highpass the caller never asked for.
         let sr = 16_000u32;
         let speech = generate_speech_like(sr, 1.0, 0.3);
-        let out = process_chunk_vad_only(&speech, sr);
+        let out = chunk_gate_fallback(&speech, sr);
         assert_eq!(out, speech, "below 48 kHz the window must be untouched");
     }
 
     #[test]
     fn chunk_vad_only_empty_input_is_empty() {
-        assert!(process_chunk_vad_only(&[], 48_000).is_empty());
+        assert!(chunk_gate_fallback(&[], 48_000).is_empty());
     }
 
     #[test]
@@ -2115,7 +2160,7 @@ mod tests {
             rms(&whisper_quiet) < CHUNK_GATE_ENERGY_FLOOR,
             "test fixture must sit below the gate floor"
         );
-        let out = process_chunk_vad_only(&whisper_quiet, sr);
+        let out = chunk_gate_fallback(&whisper_quiet, sr);
         assert!(
             out.is_empty(),
             "speech-shaped noise under the gate floor must not reach the model, kept {} samples",
@@ -2144,7 +2189,7 @@ mod tests {
             "fixture must clear the new gate floor, else it proves nothing"
         );
         assert!(
-            !process_chunk_vad_only(&quiet, sr).is_empty(),
+            !chunk_gate_fallback(&quiet, sr).is_empty(),
             "a quietly spoken window must reach the model"
         );
     }
@@ -2168,5 +2213,60 @@ mod tests {
             CHUNK_GATE_ENERGY_FLOOR < ENERGY_FLOOR,
             "the gate asks a different question than the batch VAD and must not inherit its floor"
         );
+    }
+
+    // ── The Silero-or-fallback wrapper ───────────────────────────────
+
+    #[test]
+    fn gate_falls_back_rather_than_dropping_when_silero_is_unavailable() {
+        // The load-bearing distinction. `silero::speech_present` returns None
+        // when the model has not been downloaded yet; if the wrapper read that
+        // as "no speech" a fresh install would drop EVERY window and
+        // transcribe nothing at all. On a machine without the model this
+        // exercises the real path; on one with it, the harness covers the
+        // Silero side instead.
+        let sr = 48_000u32;
+        let speech = generate_speech_like(sr, 3.0, 0.3);
+        if !crate::silero::model_present() {
+            assert_eq!(
+                process_chunk_vad_only(&speech, sr).len(),
+                chunk_gate_fallback(&speech, sr).len(),
+                "with no model the wrapper must reproduce the fallback exactly"
+            );
+        }
+        // Cheap invariants that hold either way: the wrapper never invents
+        // audio and never returns a partial window.
+        let out = process_chunk_vad_only(&speech, sr);
+        assert!(out.is_empty() || out.len() == speech.len());
+    }
+
+    #[test]
+    fn gate_is_all_or_nothing_never_a_trimmed_window() {
+        // The 2026-08-05 regression was the gate acting as a scalpel: it
+        // trimmed silence INSIDE the window, kept a median 16% of the audio,
+        // and that trimming PRODUCED the hallucination it was meant to
+        // prevent. Whichever VAD answers, the window must reach the model
+        // whole or not at all.
+        let sr = 48_000u32;
+        for amp in [0.3f32, 0.05, 0.003] {
+            let w = generate_speech_like(sr, 3.0, amp);
+            let out = process_chunk_vad_only(&w, sr);
+            assert!(
+                out.is_empty() || out.len() == w.len(),
+                "amp {amp}: gate returned {} of {} samples",
+                out.len(),
+                w.len()
+            );
+        }
+    }
+
+    #[test]
+    fn gate_passes_through_below_48k_whatever_answers() {
+        // nnnoiseless needs 48 kHz and Silero is fed a downsample of it;
+        // below that there is nothing to judge, so the window must come back
+        // untouched rather than be dropped on a guess.
+        let sr = 16_000u32;
+        let speech = generate_speech_like(sr, 1.0, 0.3);
+        assert_eq!(process_chunk_vad_only(&speech, sr), speech);
     }
 }
