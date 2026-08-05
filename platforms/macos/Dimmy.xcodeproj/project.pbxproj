@@ -548,6 +548,7 @@
 				AE000003 /* Resources */,
 				AE000004 /* Bundle onnxruntime.dylib */,
 				AE000005 /* Bundle llama.cpp + ggml dylibs */,
+				AE000007 /* Bundle Silero VAD model */,
 				AE000006 /* Validate Frameworks bundle */,
 			);
 			buildRules = (
@@ -685,6 +686,45 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
 			shellScript = "set -euo pipefail\n# Fetch (idempotent) and bundle libonnxruntime.dylib into\n# Dimmy.app/Contents/Frameworks/. Required by the local-stt-parakeet\n# backend (ort crate, load-dynamic mode).\nORT_VERSION=\"1.22.0\"\nORT_ARCH=\"arm64\"\nREPO_ROOT=\"$SRCROOT/../..\"\n\"$REPO_ROOT/scripts/download-onnxruntime.sh\" -v \"$ORT_VERSION\" -a \"$ORT_ARCH\"\n\nSRC_DIR=\"$REPO_ROOT/core/target/onnxruntime-osx-$ORT_ARCH-$ORT_VERSION/lib\"\nDEST_DIR=\"$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH\"\nmkdir -p \"$DEST_DIR\"\ncp -f \"$SRC_DIR/libonnxruntime.$ORT_VERSION.dylib\" \"$DEST_DIR/libonnxruntime.dylib\"\nchmod 644 \"$DEST_DIR/libonnxruntime.dylib\"\n# Re-sign with the project's signing identity so the hardened runtime\n# accepts the bundled dylib at launch. Ad-hoc (-) when no Developer ID.\nIDENTITY=\"${EXPANDED_CODE_SIGN_IDENTITY:-${CODE_SIGN_IDENTITY:--}}\"\ncodesign --force --sign \"$IDENTITY\" --timestamp=none \"$DEST_DIR/libonnxruntime.dylib\"\n";
+		};
+		AE000007 /* Bundle Silero VAD model */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/../../core/assets/ggml-silero-v6.2.0.bin",
+			);
+			name = "Bundle Silero VAD model";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/ggml-silero-v6.2.0.bin",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "set -euo pipefail
+# Ship the 885 KB Silero VAD model inside Dimmy.app/Contents/Resources.
+# core/src/silero.rs looks in Contents/Resources on macOS (current_exe() is
+# Contents/MacOS/Dimmy, so the model cannot sit next to the binary the way
+# it does on Windows). Without this the Mac silently runs the weaker
+# RNNoise+energy fallback with nothing in the log to notice.
+# Bundled rather than downloaded: at 0.8% of the DMG a runtime fetch would
+# only add a failure mode, and this way it carries the notarised signature.
+SRC=\"$SRCROOT/../../core/assets/ggml-silero-v6.2.0.bin\"
+DEST_DIR=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH\"
+if [ ! -f \"$SRC\" ]; then
+  echo \"warning: $SRC missing - the VAD gate will fall back to RNNoise\"
+  exit 0
+fi
+mkdir -p \"$DEST_DIR\"
+cp -f \"$SRC\" \"$DEST_DIR/ggml-silero-v6.2.0.bin\"
+chmod 644 \"$DEST_DIR/ggml-silero-v6.2.0.bin\"
+echo \"[silero] bundled $(basename \"$SRC\") into Resources\"
+";
 		};
 /* End PBXShellScriptBuildPhase section */
 

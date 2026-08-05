@@ -79,9 +79,18 @@ pub const REQUIRED_RATE: u32 = 16_000;
 pub fn model_path() -> std::path::PathBuf {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            let shipped = dir.join(MODEL_FILE);
-            if shipped.is_file() {
-                return shipped;
+            // Windows / Linux: data sits next to the executable.
+            let beside = dir.join(MODEL_FILE);
+            if beside.is_file() {
+                return beside;
+            }
+            // macOS: current_exe() is Dimmy.app/Contents/MacOS/Dimmy, and a
+            // data file belongs in Contents/Resources. Getting this wrong
+            // would leave every Mac silently on the fallback gate with no
+            // error to notice.
+            let resources = dir.join("../Resources").join(MODEL_FILE);
+            if resources.is_file() {
+                return resources;
             }
         }
     }
