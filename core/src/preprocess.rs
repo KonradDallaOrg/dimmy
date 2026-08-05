@@ -45,8 +45,28 @@ const SILENCE_GRACE_FRAMES: usize = 300;
 /// killing loud speech when the RNN model drifts after long recordings.
 const ENERGY_FLOOR: f32 = 0.015;
 
-/// Target RMS level for AGC. 0.2 ≈ -14dBFS — loud enough for clear STT input.
-const TARGET_RMS: f32 = 0.2;
+/// Target RMS level for AGC. 0.05 ≈ -26 dBFS.
+///
+/// Speech carries a large peak-to-RMS ratio: measured over 38 real dictation
+/// captures from this project's `audio_debug` (2026-07-28 → 2026-08-04), the
+/// median crest factor is **19.6 dB**. An RMS target therefore implies a peak
+/// target 19.6 dB above it. The previous 0.2 (-14 dBFS) implied peaks at
+/// **+5.6 dBFS** — above full scale — so every single one of those 38 captures
+/// came out hard-clipped at exactly 1.000. -26 dBFS puts the peaks near
+/// -6 dBFS, comfortably inside the rail, and whisper normalises internally
+/// anyway so the absolute level costs nothing.
+const TARGET_RMS: f32 = 0.05;
+
+/// True-peak ceiling applied after the AGC, -1 dBFS.
+///
+/// The gain stage targets RMS, so on unusually dynamic speech it can still ask
+/// for peaks above full scale even with a conservative target. Clamping those
+/// (what used to happen) is hard clipping: it squares off the waveform and
+/// sprays broadband harmonics across the spectrum whisper builds its mel
+/// features from. Scaling the whole buffer by one factor instead changes the
+/// level but not the shape, so it is inaudible to the model. This makes
+/// clipping impossible by construction rather than unlikely.
+const PEAK_CEILING: f32 = 0.89;
 
 /// AGC distortion factor — controls how fast gain adapts.
 /// Lower = smoother adaptation, less distortion. 0.001 is typical for speech.
@@ -227,6 +247,10 @@ impl AudioPreprocessor {
         let mut output = speech;
         if self.apply_agc {
             self.agc.process(&mut output);
+            // The gain stage is the only thing that can push samples past the
+            // rail, so the ceiling belongs here and not on the VAD-trim path,
+            // which never applies gain and must hand back untouched levels.
+            limit_peak(&mut output);
         }
 
         // Clamp to [-1.0, 1.0] after AGC (safety net).
@@ -417,6 +441,7 @@ impl AudioPreprocessor {
         // Apply AGC to maintain consistent volume with the rest of the output
         if self.apply_agc {
             self.agc.process(&mut tail);
+            limit_peak(&mut tail);
         }
 
         // Clamp after AGC (same safety net as process())
@@ -456,6 +481,25 @@ impl AudioPreprocessor {
             .ok()
             .map(DirectForm2Transposed::<f32>::new);
         }
+    }
+}
+
+/// Scale `samples` down uniformly if any peak exceeds [`PEAK_CEILING`].
+///
+/// Uniform scaling preserves waveform shape, so unlike clipping it introduces
+/// no harmonics — the model sees the same sound, quieter. A no-op when the
+/// buffer already fits inside the ceiling, which is the common case once the
+/// AGC target leaves headroom. Non-finite samples are ignored by the peak
+/// search (`f32::max` propagates the operand, not the NaN) and are zeroed by
+/// the caller's clamp immediately afterwards.
+fn limit_peak(samples: &mut [f32]) {
+    let peak = samples.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
+    if !peak.is_finite() || peak <= PEAK_CEILING {
+        return;
+    }
+    let gain = PEAK_CEILING / peak;
+    for s in samples.iter_mut() {
+        *s *= gain;
     }
 }
 
@@ -723,23 +767,31 @@ fn sustained_energy_fraction(samples: &[f32], sample_rate: u32) -> f32 {
     loud as f32 / frames as f32
 }
 
-/// Chunk preprocess for the realtime workers: highpass + VAD trim, NO AGC.
+/// Chunk gate for the realtime workers: decide whether a window is worth a
+/// model call, and hand it over WHOLE. Never trims, never applies AGC.
 ///
 /// The chunked-dictation worker (`chunked_stt.rs`) and the meeting chunk
-/// worker (`meeting.rs`) hand whisper short windows *while* capture is still
-/// running. Both used to hand it the raw buffer, silence included — which is
-/// precisely the input whisper hallucinates on, emitting the sign-off phrases
-/// from its YouTube training data ("thank you", "grazie per la visione"). This
-/// trims the silence first, with the same RNNoise VAD the batch dictation path
-/// has always used.
+/// worker (`meeting.rs`) feed whisper short windows *while* capture is still
+/// running. Handing it raw idle audio makes it emit the sign-off phrases from
+/// its training data ("thank you", "grazie per la visione"), which is what the
+/// 2026-07-31 work set out to stop.
 ///
-/// AGC is deliberately not applied (see `AudioPreprocessor::new_vad_trim`).
-/// The make-it-worse guard from the batch path is reused verbatim: if the VAD
-/// collapses a chunk that clearly had speech in it, the untrimmed chunk is
-/// returned, so a quiet speaker can never lose words. An all-silence chunk
-/// sits below `ENERGY_FLOOR`, so the guard stays out of the way and the caller
-/// gets an empty vec — which is the whole point: no audio, no whisper call, no
-/// phantom "grazie".
+/// That work removed the silence *inside* every window. It is the right cure
+/// for an idle mic and the wrong one for speech: on real dictation the VAD
+/// kept a fraction of each 3 s window, whisper received sub-second fragments
+/// with no context, and hallucinated just as badly in the other direction —
+/// Italian speech came back as invented Spanish, and a 9 s dictation as
+/// "Yeah. Yeah. Yeah." (measured 2026-08-05). One hallucination class was
+/// traded for another.
+///
+/// So the VAD is used as a GATE, not a scalpel. It answers one question —
+/// *is there speech in this window?* — and the window then goes to the model
+/// untouched, pauses and all, which is exactly what the batch path does and
+/// what whisper needs for punctuation and segmentation.
+///
+/// The anti-hallucination guarantee is not weakened by this, it is
+/// strengthened: a window without speech never reaches the model at all,
+/// where before it could still arrive as a second of trimmed clicks.
 pub fn process_chunk_vad_only(samples: &[f32], sample_rate: u32) -> Vec<f32> {
     assert!(
         sample_rate > 0,
@@ -749,89 +801,84 @@ pub fn process_chunk_vad_only(samples: &[f32], sample_rate: u32) -> Vec<f32> {
     if samples.is_empty() {
         return Vec::new();
     }
-    // No VAD below 48 kHz (nnnoiseless requires it). Trimming is the only
-    // reason this function exists, so hand the window back untouched rather
-    // than silently applying a highpass the caller never asked for.
+    // No VAD below 48 kHz (nnnoiseless requires it) — nothing to gate on, so
+    // pass the window through rather than dropping audio we cannot judge.
     if sample_rate != REQUIRED_SAMPLE_RATE {
         return samples.to_vec();
     }
 
+    // How much of this window does the VAD consider speech? `new_vad_trim`
+    // requires each frame to clear ENERGY_FLOOR as well as look like speech,
+    // so quiet clicks and breath — which score high on spectral shape alone —
+    // do not count. The OUTPUT LENGTH is the signal; the output itself is
+    // discarded.
     let mut proc = AudioPreprocessor::new_vad_trim(sample_rate);
-    let mut trimmed = proc.process(samples);
-    trimmed.extend(proc.flush());
+    let mut speech = proc.process(samples);
+    speech.extend(proc.flush());
+    let speech_ms = (speech.len() * 1000) / sample_rate as usize;
 
-    // NOTE: deliberately NOT `preprocess_made_it_worse` here. That guard is
-    // built for the batch path and treats "retained < 5 % of the input" as a
-    // collapse — which on a 15 s chunk is any utterance shorter than 750 ms.
-    // A real short "sì" in an otherwise quiet window would trip it and be
-    // handed to whisper untrimmed, silence included, i.e. exactly the input we
-    // are trying to remove. If the VAD kept anything at all, trust it.
-    if trimmed.is_empty() {
-        // Nothing survived. Two very different reasons: the VAD failed on
-        // real continuous speech (hand the window back — never lose words),
-        // or the window is an idle mic whose loud moments are transients
-        // (clicks, a chair) that a whole-window RMS cannot tell from speech.
-        // Burned 2026-07-31: the old guard fired at 16:48:13, handed whisper
-        // the untrimmed 15 s of an idle mic, and out came "Grazie.".
-        let sustained = sustained_energy_fraction(samples, sample_rate);
-        if sustained >= CHUNK_SUSTAINED_ENERGY_FRACTION {
-            crate::log(&format!(
-                "[Preprocess] WARN VAD emptied a chunk with {:.0}% sustained energy — passing it through untrimmed",
-                sustained * 100.0
-            ));
-            return samples.to_vec();
-        }
+    if speech_ms >= CHUNK_MIN_SPEECH_MS {
+        return samples.to_vec();
+    }
+
+    // The VAD found little or nothing. Two very different causes: a quiet
+    // room (drop it), or the VAD failing on speech that is plainly there
+    // (never lose the user's words). Sustained frame energy tells them apart —
+    // a whole-window RMS cannot, because one loud click lifts the average
+    // without producing a single audible frame of speech.
+    let sustained = sustained_energy_fraction(samples, sample_rate);
+    if sustained >= CHUNK_SUSTAINED_ENERGY_FRACTION {
         crate::log(&format!(
-            "[Preprocess] chunk empty after VAD, {:.0}% sustained energy — transients, treating as silence",
+            "[Preprocess] VAD found only {speech_ms} ms of speech but {:.0}% sustained energy — passing the window through",
             sustained * 100.0
         ));
-        return Vec::new();
+        return samples.to_vec();
     }
-
-    // A sliver of audio cannot hold a word, and whisper pads anything to a
-    // full 30 s encoder window — so a 0.1 s chunk costs a whole pass to return
-    // nothing. Observed 2026-07-31: a 1760-sample window (0.11 s) produced
-    // zero segments and a "[Meeting] whisper error: empty transcription".
-    if trimmed.len() < (sample_rate as usize * CHUNK_MIN_SPEECH_MS) / 1000 {
-        return Vec::new();
-    }
-
-    // Postconditions: a trim can only ever remove samples, and it must never
-    // hand non-finite audio to the model.
-    assert!(
-        trimmed.len() <= samples.len(),
-        "process_chunk_vad_only: produced {} samples from an input of {}",
-        trimmed.len(),
-        samples.len()
-    );
-    assert!(
-        trimmed.iter().all(|s| s.is_finite()),
-        "process_chunk_vad_only: output contains non-finite samples"
-    );
-    trimmed
+    Vec::new()
 }
 
 /// Downsample audio to 16kHz for Whisper (which internally resamples to 16kHz anyway).
 /// Uses a lowpass anti-aliasing filter + linear interpolation.
 /// Returns samples at 16kHz. If source is already 16kHz, returns a clone.
 pub fn downsample_to_16k(samples: &[f32], source_rate: u32) -> Vec<f32> {
-    // Invariant: source rate must be positive (0 would cause division-by-zero)
+    downsample_to(samples, source_rate, WHISPER_SAMPLE_RATE)
+}
+
+/// Downsample to an arbitrary `target_rate`.
+///
+/// Generalisation of [`downsample_to_16k`], which is now a thin wrapper: every
+/// STT route in this codebase wanted 16 kHz until OpenAI's Realtime API turned
+/// up demanding exactly 24 kHz (see `openai_stream::REQUIRED_INPUT_RATE`).
+/// Rather than a second copy of the same DSP, the rate is a parameter.
+///
+/// Returns a clone when the source is already at or below the target — this
+/// only ever downsamples, it will not invent bandwidth that is not there.
+pub fn downsample_to(samples: &[f32], source_rate: u32, target_rate: u32) -> Vec<f32> {
+    // Invariant: rates must be positive (0 would cause division-by-zero)
     assert!(
         source_rate > 0,
-        "downsample_to_16k: source_rate must be > 0, got {}",
+        "downsample_to: source_rate must be > 0, got {}",
         source_rate
     );
+    assert!(
+        target_rate > 0,
+        "downsample_to: target_rate must be > 0, got {}",
+        target_rate
+    );
 
-    if source_rate <= WHISPER_SAMPLE_RATE {
+    if source_rate <= target_rate {
         return samples.to_vec();
     }
 
-    // Step 1: Anti-aliasing lowpass filter at 7kHz (Nyquist for 16kHz is 8kHz, use 7kHz margin)
+    // Step 1: anti-aliasing lowpass a little under the target's Nyquist
+    // (7/8 of it, i.e. 7 kHz for a 16 kHz target, 10.5 kHz for 24 kHz) so the
+    // filter's transition band lands below the fold-over point.
+    let cutoff = target_rate as f32 * 0.4375;
     let filtered = if source_rate >= 1000 {
         if let Ok(coeffs) = Coefficients::<f32>::from_params(
             FilterType::LowPass,
             (source_rate as f32).hz(),
-            7000.0.hz(),
+            cutoff.hz(),
             Q_BUTTERWORTH_F32,
         ) {
             let mut lp = DirectForm2Transposed::<f32>::new(coeffs);
@@ -843,8 +890,8 @@ pub fn downsample_to_16k(samples: &[f32], source_rate: u32) -> Vec<f32> {
         samples.to_vec()
     };
 
-    // Step 2: Linear interpolation to 16kHz
-    let ratio = source_rate as f64 / WHISPER_SAMPLE_RATE as f64;
+    // Step 2: linear interpolation to the target rate
+    let ratio = source_rate as f64 / target_rate as f64;
     let output_len = (filtered.len() as f64 / ratio).floor() as usize;
     if output_len == 0 {
         return Vec::new();
@@ -860,9 +907,9 @@ pub fn downsample_to_16k(samples: &[f32], source_rate: u32) -> Vec<f32> {
         output.push(s0 + (s1 - s0) * frac);
     }
 
-    // Invariant: output length should be approximately input_length * 16000 / source_rate (within 1 sample)
+    // Invariant: output length ≈ input_length * target_rate / source_rate (within 1 sample)
     let expected_len =
-        (samples.len() as f64 * WHISPER_SAMPLE_RATE as f64 / source_rate as f64).floor() as usize;
+        (samples.len() as f64 * target_rate as f64 / source_rate as f64).floor() as usize;
     assert!(
         (output.len() as isize - expected_len as isize).unsigned_abs() <= 1,
         "downsample output length {} deviates from expected {} by more than 1 sample",
@@ -898,6 +945,140 @@ mod tests {
             "AGC should boost quiet audio: before={:.4} after={:.4}",
             rms_before,
             rms_after
+        );
+    }
+
+    /// Speech-shaped signal with a REALISTIC crest factor.
+    ///
+    /// `generate_speech_like` sits around 8 dB peak-to-RMS, which is far below
+    /// real speech and hides every headroom bug. Measured on 38 real dictation
+    /// sessions from this project's own `audio_debug` captures (2026-07-28 →
+    /// 2026-08-04): median crest factor **19.6 dB**, median RMS 0.019
+    /// (-34.4 dBFS). This builds a signal in that band — loud vowels, quiet
+    /// consonants, short plosive transients, inter-word gaps — and rescales it
+    /// to the requested RMS.
+    fn speech_with_real_crest(sample_rate: u32, duration_secs: f32, target_rms: f32) -> Vec<f32> {
+        let n = (sample_rate as f32 * duration_secs) as usize;
+        let sr = sample_rate as f32;
+        // Per-syllable gains: vowels are ~20x louder than the quiet consonants
+        // between them. This spread is what produces the real crest factor.
+        let syllable_gain = [1.0f32, 0.22, 0.6, 0.05, 0.85, 0.12, 0.45, 0.08];
+        let mut rng_state: u32 = 1234;
+        let mut out: Vec<f32> = (0..n)
+            .map(|i| {
+                let t = i as f32 / sr;
+                // 5 syllables/second, with a 25 % silent gap between words.
+                let syl = (t * 5.0) as usize;
+                let phase = (t * 5.0).fract();
+                let gain = if phase > 0.75 {
+                    0.01 // inter-word gap, not digital silence
+                } else {
+                    syllable_gain[syl % syllable_gain.len()]
+                };
+                rng_state ^= rng_state << 13;
+                rng_state ^= rng_state >> 17;
+                rng_state ^= rng_state << 5;
+                let noise = (rng_state as f32 / u32::MAX as f32) * 2.0 - 1.0;
+                let f0 = 2.0 * std::f32::consts::PI * 150.0 * t;
+                let voiced = f0.sin() * 0.6 + (2.0 * f0).sin() * 0.25 + (3.0 * f0).sin() * 0.15;
+                // Plosive: a 4 ms full-scale transient at each syllable onset.
+                let plosive = if phase < 0.02 { noise * 1.0 } else { 0.0 };
+                (voiced * 0.8 + noise * 0.2) * gain + plosive * gain
+            })
+            .collect();
+        let cur = rms(&out);
+        assert!(cur > 0.0, "fixture generated silence");
+        let scale = target_rms / cur;
+        for s in out.iter_mut() {
+            *s *= scale;
+        }
+        out
+    }
+
+    /// The clipping bug, reproduced from field data (2026-08-04).
+    ///
+    /// `TARGET_RMS` is 0.2 (-14 dBFS). Real speech carries ~19.6 dB of crest
+    /// factor, so normalising its RMS to -14 dBFS puts the peaks at +5.6 dBFS —
+    /// i.e. 5.6 dB ABOVE full scale. The post-AGC clamp then hard-clips them
+    /// into a square wave, which is what whisper actually receives.
+    ///
+    /// This is not an edge case: all 38 preprocessing-ON sessions in
+    /// `audio_debug` peaked at exactly 1.000 with a median 3.14 % of samples
+    /// pinned to full scale. Clipping is GUARANTEED by the constant, not
+    /// triggered by unlucky input.
+    ///
+    /// 44.1 kHz keeps the VAD out of the picture (nnnoiseless needs exactly
+    /// 48 kHz) so this pins the gain stage alone — which is correct here: the
+    /// field data clears the VAD, whose retention was a healthy 67 % median.
+    #[test]
+    fn agc_must_not_clip_real_speech_levels() {
+        let sr = 44_100u32;
+        let input = speech_with_real_crest(sr, 4.0, 0.019);
+
+        let in_rms = rms(&input);
+        let in_peak = input.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
+        let crest_db = 20.0 * (in_peak / in_rms).log10();
+        assert!(
+            (15.0..=24.0).contains(&crest_db),
+            "fixture must sit in the measured 15-24 dB crest band, got {:.1} dB",
+            crest_db
+        );
+        assert!(in_peak < 1.0, "fixture must not clip before preprocessing");
+
+        let out = process_buffer(&input, sr);
+        assert!(!out.is_empty(), "pipeline dropped everything");
+
+        let clipped = out.iter().filter(|s| s.abs() >= 0.999).count();
+        let clipped_pct = 100.0 * clipped as f32 / out.len() as f32;
+        assert!(
+            clipped_pct < 0.1,
+            "preprocessing hard-clipped {:.2} % of a {:.1} dB-crest speech input \
+             (in: rms={:.5} peak={:.3} -> out: rms={:.5} peak={:.3}). \
+             Hard clipping is broadband distortion; it destroys the mel features \
+             whisper transcribes from.",
+            clipped_pct,
+            crest_db,
+            in_rms,
+            in_peak,
+            rms(&out),
+            out.iter().fold(0.0f32, |m, &s| m.max(s.abs())),
+        );
+    }
+
+    #[test]
+    fn limit_peak_is_transparent_and_bounded() {
+        // Uniform scaling is the whole point: it must change the LEVEL and
+        // leave the SHAPE alone, otherwise it would be a distortion stage
+        // rather than a safety rail.
+        let mut loud: Vec<f32> = (0..1000).map(|i| (i as f32 * 0.1).sin() * 2.5).collect();
+        let before = loud.clone();
+        limit_peak(&mut loud);
+
+        let peak = loud.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
+        assert!(
+            (peak - PEAK_CEILING).abs() < 1e-4,
+            "peak must land exactly on the ceiling, got {peak}"
+        );
+        // Shape check: every sample kept the same ratio to its neighbour.
+        let ratio = loud[10] / before[10];
+        for (a, b) in loud.iter().zip(before.iter()) {
+            if b.abs() > 1e-6 {
+                assert!(
+                    ((a / b) - ratio).abs() < 1e-4,
+                    "scaling must be uniform — waveform shape changed"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn limit_peak_leaves_quiet_audio_untouched() {
+        let mut quiet: Vec<f32> = (0..500).map(|i| (i as f32 * 0.1).sin() * 0.3).collect();
+        let before = quiet.clone();
+        limit_peak(&mut quiet);
+        assert_eq!(
+            quiet, before,
+            "audio inside the ceiling must not be touched"
         );
     }
 
@@ -1732,26 +1913,45 @@ mod tests {
         let sr = 48_000u32;
         let speech = generate_speech_like(sr, 3.5, 0.3);
         let out = process_chunk_vad_only(&speech, sr);
-        assert!(!out.is_empty(), "a speech window must survive the trim");
-        assert!(out.len() <= speech.len(), "a trim can only remove samples");
+        assert!(!out.is_empty(), "a speech window must reach the model");
         assert!(out.iter().all(|s| s.is_finite()));
     }
 
     #[test]
-    fn chunk_vad_only_trims_silence_around_speech() {
-        // 1 s silence + 2 s speech + 4 s silence. The trailing silence
-        // outlasts the 3 s grace, so the window must shrink a lot.
+    fn chunk_vad_only_hands_a_speech_window_over_untouched() {
+        // The gate decides WHETHER the model is called, never what it hears.
+        //
+        // Trimming inside the window is what broke local dictation on
+        // 2026-08-05: whisper got sub-second fragments stripped of their
+        // pauses, lost the context it needs for punctuation and segmentation,
+        // and returned invented Spanish for Italian speech. The pauses are
+        // signal, not waste.
+        let sr = 48_000u32;
+        let speech = generate_speech_like(sr, 3.5, 0.3);
+        let out = process_chunk_vad_only(&speech, sr);
+        assert_eq!(
+            out.len(),
+            speech.len(),
+            "a window that passes the gate must go to the model whole"
+        );
+        assert_eq!(out, speech, "the gate must not modify a single sample");
+    }
+
+    #[test]
+    fn chunk_vad_only_keeps_the_pauses_around_speech() {
+        // 1 s silence + 2 s speech + 4 s silence: exactly the shape the old
+        // trim shrank to a fragment. The window carries speech, so it goes to
+        // the model as-is — a natural pause is what tells whisper a sentence
+        // ended.
         let sr = 48_000u32;
         let mut window = vec![0.0f32; sr as usize];
         window.extend(generate_speech_like(sr, 2.0, 0.3));
         window.extend(vec![0.0f32; sr as usize * 4]);
         let out = process_chunk_vad_only(&window, sr);
-        assert!(!out.is_empty(), "the speech in the middle must survive");
-        assert!(
-            out.len() < window.len() / 2,
-            "expected a real trim, kept {}/{}",
+        assert_eq!(
             out.len(),
-            window.len()
+            window.len(),
+            "the window holds speech, so it must survive intact"
         );
     }
 
@@ -1811,19 +2011,20 @@ mod tests {
     }
 
     #[test]
-    fn chunk_vad_only_drops_slivers_too_short_to_hold_a_word() {
-        // 0.11 s reached whisper on 2026-07-31 and cost a full encoder window
-        // to return zero segments.
+    fn chunk_vad_only_drops_a_window_holding_only_a_sliver_of_speech() {
+        // 0.1 s of speech in an otherwise silent window. Whisper pads any
+        // input to a full 30 s encoder window, so this costs a whole pass to
+        // return nothing — and on 2026-07-31 it returned a phantom sign-off
+        // instead. The gate keeps the model out of it entirely.
         let sr = 48_000u32;
         let mut window = generate_speech_like(sr, 0.1, 0.3);
         window.extend(vec![0.0f32; sr as usize * 3]);
         let out = process_chunk_vad_only(&window, sr);
         assert!(
             out.is_empty(),
-            "a sub-{}ms sliver must not reach the model, kept {} samples ({} ms)",
+            "under {}ms of speech must not open the gate, kept {} samples",
             CHUNK_MIN_SPEECH_MS,
-            out.len(),
-            out.len() * 1000 / sr as usize
+            out.len()
         );
     }
 

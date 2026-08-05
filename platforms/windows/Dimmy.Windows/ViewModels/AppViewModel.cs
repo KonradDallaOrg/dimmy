@@ -418,13 +418,22 @@ public partial class AppViewModel : ObservableObject
                         LiveCaptionText = cumulative;
                         SttChunkReceived?.Invoke(cumulative, isFinal);
                         // Realtime typing engines emit a STABLE (append-only)
-                        // delta: Deepgram cloud streaming AND the local chunked
-                        // engine in typing mode (engine="local-stream", any
-                        // local backend — Parakeet or whisper). Both inject each
+                        // delta: the cloud streaming engines (Deepgram,
+                        // OpenAI Realtime) AND the local chunked engine in
+                        // typing mode (engine="local-stream", any local
+                        // backend — Parakeet or whisper). All inject each
                         // delta at the cursor and suppress the final paste.
                         // Plain chunked captions (engine="parakeet"/"whisper")
                         // fall through to caption display only.
-                        if (engine == "deepgram" || engine == "local-stream")
+                        //
+                        // This list is a whitelist, so a NEW streaming engine
+                        // in the core is inert until its name is added here:
+                        // it streams into the caption, never reaches the
+                        // document, and the host still pastes everything at
+                        // stop. That is exactly how the OpenAI engine shipped
+                        // broken on 2026-08-05 — the core was working and the
+                        // text had nowhere to go.
+                        if (engine == "deepgram" || engine == "openai" || engine == "local-stream")
                         {
                             StreamingDictationActive = true;
                             if (!string.IsNullOrEmpty(delta))

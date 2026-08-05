@@ -23,6 +23,7 @@
         { "id": "gpt-4o-mini", "label": "GPT-4o mini", "tasks": ["llm", "recap"] },
         { "id": "o3", "label": "o3 (reasoning)", "tasks": ["recap"] },
         { "id": "o3-mini", "label": "o3 mini", "tasks": ["recap"] },
+        { "id": "gpt-transcribe", "label": "GPT Transcribe", "tasks": ["stt"], "tier": "top" },
         { "id": "whisper-1", "label": "Whisper", "tasks": ["stt"] },
         { "id": "gpt-4o-transcribe", "label": "GPT-4o transcribe", "tasks": ["stt"] },
         { "id": "gpt-4o-mini-transcribe", "label": "GPT-4o mini transcribe", "tasks": ["stt"] }

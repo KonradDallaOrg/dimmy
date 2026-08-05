@@ -29,7 +29,56 @@ static CHUNKED: Mutex<Option<crate::chunked_stt::ChunkedTranscriber>> = Mutex::n
 /// Deepgram key is present, this engine takes over the dictation capture
 /// path. Taken out by `dimmy_stop_recording` to drain the final transcript,
 /// same contract as CHUNKED.
-static STREAMING: Mutex<Option<crate::deepgram_stream::DeepgramStreamer>> = Mutex::new(None);
+static STREAMING: Mutex<Option<ActiveStreamer>> = Mutex::new(None);
+
+/// The realtime cloud engine owning the current dictation.
+///
+/// One slot, not one static per engine: the two are mutually exclusive by
+/// construction, and a single slot makes that impossible to get wrong in the
+/// stop path (which must drain exactly the engine that was started).
+enum ActiveStreamer {
+    Deepgram(crate::deepgram_stream::DeepgramStreamer),
+    OpenAi(crate::openai_stream::OpenAiStreamer),
+}
+
+impl ActiveStreamer {
+    fn stop(self) -> String {
+        match self {
+            Self::Deepgram(s) => s.stop(),
+            Self::OpenAi(s) => s.stop(),
+        }
+    }
+
+    /// Engine name for the log line and the `stt_chunk` envelope.
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Deepgram(_) => "deepgram",
+            Self::OpenAi(_) => "openai",
+        }
+    }
+}
+
+/// Which model a realtime OpenAI session should run.
+///
+/// Deliberately NOT the model picked in the STT dropdown. That choice governs
+/// BATCH transcription — quality and cost per minute of a finished recording.
+/// A realtime socket is a different job with exactly one right answer, and
+/// passing the batch pick through was a design mistake that cost an evening:
+/// `gpt-transcribe` opens a session the server happily accepts, then creates
+/// turns whose `transcript` is `null` forever, because it is not the model
+/// that transcribes incrementally (observed live 2026-08-04, confirmed from
+/// the `conversation.item.done` payload shape).
+///
+/// Only an explicitly live model is honoured; everything else resolves to the
+/// one built for this endpoint. Pure for unit testing.
+fn realtime_model_for(configured: &str) -> String {
+    let m = configured.trim();
+    if m.to_ascii_lowercase().starts_with("gpt-live-") {
+        m.to_string()
+    } else {
+        "gpt-live-transcribe".to_string()
+    }
+}
 
 /// Which dictation engine produced the current recording, for the
 /// `transcription.completed` telemetry `engine` prop. Set in start_recording,
@@ -803,46 +852,95 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
     // local typing never fires (the "non va" report, 2026-06-06).
     let streaming_on = st.streaming_dictation.lock().map(|b| *b).unwrap_or(false);
     let use_kr = st.use_keyring.lock().map(|k| *k).unwrap_or(false);
-    let dg_key = if streaming_on && !is_local {
-        crate::load_key_with_store(&st.key_store, KeyringScope::Stt(Provider::Deepgram), use_kr)
+    // Engine selection. Derived from the STT provider the user already picked,
+    // so "I chose OpenAI for voice input" means OpenAI here too — no second
+    // setting to keep in sync with the first.
+    //
+    // The Deepgram arm is the fallback, NOT the default, and it preserves the
+    // behaviour that shipped before this engine existed: a saved Deepgram key
+    // drove streaming whatever cloud provider was selected. Users on a
+    // provider with no realtime engine (Groq, Together) therefore keep the
+    // streaming they have today instead of silently losing it.
+    let streaming_provider = if streaming_on && !is_local {
+        let api_url = st.api_url.lock().map(|u| u.clone()).unwrap_or_default();
+        let oai_key = if Provider::from_url(&api_url) == Provider::OpenAI {
+            crate::load_key_with_store(&st.key_store, KeyringScope::Stt(Provider::OpenAI), use_kr)
+        } else {
+            None
+        };
+        match oai_key {
+            Some(k) => Some((Provider::OpenAI, k)),
+            None => crate::load_key_with_store(
+                &st.key_store,
+                KeyringScope::Stt(Provider::Deepgram),
+                use_kr,
+            )
+            .map(|k| (Provider::Deepgram, k)),
+        }
     } else {
         None
     };
-    let streaming_active = streaming_on && !is_local && dg_key.is_some();
-    if streaming_active {
+    let streaming_active = streaming_provider.is_some();
+    if let Some((provider, key)) = streaming_provider {
         if let Ok(mut b) = st.audio_buffer.lock() {
             b.clear();
         }
         let language = st.language.lock().map(|l| l.clone()).unwrap_or_default();
         let prompt_base = st.prompt.lock().map(|p| p.clone()).unwrap_or_default();
         let user_dict = st.user_dict.lock().map(|d| d.clone()).unwrap_or_default();
-        let keyterms = crate::compose_stt_prompt(&prompt_base, &user_dict);
+        let engine_label = if provider == Provider::OpenAI {
+            "openai"
+        } else {
+            "deepgram"
+        };
         let on_chunk: Arc<crate::deepgram_stream::StreamCallback> =
-            Arc::new(|delta: &str, cumulative: &str, is_final: bool| {
+            Arc::new(move |delta: &str, cumulative: &str, is_final: bool| {
                 let payload = serde_json::json!({
                     "delta": delta,
                     "cumulative": cumulative,
                     "is_final": is_final,
-                    "engine": "deepgram",
+                    "engine": engine_label,
                 })
                 .to_string();
                 emit_event("stt_chunk", &payload);
             });
-        let streamer = crate::deepgram_stream::DeepgramStreamer::start(
-            st.audio_buffer.clone(),
-            crate::audio::MEETING_CANONICAL_RATE,
-            dg_key.unwrap_or_default(),
-            language,
-            // Empty base => default wss://api.deepgram.com/v1/listen; the
-            // streamer's compose_deepgram_ws_url appends model + params.
-            String::new(),
-            keyterms,
-            on_chunk,
-        );
+        let streamer = if provider == Provider::OpenAI {
+            let api_model = st.api_model.lock().map(|m| m.clone()).unwrap_or_default();
+            let model = realtime_model_for(&api_model);
+            log(&format!(
+                "[StartRec] openai streaming dictation spawned (model={})",
+                model
+            ));
+            ActiveStreamer::OpenAi(crate::openai_stream::OpenAiStreamer::start(
+                st.audio_buffer.clone(),
+                crate::audio::MEETING_CANONICAL_RATE,
+                key,
+                model,
+                language,
+                // This model family takes context and literal terms as two
+                // separate fields, so the dictionary is NOT folded into the
+                // prompt the way whisper-style biasing needs.
+                prompt_base,
+                user_dict,
+                on_chunk,
+            ))
+        } else {
+            log("[StartRec] deepgram streaming dictation spawned");
+            ActiveStreamer::Deepgram(crate::deepgram_stream::DeepgramStreamer::start(
+                st.audio_buffer.clone(),
+                crate::audio::MEETING_CANONICAL_RATE,
+                key,
+                language,
+                // Empty base => default wss://api.deepgram.com/v1/listen; the
+                // streamer's compose_deepgram_ws_url appends model + params.
+                String::new(),
+                crate::compose_stt_prompt(&prompt_base, &user_dict),
+                on_chunk,
+            ))
+        };
         if let Ok(mut slot) = STREAMING.lock() {
             *slot = Some(streamer);
         }
-        log("[StartRec] deepgram streaming dictation spawned");
     }
 
     // Realtime chunked transcriber — backend-agnostic. Two modes:
@@ -871,7 +969,17 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
     let chunked_captions = !streaming_active && !local_typing && is_local && chunked_on;
     if let Ok(mut e) = DICTATION_ENGINE.lock() {
         *e = if streaming_active {
-            "deepgram_stream"
+            // Telemetry distinguishes the two cloud engines: a latency or
+            // accuracy regression that shows up on one and not the other is
+            // otherwise invisible in the aggregate.
+            match STREAMING
+                .lock()
+                .ok()
+                .and_then(|s| s.as_ref().map(|s| s.label()))
+            {
+                Some("openai") => "openai_stream",
+                _ => "deepgram_stream",
+            }
         } else if local_typing {
             "local_stream"
         } else if chunked_captions {
@@ -1092,7 +1200,10 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
         .ok()
         .and_then(|mut slot| slot.take())
         .map(|s| {
-            log("[StopRec] draining deepgram streaming worker (pre-clear)");
+            log(&format!(
+                "[StopRec] draining {} streaming worker (pre-clear)",
+                s.label()
+            ));
             s.stop()
         });
 
@@ -9346,6 +9457,42 @@ mod tests {
     use super::*;
     use serial_test::serial;
     use std::ffi::c_char;
+
+    // ── realtime engine model selection ──────────────────────────
+
+    #[test]
+    fn realtime_model_honours_an_explicit_live_model() {
+        for m in ["gpt-live-transcribe", "gpt-live-transcribe-2026-07-31"] {
+            assert_eq!(realtime_model_for(m), m, "{m} should be used as-is");
+        }
+        assert_eq!(
+            realtime_model_for("  gpt-live-transcribe "),
+            "gpt-live-transcribe",
+            "surrounding whitespace must not defeat the match"
+        );
+    }
+
+    #[test]
+    fn realtime_model_ignores_the_batch_stt_pick() {
+        // The STT dropdown chooses the BATCH model. Handing a batch model to
+        // the realtime socket is not an error the server reports: it accepts
+        // the session, creates turns, and leaves every `transcript` null. So
+        // the batch pick must never reach this endpoint.
+        for m in [
+            "gpt-transcribe",
+            "gpt-4o-transcribe",
+            "gpt-4o-mini-transcribe",
+            "whisper-1",
+            "",
+            "   ",
+        ] {
+            assert_eq!(
+                realtime_model_for(m),
+                "gpt-live-transcribe",
+                "{m:?} is a batch pick and must resolve to the live model"
+            );
+        }
+    }
 
     // ── categorize_llm_error_to_rc tests ─────────────────────────
     //

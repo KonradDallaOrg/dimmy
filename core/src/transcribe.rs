@@ -19,6 +19,39 @@ fn timeout_for_payload(wav_data: &[u8]) -> std::time::Duration {
     std::time::Duration::from_secs(capped as u64)
 }
 
+/// How an OpenAI-compatible STT model takes its language hint.
+///
+/// `whisper-1` and the `gpt-4o-transcribe` family take a singular `language`
+/// string. The `gpt-transcribe` generation takes a `languages[]` LIST instead
+/// (it can be handed several candidates), and rejects the singular form. The
+/// two spellings are not interchangeable, so the model id decides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SttFieldStyle {
+    /// `language` (single ISO code). whisper-1, gpt-4o-transcribe, and every
+    /// OpenAI-compatible third party (Groq, Together, Fireworks).
+    Whisper,
+    /// `languages[]` (repeated). gpt-transcribe, gpt-live-transcribe.
+    Structured,
+}
+
+/// Which hint spelling `model` expects. Prefix-matched so dated snapshots
+/// (`gpt-transcribe-2026-07-31`) resolve like their base model.
+///
+/// Note the prefixes do NOT collide with `gpt-4o-transcribe`, which is an
+/// older model on the whisper-style contract despite the similar name.
+/// Anything unrecognised falls back to whisper-style: that is the format
+/// every OpenAI-compatible third-party endpoint implements, so an unknown
+/// model can only ever be a model we have not catalogued yet, never a
+/// different protocol.
+pub fn stt_field_style(model: &str) -> SttFieldStyle {
+    let m = model.trim().to_ascii_lowercase();
+    if m.starts_with("gpt-transcribe") || m.starts_with("gpt-live-transcribe") {
+        SttFieldStyle::Structured
+    } else {
+        SttFieldStyle::Whisper
+    }
+}
+
 /// Send WAV audio to any OpenAI-compatible transcription endpoint,
 /// or to Google Gemini's generateContent endpoint (auto-detected from URL).
 /// `language` is an ISO 639-1 code (e.g. "it", "en"). Empty string = auto-detect.
@@ -76,14 +109,21 @@ pub async fn transcribe_audio(
         .file_name("recording.wav")
         .mime_str("audio/wav")?;
 
+    // `json` is the one response_format every model on this path accepts —
+    // gpt-transcribe supports ONLY json (verbose_json and the
+    // timestamp_granularities[] that rides on it stay whisper-1-only).
     let mut form = multipart::Form::new()
         .text("model", model.to_string())
         .text("response_format", "json")
         .part("file", file_part);
 
-    // Add language hint if specified (prevents Whisper from translating)
+    // Add language hint if specified (prevents Whisper from translating).
+    // The field name is model-dependent — see `stt_field_style`.
     if !language.is_empty() {
-        form = form.text("language", language.to_string());
+        form = match stt_field_style(model) {
+            SttFieldStyle::Whisper => form.text("language", language.to_string()),
+            SttFieldStyle::Structured => form.text("languages[]", language.to_string()),
+        };
     }
 
     // Prompt guides Whisper's output style (punctuation, vocabulary, spelling).
@@ -822,5 +862,41 @@ mod tests {
             lang_idx < vocab_idx,
             "language hint must precede vocab hint"
         );
+    }
+
+    #[test]
+    fn gpt_transcribe_family_uses_the_structured_language_field() {
+        for m in [
+            "gpt-transcribe",
+            "gpt-live-transcribe",
+            "gpt-transcribe-2026-07-31",
+            "GPT-Transcribe",
+        ] {
+            assert_eq!(
+                stt_field_style(m),
+                SttFieldStyle::Structured,
+                "{m} should take languages[]"
+            );
+        }
+    }
+
+    #[test]
+    fn whisper_family_keeps_the_singular_language_field() {
+        // gpt-4o-transcribe is the trap: same vendor, similar name, OLD
+        // contract. Sending it languages[] would drop the hint silently.
+        for m in [
+            "whisper-1",
+            "gpt-4o-transcribe",
+            "gpt-4o-mini-transcribe",
+            "whisper-large-v3-turbo",
+            "nvidia/parakeet-tdt-0.6b-v3",
+            "",
+        ] {
+            assert_eq!(
+                stt_field_style(m),
+                SttFieldStyle::Whisper,
+                "{m} should take a singular language"
+            );
+        }
     }
 }

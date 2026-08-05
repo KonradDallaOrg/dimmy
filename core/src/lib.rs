@@ -50,6 +50,11 @@ pub mod meeting;
 /// OAuth. Uses Notion's server-side markdown API (2026-02-26+) so we
 /// don't ship a markdown→block-tree converter. See `notion.rs`.
 pub mod notion;
+/// Realtime streaming dictation over OpenAI's Realtime WebSocket
+/// (`gpt-live-transcribe`). Sibling of `deepgram_stream`, same
+/// `(delta, cumulative, is_final)` callback contract so the host
+/// pipeline is engine-agnostic.
+pub mod openai_stream;
 /// Parakeet TDT v3 FP32 local STT via ONNX Runtime. Inference is
 /// gated behind `local-stt-parakeet`; bundle download / presence
 /// helpers are always available so the UI can render the "needs
