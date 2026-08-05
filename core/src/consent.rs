@@ -17,7 +17,10 @@
 
 /// Collapse a BCP-47-ish tag ("en-US", "it_IT") to one of the supported base
 /// languages, falling back to English.
-fn norm_lang(lang: &str) -> &'static str {
+///
+/// `pub(crate)` so the AI-Act notice in `meeting.rs` collapses languages the
+/// same way instead of growing a second, drifting copy.
+pub(crate) fn norm_lang(lang: &str) -> &'static str {
     let base = lang.to_ascii_lowercase();
     let base = base.split(['-', '_']).next().unwrap_or("en");
     match base {

@@ -245,6 +245,14 @@ int32_t dimmy_model_catalog_json(char * _Nullable out_buf, int32_t buf_len);
 int32_t dimmy_consent_text(const char * _Nonnull kind, const char * _Nonnull lang,
                            char * _Nonnull out_buf, int32_t buf_len);
 
+/// Localized EU AI Act art. 50(5) notice shown above a recap. `kind` is
+/// "title" or "hint"; `lang` is a BCP-47-ish tag falling back to English.
+/// Returns bytes written, or -1 on null args / unknown kind. Kept separate
+/// from dimmy_consent_text on purpose: different obligation, different
+/// audience.
+int32_t dimmy_ai_notice_text(const char * _Nonnull kind, const char * _Nonnull lang,
+                             char * _Nonnull out_buf, int32_t buf_len);
+
 /// Append a consent event to the local append-only audit log
 /// (<configdir>/consent.jsonl). `kind` is the event tag the host emits:
 /// "confirmed", "declined", "announced", "chat_copied". Returns 0, or -1.

@@ -637,6 +637,31 @@
                    in the prompt before but reintroduced as a small
                    pre-TLDR card so the user sees the LLM's framing
                    before the bullets. -->
+              <!-- EU AI Act art. 50(5): information that is clear and
+                   distinguishable to a HUMAN. The machine-readable half of the
+                   obligation is the invisible dimmy-ai-generated tag written
+                   into recap.md by the core; this is the visible half, and the
+                   two are not interchangeable. Wording comes from the core
+                   (dimmy_ai_notice_text) so all three platforms say the same
+                   thing in the same six languages. Shown only when a recap
+                   actually exists — code-behind reveals it with the cards. -->
+              <Border x:Name="AiNoticeCard" Visibility="Collapsed"
+                      Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="12,10">
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                  <FontIcon Glyph="&#xE9CE;" FontSize="14" VerticalAlignment="Top"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                  <StackPanel Spacing="1">
+                    <TextBlock x:Name="AiNoticeTitle" FontSize="13" FontWeight="SemiBold"
+                               Text="AI-generated summary"/>
+                    <TextBlock x:Name="AiNoticeHint" FontSize="12" TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               Text="Review it before sharing."/>
+                  </StackPanel>
+                </StackPanel>
+              </Border>
+
               <Border x:Name="ContextCard" Visibility="Collapsed"
                       Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                       BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"

@@ -319,7 +319,8 @@ async fn save_recap(args: serde_json::Value, cfg: &Config) -> Result<serde_json:
     }
 
     let path = dir.join("recap.md");
-    tokio::fs::write(&path, markdown)
+    let marked = mark_ai_generated(markdown);
+    tokio::fs::write(&path, &marked)
         .await
         .map_err(|e| Error::internal(&format!("write recap.md: {}", e)))?;
 
@@ -361,6 +362,57 @@ async fn get_recap_template(cfg: &Config) -> Result<serde_json::Value, Error> {
         _ => DEFAULT_TEMPLATE.to_string(),
     };
     Ok(text_result(&body))
+}
+
+/// Mirror of `core::meeting::AI_GENERATED_TAG`. See `mark_ai_generated` below.
+const AI_GENERATED_TAG: &str = "<!-- dimmy-ai-generated: true; by: Dimmy -->";
+
+/// Mirror of `core::meeting::mark_ai_generated`. Duplicated for the same
+/// reason as `parse_first_h1`: mcp-server stays dependency-free from the core
+/// crate. The two implementations MUST stay in sync.
+///
+/// A recap arriving through this tool is written by an LLM in Claude Desktop,
+/// so it is every bit as synthetic as one Dimmy generates itself and carries
+/// the same AI Act art. 50(2) marking obligation. Forgetting it here would
+/// leave a hole exactly where the text is MOST likely to be pasted somewhere
+/// public.
+fn mark_ai_generated(md: &str) -> String {
+    if md.contains("dimmy-ai-generated:") || md.trim().is_empty() {
+        return md.to_string();
+    }
+    let mut out = String::with_capacity(md.len() + AI_GENERATED_TAG.len() + 2);
+    let mut lines = md.lines();
+    let mut inserted = false;
+    for line in lines.by_ref() {
+        out.push_str(line);
+        out.push('\n');
+        if line.trim().is_empty() {
+            continue;
+        }
+        if line.trim_start().starts_with("# ") {
+            out.push_str(AI_GENERATED_TAG);
+            out.push('\n');
+        } else {
+            out.clear();
+            out.push_str(AI_GENERATED_TAG);
+            out.push('\n');
+            out.push_str(line);
+            out.push('\n');
+        }
+        inserted = true;
+        break;
+    }
+    if !inserted {
+        return md.to_string();
+    }
+    for line in lines {
+        out.push_str(line);
+        out.push('\n');
+    }
+    if !md.ends_with('\n') {
+        out.pop();
+    }
+    out
 }
 
 /// Mirror of `core::meeting::parse_recap_title`. Duplicated to avoid
@@ -555,5 +607,36 @@ mod tests {
         assert!(parse_first_h1(&md).is_none());
         // Empty after the `# ` also rejected.
         assert!(parse_first_h1("# ").is_none());
+    }
+
+    #[test]
+    fn mark_ai_generated_matches_the_core_rules() {
+        // Must stay byte-identical in behaviour to core::meeting::
+        // mark_ai_generated. Title-bearing recap: tag goes on line 2 so the
+        // H1 stays first and parse_first_h1 still finds it.
+        let with_title = "# Titolo\n\n## Context\n\nTesto.\n";
+        let out = mark_ai_generated(with_title);
+        let mut lines = out.lines();
+        assert_eq!(lines.next(), Some("# Titolo"));
+        assert_eq!(lines.next(), Some(AI_GENERATED_TAG));
+        assert_eq!(parse_first_h1(&out).as_deref(), Some("Titolo"));
+
+        // No title: tag on top, which costs nothing since parse_first_h1
+        // already returns None there.
+        let no_title = "## Context\n\nTesto.\n";
+        assert!(mark_ai_generated(no_title).starts_with(AI_GENERATED_TAG));
+
+        // Idempotent: Claude Desktop can re-save the same recap.
+        let once = mark_ai_generated(with_title);
+        assert_eq!(mark_ai_generated(&once), once);
+        assert_eq!(once.matches("dimmy-ai-generated:").count(), 1);
+
+        // Never drops content.
+        for line in with_title.lines() {
+            assert!(out.contains(line), "lost line {line:?}");
+        }
+
+        // Empty input is left alone.
+        assert_eq!(mark_ai_generated(""), "");
     }
 }

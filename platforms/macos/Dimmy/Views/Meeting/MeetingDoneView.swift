@@ -218,9 +218,42 @@ struct MeetingDoneView: View {
         }
     }
 
+    /// EU AI Act art. 50(5): information that is clear and distinguishable to
+    /// a HUMAN. The machine-readable half is the invisible dimmy-ai-generated
+    /// tag the core writes into recap.md; the two are not interchangeable.
+    /// Wording comes from the core so all three platforms agree, in six
+    /// languages. Shown only when a recap actually exists — a failure message
+    /// is Dimmy talking, not generated content, and marking it would train the
+    /// user to ignore the notice where it matters.
+    private var aiNotice: some View {
+        let lang = Locale.current.language.languageCode?.identifier ?? "en"
+        let title = DimmyCore.shared.aiNoticeText(kind: "title", lang: lang)
+            ?? "AI-generated summary"
+        let hint = DimmyCore.shared.aiNoticeText(kind: "hint", lang: lang)
+            ?? "Review it before sharing."
+        return HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "sparkles")
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title).font(.system(size: 13, weight: .semibold))
+                Text(hint).font(.system(size: 12)).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.04)))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8).stroke(Color.primary.opacity(0.10), lineWidth: 1)
+        )
+    }
+
     private var recapContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
+                if !vm.doneSections.isEmpty && !vm.recapFailed {
+                    aiNotice
+                }
                 if let tldr = vm.doneSections["TLDR"], !tldr.isEmpty {
                     tldrCard(tldr)
                 }

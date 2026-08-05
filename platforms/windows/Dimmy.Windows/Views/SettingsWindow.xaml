@@ -2588,6 +2588,35 @@
                 <HyperlinkButton Content="Open"
                                  NavigateUri="https://dimmy.app/privacy#data" />
               </controls:SettingCard>
+
+              <!-- EU AI Act art. 50(5) asks for information that is clear and
+                   distinguishable, at the latest at first interaction. The
+                   notice above each recap covers the moment of use; this is
+                   the standing explanation, and it says plainly which
+                   surfaces are marked and which are not, because "everything
+                   is AI" would be both false and useless. -->
+              <TextBlock Text="AI TRANSPARENCY"
+                         FontSize="12" FontWeight="SemiBold"
+                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                         CharacterSpacing="40" Margin="2,20,0,8" />
+              <Border Background="{ThemeResource LayerFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="16">
+                <StackPanel Spacing="10">
+                  <TextBlock TextWrapping="Wrap" FontSize="13"
+                             Text="Meeting recaps are written by an AI model. They are new text, not a transcript, so they can be wrong or miss things: read one before you share it. Every recap Dimmy saves carries a marker identifying it as AI-generated, and recaps sent to Notion carry a visible note." />
+                  <TextBlock TextWrapping="Wrap" FontSize="13"
+                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                             Text="Dictation is not marked. Transcribing what you said, removing filler words and translating do not change the meaning of your words, so stamping them would be noise in your own documents." />
+                </StackPanel>
+              </Border>
+              <controls:SettingCard Glyph="&#xE9CE;"
+                                    Label="How Dimmy uses AI"
+                                    InfoTip="Which parts of Dimmy generate text, which only transcribe it, and what gets marked."
+                                    HelpUrl="https://dimmy.app/help/telemetry">
+                <HyperlinkButton Content="Open"
+                                 NavigateUri="https://dimmy.app/privacy#ai" />
+              </controls:SettingCard>
             </StackPanel>
 
             <!-- ═══ License ═══ -->

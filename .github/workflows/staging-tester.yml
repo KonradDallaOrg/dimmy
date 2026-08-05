@@ -304,6 +304,22 @@ jobs:
       # Without this step the wizard fails with rc -2 ("binary not
       # found in app bundle"). The mcp-server crate is small (~1.2 MB)
       # and has no llama/whisper deps, so it builds in seconds.
+      # The Silero VAD model ships inside the .app (Contents/Resources) rather
+      # than being downloaded: 885 KB, so it carries the notarised signature
+      # and works offline on first run. The failure mode if it goes missing is
+      # SILENT — core/src/silero.rs just falls back to the weaker RNNoise gate
+      # with nothing in the log to notice — so fail the build loudly instead.
+      - name: Verify Silero VAD model is bundled
+        run: |
+          APP_PATH="platforms/macos/build/derived/Build/Products/Release/Dimmy.app"
+          MODEL="$APP_PATH/Contents/Resources/ggml-silero-v6.2.0.bin"
+          if [ ! -f "$MODEL" ]; then
+            echo "error: Silero VAD model missing from the app bundle" >&2
+            echo "hint: the 'Bundle Silero VAD model' Xcode phase did not run," >&2
+            echo "      or core/assets/ggml-silero-v6.2.0.bin is absent" >&2
+            exit 1
+          fi
+          echo "[verify] Silero VAD model bundled ($(stat -f%z "$MODEL") bytes)"
       - name: Build dimmy-mcp for aarch64-apple-darwin
         working-directory: mcp-server
         run: cargo build --release --target aarch64-apple-darwin
