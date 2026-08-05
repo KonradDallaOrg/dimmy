@@ -172,6 +172,17 @@ public static class MeetingRecapHelpers
 
     private const string TypeTagPrefix = "<!-- dimmy-type:";
 
+    /// <summary>
+    /// True when the line is one of Dimmy's internal `&lt;!-- dimmy-* --&gt;`
+    /// markers. Deliberately generic: `dimmy-type` drives the chip and
+    /// `dimmy-ai-generated` is the AI Act art. 50(2) stamp, and neither must
+    /// ever reach a visible card.
+    /// </summary>
+    internal static bool DimmyMarkerLine(string trimmed) =>
+        trimmed.StartsWith("<!--", StringComparison.Ordinal)
+        && trimmed.EndsWith("-->", StringComparison.Ordinal)
+        && trimmed.IndexOf("dimmy-", StringComparison.OrdinalIgnoreCase) >= 0;
+
     /// <summary>The list of selectable type keys (excluding "auto"), for the
     /// auto-classify instruction.</summary>
     private static string ClassifierKeyList() =>
@@ -546,6 +557,13 @@ public static class MeetingRecapHelpers
                 }
             }
 
+            // Any other `<!-- dimmy-* -->` marker in the preamble is swallowed
+            // rather than rendered. Today that is the AI Act art. 50(2) tag
+            // written by core::meeting::mark_ai_generated; the rule is generic
+            // so the next internal marker does not leak into a visible card
+            // before someone remembers to add a case here.
+            if (currentKey == null && DimmyMarkerLine(trimmed)) continue;
+
             if (currentKey != null) sb.AppendLine(line);
         }
         Flush();
@@ -570,9 +588,11 @@ public static class MeetingRecapHelpers
                     body, pattern, "",
                     System.Text.RegularExpressions.RegexOptions.Multiline).Trim();
             }
-            // Strip the invisible type tag so it never lands in a visible card.
+            // Strip every invisible dimmy-* marker so none lands in a visible
+            // card (the type chip and the AI Act art. 50(2) stamp both live in
+            // the preamble).
             body = System.Text.RegularExpressions.Regex.Replace(
-                body, @"^\s*<!--\s*dimmy-type:.*?-->\s*(\r?\n)?", "",
+                body, @"^\s*<!--\s*dimmy-[^>]*?-->\s*(\r?\n)?", "",
                 System.Text.RegularExpressions.RegexOptions.Multiline
                 | System.Text.RegularExpressions.RegexOptions.IgnoreCase).Trim();
             if (body.Length > 0) result["TLDR"] = body;

@@ -233,6 +233,17 @@ enum MeetingPostProcessService {
 
     static let typeTagPrefix = "<!-- dimmy-type:"
 
+    /// True when the line is one of Dimmy's internal `<!-- dimmy-* -->`
+    /// markers. Deliberately generic so the next internal marker does not leak
+    /// into a visible card before someone remembers to add a case: today it
+    /// catches `dimmy-type` (the chip) and `dimmy-ai-generated` (the AI Act
+    /// art. 50(2) stamp written by the Rust core).
+    static func isDimmyMarkerLine(_ line: String) -> Bool {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        return t.hasPrefix("<!--") && t.hasSuffix("-->")
+            && t.lowercased().contains("dimmy-")
+    }
+
     // MARK: - Recap export folder (Obsidian / Drive / Dropbox sync)
 
     /// UserDefaults key for the recap export folder. Empty = disabled.
@@ -503,9 +514,11 @@ enum MeetingPostProcessService {
             }
         }
         if hits.isEmpty {
-            // Drop any type-tag line so it never shows inside the TLDR card.
+            // Drop every internal dimmy-* marker line so none shows inside the
+            // TLDR card: the type tag drives the chip, dimmy-ai-generated is
+            // the AI Act art. 50(2) stamp, and neither is content.
             let cleaned = raw.split(separator: "\n", omittingEmptySubsequences: false)
-                .filter { !$0.trimmingCharacters(in: .whitespaces).lowercased().hasPrefix(typeTagPrefix) }
+                .filter { !isDimmyMarkerLine(String($0)) }
                 .joined(separator: "\n")
             var fallback = ["TLDR": cleaned.trimmingCharacters(in: .whitespacesAndNewlines)]
             if let capturedTitle { fallback["__TITLE__"] = capturedTitle }

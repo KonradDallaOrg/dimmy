@@ -28,6 +28,7 @@ struct MacPrivacyPage: View {
             // docs/dev/settings-map.md "Vuoi" = A-sez. Simple Privacy
             // shows the promise, the feedback form, and resources.
             feedbackGroup
+            aiTransparencyGroup
             resourcesGroup
 
             if appState.showAdvanced {
@@ -282,6 +283,41 @@ struct MacPrivacyPage: View {
         default:
             feedbackStatus = "Couldn't send right now. Try again later."
             feedbackNeedsEnable = false
+        }
+    }
+
+    // MARK: AI transparency
+
+    /// EU AI Act art. 50(5) asks for information that is clear and
+    /// distinguishable, at the latest at first interaction. The notice above
+    /// each recap covers the moment of use; this is the standing explanation.
+    /// It says plainly which surfaces are marked and which are not, because
+    /// "everything is AI" would be both false and useless.
+    private var aiTransparencyGroup: some View {
+        Group {
+            MacGroupLabel(text: "AI transparency")
+            MacTile {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Meeting recaps are written by an AI model. They are new text, not a transcript, so they can be wrong or miss things: read one before you share it. Every recap Dimmy saves carries a marker identifying it as AI-generated, and recaps sent to Notion carry a visible note.")
+                        .font(.system(size: 13))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("Dictation is not marked. Transcribing what you said, removing filler words and translating do not change the meaning of your words, so stamping them would be noise in your own documents.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.vertical, 4)
+                MacRow(
+                    "How Dimmy uses AI",
+                    description: "Which parts generate text, which only transcribe",
+                    showsDivider: false
+                ) {
+                    Link(destination: URL(string: "https://dimmy.app/privacy#ai")!) {
+                        Text("Open ›")
+                            .font(.system(size: 12))
+                    }
+                }
+            }
         }
     }
 

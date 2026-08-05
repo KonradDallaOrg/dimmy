@@ -724,8 +724,35 @@ public sealed partial class MeetingWindow : Window
         SetState(MeetingState.Recording);
     }
 
+    /// <summary>
+    /// Reveal the AI-generated notice above the recap cards, with the wording
+    /// the Rust core owns so Windows, macOS and Linux stay identical. Falls
+    /// back to the English already in the XAML if the FFI returns nothing.
+    /// </summary>
+    private void ShowAiNotice()
+    {
+        if (AiNoticeCard == null) return;
+        try
+        {
+            // Same source the consent notice uses (App.xaml.cs): the OS UI
+            // language, not the STT language. The notice speaks to the person
+            // reading the screen, not to the audio.
+            var lang = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+            var title = Interop.DimmyNative.AiNoticeText("title", lang);
+            var hint = Interop.DimmyNative.AiNoticeText("hint", lang);
+            if (!string.IsNullOrWhiteSpace(title)) AiNoticeTitle.Text = title;
+            if (!string.IsNullOrWhiteSpace(hint)) AiNoticeHint.Text = hint;
+        }
+        catch
+        {
+            // Wording is a nicety; the notice showing at all is the obligation.
+        }
+        AiNoticeCard.Visibility = Visibility.Visible;
+    }
+
     private void ClearDoneCards()
     {
+        AiNoticeCard.Visibility = Visibility.Collapsed;
         ContextCard.Visibility = Visibility.Collapsed;
         TldrCard.Visibility = Visibility.Collapsed;
         HighlightsCard.Visibility = Visibility.Collapsed;
@@ -1575,6 +1602,11 @@ public sealed partial class MeetingWindow : Window
     private void ApplyDoneSections(Dictionary<string, string> sections)
     {
         _lastDoneSections = sections;
+        // EU AI Act art. 50(5). Only here, not in ShowDoneFallback: that path
+        // renders an error message, which is Dimmy talking, not AI-generated
+        // content. Marking it would be noise and would train the user to
+        // ignore the notice where it actually matters.
+        ShowAiNotice();
         // A successful recap clears any leftover failure CTAs from a
         // prior attempt (e.g. a regenerate that finally worked).
         if (OpenRecapSettingsButton != null)

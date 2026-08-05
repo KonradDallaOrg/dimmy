@@ -592,4 +592,47 @@ public class MeetingRecapHelpersTests
         Assert.False(result.EndsWith(".") || result.EndsWith(" "),
             "filename stem must not end with a dot or space");
     }
+
+    // ── Internal dimmy-* markers must never reach a visible card ──────
+
+    [Fact]
+    public void Parse_swallows_the_ai_generated_marker_in_the_preamble()
+    {
+        // core::meeting::mark_ai_generated stamps this on every recap for EU
+        // AI Act art. 50(2). It is machine-readable metadata, not content: if
+        // it reached the TLDR card the user would read a raw HTML comment.
+        const string raw =
+            "# Autenticazione tag NFC\n"
+            + "<!-- dimmy-ai-generated: true; by: Dimmy -->\n"
+            + "<!-- dimmy-type: technical -->\n"
+            + "\n"
+            + "Il corpo del riassunto.";
+        var sections = MeetingRecapHelpers.ParseStructuredRecap(raw);
+
+        Assert.Equal("Autenticazione tag NFC", sections["__TITLE__"]);
+        Assert.Equal("technical", sections["__TYPE__"]);
+        foreach (var value in sections.Values)
+        {
+            Assert.DoesNotContain("dimmy-ai-generated", value);
+            Assert.DoesNotContain("<!--", value);
+        }
+        Assert.Contains("Il corpo del riassunto.", sections["TLDR"]);
+    }
+
+    [Fact]
+    public void DimmyMarkerLine_recognises_internal_markers_only()
+    {
+        Assert.True(MeetingRecapHelpers.DimmyMarkerLine("<!-- dimmy-type: technical -->"));
+        Assert.True(MeetingRecapHelpers.DimmyMarkerLine("<!-- dimmy-ai-generated: true; by: Dimmy -->"));
+        // A future marker is caught without anyone editing this rule, which is
+        // the point of keeping it generic.
+        Assert.True(MeetingRecapHelpers.DimmyMarkerLine("<!-- dimmy-anything-else: 1 -->"));
+
+        // Not ours, or not a comment: must be left alone as content.
+        Assert.False(MeetingRecapHelpers.DimmyMarkerLine("<!-- TODO: something -->"));
+        Assert.False(MeetingRecapHelpers.DimmyMarkerLine("dimmy-type: technical"));
+        Assert.False(MeetingRecapHelpers.DimmyMarkerLine("Testo che cita dimmy-type a meta' riga"));
+        Assert.False(MeetingRecapHelpers.DimmyMarkerLine(""));
+    }
+
 }
