@@ -5152,6 +5152,17 @@ pub unsafe extern "C" fn dimmy_notion_send_recap(
     let transcript = std::fs::read_to_string(dir.join("transcripts.txt")).unwrap_or_default();
     let title = crate::notion::meeting_dir_to_title(&dir, &transcript);
 
+    // A Notion page is the surface where a recap is most likely to be shared
+    // onward, and Notion's markdown conversion eats HTML comments — so the
+    // machine-readable marker would be lost exactly there. Swap it for the
+    // visible notice (AI Act art. 50) and drop Dimmy's internal tags.
+    let lang = state()
+        .language
+        .lock()
+        .map(|l| l.clone())
+        .unwrap_or_else(|_| "en".to_string());
+    let markdown = crate::meeting::recap_for_sharing(&markdown, &lang);
+
     let rt = match tokio::runtime::Runtime::new() {
         Ok(r) => r,
         Err(_) => return -1,
@@ -5752,6 +5763,39 @@ pub unsafe extern "C" fn dimmy_consent_text(
             Some(s) => s,
             None => return -1,
         },
+    };
+    write_to_buf(&text, out_buf, buf_len)
+}
+
+/// Localized AI-Act art. 50(5) notice shown above a recap in the UI.
+/// `kind` is "title" or "hint". Returns the byte length written, -1 on bad
+/// args or an unknown kind.
+///
+/// Separate from `dimmy_consent_text` on purpose: that one is the
+/// recording-consent dialog, a different obligation to a different audience.
+/// Sharing an FFI entry between them would be convenient and wrong.
+///
+/// # Safety
+/// `kind_ptr` and `lang_ptr` must be valid null-terminated UTF-8 C strings;
+/// `out_buf` must point to at least `buf_len` writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_ai_notice_text(
+    kind_ptr: *const c_char,
+    lang_ptr: *const c_char,
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if kind_ptr.is_null() || lang_ptr.is_null() {
+        return -1;
+    }
+    let kind = match CStr::from_ptr(kind_ptr).to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let lang = CStr::from_ptr(lang_ptr).to_str().unwrap_or("en");
+    let text = match crate::meeting::ai_notice_text(kind, lang) {
+        Some(s) => s,
+        None => return -1,
     };
     write_to_buf(&text, out_buf, buf_len)
 }

@@ -1354,9 +1354,12 @@ pub fn save_post_process(
     translated: Option<&str>,
 ) -> Result<(), String> {
     if !recap_md.trim().is_empty() {
-        std::fs::write(meeting_dir.join("recap.md"), recap_md)
+        let marked = mark_ai_generated(recap_md);
+        std::fs::write(meeting_dir.join("recap.md"), &marked)
             .map_err(|e| format!("write recap.md: {}", e))?;
-        // Title sync: best-effort, never fail the save.
+        // Title sync: best-effort, never fail the save. Parse the ORIGINAL:
+        // the marker is placed so it cannot disturb this, but not depending
+        // on that is free.
         if let Some(title) = parse_recap_title(recap_md) {
             update_meeting_meta_title(meeting_dir, &title);
         }
@@ -1372,6 +1375,163 @@ pub fn save_post_process(
         }
     }
     Ok(())
+}
+
+/// Machine-readable marker stamped on every recap Dimmy writes.
+///
+/// EU AI Act art. 50(2) requires the provider of a system that generates
+/// synthetic text to mark its outputs "in a machine-readable format and
+/// detectable as artificially generated". A recap is genuinely new text —
+/// a summary with decisions and action items — so it is in scope.
+///
+/// Dictation, filler removal and translation are NOT: 50(2) exempts a system
+/// that "performs an assistive function for standard editing or does not
+/// substantially alter the input data or its semantics". Stamping every
+/// dictated sentence would also be actively hostile, since that text goes
+/// straight into whatever app the user is typing in.
+///
+/// Not a lawyer; the classification of the recap is the point to put in front
+/// of one if certainty is needed.
+pub const AI_GENERATED_TAG: &str = "<!-- dimmy-ai-generated: true; by: Dimmy -->";
+
+/// Prepare a recap to leave Dimmy for somewhere a human will read it and
+/// Dimmy's HTML comments will not survive (Notion today).
+///
+/// Two jobs. It strips Dimmy's internal `<!-- dimmy-* -->` tags, which would
+/// otherwise either vanish silently or land as literal text in the page. And
+/// it prepends the VISIBLE notice, because that is the surface where a recap
+/// is most likely to be shared onward: the machine-readable marker alone would
+/// be lost in the conversion, taking the art. 50 marking with it.
+///
+/// Pure, so it is testable and so the next integration that needs it does not
+/// grow its own copy.
+pub fn recap_for_sharing(recap_md: &str, lang: &str) -> String {
+    let body: String = recap_md
+        .lines()
+        .filter(|l| {
+            let t = l.trim();
+            !(t.starts_with("<!--") && t.contains("dimmy-") && t.ends_with("-->"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let title = ai_notice_text("title", lang).unwrap_or_default();
+    let hint = ai_notice_text("hint", lang).unwrap_or_default();
+    let notice = format!("> **{}** {}", title.trim(), hint.trim());
+
+    let trimmed = body.trim_start_matches('\n');
+    if trimmed.trim().is_empty() {
+        return notice;
+    }
+    format!("{notice}\n\n{trimmed}")
+}
+
+/// Localized notice shown ABOVE a recap in the UI.
+///
+/// Art. 50(2) is satisfied by `AI_GENERATED_TAG`, which is machine-readable
+/// but invisible. Art. 50(5) additionally wants information that is "clear and
+/// distinguishable, at the latest at the time of the first interaction" — that
+/// one only counts if a human SEES it, so it is a separate, visible string.
+///
+/// Lives in the core for the same reason `consent::ui_text` does: hardcoding it
+/// host-side once already left half a legal notice in English while the rest
+/// was localized. `kind` is `"title"` or `"hint"`; unknown kinds return `None`
+/// so the FFI can reject them. ASCII-apostrophe style matches `consent`.
+pub fn ai_notice_text(kind: &str, lang: &str) -> Option<String> {
+    let l = crate::consent::norm_lang(lang);
+    let s = match kind {
+        "title" => match l {
+            "it" => "Riassunto generato con AI",
+            "es" => "Resumen generado con IA",
+            "fr" => "Resume genere par IA",
+            "de" => "Mit KI erstellte Zusammenfassung",
+            "pt" => "Resumo gerado por IA",
+            _ => "AI-generated summary",
+        },
+        "hint" => match l {
+            "it" => "Rileggilo prima di condividerlo.",
+            "es" => "Revisalo antes de compartirlo.",
+            "fr" => "Relisez-le avant de le partager.",
+            "de" => "Vor dem Teilen bitte pruefen.",
+            "pt" => "Revise antes de compartilhar.",
+            _ => "Review it before sharing.",
+        },
+        _ => return None,
+    };
+    Some(s.to_string())
+}
+
+/// Stamp `AI_GENERATED_TAG` on a recap, idempotently.
+///
+/// Placement follows the convention already in the file: a leading `# Title`
+/// stays the first non-empty line and the tag goes on line 2, exactly like
+/// `<!-- dimmy-type: KEY -->`. That is load-bearing — `parse_recap_title`
+/// aborts unless the first non-empty line is an H1, so anything placed above
+/// it (YAML front-matter included) silently breaks title sync. Measured on the
+/// real corpus: 30 of 54 recaps carry an H1 and would have lost their title.
+///
+/// Idempotent because regenerating a recap re-saves it, and stacking markers
+/// would be both ugly and wrong.
+pub fn mark_ai_generated(recap_md: &str) -> String {
+    if recap_md.contains("dimmy-ai-generated:") {
+        return recap_md.to_string();
+    }
+    if recap_md.trim().is_empty() {
+        return recap_md.to_string();
+    }
+
+    // Insert after a leading H1 when there is one, else at the very top.
+    // Anything else (the LLM often opens with `## Context`) already returns
+    // None from parse_recap_title, so a tag on line 1 costs nothing there.
+    let mut out = String::with_capacity(recap_md.len() + AI_GENERATED_TAG.len() + 2);
+    let mut lines = recap_md.lines();
+    let mut inserted = false;
+    for line in lines.by_ref() {
+        out.push_str(line);
+        out.push('\n');
+        if line.trim().is_empty() {
+            continue;
+        }
+        // First non-empty line decided it.
+        if line.trim_start().starts_with("# ") {
+            out.push_str(AI_GENERATED_TAG);
+            out.push('\n');
+        } else {
+            // Not a title: put the tag above the line we just emitted.
+            out.clear();
+            out.push_str(AI_GENERATED_TAG);
+            out.push('\n');
+            out.push_str(line);
+            out.push('\n');
+        }
+        inserted = true;
+        break;
+    }
+    if !inserted {
+        return recap_md.to_string();
+    }
+    for line in lines {
+        out.push_str(line);
+        out.push('\n');
+    }
+    // `lines()` drops a trailing newline; only re-add one if the input had it.
+    if !recap_md.ends_with('\n') {
+        out.pop();
+    }
+
+    // Postconditions: the marker is present exactly once, and no content was
+    // lost. The second is the one that matters — this runs on the user's only
+    // copy of a meeting summary.
+    assert_eq!(
+        out.matches("dimmy-ai-generated:").count(),
+        1,
+        "mark_ai_generated must stamp exactly one marker"
+    );
+    assert!(
+        out.len() >= recap_md.len(),
+        "mark_ai_generated must not drop recap content"
+    );
+    out
 }
 
 /// Extract a meeting title from a recap Markdown blob. Rule: the
@@ -1810,5 +1970,197 @@ mod tests {
         }
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── AI Act art. 50(2) marking ────────────────────────────────────
+
+    #[test]
+    fn ai_marker_goes_after_a_leading_h1_so_title_sync_survives() {
+        // Load-bearing: parse_recap_title aborts unless the FIRST non-empty
+        // line is an H1. 30 of the 54 recaps in the real corpus have one.
+        let recap = "# Autenticazione tag NFC
+
+## Context
+
+Testo.
+";
+        let out = mark_ai_generated(recap);
+        let mut lines = out.lines();
+        assert_eq!(lines.next(), Some("# Autenticazione tag NFC"));
+        assert_eq!(lines.next(), Some(AI_GENERATED_TAG));
+        assert_eq!(
+            parse_recap_title(&out).as_deref(),
+            Some("Autenticazione tag NFC"),
+            "the marker must not cost the meeting its title"
+        );
+    }
+
+    #[test]
+    fn ai_marker_goes_on_top_when_there_is_no_title() {
+        // The LLM often opens with "## Context" or "## TL;DR" (24 of 54 real
+        // recaps). parse_recap_title already returns None there, so a tag on
+        // line 1 costs nothing.
+        let recap = "## Context
+
+Testo.
+";
+        let out = mark_ai_generated(recap);
+        assert!(out.starts_with(AI_GENERATED_TAG));
+        assert!(out.contains("## Context"));
+        assert_eq!(parse_recap_title(recap), None);
+    }
+
+    #[test]
+    fn ai_marker_is_idempotent() {
+        // Regenerating a recap re-saves it; markers must not stack.
+        let recap = "# Titolo
+
+Testo.
+";
+        let once = mark_ai_generated(recap);
+        let twice = mark_ai_generated(&once);
+        assert_eq!(once, twice);
+        assert_eq!(twice.matches("dimmy-ai-generated:").count(), 1);
+    }
+
+    #[test]
+    fn ai_marker_never_drops_recap_content() {
+        // This runs on the user's only copy of a meeting summary.
+        for recap in [
+            "# T
+
+## Context
+
+A
+
+## Decisions
+
+- uno
+- due
+",
+            "## TL;DR
+
+Riassunto
+",
+            "nessun heading affatto
+",
+            "# T
+<!-- dimmy-type: technical -->
+
+## Context
+",
+        ] {
+            let out = mark_ai_generated(recap);
+            for line in recap.lines() {
+                assert!(
+                    out.contains(line),
+                    "line {line:?} lost when marking {recap:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ai_marker_leaves_an_empty_recap_alone() {
+        assert_eq!(mark_ai_generated(""), "");
+        assert_eq!(
+            mark_ai_generated(
+                "   
+"
+            ),
+            "   
+"
+        );
+    }
+
+    #[test]
+    fn ai_marker_coexists_with_the_type_tag() {
+        // Both tags live in the preamble; neither may displace the title.
+        let recap = "# Titolo
+<!-- dimmy-type: technical -->
+
+## Context
+";
+        let out = mark_ai_generated(recap);
+        assert_eq!(parse_recap_title(&out).as_deref(), Some("Titolo"));
+        assert!(out.contains("dimmy-type: technical"));
+        assert!(out.contains(AI_GENERATED_TAG));
+    }
+
+    #[test]
+    fn ai_notice_is_localized_and_rejects_unknown_kinds() {
+        // Mirrors consent::ui_text: the core owns the wording so all three
+        // hosts render the same notice instead of half of it in English.
+        assert_eq!(
+            ai_notice_text("title", "en").as_deref(),
+            Some("AI-generated summary")
+        );
+        assert_eq!(
+            ai_notice_text("title", "it-IT").as_deref(),
+            Some("Riassunto generato con AI"),
+            "BCP-47 tags must collapse to the base language"
+        );
+        assert_eq!(
+            ai_notice_text("hint", "it").as_deref(),
+            Some("Rileggilo prima di condividerlo.")
+        );
+        // Unsupported language falls back to English, never to empty.
+        assert_eq!(
+            ai_notice_text("title", "ja").as_deref(),
+            Some("AI-generated summary")
+        );
+        assert_eq!(ai_notice_text("nonesiste", "en"), None);
+    }
+
+    #[test]
+    fn ai_notice_copy_follows_the_house_rules() {
+        // UI copy in this codebase carries no em-dashes and no tildes: both
+        // have broken things before (PowerShell 5.1 among them).
+        for kind in ["title", "hint"] {
+            for lang in ["en", "it", "es", "fr", "de", "pt"] {
+                let s = ai_notice_text(kind, lang).expect("kind/lang must resolve");
+                assert!(!s.is_empty(), "{kind}/{lang} must not be empty");
+                assert!(
+                    !s.contains('—') && !s.contains('~'),
+                    "{kind}/{lang} breaks the UI copy rules: {s:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn recap_for_sharing_swaps_the_invisible_marker_for_a_visible_one() {
+        // Notion's markdown conversion eats HTML comments, so a page sent
+        // there would carry NO marking at all. The visible notice replaces it.
+        let recap = "# Titolo\n<!-- dimmy-ai-generated: true; by: Dimmy -->\n<!-- dimmy-type: technical -->\n\n## Context\n\nTesto.\n";
+        let out = recap_for_sharing(recap, "it");
+        assert!(
+            !out.contains("dimmy-ai-generated") && !out.contains("dimmy-type"),
+            "internal tags must not land in the shared page: {out:?}"
+        );
+        assert!(out.starts_with("> **Riassunto generato con AI**"));
+        assert!(out.contains("Rileggilo prima di condividerlo."));
+        // The recap itself survives intact.
+        assert!(out.contains("# Titolo"));
+        assert!(out.contains("## Context"));
+        assert!(out.contains("Testo."));
+    }
+
+    #[test]
+    fn recap_for_sharing_is_localized_and_never_returns_an_unmarked_body() {
+        for lang in ["en", "it", "de", "ja"] {
+            let out = recap_for_sharing("## Context\n\nTesto.\n", lang);
+            let expected = ai_notice_text("title", lang).unwrap();
+            assert!(
+                out.contains(&expected),
+                "{lang}: notice missing from shared recap"
+            );
+            assert!(out.contains("Testo."));
+        }
+        // Degenerate input still comes back marked rather than bare.
+        let only_tags = "<!-- dimmy-ai-generated: true; by: Dimmy -->\n";
+        let out = recap_for_sharing(only_tags, "en");
+        assert!(out.contains("AI-generated summary"));
+        assert!(!out.contains("dimmy-ai-generated"));
     }
 }

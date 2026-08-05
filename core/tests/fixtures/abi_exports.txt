@@ -1,6 +1,7 @@
 # ABI snapshot for dimmy_lib (cdylib). DO NOT EDIT BY HAND.
 # Regenerate with: UPDATE_ABI=1 cargo test --release --test abi_snapshot --features local-stt
 # See core/tests/abi_snapshot.rs for what this guards against.
+dimmy_ai_notice_text
 dimmy_autostart_is_enabled
 dimmy_autostart_set_enabled
 dimmy_build_flavor
