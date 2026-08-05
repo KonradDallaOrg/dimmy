@@ -35,17 +35,23 @@
 //! Cost: 150 ms median per 3 s window against the old gate's 16 ms. Both are
 //! noise against a 3000 ms budget.
 //!
-//! # Degradation
+//! # Shipping and degradation
 //!
-//! The model is an 885 KB download. When it is absent, unreadable, or this
-//! build has no `local-stt`, every entry point returns `None` and the caller
-//! keeps the old RNNoise+energy path. A fresh install therefore still has a
-//! working gate before the model lands.
+//! The model is 885 KB and rides INSIDE the signed installer / DMG, next to
+//! the executable. No runtime download: at 0.8% of the installer it is not
+//! worth a background thread, a not-yet-available state and a network failure
+//! mode. (The whisper models are fetched because they are 0.5-1.1 GB; copying
+//! that pattern here was a reflex, and the wrong one.)
+//!
+//! When the file is absent anyway — a build that did not bundle it, an
+//! unreadable copy, or no `local-stt` — every entry point returns `None` and
+//! the caller keeps the RNNoise+energy path. The gate always works.
 
 /// Filename in the shared model directory.
 pub const MODEL_FILE: &str = "ggml-silero-v6.2.0.bin";
 
-/// Where whisper.cpp publishes the ggml-converted VAD models.
+/// Upstream source, kept for provenance: this is where `core/assets/` got the
+/// bundled copy from. Nothing downloads at runtime.
 pub const MODEL_URL: &str =
     "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin";
 
@@ -58,12 +64,32 @@ const THRESHOLD: f32 = 0.5;
 /// Sample rate the model expects. Callers must downsample first.
 pub const REQUIRED_RATE: u32 = 16_000;
 
-/// Full path to the model in the shared model directory.
+/// Where the model actually is.
+///
+/// SHIPPED first: at 885 KB it rides inside the signed installer / DMG next to
+/// the executable, so it is present on first run, works offline, and carries
+/// the installer's signature. That is the whole reason there is no download
+/// path here — the whisper models are fetched because they are 0.5-1.1 GB, and
+/// copying that pattern for a file smaller than an icon would have bought a
+/// background thread, a not-yet-available state and a network failure mode for
+/// nothing.
+///
+/// The model directory is still checked as a fallback so a developer (or a
+/// user with an older install) can drop the file in by hand.
 pub fn model_path() -> std::path::PathBuf {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let shipped = dir.join(MODEL_FILE);
+            if shipped.is_file() {
+                return shipped;
+            }
+        }
+    }
     crate::local_stt::model_path(MODEL_FILE)
 }
 
-/// Is the model on disk?
+/// Is the model on disk? False in a build that did not bundle it, which is a
+/// supported state: the caller keeps the RNNoise+energy fallback.
 pub fn model_present() -> bool {
     model_path().is_file()
 }
@@ -162,19 +188,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn model_path_sits_next_to_the_whisper_models() {
+    fn model_path_prefers_the_shipped_copy_then_the_model_dir() {
+        // The bundled file rides next to the executable inside the signed
+        // installer, so it must win: a stale hand-dropped copy in the model
+        // directory must never shadow what we shipped and tested.
         let p = model_path();
         assert!(
             p.ends_with(MODEL_FILE),
-            "model path must end with the filename, got {}",
+            "path must end with the filename, got {}",
             p.display()
         );
-        assert_eq!(
-            p.parent(),
-            crate::local_stt::model_directory().as_path().into(),
-            "the VAD model shares the whisper model directory, so one download \
-             setting covers both"
-        );
+        let exe_dir = std::env::current_exe()
+            .ok()
+            .and_then(|e| e.parent().map(|d| d.to_path_buf()));
+        let shipped_here = exe_dir.as_ref().map(|d| d.join(MODEL_FILE));
+        match shipped_here {
+            Some(s) if s.is_file() => assert_eq!(p, s, "shipped copy must win"),
+            _ => assert_eq!(
+                p,
+                crate::local_stt::model_path(MODEL_FILE),
+                "with nothing shipped, fall back to the model directory"
+            ),
+        }
     }
 
     #[test]

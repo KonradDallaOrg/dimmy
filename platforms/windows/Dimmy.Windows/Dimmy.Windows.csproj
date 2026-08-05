@@ -91,6 +91,22 @@
        or the script wasn't run), this target is a no-op and the build still
        succeeds — backward-compatible. Velopack picks the OutputPath snapshot,
        so the DLL ends up in the installer next to dimmy_lib.dll automatically. -->
+  <!-- Ship the Silero VAD model next to dimmy_lib.dll. 885 KB, so it rides in
+       the signed installer rather than being downloaded: at 0.8% of the
+       installer a runtime fetch would only buy a background thread, a
+       not-yet-available state and a network failure mode. core/src/silero.rs
+       looks here FIRST, so the shipped copy always wins over a hand-dropped
+       one in the model directory. Conditional on Exists() like the ORT copy:
+       a tree without the asset still builds, and the gate falls back to
+       RNNoise+energy. Velopack snapshots OutputPath, so it lands in the
+       installer automatically. -->
+  <Target Name="CopySileroVadModel" AfterTargets="Build">
+    <PropertyGroup>
+      <SileroModelSource>$(MSBuildThisFileDirectory)..\..\..\core\assets\ggml-silero-v6.2.0.bin</SileroModelSource>
+    </PropertyGroup>
+    <Copy SourceFiles="$(SileroModelSource)" DestinationFolder="$(OutputPath)" Condition="Exists('$(SileroModelSource)')" SkipUnchangedFiles="true" />
+  </Target>
+
   <Target Name="CopyOrtDll" AfterTargets="Build">
     <PropertyGroup>
       <!-- Pin must track the ort crate. ort 2.0.0-rc.10 → onnxruntime 1.22.0. -->
