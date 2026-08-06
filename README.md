@@ -72,13 +72,18 @@ Learn more at **[dimmy.app](https://dimmy.app)**.
 - **File load** — drop or pick a WAV / MP3 / MP4 to transcribe offline (whisper or Parakeet) or via cloud, with waveform preview and silence-aware chunking for files above provider limits.
 - **Native per platform** — WinUI 3, SwiftUI, GTK4. Feels right at home, runs fast, uses little memory.
 - **Always-on-top pill overlay** with live waveform visualization and per-state colour feedback.
-- **Cloud STT providers** — Groq (fastest), OpenAI, Deepgram, Google Gemini, or any OpenAI-compatible endpoint.
+- **Realtime streaming dictation** — text appears at the cursor while you speak, over a WebSocket (Deepgram or OpenAI Realtime) on cloud STT, or via local chunked transcription with whisper / Parakeet.
+- **Command mode** — select text anywhere, press a second hotkey, and an LLM rewrites it **in place** instead of pasting something new.
+- **Cloud STT providers** — Groq (fastest), OpenAI (incl. `gpt-transcribe`), Deepgram, Google Gemini, Together, Fireworks, or any OpenAI-compatible endpoint.
 - **LLM post-processing** — 13 styles (correct grammar, summarize, rewrite professionally, translate, custom prompts, and more) with per-app rules that auto-switch style based on which app had focus when you pressed the hotkey.
+- **Use a subscription instead of an API key** — post-processing and recaps can route through a locally installed `claude` or `codex` CLI, so an Anthropic or ChatGPT plan works with no API key. Dimmy never reads their credential files.
+- **Integrations** — send recaps to **Notion**, export them to an **Obsidian**/sync folder, expose your meetings to **Claude Desktop** over MCP (including full-text search), or forward a voice note from **Telegram** and have it transcribed and recapped automatically.
+- **Custom dictionary** — bias STT toward your own names and jargon.
 - **Filler word removal** — strips "um", "basically", "cioè" etc. in six languages.
 - **Searchable history** — SQLite + FTS5 full-text search over every transcription, with audio playback + word timestamps for past dictations.
-- **Privacy-first** — no account; API keys encrypted locally with AES-256-GCM; minimal anonymous opt-out telemetry (no transcripts, no prompts, no IP — full list in [`PRIVACY.md`](PRIVACY.md)).
+- **Privacy-first** — API keys encrypted locally with AES-256-GCM; minimal anonymous opt-out telemetry (no transcripts, no prompts, no IP — full list in [`PRIVACY.md`](PRIVACY.md)). Recording-consent notice + append-only audit log for meetings, and recaps are marked as AI-generated (EU AI Act art. 50).
 - **GPU acceleration** — Metal on Apple Silicon, Vulkan on Windows (all GPU vendors), CUDA on NVIDIA. Parakeet runs on the Apple Neural Engine on M-series Macs at 100–300× realtime.
-- **Multilingual** — auto-detect or pick from 12+ languages.
+- **Multilingual** — 15 languages plus auto-detect. Auto-detect is cloud-only: local whisper's language detection is unreliable enough to be worse than useless (it returns zero segments, or a confident wrong answer).
 - **Configurable hotkey** — toggle or hold-to-record, any modifier combination.
 - **Auto-update** — checks GitHub for new releases, notifies from Settings → About.
 
@@ -141,14 +146,17 @@ Dimmy lives as a tiny always-on overlay — the **pill**. It changes shape, colo
 
 Right-click the pill (or the tray / menu-bar icon) to open **Settings**, which has tabs for:
 
-- **General** — STT mode (local / cloud), language, filler removal
-- **Models** — browse, download, and pick Whisper models
-- **Shortcut** — hotkey combo, toggle vs hold-to-record
-- **Output** — LLM style, tone, translation target, custom prompts
-- **Overlay** — pill position, waveform style, border scheme, idle opacity
-- **History** — searchable transcript archive with stats
-- **Permissions** — microphone + accessibility (macOS)
-- **Stats** — transcription count, time saved, words dictated
+- **Home** — status at a glance, quick toggles
+- **Voice input** — STT mode (local / cloud), model, language, microphone, preprocessing
+- **Output** — LLM style, tone, translation target, custom prompts, filler removal
+- **Providers & keys** — one card per vendor; a key entered once covers STT, LLM and recap
+- **Pill overlay** — position, waveform style, border scheme, idle opacity
+- **App rules** — auto-switch LLM style based on which app had focus
+- **Shortcut** — hotkey combo, toggle vs hold-to-record, command-mode and meeting hotkeys
+- **Recordings** — searchable transcript archive, audio playback, retention
+- **Integrations** — Notion, folder export, Claude Desktop (MCP), Telegram
+- **Privacy & data** — telemetry toggles, AI transparency, privacy policy
+- **License** — trial, activation, plan
 - **About** — version, update check, links
 
 ## How it works
@@ -162,21 +170,26 @@ graph TD
     end
 
     subgraph "Rust core (core/src/)"
-        FFI["ffi.rs<br/>30+ C exports"]
-        AUDIO["audio.rs &rarr; preprocess.rs<br/>VAD &middot; AGC &middot; highpass"]
-        LOCAL["local_stt.rs<br/>whisper.cpp via whisper-rs"]
+        FFI["ffi.rs<br/>147 C exports"]
+        AUDIO["audio.rs &rarr; preprocess.rs<br/>highpass &middot; VAD &middot; AGC"]
+        GATE["silero.rs<br/>speech gate for realtime chunks"]
+        LOCAL["local_stt.rs &middot; parakeet.rs<br/>whisper.cpp / Parakeet TDT"]
         CLOUD["transcribe.rs<br/>Cloud STT routing + chunking"]
+        STREAM["deepgram_stream.rs &middot; openai_stream.rs<br/>chunked_stt.rs &mdash; realtime dictation"]
+        MEET["meeting.rs<br/>long-form record + live transcript"]
         FILLER["filler.rs<br/>6-language cleanup"]
-        LLM["llm.rs<br/>13 post-processing styles"]
+        LLM["llm.rs<br/>13 styles &middot; command mode &middot; recap"]
         LOCALLM["local_llm.rs<br/>llama.cpp (optional)"]
         HIST["history.rs<br/>SQLite + FTS5"]
         KEY["keystore.rs<br/>AES-256-GCM"]
+        INTEG["notion.rs &middot; telegram.rs<br/>claude_desktop.rs (MCP)"]
     end
 
     subgraph "External"
         MIC["OS audio<br/>(cpal)"]
-        WHISPER["Whisper GGML models<br/>(HuggingFace)"]
-        PROVIDERS["Cloud providers<br/>Groq / OpenAI / Deepgram / Gemini"]
+        WHISPER["Whisper / Parakeet models<br/>(HuggingFace)"]
+        PROVIDERS["Cloud STT + LLM<br/>Groq / OpenAI / Deepgram / Gemini / …"]
+        SUBS["claude &middot; codex CLI<br/>(subscription instead of API key)"]
         LLAMA["llama.cpp + Gemma 4 E2B<br/>(optional, local LLM)"]
     end
 
@@ -185,23 +198,33 @@ graph TD
     LIN -->|Rust crate| FFI
 
     FFI --> AUDIO
+    FFI --> MEET
+    AUDIO --> GATE
+    GATE -->|"speech in this window?"| STREAM
     AUDIO -->|"stt_mode = local"| LOCAL
     AUDIO -->|"stt_mode = cloud"| CLOUD
+    MEET --> GATE
+    STREAM -->|"live text at the cursor"| FFI
     LOCAL --> FILLER
     CLOUD --> FILLER
     FILLER --> LLM
     LLM -->|"llm_mode = local"| LOCALLM
     LLM --> HIST
+    MEET -->|recap| LLM
+    LLM --> INTEG
     HIST -->|auto-save| FFI
 
     MIC --> AUDIO
     WHISPER --> LOCAL
     PROVIDERS --> CLOUD
+    SUBS --> LLM
     LLAMA --> LOCALLM
     KEY --> FFI
 ```
 
-**Shared core, native chrome.** All business logic — audio capture, preprocessing (48 kHz highpass → VAD → AGC → NaN-safe clamp), local or cloud STT, filler removal, optional LLM post-processing, SQLite history, AES-256 key storage — lives in the Rust core. Windows and macOS call it through a 30+ function C FFI. Linux links the core as a direct Rust crate dependency.
+**Shared core, native chrome.** All business logic — audio capture, preprocessing (48 kHz highpass → VAD → AGC → NaN-safe clamp), local or cloud STT, realtime streaming, meetings and recaps, filler removal, optional LLM post-processing, SQLite history, AES-256 key storage — lives in the Rust core. Windows and macOS call it through a 147-function C FFI. Linux links the core as a direct Rust crate dependency.
+
+**Two different audio paths, and the difference matters.** A finished recording goes through the batch pipeline (highpass → VAD → AGC), which trims silence and normalises level before one STT call. A *realtime* window instead passes a **gate**: Silero answers "is there speech in these 3 seconds?" and the window then reaches the model **whole**, pauses included. Trimming inside a realtime window turned out to be actively harmful — starved of context, whisper falls back on the sign-off phrases from its training data ("Grazie", "Thank you everyone"), so the trimming produced the very hallucination it was meant to prevent. Measured over 300 windows of real meetings, gating instead of trimming cut those from 62 to 19 with no words lost.
 
 For depth: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** covers the layer map, directory tree, data flow, FFI surface, and decision log. **[docs/dev/modules.md](docs/dev/modules.md)** is the per-module reference. **[docs/dev/audio-pipeline.md](docs/dev/audio-pipeline.md)** documents the DSP pipeline, VAD state machine, and the (nasty, previously-shipped) dagc NaN corruption bug we have to keep guarding against.
 
@@ -209,15 +232,24 @@ For depth: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** covers the layer map
 
 **Local mode is the default** — whisper.cpp, no API key, no internet, no data leaves your device. Cloud providers are opt-in and can be faster on long audio.
 
+The model list is not hardcoded in the UI: it is compiled in from
+[`assets/model-catalog.json`](assets/model-catalog.json), so Windows, macOS and
+Linux always offer exactly the same models and cannot drift apart.
+
 | Provider | Type | Models | Free tier | Get a key |
 |----------|------|--------|-----------|-----------|
-| **Groq** (recommended) | STT + LLM | whisper-large-v3, whisper-large-v3-turbo, llama-3.3-70b | Yes (rate-limited) | [console.groq.com/keys](https://console.groq.com/keys) |
-| **OpenAI** | STT + LLM | gpt-4o-transcribe, gpt-4o-mini-transcribe, whisper-1, gpt-4o-mini | ~$0.006/min | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
-| **Deepgram** | STT | Nova-3, Nova-2 | $200 free credits | [console.deepgram.com](https://console.deepgram.com/) |
-| **Google Gemini** | STT + LLM | gemini-2.5-flash, gemini-2.5-pro | Yes | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
-| **Anthropic** | LLM only | Claude Haiku 4.5, Claude Sonnet 4 | No | [console.anthropic.com/keys](https://console.anthropic.com/settings/keys) |
+| **Groq** (recommended) | STT + LLM | whisper-large-v3-turbo, gpt-oss-120b, llama-3.3-70b, qwen3-32b | Yes (rate-limited) | [console.groq.com/keys](https://console.groq.com/keys) |
+| **OpenAI** | STT + LLM | gpt-transcribe, gpt-4o-transcribe, whisper-1, gpt-5.5, gpt-5.4-mini/nano | Pay as you go | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
+| **Deepgram** | STT (+ realtime WS) | Nova-3, Nova-2 | $200 free credits | [console.deepgram.com](https://console.deepgram.com/) |
+| **Google Gemini** | STT + LLM | gemini-3.5-flash, gemini-3.1-pro, gemini-2.5-flash/pro | Yes | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
+| **Anthropic** | LLM only | Claude Opus 4.8, Fable 5, Sonnet 5, Haiku 4.5 | No | [console.anthropic.com/keys](https://console.anthropic.com/settings/keys) |
 | **OpenRouter** | LLM only | Llama 3.3 70B, DeepSeek R1 | Yes (free models) | [openrouter.ai/keys](https://openrouter.ai/keys) |
+| **Together** | STT + LLM | Parakeet TDT, whisper-large-v3, Llama 3.3 70B | — | [api.together.xyz](https://api.together.xyz/settings/api-keys) |
+| **Fireworks** | LLM | Kimi K2 | — | [fireworks.ai](https://fireworks.ai/account/api-keys) |
 | **Custom** | STT + LLM | Any OpenAI-compatible endpoint | — | Bring your own URL |
+
+One key per provider covers STT, LLM and recap: the core falls back from the
+LLM scope to the STT scope of the same vendor rather than asking twice.
 
 Keys are encrypted on device with AES-256-GCM and a machine-specific KDF — no keyring prompt, no admin permission, no OS popups.
 
@@ -290,7 +322,7 @@ Benchmarked on real audio files (LibriVox, public domain). `Match%` is word over
 - **Deepgram** handles large files natively (2 GB limit) but is slower on short audio.
 - **Gemini Flash** balances speed and quality well on medium-length audio.
 - **OpenAI whisper-1** is accurate but consistently the slowest.
-- Files above 25 MB are auto-chunked for Groq/OpenAI. Dimmy's chunker searches for silence boundaries in the last 25 % of each chunk before force-splitting. See [`docs/dev/audio-pipeline.md`](docs/dev/audio-pipeline.md#chunked-transcription-transcriberrs).
+- Files above 25 MB are auto-chunked for Groq/OpenAI. Dimmy's chunker searches for silence boundaries in the last 25 % of each chunk before force-splitting. See [`docs/dev/audio-pipeline.md`](docs/dev/audio-pipeline.md#chunked-transcription-transcribers).
 
 *Benchmark date: 2026-03-13. Reproduce with `./tests/test_benchmark.sh quick`.*
 
@@ -449,8 +481,9 @@ Contributions welcome. Start at:
 
 Full backlog with MoSCoW prioritization: **[`BACKLOG.md`](BACKLOG.md)**. Highlights:
 
-- **v1.1 Should-Have** — Local LLM enhancement (Gemma 4 E2B, all platforms), launch-at-login across OSes, accessibility (VoiceOver / screen reader), streaming partial transcription results, macOS polish (BlobGlowView, simplified tabs).
-- **v2.0 Could-Have** — Plugin system for post-processing, multiple profiles, speaker diarization, live-captions overlay mode, WhisperKit fast-path on Apple Silicon, Flatpak distribution for Linux.
+- **Shipped since this list was written** — local LLM enhancement, streaming partial transcription (Deepgram and OpenAI Realtime, plus a local chunked path), live-captions overlay, meeting mode with recaps, MCP bridge, Notion and Telegram integrations.
+- **Should-Have** — launch-at-login across OSes, accessibility (VoiceOver / screen reader), macOS polish.
+- **Could-Have** — Plugin system for post-processing, multiple profiles, speaker diarization, WhisperKit fast-path on Apple Silicon, Flatpak distribution for Linux.
 - **Won't have** — Full text editor, screen recording, mobile app, cloud sync, browser extension, Electron/WebView anything.
 
 ## FAQ
