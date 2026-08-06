@@ -311,7 +311,8 @@ jobs:
       # with nothing in the log to notice — so fail the build loudly instead.
       - name: Verify Silero VAD model is bundled
         run: |
-          APP_PATH="platforms/macos/build/derived/Build/Products/Release/Dimmy.app"
+          APP_PATH="platforms/macos/build/derived/Build/Products/Release/Dimmy Staging.app"
+          [ -d "$APP_PATH" ] || APP_PATH="platforms/macos/build/derived/Build/Products/Release/Dimmy.app"
           MODEL="$APP_PATH/Contents/Resources/ggml-silero-v6.2.0.bin"
           if [ ! -f "$MODEL" ]; then
             echo "error: Silero VAD model missing from the app bundle" >&2
