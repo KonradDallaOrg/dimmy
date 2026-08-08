@@ -579,6 +579,19 @@ jobs:
           LIBCLANG_PATH: "C:\\Program Files\\LLVM\\bin"
           CMAKE_GENERATOR: Ninja
           CARGO_TARGET_DIR: "D:\\t"
+          # GGML_NATIVE=OFF: build whisper.cpp for the generic x86-64
+          # baseline instead of the compile host's CPU. Without it ggml uses
+          # -march=native, so a runner with AVX-512 emits instructions that
+          # crash 0xc000001d (illegal instruction) on any user CPU without
+          # them - e.g. Alder Lake, which has no AVX-512. That is what shipped
+          # in v0.6.71-rc9 and rc10: the rc10 DLL carried 4820 zmm (AVX-512)
+          # instructions, a local build of the same source carried 0.
+          # It looks nondeterministic only because the runner CPU varies
+          # between runs, which is why it was repeatedly misdiagnosed as a
+          # stale cache or a bad MSVC. e2e-tests.yml has set this since
+          # 2026-04-29 for exactly this reason (SIGILL on ubuntu runners);
+          # the release pipelines never got it.
+          GGML_NATIVE: "OFF"
           # Diagnostic build (see macOS step for the rationale).
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}

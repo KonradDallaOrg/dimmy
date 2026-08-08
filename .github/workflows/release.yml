@@ -856,6 +856,19 @@ jobs:
           LIBCLANG_PATH: "C:\\Program Files\\LLVM\\bin"
           CMAKE_GENERATOR: Ninja
           CARGO_TARGET_DIR: "D:\\t"
+          # GGML_NATIVE=OFF: build whisper.cpp for the generic x86-64
+          # baseline instead of the compile host's CPU. Without it ggml uses
+          # -march=native, so a runner with AVX-512 emits instructions that
+          # crash 0xc000001d (illegal instruction) on any user CPU without
+          # them - e.g. Alder Lake, which has no AVX-512. That is what shipped
+          # in v0.6.71-rc9 and rc10: the rc10 DLL carried 4820 zmm (AVX-512)
+          # instructions, a local build of the same source carried 0.
+          # It looks nondeterministic only because the runner CPU varies
+          # between runs, which is why it was repeatedly misdiagnosed as a
+          # stale cache or a bad MSVC. e2e-tests.yml has set this since
+          # 2026-04-29 for exactly this reason (SIGILL on ubuntu runners);
+          # the release pipelines never got it.
+          GGML_NATIVE: "OFF"
           # Diagnostic build (see macOS step for the rationale).
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
@@ -963,6 +976,19 @@ jobs:
           LIBCLANG_PATH: "C:\\Program Files\\LLVM\\bin"
           CMAKE_GENERATOR: Ninja
           CARGO_TARGET_DIR: "D:\\t"
+          # GGML_NATIVE=OFF: build whisper.cpp for the generic x86-64
+          # baseline instead of the compile host's CPU. Without it ggml uses
+          # -march=native, so a runner with AVX-512 emits instructions that
+          # crash 0xc000001d (illegal instruction) on any user CPU without
+          # them - e.g. Alder Lake, which has no AVX-512. That is what shipped
+          # in v0.6.71-rc9 and rc10: the rc10 DLL carried 4820 zmm (AVX-512)
+          # instructions, a local build of the same source carried 0.
+          # It looks nondeterministic only because the runner CPU varies
+          # between runs, which is why it was repeatedly misdiagnosed as a
+          # stale cache or a bad MSVC. e2e-tests.yml has set this since
+          # 2026-04-29 for exactly this reason (SIGILL on ubuntu runners);
+          # the release pipelines never got it.
+          GGML_NATIVE: "OFF"
         run: |
           call "%VS2026_PATH%\VC\Auxiliary\Build\vcvars64.bat" -vcvars_ver=%VCVARS_VER%
           if errorlevel 1 exit /b 1
@@ -996,6 +1022,28 @@ jobs:
           DIMMY_TELEGRAM_API_HASH: ${{ secrets.DIMMY_TELEGRAM_API_HASH }}
           FEAT: "local-stt-vulkan,local-llm-vulkan,local-stt-parakeet,license-client,telegram"
         run: scripts/dev/dll-cache.sh store win-x64 "$FEAT" "D:/t/release/dimmy_lib.dll" || true
+
+      - name: Gate — reject AVX-512 in dimmy_lib.dll
+        shell: pwsh
+        run: |
+          # GGML_NATIVE=OFF above is the fix; this is the proof. A DLL built
+          # with -march=native on an AVX-512 runner crashes 0xc000001d on any
+          # CPU without AVX-512 (Alder Lake, Zen 2, ...). It looks random
+          # because the runner CPU varies run to run, and every CI gate passes
+          # because they all execute on the runner's own CPU. Measured on
+          # v0.6.71-rc10: 4820 zmm instructions in the shipped DLL, 0 in a
+          # local build of the same source.
+          $dll = "D:\t\release\dimmy_lib.dll"
+          if (-not (Test-Path $dll)) { throw "dimmy_lib.dll not found at $dll" }
+          $mscvDir = Join-Path $env:VS2026_PATH "VC\Tools\MSVC"
+          $tool = Get-ChildItem $mscvDir -Directory | Sort-Object Name -Descending | Select-Object -First 1
+          $dumpbin = Join-Path $tool.FullName "bin\Hostx64\x64\dumpbin.exe"
+          if (-not (Test-Path $dumpbin)) { throw "dumpbin.exe not found at $dumpbin" }
+          $zmm = (& $dumpbin /disasm:nobytes $dll | Select-String -Pattern 'zmm[0-9]').Count
+          Write-Host "AVX-512 (zmm) instructions in dimmy_lib.dll: $zmm"
+          if ($zmm -gt 0) {
+            throw "dimmy_lib.dll contains $zmm AVX-512 instructions. It would crash 0xc000001d on any CPU without AVX-512. GGML_NATIVE=OFF is not taking effect. Aborting release."
+          }
 
       - name: Gate — verify dimmy_lib.dll linker version
         shell: pwsh

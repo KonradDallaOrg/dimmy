@@ -50,7 +50,12 @@ base="$(basename "$file")"
 # is never cached here again. This v2->v3 bump forces one fresh, gated rebuild
 # past the poisoned rc3 DLL (a version-only bump is normalized out of the hash).
 # (v1->v2 on 2026-07-28 was the same story for v0.6.69-rc1.)
-url="s3://$bucket/dll-cache/v3/$platform/$hash/$base"
+# Namespace bumped v3 -> v4 on 2026-08-08: v3 holds DLLs built with
+# GGML_NATIVE on, i.e. carrying the compile host's AVX-512. Those crash
+# 0xc000001d on any CPU without it. The release pipelines now set
+# GGML_NATIVE=OFF and gate on a zmm scan; this bump makes sure no v3
+# entry can be reused past those gates.
+url="s3://$bucket/dll-cache/v4/$platform/$hash/$base"
 common=(--endpoint-url "${SCCACHE_R2_ENDPOINT:-}" --region auto)
 echo "dll-cache: $action  hash=$hash  key=$url" >&2
 
