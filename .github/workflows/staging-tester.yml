@@ -515,6 +515,30 @@ jobs:
             if (-not $vs2026) { throw "VS 2026 not found after $maxTries attempts" }
           }
           Add-Content -Path $env:GITHUB_ENV -Value "VS2026_PATH=$vs2026" -Encoding utf8
+          # Pin the MSVC toolset instead of letting vcvars64.bat default to the
+          # newest installed one - see the long rationale in release.yml.
+          # This workflow never selected a toolset at all, so it silently rode
+          # whatever the runner image shipped.
+          $mscvDir = Join-Path $vs2026 "VC\Tools\MSVC"
+          if (-not (Test-Path $mscvDir)) { throw "VC\Tools\MSVC not found - VCTools workload missing" }
+          $tools = Get-ChildItem $mscvDir -Directory -ErrorAction Stop | Sort-Object Name -Descending
+          if (-not $tools -or $tools.Count -eq 0) { throw "VC\Tools\MSVC is empty" }
+          Write-Host "Found $($tools.Count) MSVC toolchain(s): $($tools.Name -join ', ')"
+          $preferred = '14.50'
+          $pinned = $tools | Where-Object { $_.Name -like "$preferred.*" } | Select-Object -First 1
+          if ($pinned) {
+            $toolName = $pinned.Name
+            Write-Host "Using PINNED toolset: $toolName"
+          } else {
+            $toolName = $tools[0].Name
+            Write-Host "::warning title=MSVC toolset::Pinned $preferred unavailable, built with $toolName"
+          }
+          $verMatch = [regex]::Match($toolName, '^(\d+)\.(\d+)')
+          if (-not $verMatch.Success) { throw "Cannot parse major.minor from toolchain name '$toolName'" }
+          if ([int]$verMatch.Groups[1].Value -lt 14 -or ([int]$verMatch.Groups[1].Value -eq 14 -and [int]$verMatch.Groups[2].Value -lt 50)) {
+            throw "MSVC $toolName is < 14.50 (miscompiles whisper ggml-vulkan)"
+          }
+          Add-Content -Path $env:GITHUB_ENV -Value "VCVARS_VER=$toolName" -Encoding utf8
           exit 0
 
       - name: Install Vulkan SDK
@@ -592,7 +616,7 @@ jobs:
           DIMMY_TELEGRAM_API_ID: ${{ secrets.DIMMY_TELEGRAM_API_ID }}
           DIMMY_TELEGRAM_API_HASH: ${{ secrets.DIMMY_TELEGRAM_API_HASH }}
         run: |
-          call "%VS2026_PATH%\VC\Auxiliary\Build\vcvars64.bat"
+          call "%VS2026_PATH%\VC\Auxiliary\Build\vcvars64.bat" -vcvars_ver=%VCVARS_VER%
           if errorlevel 1 exit /b 1
           REM ── cargo clean --release: RE-ADDED 2026-07-29 ──
           REM     Mirrors the release.yml rc70 fix. v0.6.69-rc1 shipped a

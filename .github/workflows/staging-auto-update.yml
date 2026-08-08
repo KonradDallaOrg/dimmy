@@ -475,8 +475,18 @@ jobs:
           $tools = Get-ChildItem $mscvDir -Directory -ErrorAction Stop | Sort-Object Name -Descending
           Write-Host "Found $($tools.Count) MSVC toolchain(s): $($tools.Name -join ', ')"
           if (-not $tools -or $tools.Count -eq 0) { throw "VC\Tools\MSVC is empty" }
-          $toolName = $tools[0].Name
-          Write-Host "Picking newest: $toolName"
+          # Pin the toolset rather than taking "newest" - see the long
+          # rationale in release.yml (v0.6.71-rc9 shipped a 0xc000001d whisper
+          # crash from a clean 14.51 build; 14.50 builds the same source fine).
+          $preferred = '14.50'
+          $pinned = $tools | Where-Object { $_.Name -like "$preferred.*" } | Select-Object -First 1
+          if ($pinned) {
+            $toolName = $pinned.Name
+            Write-Host "Using PINNED toolset: $toolName"
+          } else {
+            $toolName = $tools[0].Name
+            Write-Host "::warning title=MSVC toolset::Pinned $preferred unavailable, built with $toolName"
+          }
           $verMatch = [regex]::Match($toolName, '^(\d+)\.(\d+)')
           if (-not $verMatch.Success) { throw "Cannot parse major.minor from toolchain name '$toolName'" }
           $major = [int]$verMatch.Groups[1].Value
@@ -485,8 +495,9 @@ jobs:
           if ($major -lt 14 -or ($major -eq 14 -and $minor -lt 50)) {
             throw "VS 2026 has MSVC $toolName (major=$major, minor=$minor), < 14.50 required"
           }
-          Write-Host "Toolchain OK, exporting VS2026_PATH"
+          Write-Host "Toolchain OK, exporting VS2026_PATH + VCVARS_VER=$toolName"
           Add-Content -Path $env:GITHUB_ENV -Value "VS2026_PATH=$vs2026" -Encoding utf8
+          Add-Content -Path $env:GITHUB_ENV -Value "VCVARS_VER=$toolName" -Encoding utf8
           Write-Host "DONE"
           # choco's exit 3010 (reboot-required) sets $LASTEXITCODE=3010 and
           # in pwsh 7.3+ with $PSNativeCommandUseErrorActionPreference=$true
@@ -574,7 +585,7 @@ jobs:
           REM the original job env (VS 2022) because activation is
           REM scoped to this shell invocation. cmd is required because
           REM vcvars64.bat is a batch script.
-          call "%VS2026_PATH%\VC\Auxiliary\Build\vcvars64.bat"
+          call "%VS2026_PATH%\VC\Auxiliary\Build\vcvars64.bat" -vcvars_ver=%VCVARS_VER%
           if errorlevel 1 exit /b 1
           REM ── DO NOT add `cargo clean --release` back here ──
           REM     Dropped 2026-05-14 to reuse the Swatinem/rust-cache@v2

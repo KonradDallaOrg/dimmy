@@ -710,8 +710,44 @@ jobs:
           $tools = Get-ChildItem $mscvDir -Directory -ErrorAction Stop | Sort-Object Name -Descending
           Write-Host "Found $($tools.Count) MSVC toolchain(s): $($tools.Name -join ', ')"
           if (-not $tools -or $tools.Count -eq 0) { throw "VC\Tools\MSVC is empty" }
-          $toolName = $tools[0].Name
-          Write-Host "Picking newest: $toolName"
+          # ── PIN the toolset instead of taking "newest" (2026-08-08) ──
+          #   v0.6.71-rc9 shipped a dimmy_lib.dll that crashed 0xc000001d
+          #   (illegal instruction) inside whisper_backend_init_gpu on the
+          #   Vulkan path. It was built FRESH: dll-cache reuse is disabled for
+          #   win-x64 and `cargo clean --release` ran, so neither cache could
+          #   be blamed. Same source built locally with MSVC 14.50 produces a
+          #   DLL that runs fine on the same machine (swap-tested); CI's 14.51
+          #   does not. rc7/rc8 also used 14.51 and were fine, so 14.51 is not
+          #   reliably bad -- which is exactly why "newest wins" is the wrong
+          #   policy: it silently drifts onto whatever toolset the image ships
+          #   and we only find out in production. Pin to the version we have
+          #   evidence for, and say so loudly when we cannot get it.
+          #   NOTE: the older "nondeterministic preview MSVC" story in
+          #   scripts/dev/dll-cache.sh over-attributes: rc4/rc5/rc6 turned out
+          #   to be the whisper gate overwriting the shipped DLL, not MSVC.
+          $preferred = '14.50'
+          $pinned = $tools | Where-Object { $_.Name -like "$preferred.*" } | Select-Object -First 1
+          if (-not $pinned) {
+            Write-Host "Preferred MSVC $preferred not installed; attempting to add it"
+            $vsInstaller = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vs_installer.exe"
+            if (Test-Path $vsInstaller) {
+              $component = "Microsoft.VisualStudio.Component.VC.$preferred.18.8.x86.x64"
+              & $vsInstaller modify --installPath "$vs2026" --add $component `
+                --quiet --norestart --nocache 2>&1 | Out-String | Write-Host
+              $tools = Get-ChildItem $mscvDir -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending
+              $pinned = $tools | Where-Object { $_.Name -like "$preferred.*" } | Select-Object -First 1
+            } else {
+              Write-Host "vs_installer.exe not found at $vsInstaller"
+            }
+          }
+          if ($pinned) {
+            $toolName = $pinned.Name
+            Write-Host "Using PINNED toolset: $toolName"
+          } else {
+            $toolName = $tools[0].Name
+            Write-Warning "MSVC $preferred unavailable on this image; falling back to newest: $toolName. This is the configuration that shipped the rc9 whisper crash - validate the DLL on a GPU before publishing."
+            Write-Host "::warning title=MSVC toolset::Pinned $preferred unavailable, built with $toolName"
+          }
           $verMatch = [regex]::Match($toolName, '^(\d+)\.(\d+)')
           if (-not $verMatch.Success) { throw "Cannot parse major.minor from toolchain name '$toolName'" }
           $major = [int]$verMatch.Groups[1].Value
@@ -720,8 +756,11 @@ jobs:
           if ($major -lt 14 -or ($major -eq 14 -and $minor -lt 50)) {
             throw "VS 2026 has MSVC $toolName (major=$major, minor=$minor), < 14.50 required"
           }
-          Write-Host "Toolchain OK, exporting VS2026_PATH"
+          Write-Host "Toolchain OK, exporting VS2026_PATH + VCVARS_VER=$toolName"
           Add-Content -Path $env:GITHUB_ENV -Value "VS2026_PATH=$vs2026" -Encoding utf8
+          # vcvars64.bat also defaults to "newest installed" unless told
+          # otherwise, so pinning the folder above is not enough on its own.
+          Add-Content -Path $env:GITHUB_ENV -Value "VCVARS_VER=$toolName" -Encoding utf8
           Write-Host "DONE"
           # choco's exit 3010 (reboot-required) sets $LASTEXITCODE=3010 and
           # in pwsh 7.3+ with $PSNativeCommandUseErrorActionPreference=$true
@@ -824,7 +863,7 @@ jobs:
           REM the original job env (VS 2022) because activation is
           REM scoped to this shell invocation. cmd is required because
           REM vcvars64.bat is a batch script.
-          call "%VS2026_PATH%\VC\Auxiliary\Build\vcvars64.bat"
+          call "%VS2026_PATH%\VC\Auxiliary\Build\vcvars64.bat" -vcvars_ver=%VCVARS_VER%
           if errorlevel 1 exit /b 1
           REM ── cargo clean --release: RE-ADDED 2026-07-28 ──
           REM     Dropped 2026-05-14 for speed (reuse Swatinem rust-cache),
@@ -876,7 +915,7 @@ jobs:
           CMAKE_GENERATOR: Ninja
           CARGO_TARGET_DIR: "D:\\t"
         run: |
-          call "%VS2026_PATH%\VC\Auxiliary\Build\vcvars64.bat"
+          call "%VS2026_PATH%\VC\Auxiliary\Build\vcvars64.bat" -vcvars_ver=%VCVARS_VER%
           if errorlevel 1 exit /b 1
           cargo test --release --test ffi_e2e --features local-stt-vulkan,test-ffi -- --test-threads=1 --nocapture
 
