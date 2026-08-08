@@ -729,13 +729,22 @@ jobs:
           $pinned = $tools | Where-Object { $_.Name -like "$preferred.*" } | Select-Object -First 1
           if (-not $pinned) {
             Write-Host "Preferred MSVC $preferred not installed; attempting to add it"
+            # The component id encodes the VS release that shipped the toolset
+            # and is not queryable, so probe the plausible ids and take
+            # whichever lands. 14.50 came with VS 18.4; the runner image ships
+            # VS 18.8. Same loop as staging-auto-update.yml.
             $vsInstaller = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vs_installer.exe"
             if (Test-Path $vsInstaller) {
-              $component = "Microsoft.VisualStudio.Component.VC.$preferred.18.8.x86.x64"
-              & $vsInstaller modify --installPath "$vs2026" --add $component `
-                --quiet --norestart --nocache 2>&1 | Out-String | Write-Host
-              $tools = Get-ChildItem $mscvDir -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending
-              $pinned = $tools | Where-Object { $_.Name -like "$preferred.*" } | Select-Object -First 1
+              foreach ($vsVer in @('18.4', '18.0', '18.8')) {
+                $component = "Microsoft.VisualStudio.Component.VC.$preferred.$vsVer.x86.x64"
+                Write-Host "Trying to add $component"
+                & $vsInstaller modify --installPath "$vs2026" --add $component `
+                  --quiet --norestart --nocache 2>&1 | Out-String | Write-Host
+                Start-Sleep -Seconds 10
+                $tools = Get-ChildItem $mscvDir -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending
+                $pinned = $tools | Where-Object { $_.Name -like "$preferred.*" } | Select-Object -First 1
+                if ($pinned) { Write-Host "Component $component installed $($pinned.Name)"; break }
+              }
             } else {
               Write-Host "vs_installer.exe not found at $vsInstaller"
             }
