@@ -737,6 +737,15 @@ jobs:
           $ortLib = "core/target/onnxruntime-win-x64-1.22.0/lib"
           Copy-Item "$ortLib/onnxruntime.dll" "$pubDir/"
           Copy-Item "$ortLib/onnxruntime_providers_shared.dll" "$pubDir/"
+          # Silero VAD model, same reason: the csproj target copies it to the
+          # BUILD output, but Velopack packs `publish/`, so without this line
+          # it never reaches the installer. It shipped missing in v0.6.71-rc9
+          # and nobody noticed, because a missing model degrades silently to
+          # the RNNoise gate instead of failing. Hence the assert below.
+          Copy-Item "core/assets/ggml-silero-v6.2.0.bin" "$pubDir/"
+          if (-not (Test-Path "$pubDir/ggml-silero-v6.2.0.bin")) {
+            throw "Silero VAD model missing from publish dir — the chunk gate would silently fall back to RNNoise"
+          }
           # Bundle the dimmy-mcp MCP server next to the app exe (Win parity
           # with the macOS .app Resources copy) so the INSTALLED app exposes
           # meetings to Claude Code / Claude Desktop. Self-contained Rust stdio
