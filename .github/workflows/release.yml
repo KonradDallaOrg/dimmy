@@ -892,6 +892,43 @@ jobs:
           copy /Y "D:\t\release\dimmy_lib.dll" "D:\t\dimmy_lib.prod.dll"
           if errorlevel 1 exit /b 1
 
+      - name: Install lavapipe (software Vulkan) so the whisper gate covers the GPU path
+        # v0.6.71-rc9 passed the whisper gate below and then crashed 0xc000001d
+        # inside whisper_backend_init_gpu on a real machine. The gate could not
+        # have caught it: a GitHub-hosted runner has no GPU, so ggml-vulkan saw
+        # zero ICDs and took its CPU early-return. lavapipe is Mesa's CPU Vulkan
+        # driver; registering it as an ICD makes the SAME test walk the Vulkan
+        # init path instead.
+        #
+        # Honest scope: this exercises generic ggml-vulkan code, not NVIDIA's
+        # driver. It would have caught rc9 (which died in generic backend init)
+        # but it is not a substitute for running on real hardware.
+        if: env.DLL_REUSED != '1'
+        shell: pwsh
+        run: |
+          $ver = '26.1.6'
+          $url = "https://github.com/pal1000/mesa-dist-win/releases/download/$ver/mesa3d-$ver-release-msvc.7z"
+          $dst = Join-Path $env:RUNNER_TEMP 'mesa'
+          try {
+            Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\mesa.7z" -UseBasicParsing
+            & 7z x "$env:RUNNER_TEMP\mesa.7z" "-o$dst" -y | Out-Null
+            $icd = Get-ChildItem $dst -Recurse -Filter 'lvp_icd.x86_64.json' -ErrorAction Stop |
+              Select-Object -First 1
+            if (-not $icd) { throw "lvp_icd.x86_64.json not found under $dst" }
+            $dll = Join-Path $icd.DirectoryName 'vulkan_lvp.dll'
+            if (-not (Test-Path $dll)) { throw "vulkan_lvp.dll missing next to the ICD manifest" }
+            Write-Host "lavapipe ICD: $($icd.FullName)"
+            # Both names: the loader reads VK_DRIVER_FILES and falls back to the
+            # deprecated VK_ICD_FILENAMES depending on its version.
+            Add-Content -Path $env:GITHUB_ENV -Value "VK_ICD_FILENAMES=$($icd.FullName)" -Encoding utf8
+            Add-Content -Path $env:GITHUB_ENV -Value "VK_DRIVER_FILES=$($icd.FullName)" -Encoding utf8
+          } catch {
+            # Do not block a release on a flaky GitHub download. Say so loudly:
+            # without an ICD the gate below silently degrades to the CPU-only
+            # coverage that let rc9 through.
+            Write-Host "::warning title=lavapipe::Could not install software Vulkan ($($_.Exception.Message)). The whisper gate will only cover the CPU path."
+          }
+
       - name: Gate — whisper transcription smoke test (catch miscompiled whisper.cpp)
         # The >=14.50 linker gate is NOT enough on its own: v0.6.69-rc1 and
         # v0.6.71-rc3 shipped a whisper.cpp that linked at 14.51 (gate green) but
@@ -900,8 +937,8 @@ jobs:
         # contains "ask not"), REUSING the whisper.cpp objects just built in D:\t.
         # A broken whisper crashes the transcription so this step fails BEFORE the
         # Store below -> the bad DLL is never cached and the release does not
-        # publish. GitHub-hosted runner has no GPU, so this exercises the CPU
-        # whisper path. Fresh build only.
+        # publish. The step above registers lavapipe so this now covers the
+        # Vulkan init path too, not just CPU. Fresh build only.
         #
         # ⚠️ SIDE EFFECT: `cargo test` with `test-ffi` re-emits the cdylib
         # dimmy_lib.dll into D:\t\release with the WRONG feature set. The
@@ -910,6 +947,9 @@ jobs:
         if: env.DLL_REUSED != '1'
         working-directory: core
         shell: cmd
+        # Software Vulkan is slow; cap it so a hang fails instead of eating the
+        # job's whole budget.
+        timeout-minutes: 25
         env:
           LIBCLANG_PATH: "C:\\Program Files\\LLVM\\bin"
           CMAKE_GENERATOR: Ninja
