@@ -124,6 +124,12 @@ local-stt-parakeet-fluid = ["dep:fluidaudio-rs"]
 # 19 highest-accuracy locales and it emits punctuation + capitalisation
 # natively. Not wired into the app - smoke binary only until measured.
 nemotron-streaming = ["dep:parakeet-rs", "local-stt-parakeet"]
+# EXPERIMENT: GTCRN speech enhancement (ICASSP 2024) as a candidate
+# replacement for the 2017-era RNNoise suppressor. 48.2K params, ~535 KB
+# ONNX, frame-by-frame with carried state so it also fits the realtime
+# path. Runs on the ort session we already ship for Parakeet - no
+# sherpa-onnx dependency needed for a half-megabyte model.
+denoise-gtcrn = ["dep:ort", "dep:realfft"]
 # DeepFilterNet ML noise suppression — feature flag kept for the
 # day the upstream blocker (see deep_filter dep comment above) is
 # unblocked. Currently a no-op: dfn3.rs is gated on this feature
@@ -255,8 +261,16 @@ whisper-rs = { version = "0.16", optional = true }
 # extractor as 3 separate .onnx files). Native execution, no Python.
 # Build pulls a prebuilt onnxruntime dll/dylib for the host (~30MB);
 # CUDA / CoreML are opt-in via cargo features.
-ort = { version = "=2.0.0-rc.13", optional = true, features = ["ndarray", "load-dynamic"] }
+# default-features = false + explicit api-22: ort rc.13 defaults to api-27,
+# which makes it REFUSE the onnxruntime 1.22.0 we ship ("BadVersion").
+# Pinning the API level to what our dylib actually implements keeps the
+# native library unchanged. Also drops `download-binaries`, which we never
+# wanted: we load our own dylib via ORT_DYLIB_PATH.
+ort = { version = "=2.0.0-rc.13", optional = true, default-features = false, features = ["std", "ndarray", "load-dynamic", "api-22"] }
 parakeet-rs = { version = "0.3", optional = true, default-features = false }
+# STFT for the GTCRN denoiser. Already in the tree via aec3/nnnoiseless,
+# so making it direct pulls nothing new.
+realfft = { version = "3.5", optional = true }
 ndarray = { version = "0.16", optional = true }
 anyhow = { version = "1", optional = true }
 llama-cpp-4 = { git = "https://github.com/KonradDallaOrg/llama-cpp-rs", optional = true, default-features = false }
