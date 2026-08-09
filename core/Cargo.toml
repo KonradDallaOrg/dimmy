@@ -70,6 +70,12 @@ name = "chunked_smoke"
 path = "src/bin/chunked_smoke.rs"
 required-features = ["local-stt-parakeet"]
 
+# Measurement harness for the Nemotron streaming experiment. Not shipped.
+[[bin]]
+name = "nemotron_smoke"
+path = "src/bin/nemotron_smoke.rs"
+required-features = ["nemotron-streaming"]
+
 # Mac-only counterpart to parakeet_smoke that exercises the
 # FluidInference / Apple Neural Engine path. Same shape: one WAV in,
 # one transcript out, plus timings. Gated on the matching cargo
@@ -111,6 +117,13 @@ local-stt-parakeet-coreml = ["local-stt-parakeet", "ort/coreml"]
 # documented at 100-300x; intended as the Mac-only fast path while
 # Win/Linux stay on ort.
 local-stt-parakeet-fluid = ["dep:fluidaudio-rs"]
+# EXPERIMENT (feat/nemotron-streaming, 2026-08-09): Nemotron 3.5 cache-aware
+# streaming ASR via the parakeet-rs crate. Unlike our fixed-3s-window chunking
+# it keeps encoder context ACROSS chunks, which is the actual fix for the
+# duplicated/cut words at chunk boundaries. Italian (it-IT) is in the model's
+# 19 highest-accuracy locales and it emits punctuation + capitalisation
+# natively. Not wired into the app - smoke binary only until measured.
+nemotron-streaming = ["dep:parakeet-rs", "local-stt-parakeet"]
 # DeepFilterNet ML noise suppression — feature flag kept for the
 # day the upstream blocker (see deep_filter dep comment above) is
 # unblocked. Currently a no-op: dfn3.rs is gated on this feature
@@ -242,7 +255,8 @@ whisper-rs = { version = "0.16", optional = true }
 # extractor as 3 separate .onnx files). Native execution, no Python.
 # Build pulls a prebuilt onnxruntime dll/dylib for the host (~30MB);
 # CUDA / CoreML are opt-in via cargo features.
-ort = { version = "=2.0.0-rc.10", optional = true, features = ["ndarray", "load-dynamic"] }
+ort = { version = "=2.0.0-rc.13", optional = true, features = ["ndarray", "load-dynamic"] }
+parakeet-rs = { version = "0.3", optional = true, default-features = false }
 ndarray = { version = "0.16", optional = true }
 anyhow = { version = "1", optional = true }
 llama-cpp-4 = { git = "https://github.com/KonradDallaOrg/llama-cpp-rs", optional = true, default-features = false }
