@@ -585,7 +585,7 @@ jobs:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           DIMMY_TELEGRAM_API_ID: ${{ secrets.DIMMY_TELEGRAM_API_ID }}
           DIMMY_TELEGRAM_API_HASH: ${{ secrets.DIMMY_TELEGRAM_API_HASH }}
-          FEAT: "local-stt-vulkan,local-stt-parakeet,local-llm-vulkan,local-dfn,license-client,telegram"
+          FEAT: "local-stt-vulkan,local-stt-parakeet,local-llm-vulkan,local-dfn,denoise-gtcrn,license-client,telegram"
         run: |
           res="$(scripts/dev/dll-cache.sh restore win-x64 "$FEAT" "D:/t/release/dimmy_lib.dll" || echo MISS)"
           echo "restore: $res"
@@ -661,7 +661,7 @@ jobs:
           # staging testers always exercise the production-default
           # backend.
           cargo clean --release
-          cargo build --lib --release --features local-stt-vulkan,local-stt-parakeet,local-llm-vulkan,local-dfn,license-client,telegram
+          cargo build --lib --release --features local-stt-vulkan,local-stt-parakeet,local-llm-vulkan,local-dfn,denoise-gtcrn,license-client,telegram
 
       # Added 2026-07-05: the REM comment above always claimed this gate
       # existed, but only release.yml and staging-auto-update.yml had it;
@@ -711,7 +711,7 @@ jobs:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           DIMMY_TELEGRAM_API_ID: ${{ secrets.DIMMY_TELEGRAM_API_ID }}
           DIMMY_TELEGRAM_API_HASH: ${{ secrets.DIMMY_TELEGRAM_API_HASH }}
-          FEAT: "local-stt-vulkan,local-stt-parakeet,local-llm-vulkan,local-dfn,license-client,telegram"
+          FEAT: "local-stt-vulkan,local-stt-parakeet,local-llm-vulkan,local-dfn,denoise-gtcrn,license-client,telegram"
         run: scripts/dev/dll-cache.sh store win-x64 "$FEAT" "D:/t/release/dimmy_lib.dll" || true
 
       - name: Fetch onnxruntime win-x64 DLL (Parakeet ort path)
@@ -774,6 +774,15 @@ jobs:
           $ortLib = "core/target/onnxruntime-win-x64-1.22.0/lib"
           Copy-Item "$ortLib/onnxruntime.dll" "$pubDir/"
           Copy-Item "$ortLib/onnxruntime_providers_shared.dll" "$pubDir/"
+          # Both ONNX models the core loads at runtime. This workflow never
+          # bundled Silero either (pre-existing gap: signed tester builds fell
+          # back to the energy gate), so both are added here. Missing models
+          # degrade SILENTLY by design, hence the asserts.
+          Copy-Item "core/assets/ggml-silero-v6.2.0.bin" "$pubDir/"
+          Copy-Item "core/assets/gtcrn_simple.onnx" "$pubDir/"
+          foreach ($m in @("ggml-silero-v6.2.0.bin", "gtcrn_simple.onnx")) {
+            if (-not (Test-Path "$pubDir/$m")) { throw "$m missing from publish dir" }
+          }
           # Silero VAD model, same reason: the csproj target copies it to the
           # BUILD output, but Velopack packs `publish/`, so without this line
           # it never reaches the installer. It shipped missing in v0.6.71-rc9

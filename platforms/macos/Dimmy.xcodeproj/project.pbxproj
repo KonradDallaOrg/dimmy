@@ -697,12 +697,14 @@
 			);
 			inputPaths = (
 				"$(SRCROOT)/../../core/assets/ggml-silero-v6.2.0.bin",
+				"$(SRCROOT)/../../core/assets/gtcrn_simple.onnx",
 			);
 			name = "Bundle Silero VAD model";
 			outputFileListPaths = (
 			);
 			outputPaths = (
 				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/ggml-silero-v6.2.0.bin",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/gtcrn_simple.onnx",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
@@ -724,6 +726,17 @@ mkdir -p \"$DEST_DIR\"
 cp -f \"$SRC\" \"$DEST_DIR/ggml-silero-v6.2.0.bin\"
 chmod 644 \"$DEST_DIR/ggml-silero-v6.2.0.bin\"
 echo \"[silero] bundled $(basename \"$SRC\") into Resources\"
+# GTCRN, same reasoning. Since 2026-08-10 it is the ONLY noise suppressor -
+# the RNNoise stage upstream of AEC3 is gone - so a missing model here means
+# the app ships with none, silently.
+GTCRN_SRC=\"$SRCROOT/../../core/assets/gtcrn_simple.onnx\"
+if [ ! -f \"$GTCRN_SRC\" ]; then
+  echo \"warning: $GTCRN_SRC missing - the app will run with no noise suppression\"
+  exit 0
+fi
+cp -f \"$GTCRN_SRC\" \"$DEST_DIR/gtcrn_simple.onnx\"
+chmod 644 \"$DEST_DIR/gtcrn_simple.onnx\"
+echo \"[gtcrn] bundled $(basename \"$GTCRN_SRC\") into Resources\"
 ";
 		};
 /* End PBXShellScriptBuildPhase section */

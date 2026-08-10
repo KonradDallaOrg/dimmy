@@ -283,12 +283,17 @@ mod tests {
     }
 }
 
-/// Opt-in denoise pass for the STT path, off unless `DIMMY_GTCRN=1`.
+/// The denoise pass for the STT path. ON by default, `DIMMY_GTCRN=0` to skip.
 ///
-/// Deliberately an env var and not a config field: this is an experiment, and
-/// a config field would mean schema + FFI + two host UIs before we know
-/// whether it is worth having. Placed on the 16 kHz STT input rather than in
-/// the capture chain, so the audio we ARCHIVE stays untouched at 48 kHz.
+/// Default-on because this REPLACES the RNNoise stage that used to run
+/// unconditionally upstream of AEC3 — leaving it off would have been a silent
+/// removal of noise suppression, not a swap. Env var rather than a config
+/// field for now: the field means schema + FFI + two host UIs, and that is
+/// worth doing once we know which default users actually want.
+///
+/// Placed on the 16 kHz STT input rather than in the capture chain, so the
+/// audio we ARCHIVE keeps its full band and stays re-transcribable from the
+/// original signal.
 ///
 /// Returns the input unchanged whenever it is off, the model is missing, or
 /// the model errors. Silently degrading to the original audio is the right
@@ -297,7 +302,7 @@ pub fn maybe_denoise_16k(samples_16k: &[f32]) -> std::borrow::Cow<'_, [f32]> {
     use std::borrow::Cow;
     use std::sync::Mutex;
 
-    if std::env::var("DIMMY_GTCRN").as_deref() != Ok("1") {
+    if std::env::var("DIMMY_GTCRN").as_deref() == Ok("0") {
         return Cow::Borrowed(samples_16k);
     }
     if samples_16k.is_empty() {
