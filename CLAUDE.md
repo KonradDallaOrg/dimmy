@@ -126,10 +126,11 @@ is the safety net; the rule is the actual fix.
 
 ### Windows local DLL build — feature flag set is FROZEN
 
-**`cargo build --release --lib --features local-stt-vulkan,local-stt-parakeet,local-llm-vulkan`** is the canonical local Windows build for `dimmy_lib.dll`. Dropping any of these features = silently breaks production code paths:
+**`cargo build --release --lib --features local-stt-vulkan,local-stt-parakeet,local-llm-vulkan,denoise-gtcrn`** is the canonical local Windows build for `dimmy_lib.dll`. Dropping any of these features = silently breaks production code paths:
 - `local-stt-vulkan` → whisper.cpp Vulkan STT (used by dictation when `stt_mode=local && local_stt_backend=whisper`, by meeting STT chunks, by file-load).
 - `local-stt-parakeet` → Parakeet TDT v3 STT (used by dictation chunked-stt worker when `local_stt_backend=parakeet`, default for many users; ALSO referenced by meeting follow-ups in v2).
 - `local-llm-vulkan` → llama.cpp Vulkan LLM (used for local recap, local rewrite, future meeting-recap-local path).
+- `denoise-gtcrn` → GTCRN noise suppression on the 16 kHz STT input. **Load-bearing since 2026-08-10**: it replaced the RNNoise stage that used to run upstream of AEC3, so dropping the feature ships a binary with NO noise suppression at all — and it degrades silently, because `maybe_denoise_16k` passes the audio through by design when the model or the feature is absent.
 
 **NEVER** rebuild with a subset just because the diff "doesn't touch parakeet" or "the recap is cloud-only". The user's *runtime config* decides which path runs — drop the feature and the path becomes a silent trap (`local model: parakeet inference requires the local-stt-parakeet cargo feature` looped on every chunk while telemetry says `transcription.failed`). Burned 2026-05-07 twice (meeting empty transcript, then dictation empty transcript). The feature set was frozen after the second incident.
 

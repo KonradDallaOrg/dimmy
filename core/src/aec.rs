@@ -95,31 +95,26 @@ fn run(
             return;
         }
     };
-    crate::log("[AEC] pipeline ready (10ms @ 48kHz mono, HPF+AEC3+NS+AGC2)");
+    crate::log("[AEC] pipeline ready (10ms @ 48kHz mono, HPF+AEC3+NS+AGC2, no upstream NN)");
 
-    // Noise suppressor stacked upstream of AEC. The backend is
-    // chosen at compile time via the `local-dfn` cargo feature:
-    //   - ON (release default): DeepFilterNet3 via the upstream
-    //     `deep_filter` crate. SOTA on PESQ/STOI, ~3-5 ms / frame,
-    //     ~7 MB model embedded.
-    //   - OFF (fallback / dev / no-DFN3 builds): nnnoiseless
-    //     (RNNoise port). ~1 ms / frame, ~85 KB model embedded,
-    //     less aggressive on non-stationary noise but always
-    //     available without the patched libDF dep.
-    // Either way, `try_init_*` returns None when the runtime toggle
-    // is off, in which case the mic frame goes straight into AEC
-    // capture unchanged.
-    #[cfg(feature = "local-dfn")]
-    let mut dfn = crate::dfn3::Dfn3Processor::try_init_runtime();
-    #[cfg(not(feature = "local-dfn"))]
-    let mut dfn = crate::dfn::DfnProcessor::try_init();
-    if dfn.is_some() {
-        crate::log("[AEC] noise suppressor active on mic capture (NN -> AEC3)");
-    }
+    // Noise suppression used to live HERE, upstream of AEC3 (RNNoise via
+    // nnnoiseless, or DeepFilterNet3 under `local-dfn`). Removed 2026-08-10.
+    //
+    // Two reasons. First, one suppressor, not two: GTCRN now runs on the
+    // 16 kHz STT input, and stacking a second one here meant meeting audio
+    // was filtered twice while dictation (mic-only, no AEC) was filtered
+    // once — the same signal treated differently depending on capture mode.
+    // Second, this stage also filtered the audio we ARCHIVE, so a recording
+    // could never be re-transcribed from the original signal.
+    //
+    // Measured on a real 40 min Italian meeting mic track, same recogniser
+    // on all three: unsuppressed transcribed best, GTCRN second, RNNoise
+    // worst — RNNoise dropped whole phrases the other two kept. Suppression
+    // earns its place on NOISY input, which is exactly why it now sits where
+    // it can be turned on for that case instead of always running here.
 
     let mut render_frame = vec![0.0f32; FRAME_SAMPLES];
     let mut capture_frame = vec![0.0f32; FRAME_SAMPLES];
-    let mut dfn_frame = vec![0.0f32; FRAME_SAMPLES];
     let mut output_frame = vec![0.0f32; FRAME_SAMPLES];
 
     // Track whether we've ever seen a ref frame. Required for the
@@ -195,29 +190,6 @@ fn run(
         if !drain_frame(&mic_ring, &mut capture_frame) {
             thread::sleep(POLL_SLEEP);
             continue;
-        }
-
-        // Stage 1: NN noise suppression on the mic capture (if loaded).
-        // Output overwrites capture_frame so the AEC sees the cleaned
-        // signal as its near-end. The two backends have slightly
-        // different return signatures (DFN3 → Result; nnnoiseless →
-        // ()), so we dispatch on the cargo feature.
-        if let Some(ref mut p) = dfn {
-            #[cfg(feature = "local-dfn")]
-            {
-                if let Err(e) = p.process_frame(&capture_frame, &mut dfn_frame) {
-                    crate::log(&format!(
-                        "[AEC] DFN3 process_frame failed: {} — bypassing this frame",
-                        e
-                    ));
-                    dfn_frame.copy_from_slice(&capture_frame);
-                }
-            }
-            #[cfg(not(feature = "local-dfn"))]
-            {
-                p.process_frame(&capture_frame, &mut dfn_frame);
-            }
-            capture_frame.copy_from_slice(&dfn_frame);
         }
 
         // Stage 2: AEC. handle_render_frame stores reference; process_capture_frame

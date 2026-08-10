@@ -639,7 +639,7 @@ jobs:
           REM     gate fail, test-install red, user-reported Win crash),
           REM     FIRST diagnostic = re-add `cargo clean --release` and
           REM     re-run. Then investigate why the cache went stale.
-          cargo build --lib --release --features local-stt-vulkan,local-llm-vulkan,local-stt-parakeet,license-client,telegram
+          cargo build --lib --release --features local-stt-vulkan,local-llm-vulkan,local-stt-parakeet,denoise-gtcrn,license-client,telegram
 
       - name: Gate — verify dimmy_lib.dll linker version
         shell: pwsh
@@ -762,6 +762,14 @@ jobs:
           Copy-Item "core/assets/ggml-silero-v6.2.0.bin" "$pubDir/"
           if (-not (Test-Path "$pubDir/ggml-silero-v6.2.0.bin")) {
             throw "Silero VAD model missing from publish dir — the chunk gate would silently fall back to RNNoise"
+          }
+          # GTCRN is now the ONLY noise suppressor: the RNNoise stage upstream
+          # of AEC3 was removed 2026-08-10. A missing model here means the
+          # build ships with no suppression at all, and degrades silently
+          # (maybe_denoise_16k passes the audio through by design), so assert.
+          Copy-Item "core/assets/gtcrn_simple.onnx" "$pubDir/"
+          if (-not (Test-Path "$pubDir/gtcrn_simple.onnx")) {
+            throw "GTCRN model missing from publish dir — the build would ship with no noise suppression"
           }
           # Bundle the dimmy-mcp MCP server next to the app exe (Win parity
           # with the macOS .app Resources copy) so the INSTALLED app exposes

@@ -70,6 +70,7 @@ name = "chunked_smoke"
 path = "src/bin/chunked_smoke.rs"
 required-features = ["local-stt-parakeet"]
 
+
 # Mac-only counterpart to parakeet_smoke that exercises the
 # FluidInference / Apple Neural Engine path. Same shape: one WAV in,
 # one transcript out, plus timings. Gated on the matching cargo
@@ -111,6 +112,12 @@ local-stt-parakeet-coreml = ["local-stt-parakeet", "ort/coreml"]
 # documented at 100-300x; intended as the Mac-only fast path while
 # Win/Linux stay on ort.
 local-stt-parakeet-fluid = ["dep:fluidaudio-rs"]
+# EXPERIMENT: GTCRN speech enhancement (ICASSP 2024) as a candidate
+# replacement for the 2017-era RNNoise suppressor. 48.2K params, ~535 KB
+# ONNX, frame-by-frame with carried state so it also fits the realtime
+# path. Runs on the ort session we already ship for Parakeet - no
+# sherpa-onnx dependency needed for a half-megabyte model.
+denoise-gtcrn = ["dep:ort", "dep:realfft"]
 # DeepFilterNet ML noise suppression — feature flag kept for the
 # day the upstream blocker (see deep_filter dep comment above) is
 # unblocked. Currently a no-op: dfn3.rs is gated on this feature
@@ -243,6 +250,9 @@ whisper-rs = { version = "0.16", optional = true }
 # Build pulls a prebuilt onnxruntime dll/dylib for the host (~30MB);
 # CUDA / CoreML are opt-in via cargo features.
 ort = { version = "=2.0.0-rc.10", optional = true, features = ["ndarray", "load-dynamic"] }
+# STFT for the GTCRN denoiser. Already in the tree via aec3/nnnoiseless,
+# so making it direct pulls nothing new.
+realfft = { version = "3.5", optional = true }
 ndarray = { version = "0.16", optional = true }
 anyhow = { version = "1", optional = true }
 llama-cpp-4 = { git = "https://github.com/KonradDallaOrg/llama-cpp-rs", optional = true, default-features = false }

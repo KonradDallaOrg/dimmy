@@ -467,8 +467,7 @@ pub fn transcribe_audio_local(
         "transcribe_audio_local: sample_rate must be positive"
     );
 
-    // Downsample to 16kHz for Whisper
-    let samples_16k = crate::preprocess::downsample_to_16k(&audio.samples, audio.sample_rate);
+    let samples_16k = stt_input_16k(audio);
 
     // Postcondition: downsampled samples must be non-empty and finite
     assert!(
@@ -478,6 +477,21 @@ pub fn transcribe_audio_local(
 
     let model_path = crate::local_stt::model_path(model_filename);
     crate::local_stt::transcribe_local(&model_path, &samples_16k, language, prompt)
+}
+
+/// The single door every local recogniser walks through: 48 kHz capture in,
+/// 16 kHz denoised mono out.
+///
+/// One place, deliberately. Noise suppression used to sit upstream of AEC3,
+/// which meant meetings were filtered and dictation was not (mic-only capture
+/// never spins up the AEC), and the audio we ARCHIVED was already filtered.
+/// Routing every engine through here makes "exactly one suppressor" a property
+/// of the code rather than something to remember.
+fn stt_input_16k(audio: &crate::audio::ProcessedAudio) -> Vec<f32> {
+    let samples_16k = crate::preprocess::downsample_to_16k(&audio.samples, audio.sample_rate);
+    #[cfg(feature = "denoise-gtcrn")]
+    let samples_16k = crate::gtcrn::maybe_denoise_16k(&samples_16k).into_owned();
+    samples_16k
 }
 
 /// Transcribe ProcessedAudio locally using Parakeet TDT v3 FP32. No
@@ -500,7 +514,7 @@ pub fn transcribe_audio_local_parakeet(
         "transcribe_audio_local_parakeet: sample_rate must be positive"
     );
 
-    let samples_16k = crate::preprocess::downsample_to_16k(&audio.samples, audio.sample_rate);
+    let samples_16k = stt_input_16k(audio);
     assert!(
         !samples_16k.is_empty(),
         "transcribe_audio_local_parakeet: downsampled samples must not be empty"
@@ -533,7 +547,7 @@ pub fn transcribe_audio_local_parakeet_with_word_ts(
         "transcribe_audio_local_parakeet_with_word_ts: sample_rate must be positive"
     );
 
-    let samples_16k = crate::preprocess::downsample_to_16k(&audio.samples, audio.sample_rate);
+    let samples_16k = stt_input_16k(audio);
     assert!(
         !samples_16k.is_empty(),
         "transcribe_audio_local_parakeet_with_word_ts: downsampled samples must not be empty"

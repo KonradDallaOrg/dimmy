@@ -367,6 +367,15 @@ jobs:
             exit 1
           fi
           echo "[verify] Silero VAD model bundled ($(stat -f%z "$MODEL") bytes)"
+          GTCRN="$APP_PATH/Contents/Resources/gtcrn_simple.onnx"
+          if [ ! -f "$GTCRN" ]; then
+            echo "error: GTCRN model missing from the app bundle" >&2
+            echo "hint: it is the ONLY noise suppressor since the RNNoise stage" >&2
+            echo "      was removed from the AEC on 2026-08-10, and a missing" >&2
+            echo "      model degrades silently to no suppression at all" >&2
+            exit 1
+          fi
+          echo "[verify] GTCRN model bundled ($(stat -f%z "$GTCRN") bytes)"
       - name: Build dimmy-mcp for aarch64-apple-darwin
         working-directory: mcp-server
         run: cargo build --release --target aarch64-apple-darwin
@@ -837,7 +846,7 @@ jobs:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           DIMMY_TELEGRAM_API_ID: ${{ secrets.DIMMY_TELEGRAM_API_ID }}
           DIMMY_TELEGRAM_API_HASH: ${{ secrets.DIMMY_TELEGRAM_API_HASH }}
-          FEAT: "local-stt-vulkan,local-llm-vulkan,local-stt-parakeet,license-client,telegram"
+          FEAT: "local-stt-vulkan,local-llm-vulkan,local-stt-parakeet,denoise-gtcrn,license-client,telegram"
         run: |
           res="$(scripts/dev/dll-cache.sh restore win-x64 "$FEAT" "D:/t/release/dimmy_lib.dll" || echo MISS)"
           echo "restore: $res"
@@ -898,7 +907,7 @@ jobs:
           REM     when the core is unchanged (DLL-reuse via dll-cache.sh),
           REM     so `cargo clean` only runs on a real rebuild.
           cargo clean --release
-          cargo build --lib --release --features local-stt-vulkan,local-llm-vulkan,local-stt-parakeet,license-client,telegram
+          cargo build --lib --release --features local-stt-vulkan,local-llm-vulkan,local-stt-parakeet,denoise-gtcrn,license-client,telegram
           if errorlevel 1 exit /b 1
           REM ── PRESERVE the production DLL before the whisper gate ──
           REM The gate below runs `cargo test --features ...,test-ffi` in THIS
@@ -1020,7 +1029,7 @@ jobs:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           DIMMY_TELEGRAM_API_ID: ${{ secrets.DIMMY_TELEGRAM_API_ID }}
           DIMMY_TELEGRAM_API_HASH: ${{ secrets.DIMMY_TELEGRAM_API_HASH }}
-          FEAT: "local-stt-vulkan,local-llm-vulkan,local-stt-parakeet,license-client,telegram"
+          FEAT: "local-stt-vulkan,local-llm-vulkan,local-stt-parakeet,denoise-gtcrn,license-client,telegram"
         run: scripts/dev/dll-cache.sh store win-x64 "$FEAT" "D:/t/release/dimmy_lib.dll" || true
 
       - name: Gate — reject AVX-512 in dimmy_lib.dll
@@ -1168,6 +1177,14 @@ jobs:
           Copy-Item "core/assets/ggml-silero-v6.2.0.bin" "$pubDir/"
           if (-not (Test-Path "$pubDir/ggml-silero-v6.2.0.bin")) {
             throw "Silero VAD model missing from publish dir — the chunk gate would silently fall back to RNNoise"
+          }
+          # GTCRN is now the ONLY noise suppressor: the RNNoise stage upstream
+          # of AEC3 was removed 2026-08-10. A missing model here means the
+          # build ships with no suppression at all, and degrades silently
+          # (maybe_denoise_16k passes the audio through by design), so assert.
+          Copy-Item "core/assets/gtcrn_simple.onnx" "$pubDir/"
+          if (-not (Test-Path "$pubDir/gtcrn_simple.onnx")) {
+            throw "GTCRN model missing from publish dir — the build would ship with no noise suppression"
           }
           # Bundle the dimmy-mcp MCP server next to the app exe (Win parity
           # with the macOS .app Resources copy) so the INSTALLED app exposes
