@@ -469,6 +469,10 @@ pub fn transcribe_audio_local(
 
     // Downsample to 16kHz for Whisper
     let samples_16k = crate::preprocess::downsample_to_16k(&audio.samples, audio.sample_rate);
+    // Opt-in GTCRN denoise (DIMMY_GTCRN=1), no-op otherwise. Sits here rather
+    // than in the capture chain so the archived 48 kHz audio is untouched.
+    #[cfg(feature = "denoise-gtcrn")]
+    let samples_16k = crate::gtcrn::maybe_denoise_16k(&samples_16k).into_owned();
 
     // Postcondition: downsampled samples must be non-empty and finite
     assert!(

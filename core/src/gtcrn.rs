@@ -282,3 +282,81 @@ mod tests {
         assert_eq!(BINS, 257);
     }
 }
+
+/// Opt-in denoise pass for the STT path, off unless `DIMMY_GTCRN=1`.
+///
+/// Deliberately an env var and not a config field: this is an experiment, and
+/// a config field would mean schema + FFI + two host UIs before we know
+/// whether it is worth having. Placed on the 16 kHz STT input rather than in
+/// the capture chain, so the audio we ARCHIVE stays untouched at 48 kHz.
+///
+/// Returns the input unchanged whenever it is off, the model is missing, or
+/// the model errors. Silently degrading to the original audio is the right
+/// failure mode here: a denoiser is an enhancement, never a gate.
+pub fn maybe_denoise_16k(samples_16k: &[f32]) -> std::borrow::Cow<'_, [f32]> {
+    use std::borrow::Cow;
+    use std::sync::Mutex;
+
+    if std::env::var("DIMMY_GTCRN").as_deref() != Ok("1") {
+        return Cow::Borrowed(samples_16k);
+    }
+    if samples_16k.is_empty() {
+        return Cow::Borrowed(samples_16k);
+    }
+
+    static DENOISER: Mutex<Option<GtcrnDenoiser>> = Mutex::new(None);
+    let Ok(mut guard) = DENOISER.lock() else {
+        crate::log("[GTCRN] mutex poisoned — passing audio through");
+        return Cow::Borrowed(samples_16k);
+    };
+    if guard.is_none() {
+        let path = model_path();
+        match GtcrnDenoiser::load(&path) {
+            Ok(d) => {
+                crate::log(&format!("[GTCRN] denoiser loaded from {}", path.display()));
+                *guard = Some(d);
+            }
+            Err(e) => {
+                crate::log(&format!("[GTCRN] load failed ({e}) — passing through"));
+                return Cow::Borrowed(samples_16k);
+            }
+        }
+    }
+    let d = guard.as_mut().expect("just initialised");
+    // Each call is an independent recording; carrying state across them would
+    // denoise the start of this one against the previous one's noise.
+    d.reset();
+    let t0 = std::time::Instant::now();
+    match d.process(samples_16k) {
+        Ok(out) => {
+            crate::log(&format!(
+                "[GTCRN] denoised {:.1}s of audio in {} ms",
+                samples_16k.len() as f32 / REQUIRED_RATE as f32,
+                t0.elapsed().as_millis()
+            ));
+            Cow::Owned(out)
+        }
+        Err(e) => {
+            crate::log(&format!("[GTCRN] process failed ({e}) — passing through"));
+            Cow::Borrowed(samples_16k)
+        }
+    }
+}
+
+/// Beside the executable first (bundled, like the Silero VAD model), then the
+/// config dir. Mirrors `silero::model_path` so the two behave the same.
+pub fn model_path() -> std::path::PathBuf {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let beside = dir.join(MODEL_FILE);
+            if beside.is_file() {
+                return beside;
+            }
+            let resources = dir.join("../Resources").join(MODEL_FILE);
+            if resources.is_file() {
+                return resources;
+            }
+        }
+    }
+    crate::local_stt::model_path(MODEL_FILE)
+}

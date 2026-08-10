@@ -205,6 +205,36 @@ fn run_pipeline(
         target_rate
     );
 
+    // Optional trim: a 40 min meeting is minutes of CPU, and judging quality
+    // by ear needs a minute, not the whole thing.
+    let work = match std::env::var("DENOISE_MAX_SECS")
+        .ok()
+        .and_then(|v| v.parse::<f32>().ok())
+    {
+        Some(secs) => {
+            let cap = (secs * target_rate as f32) as usize;
+            if work.len() > cap {
+                println!("  trimmed to the first {secs:.0} s (DENOISE_MAX_SECS)");
+                work[..cap].to_vec()
+            } else {
+                work
+            }
+        }
+        None => work,
+    };
+
+    // Write the UNPROCESSED signal next to the result, at the same rate, so
+    // the A/B is between two files that differ only by the denoiser.
+    let before_path = output_path.with_file_name(format!(
+        "{}_before.wav",
+        output_path
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "audio".into())
+    ));
+    write_wav(&before_path, &work, target_rate)?;
+    println!("  wrote (originale): {}", before_path.display());
+
     // --- Dispatch to the selected backend -------------------------------
     let t0 = std::time::Instant::now();
     let out: Vec<f32> = match backend {
@@ -229,19 +259,23 @@ fn run_pipeline(
     );
 
     // --- Write output WAV -----------------------------------------------
-    let out_spec = hound::WavSpec {
+    write_wav(output_path, &out, target_rate)?;
+    println!("  wrote (elaborato): {}", output_path.display());
+    Ok(())
+}
+
+fn write_wav(path: &Path, samples: &[f32], rate: u32) -> Result<(), Box<dyn std::error::Error>> {
+    let spec = hound::WavSpec {
         channels: 1,
-        sample_rate: target_rate,
+        sample_rate: rate,
         bits_per_sample: 16,
         sample_format: hound::SampleFormat::Int,
     };
-    let mut writer = hound::WavWriter::create(output_path, out_spec)?;
-    for &s in &out {
-        let clamped = s.clamp(-1.0, 1.0);
-        writer.write_sample((clamped * i16::MAX as f32) as i16)?;
+    let mut writer = hound::WavWriter::create(path, spec)?;
+    for &s in samples {
+        writer.write_sample((s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)?;
     }
     writer.finalize()?;
-    println!("  wrote: {}", output_path.display());
     Ok(())
 }
 
