@@ -1483,40 +1483,45 @@ pub fn mark_ai_generated(recap_md: &str) -> String {
     // Insert after a leading H1 when there is one, else at the very top.
     // Anything else (the LLM often opens with `## Context`) already returns
     // None from parse_recap_title, so a tag on line 1 costs nothing there.
-    let mut out = String::with_capacity(recap_md.len() + AI_GENERATED_TAG.len() + 2);
-    let mut lines = recap_md.lines();
-    let mut inserted = false;
-    for line in lines.by_ref() {
-        out.push_str(line);
-        out.push('\n');
-        if line.trim().is_empty() {
-            continue;
+    //
+    // Splice by byte offset instead of rebuilding the document from
+    // `lines()`: that iterator strips the `\r` of a CRLF pair, so re-emitting
+    // each line with a bare `\n` silently dropped one byte per line. On a
+    // CRLF recap that loss outweighs the inserted tag and tripped the
+    // no-content-lost postcondition below — taking the process down, since
+    // this runs under an `extern "C"` frame that cannot unwind. Splicing
+    // keeps every original byte (line endings included) and only ever adds.
+    // Burned 2026-08-11: Kimi K3 via Fireworks answers in CRLF, where every
+    // previously-tested provider used LF.
+    let mut line_start = 0usize;
+    let mut first_content: Option<(usize, usize)> = None;
+    for line in recap_md.split_inclusive('\n') {
+        if !line.trim().is_empty() {
+            first_content = Some((line_start, line_start + line.len()));
+            break;
         }
-        // First non-empty line decided it.
-        if line.trim_start().starts_with("# ") {
-            out.push_str(AI_GENERATED_TAG);
-            out.push('\n');
-        } else {
-            // Not a title: put the tag above the line we just emitted.
-            out.clear();
-            out.push_str(AI_GENERATED_TAG);
-            out.push('\n');
-            out.push_str(line);
-            out.push('\n');
-        }
-        inserted = true;
-        break;
+        line_start += line.len();
     }
-    if !inserted {
+    let Some((start, end)) = first_content else {
         return recap_md.to_string();
-    }
-    for line in lines {
-        out.push_str(line);
+    };
+
+    let mut out = String::with_capacity(recap_md.len() + AI_GENERATED_TAG.len() + 2);
+    if recap_md[start..end].trim_start().starts_with("# ") {
+        // Title line: tag goes on the line after it.
+        out.push_str(&recap_md[..end]);
+        if !out.ends_with('\n') {
+            out.push('\n'); // no trailing newline in the source
+        }
+        out.push_str(AI_GENERATED_TAG);
         out.push('\n');
-    }
-    // `lines()` drops a trailing newline; only re-add one if the input had it.
-    if !recap_md.ends_with('\n') {
-        out.pop();
+        out.push_str(&recap_md[end..]);
+    } else {
+        // Not a title: tag goes above the first content line.
+        out.push_str(&recap_md[..start]);
+        out.push_str(AI_GENERATED_TAG);
+        out.push('\n');
+        out.push_str(&recap_md[start..]);
     }
 
     // Postconditions: the marker is present exactly once, and no content was
@@ -1993,6 +1998,41 @@ Testo.
             Some("Autenticazione tag NFC"),
             "the marker must not cost the meeting its title"
         );
+    }
+
+    #[test]
+    fn ai_marker_preserves_crlf_line_endings() {
+        // Regression: the old implementation rebuilt the document from
+        // `lines()`, which strips the `\r` of a CRLF pair, losing a byte per
+        // line. On a real recap that loss exceeded the inserted tag and blew
+        // the no-content-lost postcondition — a process abort, because this
+        // runs under a non-unwinding FFI frame. Kimi K3 via Fireworks answers
+        // in CRLF; every provider tested before it used LF.
+        for recap in [
+            "# Titolo\r\n\r\n## Context\r\n\r\nTesto lungo abbastanza.\r\n",
+            "## Context\r\n\r\nSenza titolo, tante righe.\r\nAltra riga.\r\n",
+            "\r\n\r\n## Dopo righe vuote\r\n\r\nTesto.\r\n",
+        ] {
+            let out = mark_ai_generated(recap);
+            assert!(
+                out.len() > recap.len(),
+                "marking must only ever add bytes, never drop them"
+            );
+            assert_eq!(
+                out.matches(AI_GENERATED_TAG).count(),
+                1,
+                "exactly one marker"
+            );
+            // Every original byte survives: strip the inserted tag line back
+            // out and the document must be identical to what came in.
+            let restored = out.replacen(&format!("{AI_GENERATED_TAG}\n"), "", 1);
+            assert_eq!(restored, recap, "CRLF document must round-trip verbatim");
+            assert_eq!(
+                mark_ai_generated(&out),
+                out,
+                "marking must stay idempotent on CRLF too"
+            );
+        }
     }
 
     #[test]
