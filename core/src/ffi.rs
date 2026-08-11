@@ -5417,7 +5417,14 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
     let recap_vendor_derived = if parsed_model.is_empty() {
         None
     } else {
-        Provider::from_model_id(&parsed_model).filter(|v| v.default_llm_url().is_some())
+        // Prefix match first (covers claude-*/gpt-*/gemini-* incl. ids we
+        // don't ship), then the catalog for every other vendor — without
+        // that second step a Together/Groq recap model resolves to None
+        // and inherits the DICTATION endpoint, which 404s on a model id
+        // it has never heard of.
+        Provider::from_model_id(&parsed_model)
+            .or_else(|| Provider::from_catalog_model_id(&parsed_model))
+            .filter(|v| v.default_llm_url().is_some())
     };
     let use_kr = st.use_keyring.lock().map(|k| *k).unwrap_or(false);
     let recap_same_key = st.recap_use_same_key.lock().map(|b| *b).unwrap_or(true);
