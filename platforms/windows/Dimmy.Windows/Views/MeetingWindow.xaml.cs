@@ -1408,7 +1408,8 @@ public sealed partial class MeetingWindow : Window
 
             var recapMarkdown = Helpers.MeetingRecapHelpers.BuildMarkdownFromSections(sections);
             var actionsPlain = sections.GetValueOrDefault("ACTIONS", "");
-            DimmyNative.dimmy_meeting_save_post_process(dir, recapMarkdown, actionsPlain, null);
+            DimmyNative.dimmy_meeting_save_post_process(dir, recapMarkdown, actionsPlain, null,
+                string.IsNullOrWhiteSpace(modelOverride) ? null : modelOverride);
 
             // Best-effort copy into the user's export folder (Obsidian /
             // Drive / Dropbox sync). No-op when unconfigured; never throws.

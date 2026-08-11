@@ -172,16 +172,25 @@ extension DimmyCore {
     /// Persist the post-process LLM recap + actions into the meeting dir.
     /// Pass empty/nil for fields that shouldn't be written. 0 = ok.
     @discardableResult
+    /// `model` is recorded in the AI-generated marker for provenance. Pass
+    /// nil when the writer is unknown (empty override = "inherit / pick
+    /// best", which only the core resolves) rather than guessing — the
+    /// marker then omits the field, like every recap saved before this.
     func meetingSavePostProcess(dir: String,
                                  recap: String?,
                                  actions: String?,
-                                 translated: String? = nil) -> Bool {
+                                 translated: String? = nil,
+                                 model: String? = nil) -> Bool {
         guard isInitialized else { return false }
+        let modelArg = (model?.isEmpty ?? true) ? nil : model
         let result = dir.withCString { dirPtr -> Int32 in
             withOptionalCString(recap) { recapPtr in
                 withOptionalCString(actions) { actionsPtr in
                     withOptionalCString(translated) { translatedPtr in
-                        dimmy_meeting_save_post_process(dirPtr, recapPtr, actionsPtr, translatedPtr)
+                        withOptionalCString(modelArg) { modelPtr in
+                            dimmy_meeting_save_post_process(
+                                dirPtr, recapPtr, actionsPtr, translatedPtr, modelPtr)
+                        }
                     }
                 }
             }

@@ -93,8 +93,14 @@ public static class MeetingPostProcessService
                 ? dt
                 : (string.IsNullOrWhiteSpace(meetingType) ? "auto" : meetingType);
 
+            // modelOverride is what actually ran; empty means "inherit /
+            // pick best", which only the core resolves — pass null there
+            // rather than guess, so the marker omits the field instead of
+            // naming the wrong model. The core strips the cloud:/local:
+            // prefix, so hosts pass the picker value verbatim.
             int saveRc = DimmyNative.dimmy_meeting_save_post_process(
-                dir, recapMarkdown, actionsPlain, null);
+                dir, recapMarkdown, actionsPlain, null,
+                string.IsNullOrWhiteSpace(modelOverride) ? null : modelOverride);
             App.Log($"recap (shared) saved rc={saveRc}", "MeetingRecap");
 
             // Best-effort copy into the user's export folder (Obsidian /

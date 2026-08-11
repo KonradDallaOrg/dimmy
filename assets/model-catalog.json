@@ -1,7 +1,7 @@
 {
   "schema": 2,
-  "generated": "2026-07-03",
-  "note": "Single source of truth for the cloud models Dimmy offers per provider. Embedded into the Rust core via include_str! and served to every host UI through the dimmy_model_catalog_json() FFI — Windows (System.Text.Json) and macOS (Codable) read the SAME compiled bytes, so they cannot diverge. Validate it against each provider's live /models endpoint with scripts/dev/check-model-ids.py before a release. Fields: provider 'icon' = svg asset name (Assets/Providers/<icon>.svg on Win, provider-<icon> on Mac); 'llm_url'/'stt_url' = the per-task endpoint a selected model resolves to; per-model 'tasks' drives which picker shows it (stt = Voice input, llm = dictation rewrite, recap = meeting recap). NOTE: 'recap' is only valid on Anthropic/OpenAI/Gemini models — recap dispatch derives the endpoint from the model id via Provider::from_model_id, which recognises only claude-*/gpt-*/o-series/gemini-* prefixes. A recap tag on any other provider (groq/together/openrouter/fireworks) would mis-route to the dictation endpoint, so those carry 'llm' only. 'tier' (top/balanced/fast/fastest) drives ordering + the Auto-pick default. Local models (Whisper/Parakeet/Gemma/Phi) are NOT here — they have download/bundle/feature-flag semantics and stay in host code, injected alongside this list.",
+  "generated": "2026-08-11",
+  "note": "Single source of truth for the cloud models Dimmy offers per provider. Embedded into the Rust core via include_str! and served to every host UI through the dimmy_model_catalog_json() FFI — Windows (System.Text.Json) and macOS (Codable) read the SAME compiled bytes, so they cannot diverge. Validate it against each provider's live /models endpoint with scripts/dev/check-model-ids.py before a release. Fields: provider 'icon' = svg asset name (Assets/Providers/<icon>.svg on Win, provider-<icon> on Mac); 'llm_url'/'stt_url' = the per-task endpoint a selected model resolves to; per-model 'tasks' drives which picker shows it (stt = Voice input, llm = dictation rewrite, recap = meeting recap). NOTE: 'recap' resolves its endpoint from the model id — Provider::from_model_id for claude-*/gpt-*/o-series/gemini-*, then Provider::from_catalog_model_id (an exact lookup in THIS file) for every other vendor. So a model id listed here is routable as a recap model whatever its provider; an id NOT listed here that also fails the prefix rule falls back to the dictation endpoint and will 404. 'tier' (top/balanced/fast/fastest) drives ordering + the Auto-pick default. Local models (Whisper/Parakeet/Gemma/Phi) are NOT here — they have download/bundle/feature-flag semantics and stay in host code, injected alongside this list.",
   "providers": [
     {
       "id": "openai",
@@ -12,7 +12,10 @@
       "models_endpoint": "https://api.openai.com/v1/models",
       "auth": "bearer",
       "models": [
-        { "id": "gpt-5.5", "label": "GPT-5.5", "tasks": ["llm", "recap"], "tier": "top" },
+        { "id": "gpt-5.6-sol", "label": "GPT-5.6 Sol", "tasks": ["llm", "recap"], "tier": "top" },
+        { "id": "gpt-5.6-luna", "label": "GPT-5.6 Luna", "tasks": ["llm", "recap"] },
+        { "id": "gpt-5.6-terra", "label": "GPT-5.6 Terra", "tasks": ["llm", "recap"] },
+        { "id": "gpt-5.5", "label": "GPT-5.5", "tasks": ["llm", "recap"] },
         { "id": "gpt-5.4-mini", "label": "GPT-5.4 mini", "tasks": ["llm", "recap"], "tier": "fast" },
         { "id": "gpt-5.4-nano", "label": "GPT-5.4 nano", "tasks": ["llm", "recap"], "tier": "fastest" },
         { "id": "gpt-5.1", "label": "GPT-5.1", "tasks": ["llm", "recap"] },
@@ -38,7 +41,8 @@
       "models_endpoint": "https://api.anthropic.com/v1/models",
       "auth": "anthropic",
       "models": [
-        { "id": "claude-opus-4-8", "label": "Claude Opus 4.8", "tasks": ["llm", "recap"], "tier": "top" },
+        { "id": "claude-opus-5", "label": "Claude Opus 5", "tasks": ["llm", "recap"], "tier": "top" },
+        { "id": "claude-opus-4-8", "label": "Claude Opus 4.8", "tasks": ["llm", "recap"] },
         { "id": "claude-fable-5", "label": "Claude Fable 5", "tasks": ["llm", "recap"] },
         { "id": "claude-sonnet-5", "label": "Claude Sonnet 5", "tasks": ["llm", "recap"], "tier": "balanced" },
         { "id": "claude-opus-4-7", "label": "Claude Opus 4.7", "tasks": ["llm", "recap"] },
@@ -55,6 +59,7 @@
       "models_endpoint": "https://generativelanguage.googleapis.com/v1beta/models",
       "auth": "gemini",
       "models": [
+        { "id": "gemini-3.6-flash", "label": "Gemini 3.6 Flash", "tasks": ["llm", "recap"] },
         { "id": "gemini-3.5-flash", "label": "Gemini 3.5 Flash", "tasks": ["llm", "recap"], "tier": "fast" },
         { "id": "gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro", "tasks": ["llm", "recap"], "tier": "top" },
         { "id": "gemini-3.1-flash-lite", "label": "Gemini 3.1 Flash Lite", "tasks": ["stt", "llm", "recap"], "tier": "fast" },
@@ -72,11 +77,10 @@
       "models_endpoint": "https://api.groq.com/openai/v1/models",
       "auth": "bearer",
       "models": [
-        { "id": "llama-3.3-70b-versatile", "label": "Llama 3.3 70B", "tasks": ["llm"], "tier": "top" },
-        { "id": "openai/gpt-oss-120b", "label": "GPT-OSS 120B", "tasks": ["llm"] },
-        { "id": "meta-llama/llama-4-scout-17b-16e-instruct", "label": "Llama 4 Scout 17B", "tasks": ["llm"] },
+        { "id": "llama-3.3-70b-versatile", "label": "Llama 3.3 70B", "tasks": ["llm", "recap"], "tier": "top" },
+        { "id": "openai/gpt-oss-120b", "label": "GPT-OSS 120B", "tasks": ["llm", "recap"] },
         { "id": "llama-3.1-8b-instant", "label": "Llama 3.1 8B Instant", "tasks": ["llm"], "tier": "fastest" },
-        { "id": "qwen/qwen3-32b", "label": "Qwen3 32B", "tasks": ["llm"] },
+        { "id": "qwen/qwen3.6-27b", "label": "Qwen3.6 27B", "tasks": ["llm", "recap"] },
         { "id": "whisper-large-v3-turbo", "label": "Whisper Large v3 Turbo", "tasks": ["stt"] },
         { "id": "whisper-large-v3", "label": "Whisper Large v3", "tasks": ["stt"] }
       ]
@@ -116,7 +120,10 @@
       "models_endpoint": "https://api.together.xyz/v1/models",
       "auth": "bearer",
       "models": [
-        { "id": "meta-llama/Llama-3.3-70B-Instruct-Turbo", "label": "Llama 3.3 70B Turbo", "tasks": ["llm"] },
+        { "id": "moonshotai/Kimi-K3", "label": "Kimi K3", "tasks": ["llm", "recap"] },
+        { "id": "zai-org/GLM-5.2", "label": "GLM-5.2", "tasks": ["llm", "recap"] },
+        { "id": "deepseek-ai/DeepSeek-V4-Pro", "label": "DeepSeek V4 Pro", "tasks": ["llm", "recap"] },
+        { "id": "meta-llama/Llama-3.3-70B-Instruct-Turbo", "label": "Llama 3.3 70B Turbo", "tasks": ["llm", "recap"] },
         { "id": "Qwen/Qwen2.5-7B-Instruct-Turbo", "label": "Qwen 2.5 7B Turbo", "tasks": ["llm"] },
         { "id": "nvidia/parakeet-tdt-0.6b-v3", "label": "Parakeet TDT v3", "tasks": ["stt"] },
         { "id": "openai/whisper-large-v3", "label": "Whisper Large v3", "tasks": ["stt"] }
@@ -131,7 +138,12 @@
       "models_endpoint": "https://api.fireworks.ai/inference/v1/models",
       "auth": "bearer",
       "models": [
-        { "id": "accounts/fireworks/models/kimi-k2p6", "label": "Kimi K2", "tasks": ["llm"] },
+        { "id": "accounts/fireworks/models/qwen3p7-plus", "label": "Qwen3.7 Plus", "tasks": ["llm", "recap"] },
+        { "id": "accounts/fireworks/models/kimi-k3", "label": "Kimi K3", "tasks": ["llm", "recap"] },
+        { "id": "accounts/fireworks/models/glm-5p2", "label": "GLM-5.2", "tasks": ["llm", "recap"] },
+        { "id": "accounts/fireworks/models/deepseek-v4-pro", "label": "DeepSeek V4 Pro", "tasks": ["llm", "recap"] },
+        { "id": "accounts/fireworks/models/minimax-m3", "label": "MiniMax M3", "tasks": ["llm", "recap"] },
+        { "id": "accounts/fireworks/models/kimi-k2p6", "label": "Kimi K2", "tasks": ["llm", "recap"] },
         { "id": "whisper-v3-turbo", "label": "Whisper v3 Turbo", "tasks": ["stt"] }
       ]
     }

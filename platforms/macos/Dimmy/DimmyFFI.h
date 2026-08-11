@@ -402,10 +402,15 @@ int32_t dimmy_meeting_stop(char * _Nonnull out_buf, int32_t buf_len);
 
 /// Persist the LLM-produced recap + actions (+ optional translation) into
 /// the meeting directory. Pass nulls/empty to skip a field. 0 ok, -1 error.
+/// `model_ptr` names the model that wrote the recap and is recorded in the
+/// machine-readable AI-generated marker; pass null when it is unknown (a
+/// wrong attribution is worse than none). The core strips a `cloud:` /
+/// `local:` picker prefix, so pass the override value verbatim.
 int32_t dimmy_meeting_save_post_process(const char * _Nonnull dir_ptr,
                                         const char * _Nullable recap_ptr,
                                         const char * _Nullable actions_ptr,
-                                        const char * _Nullable translated_ptr);
+                                        const char * _Nullable translated_ptr,
+                                        const char * _Nullable model_ptr);
 
 /// JSON array of orphaned meeting directories (`.recording` marker still
 /// present from a crashed session). UI can offer "recover meeting?".

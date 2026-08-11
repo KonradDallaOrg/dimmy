@@ -96,6 +96,29 @@ impl Provider {
         }
     }
 
+    /// Resolve a vendor by looking the model id up in the embedded
+    /// catalog — the same table the pickers are built from.
+    ///
+    /// `from_model_id` only knows claude-*/gpt-*/o-series/gemini-*
+    /// prefixes, so every other vendor's ids returned None and the recap
+    /// dispatcher silently fell back to the *dictation* endpoint, POSTing
+    /// e.g. `moonshotai/Kimi-K3` to Groq (404). The catalog already maps
+    /// model → provider, so ask it instead of guessing from the name.
+    /// This is what lets a cheap Together/Groq model be picked as the
+    /// recap model. Exact match only: ids are vendor-unique strings, and
+    /// a prefix rule here would reintroduce the bug it fixes.
+    pub fn from_catalog_model_id(model: &str) -> Option<Self> {
+        let v: serde_json::Value = serde_json::from_str(crate::catalog::MODEL_CATALOG_JSON).ok()?;
+        for p in v["providers"].as_array()? {
+            for m in p["models"].as_array()? {
+                if m["id"].as_str() == Some(model) {
+                    return Self::from_tag(p["id"].as_str()?);
+                }
+            }
+        }
+        None
+    }
+
     /// Inverse of `as_str()` — parse a lowercase vendor tag back to the
     /// enum. Returns None for unknown values so callers can distinguish
     /// "empty / inherit" from "unrecognised vendor". Used by the

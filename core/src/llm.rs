@@ -973,10 +973,17 @@ fn anthropic_uses_adaptive_thinking(model_lc: &str) -> bool {
     // budget_tokens/disabled. It also needs the adaptive branch's 32k
     // max_tokens headroom or the inline reasoning trace can eat a small
     // command/recap budget and return truncated output.
+    // Opus 5 (Aug 2026) is adaptive-only too. Verified live against
+    // api.anthropic.com: without this arm the call builds the legacy
+    // budget_tokens body and comes back HTTP 400 — the same failure Opus
+    // 4.8 had. Note "opus-5" cannot false-match "claude-opus-4-5": that
+    // id reads "opus-4-5", so the "opus-" prefix is followed by a 4.
     model_lc.contains("opus-4-7")
         || model_lc.contains("opus-4.7")
         || model_lc.contains("opus-4-8")
         || model_lc.contains("opus-4.8")
+        || model_lc.contains("opus-5")
+        || model_lc.contains("opus-6") // future-proof
         || model_lc.contains("sonnet-5")
         || model_lc.contains("sonnet-6") // future-proof
         || model_lc.contains("fable")
@@ -1142,7 +1149,13 @@ pub async fn process_raw_prompt(
     let (content, truncated) =
         send_raw_prompt_request(&client, api_url, model, api_key, user_prompt, max_tokens).await?;
     if !truncated {
-        return Ok(content);
+        // Reasoning models (qwen3 via Groq, and the open-weight Together
+        // line) emit <think>…</think> ahead of the answer. `process_text`
+        // has stripped it since 2026-06-19; this path never did, so a
+        // recap built on one of those models embedded the whole
+        // chain-of-thought in the saved recap.md. Verified live against
+        // groq/qwen3.6-27b, which returns a raw "<think>" block.
+        return Ok(strip_output_scaffolding(&content));
     }
     let retry_budget = (max_tokens * 4).clamp(16_384, 99_000);
     crate::log(&format!(
@@ -1156,7 +1169,7 @@ pub async fn process_raw_prompt(
         crate::log("[LLM] ERROR: raw-prompt output truncated even after the headroom retry — refusing to return a partial answer");
         return Err(crate::error::LlmError::Truncated);
     }
-    Ok(retry_content)
+    Ok(strip_output_scaffolding(&retry_content))
 }
 
 /// One dispatch of the raw-prompt (recap / command) request. Returns the
