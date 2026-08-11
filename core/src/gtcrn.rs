@@ -72,11 +72,16 @@ pub struct GtcrnDenoiser {
 
 impl GtcrnDenoiser {
     pub fn load(model_path: &Path) -> Result<Self, String> {
-        assert!(
-            model_path.is_file(),
-            "GTCRN model missing at {}",
-            model_path.display()
-        );
+        // NOT an assert. A missing model file is an environment state, not a
+        // broken invariant: the documented contract is that `maybe_denoise_16k`
+        // passes audio through when the model is absent. An assert here panics
+        // across the `extern "C"` FFI boundary — which cannot unwind — so the
+        // whole host process aborts mid-transcription instead of degrading.
+        // Burned 2026-08-11: a local build without the asset copied next to the
+        // exe took the app down on the first recording.
+        if !model_path.is_file() {
+            return Err(format!("gtcrn model missing at {}", model_path.display()));
+        }
 
         // No explicit optimisation level: this ONNX Runtime build rejects the
         // setting, and at 48.2K parameters graph optimisation buys nothing
@@ -252,6 +257,34 @@ impl GtcrnDenoiser {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn load_returns_err_for_a_missing_model_instead_of_panicking() {
+        // Regression: this used to be an assert!, so a tree without the
+        // bundled asset panicked across the extern "C" FFI boundary — which
+        // cannot unwind — and aborted the whole host process on the first
+        // recording. A missing optional asset must degrade, not crash.
+        let missing = std::path::Path::new("definitely-not-a-real-gtcrn-model.onnx");
+        assert!(!missing.is_file(), "test fixture must not exist");
+        let err = GtcrnDenoiser::load(missing)
+            .err()
+            .expect("missing model must be an Err, never a panic");
+        assert!(err.contains("missing"), "unexpected error text: {err}");
+    }
+
+    #[test]
+    fn missing_model_passes_audio_through_unchanged() {
+        // The documented contract of the whole module: no model, no change.
+        // Guards the wiring between load()'s Err and the passthrough branch.
+        let input: Vec<f32> = (0..1600).map(|i| (i as f32 * 0.01).sin()).collect();
+        let out = maybe_denoise_16k(&input);
+        if matches!(out, std::borrow::Cow::Borrowed(_)) {
+            assert_eq!(&*out, &input[..], "passthrough must not alter samples");
+        }
+        // When the asset IS present the denoiser legitimately returns Owned
+        // audio, so only the borrowed case is asserted — the point of this
+        // test is that neither path aborts the process.
+    }
 
     #[test]
     fn window_squared_sums_to_unity_at_fifty_percent_overlap() {
