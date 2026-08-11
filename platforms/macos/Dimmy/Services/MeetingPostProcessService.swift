@@ -148,7 +148,8 @@ enum MeetingPostProcessService {
             DimmyCore.shared.meetingSavePostProcess(
                 dir: dir,
                 recap: markdown,
-                actions: actions
+                actions: actions,
+                model: model
             )
             // Best-effort copy into the user's export folder (Obsidian /
             // Drive / Dropbox sync). No-op when unconfigured; never throws.

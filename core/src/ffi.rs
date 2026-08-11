@@ -3989,6 +3989,12 @@ fn clear_capture_buffers(st: &AppState) {
 /// can be null/empty — empty fields are skipped, not written as
 /// blank files. Returns 0 on success, -1 on any error.
 ///
+/// `model_ptr` names the model that produced the recap; it is written
+/// into the machine-readable AI-generated marker for provenance. Pass
+/// null when the caller genuinely does not know (a wrong attribution is
+/// worse than none) — the marker then omits the field, exactly as every
+/// recap saved before this parameter existed does.
+///
 /// # Safety
 /// All non-null `*const c_char` pointers must be valid null-
 /// terminated UTF-8 C strings.
@@ -3998,6 +4004,7 @@ pub unsafe extern "C" fn dimmy_meeting_save_post_process(
     recap_ptr: *const c_char,
     actions_ptr: *const c_char,
     translated_ptr: *const c_char,
+    model_ptr: *const c_char,
 ) -> c_int {
     if dir_ptr.is_null() {
         return -1;
@@ -4025,7 +4032,15 @@ pub unsafe extern "C" fn dimmy_meeting_save_post_process(
             _ => None,
         }
     };
-    match crate::meeting::save_post_process(dir, recap, actions, translated) {
+    let model = if model_ptr.is_null() {
+        None
+    } else {
+        match CStr::from_ptr(model_ptr).to_str() {
+            Ok(s) if !s.is_empty() => Some(s),
+            _ => None,
+        }
+    };
+    match crate::meeting::save_post_process(dir, recap, actions, translated, model) {
         Ok(_) => 0,
         Err(e) => {
             log(&format!("[Meeting] save_post_process: {}", e));

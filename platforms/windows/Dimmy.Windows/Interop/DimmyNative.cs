@@ -315,11 +315,18 @@ public static class DimmyNative
     public static extern int dimmy_meeting_stop(byte[] outBuf, int bufLen);
 
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    /// <param name="model">
+    /// The model that produced the recap, recorded in the machine-readable
+    /// AI-generated marker for provenance. Pass null when the writer is
+    /// genuinely unknown — a wrong attribution is worse than none, and the
+    /// marker then looks exactly like every recap saved before this existed.
+    /// </param>
     public static extern int dimmy_meeting_save_post_process(
         [MarshalAs(UnmanagedType.LPUTF8Str)] string dir,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string? recap,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string? actions,
-        [MarshalAs(UnmanagedType.LPUTF8Str)] string? translated);
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? translated,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? model);
 
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_meeting_list_orphans(byte[] outBuf, int bufLen);

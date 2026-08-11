@@ -877,12 +877,14 @@ fn meeting_save_post_process_writes_recap_and_actions_files() {
     let dir_c = CString::new(tmp.to_string_lossy().as_ref()).unwrap();
     let recap_c = CString::new("• Decided X\n• Outcome Y").unwrap();
     let actions_c = CString::new("1. alice — write doc — friday").unwrap();
+    let model_c = CString::new("accounts/fireworks/models/kimi-k3").unwrap();
     let rc = unsafe {
         dimmy_meeting_save_post_process(
             dir_c.as_ptr(),
             recap_c.as_ptr(),
             actions_c.as_ptr(),
             std::ptr::null(),
+            model_c.as_ptr(),
         )
     };
     assert_eq!(rc, 0, "save_post_process must succeed");
@@ -893,6 +895,15 @@ fn meeting_save_post_process_writes_recap_and_actions_files() {
     assert!(actions_path.exists(), "actions.json not written");
     let recap = std::fs::read_to_string(&recap_path).unwrap();
     assert!(recap.contains("Decided X"));
+    // The model reaches the marker across the FFI boundary — this is the
+    // round-trip the C#/Swift hosts depend on, so a signature change that
+    // silently drops the argument fails here rather than in a shipped recap.
+    assert!(
+        recap.contains(
+            "dimmy-ai-generated: true; by: Dimmy; model: accounts/fireworks/models/kimi-k3"
+        ),
+        "recap.md must record the generating model, got: {recap}"
+    );
 
     // Cleanup
     let _ = std::fs::remove_dir_all(&tmp);
