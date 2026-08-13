@@ -1299,7 +1299,9 @@ async fn send_raw_prompt_request(
             .await?
     } else {
         // OpenAI-compatible (Groq, OpenAI, Together, Gemini-OAI proxy, ...).
-        let body = if openai_reasoning_shape(api_url, &model_lc) {
+        // Streamed — see `read_openai_sse` for the measured reason and for
+        // why only this branch streams.
+        let mut body = if openai_reasoning_shape(api_url, &model_lc) {
             // gpt-5 / o-series: max_completion_tokens, no temperature. Floor the
             // budget so the internal reasoning trace can't eat it all and return
             // EMPTY — a short creative command ("write a haiku") on gpt-5-mini
@@ -1323,6 +1325,7 @@ async fn send_raw_prompt_request(
                 ],
             })
         };
+        body["stream"] = serde_json::Value::Bool(true);
         client
             .post(api_url)
             .header("Authorization", format!("Bearer {api_key}"))
@@ -1406,36 +1409,188 @@ async fn send_raw_prompt_request(
         let truncated = raw["candidates"][0]["finishReason"].as_str() == Some("MAX_TOKENS");
         Ok((text, truncated))
     } else {
-        // OpenAI-compatible
-        #[derive(serde::Deserialize)]
-        struct ChatResponse {
-            choices: Vec<ChatChoice>,
-        }
-        #[derive(serde::Deserialize)]
-        struct ChatChoice {
-            message: ChatMessage,
-            #[serde(default)]
-            finish_reason: Option<String>,
-        }
-        #[derive(serde::Deserialize)]
-        struct ChatMessage {
-            content: String,
-        }
-        let parsed: ChatResponse = response.json().await?;
-        let first = parsed.choices.into_iter().next();
-        let truncated = first.as_ref().and_then(|c| c.finish_reason.as_deref()) == Some("length");
-        Ok((
-            first
-                .map(|c| c.message.content.trim().to_string())
-                .unwrap_or_default(),
-            truncated,
-        ))
+        // OpenAI-compatible: Server-Sent Events. See `read_openai_sse`.
+        read_openai_sse(response).await
     }
+}
+
+/// Consume an OpenAI-compatible `stream: true` response.
+///
+/// Why stream at all: the answer starts appearing far sooner, and some
+/// providers refuse to answer any other way. Measured on a real recap
+/// prompt (2026-08-13):
+///
+///   fireworks/kimi-k3     batch  first text 35.2s | stream  first text 11.7s
+///   together/Qwen3.7-Plus batch  HTTP 400 "only supports streaming"
+///                         stream first text 25.5s — works
+///
+/// Wire format: `data: {json}` lines, terminated by `data: [DONE]`. The text
+/// lives in `choices[0].delta.content`, and `finish_reason` arrives on a
+/// later chunk than the text, so both are accumulated to the end.
+///
+/// Deliberately scoped to the OpenAI-compatible branch. Anthropic and
+/// Gemini-native use different SSE shapes and are already fast, so they stay
+/// on the batch path — nothing that works today changes.
+async fn read_openai_sse(
+    mut response: reqwest::Response,
+) -> Result<(String, bool), crate::error::LlmError> {
+    let mut acc = SseAccumulator::default();
+    // `chunk()` needs no reqwest "stream" feature, so this adds no dependency.
+    while let Some(bytes) = response.chunk().await? {
+        for delta in acc.feed(&String::from_utf8_lossy(&bytes)) {
+            emit_recap_stream_event("delta", &delta);
+        }
+    }
+    if !acc.text.is_empty() {
+        emit_recap_stream_event("end", "");
+    }
+    // A 200 that carried no parseable SSE at all means the provider answered
+    // in a shape we don't understand. Report it rather than returning an empty
+    // string, which the caller would treat as a valid (empty) answer.
+    if !acc.saw_any_event {
+        return Err(crate::error::LlmError::Api {
+            status: 200,
+            body: "streaming response contained no SSE events".to_string(),
+        });
+    }
+    Ok((
+        acc.text.trim().to_string(),
+        acc.finish_reason.as_deref() == Some("length"),
+    ))
+}
+
+/// Incremental parser for an OpenAI-compatible SSE body.
+///
+/// Split out of the network call so the parsing rules are testable: chunk
+/// boundaries land anywhere (mid-line, even mid-JSON), providers interleave
+/// keep-alive frames that are not JSON, and `finish_reason` arrives on a
+/// LATER frame than the last text. Each of those is a silent-corruption bug
+/// if handled wrong — a truncated recap that looks complete.
+#[derive(Default)]
+struct SseAccumulator {
+    pending: String,
+    text: String,
+    finish_reason: Option<String>,
+    saw_any_event: bool,
+}
+
+impl SseAccumulator {
+    /// Feed one network chunk; returns the text deltas it completed.
+    fn feed(&mut self, chunk: &str) -> Vec<String> {
+        self.pending.push_str(chunk);
+        let mut deltas = Vec::new();
+        // Consume only up to the last newline — the tail may be half a line.
+        while let Some(nl) = self.pending.find('\n') {
+            let line: String = self.pending.drain(..=nl).collect();
+            let line = line.trim();
+            let Some(payload) = line.strip_prefix("data: ") else {
+                continue; // comments, blank keep-alives, `event:` lines
+            };
+            if payload == "[DONE]" {
+                self.saw_any_event = true;
+                continue;
+            }
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) else {
+                continue; // a provider's non-conforming keep-alive frame
+            };
+            self.saw_any_event = true;
+            if let Some(delta) = v["choices"][0]["delta"]["content"].as_str() {
+                if !delta.is_empty() {
+                    if self.text.is_empty() {
+                        emit_recap_stream_event("start", "");
+                    }
+                    self.text.push_str(delta);
+                    deltas.push(delta.to_string());
+                }
+            }
+            if let Some(fr) = v["choices"][0]["finish_reason"].as_str() {
+                self.finish_reason = Some(fr.to_string());
+            }
+        }
+        deltas
+    }
+}
+
+/// Publish recap/command text as it arrives, so a host can render it
+/// progressively instead of showing nothing for 35 seconds.
+///
+/// Mirrors the `stt_chunk` event the streaming-dictation path already emits —
+/// same channel, same shape — because CLAUDE.md's no-polling rule makes the
+/// event callback the only sanctioned way to push core state at a host.
+/// Emitting it costs nothing when no host subscribes yet.
+fn emit_recap_stream_event(phase: &str, delta: &str) {
+    crate::ffi::emit_event(
+        "llm_stream",
+        &serde_json::json!({ "phase": phase, "delta": delta }).to_string(),
+    );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sse_frame(delta: &str) -> String {
+        format!(
+            "data: {}\n",
+            serde_json::json!({"choices":[{"delta":{"content":delta}}]})
+        )
+    }
+
+    #[test]
+    fn sse_reassembles_text_split_across_network_chunks() {
+        // A chunk boundary lands wherever TCP decides — including inside a
+        // JSON frame. Consuming a partial line would drop that frame's text
+        // and produce a recap that looks complete but silently lost a piece.
+        let whole = format!(
+            "{}{}{}",
+            sse_frame("Ciao "),
+            sse_frame("come "),
+            sse_frame("stai")
+        );
+        let mut acc = SseAccumulator::default();
+        let mid = whole.len() / 2;
+        acc.feed(&whole[..mid]);
+        acc.feed(&whole[mid..]);
+        assert_eq!(acc.text, "Ciao come stai");
+        assert!(acc.saw_any_event);
+    }
+
+    #[test]
+    fn sse_survives_keepalives_and_done_marker() {
+        // Providers interleave comment lines and non-JSON keep-alives, and
+        // close with [DONE], which is not JSON. None may abort the parse.
+        let body = format!(
+            ": keep-alive\n\n{}data: not-json-at-all\n{}data: [DONE]\n",
+            sse_frame("uno "),
+            sse_frame("due")
+        );
+        let mut acc = SseAccumulator::default();
+        acc.feed(&body);
+        assert_eq!(acc.text, "uno due");
+    }
+
+    #[test]
+    fn sse_reads_finish_reason_from_a_later_frame_than_the_text() {
+        // finish_reason arrives AFTER the last content delta, so reading it
+        // eagerly would miss a truncation and hand back a half answer as if
+        // it were whole — the failure the batch path already guards against.
+        let mut acc = SseAccumulator::default();
+        acc.feed(&sse_frame("testo"));
+        assert_eq!(acc.finish_reason, None);
+        acc.feed("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n");
+        assert_eq!(acc.finish_reason.as_deref(), Some("length"));
+        assert_eq!(acc.text, "testo", "the tail frame must not alter the text");
+    }
+
+    #[test]
+    fn sse_with_no_events_is_distinguishable_from_an_empty_answer() {
+        // A 200 carrying nothing parseable must not look like a valid empty
+        // reply; read_openai_sse turns this state into an error.
+        let mut acc = SseAccumulator::default();
+        acc.feed("<html>gateway error</html>\n");
+        assert!(!acc.saw_any_event);
+        assert!(acc.text.is_empty());
+    }
 
     #[test]
     fn openai_reasoning_shape_only_openai_gpt5_and_o_series() {
