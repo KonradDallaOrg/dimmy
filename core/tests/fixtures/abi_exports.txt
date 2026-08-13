@@ -58,6 +58,7 @@ dimmy_history_stats
 dimmy_history_update_audio
 dimmy_history_update_enhanced
 dimmy_history_update_word_timestamps
+dimmy_host_log
 dimmy_hotkey_combos_conflict
 dimmy_hotkey_install
 dimmy_hotkey_poll_recording

@@ -1444,13 +1444,38 @@ async fn read_openai_sse(
     if !acc.text.is_empty() {
         emit_recap_stream_event("end", "");
     }
-    // A 200 that carried no parseable SSE at all means the provider answered
-    // in a shape we don't understand. Report it rather than returning an empty
-    // string, which the caller would treat as a valid (empty) answer.
+    // No SSE at all: the provider ignored `stream: true` and answered with a
+    // plain chat completion. That must keep working — asking for streaming is
+    // an optimisation, and a provider declining it is not an error. Parse the
+    // body the old way before giving up.
     if !acc.saw_any_event {
+        #[derive(serde::Deserialize)]
+        struct ChatResponse {
+            choices: Vec<ChatChoice>,
+        }
+        #[derive(serde::Deserialize)]
+        struct ChatChoice {
+            message: ChatMessage,
+            #[serde(default)]
+            finish_reason: Option<String>,
+        }
+        #[derive(serde::Deserialize)]
+        struct ChatMessage {
+            content: String,
+        }
+        if let Ok(parsed) = serde_json::from_str::<ChatResponse>(&acc.raw) {
+            if let Some(first) = parsed.choices.into_iter().next() {
+                return Ok((
+                    first.message.content.trim().to_string(),
+                    first.finish_reason.as_deref() == Some("length"),
+                ));
+            }
+        }
+        // Neither SSE nor a chat completion: report it rather than returning
+        // an empty string, which the caller would treat as a valid answer.
         return Err(crate::error::LlmError::Api {
             status: 200,
-            body: "streaming response contained no SSE events".to_string(),
+            body: "response was neither SSE nor a chat completion".to_string(),
         });
     }
     Ok((
@@ -1469,6 +1494,9 @@ async fn read_openai_sse(
 #[derive(Default)]
 struct SseAccumulator {
     pending: String,
+    /// Every byte received, kept so a provider that ignores `stream: true`
+    /// can still be parsed as an ordinary chat completion.
+    raw: String,
     text: String,
     finish_reason: Option<String>,
     saw_any_event: bool,
@@ -1477,6 +1505,7 @@ struct SseAccumulator {
 impl SseAccumulator {
     /// Feed one network chunk; returns the text deltas it completed.
     fn feed(&mut self, chunk: &str) -> Vec<String> {
+        self.raw.push_str(chunk);
         self.pending.push_str(chunk);
         let mut deltas = Vec::new();
         // Consume only up to the last newline — the tail may be half a line.
@@ -1580,6 +1609,25 @@ mod tests {
         acc.feed("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n");
         assert_eq!(acc.finish_reason.as_deref(), Some("length"));
         assert_eq!(acc.text, "testo", "the tail frame must not alter the text");
+    }
+
+    #[test]
+    fn a_provider_ignoring_stream_true_is_still_readable() {
+        // Asking for streaming is an optimisation; a provider answering with
+        // an ordinary chat completion instead must keep working. Caught by
+        // CI (llm_request_shape) after the first cut errored on exactly this.
+        let mut acc = SseAccumulator::default();
+        acc.feed(
+            r##"{"choices":[{"message":{"role":"assistant","content":"# Recap"},"finish_reason":"stop"}]}"##,
+        );
+        assert!(
+            !acc.saw_any_event,
+            "a plain JSON body carries no SSE events"
+        );
+        assert!(
+            acc.raw.contains("# Recap"),
+            "the raw body must be retained so the caller can fall back to JSON"
+        );
     }
 
     #[test]
