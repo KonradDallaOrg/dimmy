@@ -1048,9 +1048,24 @@ jobs:
           $tool = Get-ChildItem $mscvDir -Directory | Sort-Object Name -Descending | Select-Object -First 1
           $dumpbin = Join-Path $tool.FullName "bin\Hostx64\x64\dumpbin.exe"
           if (-not (Test-Path $dumpbin)) { throw "dumpbin.exe not found at $dumpbin" }
-          $zmm = (& $dumpbin /disasm:nobytes $dll | Select-String -Pattern 'zmm[0-9]').Count
+          # Report WHERE, not just how many. v0.6.72-rc5 failed this gate with
+          # 4 hits while a local build of the same source and feature set had
+          # 0 — and a bare count cannot tell a real -march=native regression
+          # (rc10: 4820 hits) from a handful of runtime-dispatched or
+          # differently-decoded instructions. Print the matches and the
+          # disassembler, so the next failure is diagnosed by reading the log
+          # instead of by bisecting the build.
+          #
+          # Note the build is pinned to $env:VCVARS_VER while this picks the
+          # NEWEST MSVC on the runner: a newer dumpbin knows encodings the
+          # older one does not, so the two can disagree about the same bytes.
+          Write-Host "disassembler: $dumpbin"
+          $hits = & $dumpbin /disasm:nobytes $dll | Select-String -Pattern 'zmm[0-9]'
+          $zmm = $hits.Count
           Write-Host "AVX-512 (zmm) instructions in dimmy_lib.dll: $zmm"
           if ($zmm -gt 0) {
+            Write-Host "--- first 20 matches ---"
+            $hits | Select-Object -First 20 | ForEach-Object { Write-Host $_.Line.Trim() }
             throw "dimmy_lib.dll contains $zmm AVX-512 instructions. It would crash 0xc000001d on any CPU without AVX-512. GGML_NATIVE=OFF is not taking effect. Aborting release."
           }
 
