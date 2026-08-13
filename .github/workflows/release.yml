@@ -1044,9 +1044,25 @@ jobs:
           # local build of the same source.
           $dll = "D:\t\release\dimmy_lib.dll"
           if (-not (Test-Path $dll)) { throw "dimmy_lib.dll not found at $dll" }
+          # Disassemble with the toolchain that COMPILED the DLL, not the
+          # newest one installed. The build pins -vcvars_ver=$VCVARS_VER
+          # (14.50); picking the newest gave 14.51, whose decoder produced
+          # nonsense on v0.6.72-rc5/rc6: instructions referencing `r26`, a
+          # register that exists only under APX and cannot appear in a
+          # baseline x86-64 build, with 8 of 9 hits inside a 140-byte window
+          # - the signature of a disassembler losing sync inside a data blob
+          # embedded in .text, not of vectorised code. The same source built
+          # locally and scanned with 14.50 reports 0, and the count moved
+          # 4 -> 9 between two tags whose DLL sources are identical.
           $mscvDir = Join-Path $env:VS2026_PATH "VC\Tools\MSVC"
-          $tool = Get-ChildItem $mscvDir -Directory | Sort-Object Name -Descending | Select-Object -First 1
-          $dumpbin = Join-Path $tool.FullName "bin\Hostx64\x64\dumpbin.exe"
+          $pinned = Join-Path $mscvDir "$env:VCVARS_VER\bin\Hostx64\x64\dumpbin.exe"
+          if (Test-Path $pinned) {
+            $dumpbin = $pinned
+          } else {
+            Write-Host "::warning title=AVX gate::VCVARS_VER=$env:VCVARS_VER dumpbin not found; falling back to newest MSVC"
+            $tool = Get-ChildItem $mscvDir -Directory | Sort-Object Name -Descending | Select-Object -First 1
+            $dumpbin = Join-Path $tool.FullName "bin\Hostx64\x64\dumpbin.exe"
+          }
           if (-not (Test-Path $dumpbin)) { throw "dumpbin.exe not found at $dumpbin" }
           # Report WHERE, not just how many. v0.6.72-rc5 failed this gate with
           # 4 hits while a local build of the same source and feature set had
