@@ -959,6 +959,14 @@ final class AppState: ObservableObject {
     @Published var liveCaptionTick: Int = 0
     @Published var liveCaptionIsFinal: Bool = false
 
+    /// Recap/command text as the LLM writes it, accumulated from the core's
+    /// `llm_stream` event. A slow open-weight model can take half a minute
+    /// before its first word (measured: 35s batch vs 11.7s streamed on
+    /// Kimi K3), and an empty panel for that long reads as a hang.
+    /// Only the OpenAI-compatible providers stream — with Anthropic or
+    /// Gemini-native this simply stays empty and the UI shows nothing.
+    @Published var llmStreamText: String = ""
+
     // MARK: - Call detection
 
     /// Toggle for the 1 Hz CoreAudio poll that detects VoIP calls and

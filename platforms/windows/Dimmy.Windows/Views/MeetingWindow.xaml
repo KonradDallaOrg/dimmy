@@ -645,6 +645,27 @@
                    (dimmy_ai_notice_text) so all three platforms say the same
                    thing in the same six languages. Shown only when a recap
                    actually exists — code-behind reveals it with the cards. -->
+              <!-- Live recap: the model's text as it is written, for the
+                   long wait before a slow model's first word. Visible only
+                   while streaming; the finished cards replace it. Only the
+                   OpenAI-compatible providers stream, so with Anthropic or
+                   Gemini this simply never appears. -->
+              <Border x:Name="LiveRecapCard" Visibility="Collapsed"
+                      Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="14">
+                <StackPanel Spacing="6">
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <ProgressRing IsActive="True" Width="14" Height="14"/>
+                    <TextBlock x:Name="LiveRecapLabel" Text="Writing the recap..."
+                               FontSize="14" FontWeight="SemiBold"/>
+                  </StackPanel>
+                  <TextBlock x:Name="LiveRecapText" TextWrapping="Wrap" FontSize="13"
+                             IsTextSelectionEnabled="True"
+                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                </StackPanel>
+              </Border>
+
               <Border x:Name="AiNoticeCard" Visibility="Collapsed"
                       Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                       BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"

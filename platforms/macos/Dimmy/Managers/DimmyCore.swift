@@ -1161,6 +1161,19 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
             chunkTotal: chunkTotal
         )
 
+    case "llm_stream":
+        // Recap/command text as the model writes it. Payload:
+        //   { "phase": "start" | "delta" | "end", "delta": "<new text>" }
+        // Emitted only by the OpenAI-compatible providers; Anthropic and
+        // Gemini-native answer in one shot and never send this.
+        let phase = (payload["phase"] as? String) ?? ""
+        let delta = (payload["delta"] as? String) ?? ""
+        if phase == "start" {
+            appState.llmStreamText = ""
+        } else if phase == "delta" {
+            appState.llmStreamText += delta
+        }
+
     case "stt_chunk":
         // Rust core emits this when chunk_streaming is on AND the
         // active local backend is Parakeet. Payload schema:

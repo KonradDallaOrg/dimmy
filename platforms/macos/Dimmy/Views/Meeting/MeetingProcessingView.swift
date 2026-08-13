@@ -9,6 +9,14 @@ import SwiftUI
 
 struct MeetingProcessingView: View {
     @ObservedObject var vm: MeetingViewModel
+    /// Mirror of the Win LiveRecapCard. Empty unless the recap runs on a
+    /// streaming (OpenAI-compatible) provider, so the block below simply
+    /// does not appear with Anthropic or Gemini-native.
+    ///
+    /// Observed via the shared singleton rather than @EnvironmentObject:
+    /// MeetingView is not inside an .environmentObject(appState) tree, so
+    /// the environment form would compile and then crash at runtime.
+    @ObservedObject private var appState = AppState.shared
 
     var body: some View {
         VStack(spacing: 22) {
@@ -40,6 +48,24 @@ struct MeetingProcessingView: View {
                      color: stepIconColor(.extractingActions))
             }
             .frame(minWidth: 320, alignment: .leading)
+
+            // The model's text as it is written, for the long wait before a
+            // slow model's first word. Tail only: the finished recap is
+            // rendered by the Done view, so this is a progress signal, not
+            // the deliverable.
+            if !appState.llmStreamText.isEmpty {
+                ScrollView {
+                    Text(String(appState.llmStreamText.suffix(1200)))
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.macTextSecondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
+                }
+                .frame(maxWidth: 520, maxHeight: 160)
+                .background(Color.primary.opacity(0.05))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

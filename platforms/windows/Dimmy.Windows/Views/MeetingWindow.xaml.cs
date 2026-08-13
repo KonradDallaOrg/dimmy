@@ -1382,6 +1382,7 @@ public sealed partial class MeetingWindow : Window
             var prompt = Helpers.MeetingRecapHelpers.BuildStructuredRecapPrompt(transcript, "", meetingType);
             var modelOverride = PickRecapModel();
             App.Log($"recap with model='{modelOverride}', prompt {prompt.Length} chars", "Meeting");
+            BeginLiveRecap();
             var buf = new byte[1 << 18];
             // 16000 max_tokens leaves room for the Anthropic extended-thinking
             // budget (10000) + the actual response (~4-6k tokens for a rich
@@ -1433,6 +1434,9 @@ public sealed partial class MeetingWindow : Window
 
     private void ShowDoneFallback(string transcript, string note, bool actionable)
     {
+        // Failure path too: leaving the live pane up would show a half-written
+        // recap next to the error that killed it.
+        EndLiveRecap();
         SetPlainText(TldrText, note);
         TldrCard.Visibility = Visibility.Visible;
         // Show the "Open Recap settings" CTA only when the error is
@@ -1600,8 +1604,48 @@ public sealed partial class MeetingWindow : Window
         }
     }
 
+    /// Show the model's text as it is written. Streaming providers can take
+    /// half a minute before the first word, and an empty panel for that long
+    /// reads as a hang rather than as work in progress.
+    ///
+    /// Subscribes for the duration of one recap and unsubscribes in
+    /// EndLiveRecap — a leaked handler here would keep appending a later
+    /// command-mode stream into a stale meeting window.
+    private void BeginLiveRecap()
+    {
+        var vm = App.Instance?.AppViewModel;
+        if (vm == null || LiveRecapCard == null) return;
+        vm.LlmStreamText = "";
+        if (LiveRecapText != null) LiveRecapText.Text = "";
+        LiveRecapCard.Visibility = Visibility.Visible;
+        vm.PropertyChanged -= OnLlmStreamChanged;
+        vm.PropertyChanged += OnLlmStreamChanged;
+    }
+
+    private void EndLiveRecap()
+    {
+        var vm = App.Instance?.AppViewModel;
+        if (vm != null) vm.PropertyChanged -= OnLlmStreamChanged;
+        if (LiveRecapCard != null) LiveRecapCard.Visibility = Visibility.Collapsed;
+    }
+
+    private void OnLlmStreamChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(ViewModels.AppViewModel.LlmStreamText)) return;
+        var text = App.Instance?.AppViewModel?.LlmStreamText ?? "";
+        // The event arrives on the core's thread; the UI has its own.
+        DispatcherQueue?.TryEnqueue(() =>
+        {
+            if (LiveRecapText == null) return;
+            // Tail only: the finished recap is rendered by the cards below,
+            // so this pane is a progress signal, not the deliverable.
+            LiveRecapText.Text = text.Length > 1200 ? text[^1200..] : text;
+        });
+    }
+
     private void ApplyDoneSections(Dictionary<string, string> sections)
     {
+        EndLiveRecap();
         _lastDoneSections = sections;
         // EU AI Act art. 50(5). Only here, not in ShowDoneFallback: that path
         // renders an error message, which is Dimmy talking, not AI-generated

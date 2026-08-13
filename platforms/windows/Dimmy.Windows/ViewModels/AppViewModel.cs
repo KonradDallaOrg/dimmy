@@ -61,6 +61,14 @@ public partial class AppViewModel : ObservableObject
     /// not show the CaptionWindow even if the chunked engine is on.
     [ObservableProperty] private bool _liveCaptionsEnabled = true;
 
+    /// Recap/command text as the LLM writes it, accumulated from the core's
+    /// `llm_stream` event. A slow open-weight model can take half a minute
+    /// before its first word (measured: 35s batch vs 11.7s streamed on
+    /// Kimi K3), and showing nothing for that long reads as a hang — the
+    /// question "is it stuck?" came from the user, not from a hypothesis.
+    /// Empty between runs; the meeting window clears it when a recap starts.
+    [ObservableProperty] private string _llmStreamText = "";
+
     // ── Local-model download state ──────────────────────────────────
     // The download runs on a background thread (Task.Run → FFI) and keeps
     // going even if the Settings window is closed. The Rust core emits
@@ -403,6 +411,21 @@ public partial class AppViewModel : ObservableObject
                         var tot = payload.GetProperty("total").GetInt64();
                         ApplyDownloadState(fn, dl, tot, isLlm: true);
                         LlmModelDownloadProgress?.Invoke(fn, dl, tot);
+                    }
+                    break;
+                case "llm_stream":
+                    {
+                        // phase: start | delta | end. Only the OpenAI-compatible
+                        // providers stream; Anthropic and Gemini-native answer in
+                        // one shot and simply never emit this.
+                        var phase = payload.TryGetProperty("phase", out var ph)
+                            ? (ph.GetString() ?? "")
+                            : "";
+                        var chunk = payload.TryGetProperty("delta", out var ld)
+                            ? (ld.GetString() ?? "")
+                            : "";
+                        if (phase == "start") LlmStreamText = "";
+                        else if (phase == "delta") LlmStreamText += chunk;
                     }
                     break;
                 case "stt_chunk":
