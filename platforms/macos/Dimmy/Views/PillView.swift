@@ -109,6 +109,7 @@ struct PillView: View {
     @ObservedObject var appState: AppState
     @State private var isHovering = false
     @State private var borderPhase: Double = 0
+    @StateObject private var rotation = PillRotationDriver()
     @State private var showCheckmark = false
     @State private var introPhase: Double = 0
 
@@ -496,12 +497,21 @@ struct PillView: View {
         .shadow(color: recordingGlowColor(offset: 0.6), radius: 4)
         .onAppear {
             borderPhase = 0
-            withAnimation(.linear(duration: 2.5).repeatForever(autoreverses: false)) {
-                borderPhase = 360
+            // The rainbow border rotates at a voice-driven speed (see
+            // PillRotationDriver); every other style keeps the fixed 2.5 s
+            // pulse it has always had. Exactly one of the two runs, so the
+            // pill never re-renders off two clocks at once.
+            if activeBorderStyle == .rainbow {
+                rotation.start()
+            } else {
+                withAnimation(.linear(duration: 2.5).repeatForever(autoreverses: false)) {
+                    borderPhase = 360
+                }
             }
         }
         .onDisappear {
             borderPhase = 0
+            rotation.stop()
         }
     }
 
@@ -512,7 +522,7 @@ struct PillView: View {
         switch style {
         case .rainbow:
             Capsule()
-                .stroke(rainbowGradient(phase: borderPhase), lineWidth: 2)
+                .stroke(rainbowGradient(phase: rotation.angleDeg), lineWidth: 2)
         case .none:
             Capsule()
                 .stroke(Color.clear, lineWidth: 0)
@@ -528,7 +538,7 @@ struct PillView: View {
         let style = activeBorderStyle
         switch style {
         case .rainbow:
-            return phaseGlowColor(phase: borderPhase, offset: offset)
+            return phaseGlowColor(phase: rotation.angleDeg, offset: offset)
         case .none:
             return .clear
         default:
@@ -667,5 +677,65 @@ extension RecordingState {
         case .processing: return 4
         case .completing: return 5
         }
+    }
+}
+// MARK: - PillRotationDriver
+
+/// Drives the rainbow border's rotation while recording. Mirror of the Win
+/// `PillWindow.StartRainbowAnimation`: the gradient idles during a pause and
+/// spins up while the user speaks.
+///
+/// Two details are load-bearing and easy to get wrong:
+///  - the phase is ACCUMULATED, never derived from elapsed x speed, or it
+///    jumps the moment the speed changes;
+///  - the input is the RAW amplitude, not the boosted level the waveform
+///    bars use, because that one is relative and would read a quiet room's
+///    background noise as speech.
+@MainActor
+final class PillRotationDriver: ObservableObject {
+    @Published private(set) var angleDeg: Double = 0
+
+    private static let slowDegPerSec = 40.0
+    private static let fastDegPerSec = 220.0
+    /// Absolute thresholds on the raw amplitude, same values as the Win pill.
+    private static let voiceFloor = 0.02
+    private static let voiceCeil = 0.12
+
+    private var timer: Timer?
+    private var speedDeg = PillRotationDriver.slowDegPerSec
+    private var lastTick = Date()
+
+    func start() {
+        timer?.invalidate()
+        angleDeg = 0
+        speedDeg = Self.slowDegPerSec
+        lastTick = Date()
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.tick() }
+        }
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+    }
+
+    private func tick() {
+        let now = Date()
+        // Clamped: a stalled main thread must not teleport the gradient.
+        let dt = min(max(now.timeIntervalSince(lastTick), 0), 0.1)
+        lastTick = now
+
+        // Always-mix, like the Win pill: react to mic OR system audio.
+        let mic = DimmyCore.shared.getAmplitude()
+        let sys = DimmyCore.shared.getLoopbackAmplitude()
+        let amp = Double(max(mic.isFinite ? mic : 0, sys.isFinite ? sys : 0))
+
+        let voice = min(max((amp - Self.voiceFloor) / (Self.voiceCeil - Self.voiceFloor), 0), 1)
+        let target = Self.slowDegPerSec + (Self.fastDegPerSec - Self.slowDegPerSec) * voice
+        // Ease toward the target (~200 ms) so the speed glides instead of
+        // snapping on every sample.
+        speedDeg += (target - speedDeg) * 0.15
+        angleDeg = (angleDeg + speedDeg * dt).truncatingRemainder(dividingBy: 360)
     }
 }
