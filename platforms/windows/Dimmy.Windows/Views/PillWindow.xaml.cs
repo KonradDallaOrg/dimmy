@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -37,7 +37,10 @@ public sealed partial class PillWindow : Window
     private DispatcherTimer? _errorTimer;
     private DispatcherTimer? _rainbowTimer;
     private LinearGradientBrush? _rainbowBrush;
-    private DateTime _rainbowStartTime;
+    private DateTime _rainbowLastTick;
+    private double _rainbowAngleDeg;
+    private double _rainbowSpeedDeg;
+    private float _rawAmplitude;
 
     private bool _amplitudeHandlerAttached;
     // Display AGC: tracks a smoothed peak to normalize amplitude for visual feedback.
@@ -759,6 +762,7 @@ public sealed partial class PillWindow : Window
     private void StartAmplitudePolling()
     {
         _displayPeak = 0.05f; // reset AGC for each new recording
+        _rawAmplitude = 0f;
         if (_amplitudeTimer is null)
             _amplitudeTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1000.0 / 12) };
         if (!_amplitudeHandlerAttached)
@@ -777,6 +781,11 @@ public sealed partial class PillWindow : Window
                 if (!float.IsFinite(ampMic)) ampMic = 0;
                 if (!float.IsFinite(ampSys)) ampSys = 0;
                 var amp = Math.Max(ampMic, ampSys);
+
+                // Kept RAW for the rainbow rotation. The display AGC below is a
+                // RELATIVE measure, so it is the wrong input for "is the user
+                // speaking?" - see StartRainbowAnimation.
+                _rawAmplitude = amp;
 
                 // Display AGC: smoothly track the peak level, then normalize against it.
                 // - When loud: _displayPeak rises fast → normalized value stays <1.0
@@ -830,17 +839,43 @@ public sealed partial class PillWindow : Window
             _rainbowBrush.GradientStops.Add(new GradientStop { Offset = offset, Color = ParseColor(hex) });
     }
 
+    // Rotation speed follows the voice: the gradient idles during a pause and
+    // spins up while the user speaks.
+    private const double RainbowSlowDegPerSec = 40.0;
+    private const double RainbowFastDegPerSec = 220.0;
+    // Absolute thresholds on the RAW amplitude. 0.02 is the same "signal
+    // present" floor the call detector uses; speech peaks well past 0.12.
+    private const double RainbowVoiceFloor = 0.02;
+    private const double RainbowVoiceCeil = 0.12;
+
     private void StartRainbowAnimation()
     {
-        _rainbowStartTime = DateTime.UtcNow;
+        _rainbowAngleDeg = 0;
+        _rainbowSpeedDeg = RainbowSlowDegPerSec;
+        _rainbowLastTick = DateTime.UtcNow;
         if (_rainbowTimer is null)
         {
             _rainbowTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1000.0 / 30) };
             _rainbowTimer.Tick += (_, _) =>
             {
                 if (_rainbowBrush is null) return;
-                var elapsed = (DateTime.UtcNow - _rainbowStartTime).TotalSeconds;
-                var angleRad = (elapsed * 144.0 % 360.0) * Math.PI / 180.0;
+                var now = DateTime.UtcNow;
+                // Clamped: a stalled UI thread must not teleport the gradient.
+                var dt = Math.Clamp((now - _rainbowLastTick).TotalSeconds, 0.0, 0.1);
+                _rainbowLastTick = now;
+
+                var voice = Math.Clamp(
+                    (_rawAmplitude - RainbowVoiceFloor) / (RainbowVoiceCeil - RainbowVoiceFloor), 0.0, 1.0);
+                var target = RainbowSlowDegPerSec + (RainbowFastDegPerSec - RainbowSlowDegPerSec) * voice;
+                // Ease toward the target (~200 ms) so the speed glides instead of
+                // snapping on every 12 Hz amplitude sample.
+                _rainbowSpeedDeg += (target - _rainbowSpeedDeg) * 0.15;
+
+                // Accumulate the phase. Deriving the angle from elapsed*speed
+                // would make it jump the moment the speed changes.
+                _rainbowAngleDeg = (_rainbowAngleDeg + _rainbowSpeedDeg * dt) % 360.0;
+
+                var angleRad = _rainbowAngleDeg * Math.PI / 180.0;
                 var cos = Math.Cos(angleRad);
                 var sin = Math.Sin(angleRad);
                 var scale = 0.5 / Math.Max(Math.Abs(cos), Math.Abs(sin));
