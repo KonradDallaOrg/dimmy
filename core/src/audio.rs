@@ -1754,6 +1754,17 @@ pub fn default_input_device_name() -> String {
 }
 
 /// Get sample rate for a specific device (by name), falling back to default
+/// True for a Bluetooth hands-free (HFP) capture endpoint.
+///
+/// Windows exposes those at 8 or 16 kHz MONO, and essentially nothing else
+/// reports that shape - a normal mic is 44.1/48 kHz, and a mono USB mic
+/// still runs at 44.1 kHz or above. Callers use it to keep diagnostics from
+/// OPENING such a device: the open drags the headset off A2DP into
+/// hands-free and back, and the user hears that as their music stuttering.
+pub fn is_hands_free_shape(channels: u16, sample_rate: u32) -> bool {
+    channels == 1 && sample_rate <= 16_000
+}
+
 pub fn device_sample_rate(device_name: &Option<String>) -> u32 {
     primary_sample_rate(device_name, &AudioSource::Mic)
 }
@@ -2066,6 +2077,24 @@ pub fn encode_wav(samples: &[f32], sample_rate: u32) -> Result<Vec<u8>, crate::e
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn hands_free_shape_matches_bluetooth_hfp_endpoints() {
+        // The two rates Windows exposes for HFP capture.
+        assert!(is_hands_free_shape(1, 16_000));
+        assert!(is_hands_free_shape(1, 8_000));
+    }
+
+    #[test]
+    fn hands_free_shape_rejects_ordinary_microphones() {
+        // Stereo array mic, the shape the Realtek input reports.
+        assert!(!is_hands_free_shape(2, 48_000));
+        // Mono USB mic - mono alone must not be enough to match.
+        assert!(!is_hands_free_shape(1, 44_100));
+        assert!(!is_hands_free_shape(1, 48_000));
+        // 16 kHz stereo is not an HFP shape either.
+        assert!(!is_hands_free_shape(2, 16_000));
+    }
+
     use super::*;
 
     // ── Device-change debounce (Tahoe HAL-wedge avoidance) ───────────
