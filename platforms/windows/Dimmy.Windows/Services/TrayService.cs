@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Runtime.InteropServices;
 using Dimmy.Windows.ViewModels;
@@ -446,8 +446,12 @@ public class TrayService : IDisposable
             // Command Mode toggle — checkmark reflects the current mode so
             // the tray (taskbar-only users) can flip dictation ↔ command
             // without opening the pill.
+            // The check reads BOTH flags so it agrees with the amber pill and
+            // with the pill's own menu: one-shot armed elsewhere still shows as
+            // checked here, and unchecking clears whichever one is set.
+            bool commandArmed = _vm.CommandMode || _vm.CommandOneShot;
             AppendMenu(menu,
-                MF_STRING | (_vm.CommandMode ? MF_CHECKED : 0),
+                MF_STRING | (commandArmed ? MF_CHECKED : 0),
                 (nuint)IDM_COMMAND, "Command (edit selection)");
             AppendMenu(menu, MF_SEPARATOR, 0, null);
             AppendMenu(menu, MF_STRING, (nuint)IDM_QUIT, "Quit Dimmy");
@@ -468,7 +472,10 @@ public class TrayService : IDisposable
                 case IDM_TOGGLE:   _onTogglePill();   break;
                 case IDM_MEETING:  _onMeetingClick?.Invoke(); break;
                 case IDM_SETTINGS: _onSettingsClick(); break;
-                case IDM_COMMAND:  _vm.CommandMode = !_vm.CommandMode; break;
+                case IDM_COMMAND:
+                    if (commandArmed) { _vm.CommandMode = false; _vm.CommandOneShot = false; }
+                    else _vm.CommandMode = true;
+                    break;
                 case IDM_QUIT:     _onQuitClick();    break;
                 // 0 = dismissed without selection. IDM_STATUS is
                 // grayed and never returnable here.
