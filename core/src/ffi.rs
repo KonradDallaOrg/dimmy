@@ -3068,27 +3068,41 @@ pub extern "C" fn dimmy_check_audio_health(out_buf: *mut c_char, buf_len: c_int)
     if let Some(dev) = probe_device {
         match dev.default_input_config() {
             Ok(config) => {
-                // Try building a stream briefly to verify device access
-                let result = dev.build_input_stream(
-                    &config.into(),
-                    |_data: &[f32], _: &cpal::InputCallbackInfo| {},
-                    |err| {
-                        let _ = err;
-                    },
-                    None,
-                );
-                match result {
-                    Ok(stream) => {
-                        match stream.play() {
+                if crate::audio::is_hands_free_shape(config.channels(), config.sample_rate().0) {
+                    // A Bluetooth headset mic. Opening a capture stream here,
+                    // even for the millisecond this probe needs, drags the
+                    // headset off A2DP into hands-free and straight back - and
+                    // the user hears that round trip as their music stuttering
+                    // the moment Dimmy launches, or dropping out entirely.
+                    // The device enumerating and reporting a config is proof
+                    // enough that it is there; a genuinely unusable mic still
+                    // surfaces on the first real recording, which has its own
+                    // error path. Reported 2026-08-24.
+                    crate::log(
+                        "[AudioHealth] hands-free (Bluetooth) mic - skipping the open probe",
+                    );
+                    can_open = true;
+                } else {
+                    // Try building a stream briefly to verify device access
+                    let result = dev.build_input_stream(
+                        &config.into(),
+                        |_data: &[f32], _: &cpal::InputCallbackInfo| {},
+                        |err| {
+                            let _ = err;
+                        },
+                        None,
+                    );
+                    match result {
+                        Ok(stream) => match stream.play() {
                             Ok(()) => {
                                 can_open = true;
-                                // Drop stream immediately — we just needed to verify
+                                // Drop stream immediately - we just needed to verify
                                 drop(stream);
                             }
                             Err(e) => error = Some(format!("Stream play failed: {}", e)),
-                        }
+                        },
+                        Err(e) => error = Some(format!("Cannot open audio stream: {}", e)),
                     }
-                    Err(e) => error = Some(format!("Cannot open audio stream: {}", e)),
                 }
             }
             Err(e) => error = Some(format!("Cannot get device config: {}", e)),
