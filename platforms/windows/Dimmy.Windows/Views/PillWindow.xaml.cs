@@ -1110,11 +1110,22 @@ public sealed partial class PillWindow : Window
         dictItem.Click += (_, _) => App.Instance?.MenuToggleDictation();
         menu.Items.Add(dictItem);
 
-        var commandItem = new MenuFlyoutItem
+        // Checked whenever the pill is amber - i.e. for the one-shot AND for
+        // the sticky tray toggle - so the check always answers the question the
+        // user is actually asking ("is my next dictation a command?"), and
+        // unchecking it always gets them back to plain dictation. The menu is
+        // rebuilt on every right-click, so the state is read fresh.
+        var commandArmed = _vm.CommandMode || _vm.CommandOneShot;
+        var commandItem = new ToggleMenuFlyoutItem
         {
             Text = "Command (next dictation)" + ShortcutSuffix(prefs.CommandHotkey),
+            IsChecked = commandArmed,
         };
-        commandItem.Click += (_, _) => App.Instance?.MenuArmCommandOneShot();
+        commandItem.Click += (_, _) =>
+        {
+            if (commandArmed) App.Instance?.MenuDisarmCommand();
+            else App.Instance?.MenuArmCommandOneShot();
+        };
         menu.Items.Add(commandItem);
 
         var meetingRecItem = new MenuFlyoutItem

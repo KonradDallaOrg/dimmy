@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -258,6 +258,21 @@ public partial class App : Application
             }
             _appViewModel.CommandOneShot = true;
             PttLog("Command armed for the next dictation (menu)");
+        });
+    }
+
+    /// <summary>Menu action: back to plain dictation. Clears BOTH the one-shot
+    /// and the sticky toggle, because the amber pill lights up for either and
+    /// the user unchecking it means "stop being in command mode" - not "stop
+    /// being in the particular one of the two flavours I happened to arm".
+    /// Without this the pill menu could arm a command it could not disarm.</summary>
+    public void MenuDisarmCommand()
+    {
+        _dispatcherQueue?.TryEnqueue(() =>
+        {
+            _appViewModel.CommandOneShot = false;
+            _appViewModel.CommandMode = false;
+            PttLog("Command disarmed (menu)");
         });
     }
 
