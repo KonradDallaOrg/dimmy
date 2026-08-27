@@ -80,9 +80,12 @@ final class AppStateTests: XCTestCase {
     }
 
     func testLlmPresetFindByUrlAndModel() {
-        let found = LlmPreset.find(url: "https://api.groq.com/openai/v1/chat/completions", model: "llama-3.3-70b-versatile")
+        let found = LlmPreset.find(url: "https://api.groq.com/openai/v1/chat/completions", model: "openai/gpt-oss-120b")
         XCTAssertNotNil(found)
-        XCTAssertEqual(found?.id, "groq-llama70b")
+        // Ids are derived as "<provider.id>-<model.id>" in buildPresets(); the
+        // previous expectation ("groq-llama70b") was a hand-written string that
+        // no longer matched the derived one even before the model was retired.
+        XCTAssertEqual(found?.id, "groq-openai/gpt-oss-120b")
     }
 
     // MARK: - LlmStyle (NSP: all cases have display names, colors, and unique raw values)

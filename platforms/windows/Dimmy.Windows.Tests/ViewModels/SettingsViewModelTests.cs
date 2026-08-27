@@ -40,7 +40,7 @@ public class SettingsViewModelTests
             "use_keyring": true,
             "llm_enabled": true,
             "llm_api_url": "https://api.groq.com/openai/v1/chat/completions",
-            "llm_api_model": "llama-3.3-70b-versatile",
+            "llm_api_model": "openai/gpt-oss-120b",
             "llm_use_same_key": true,
             "llm_log_enabled": false,
             "audio_debug_enabled": false,
