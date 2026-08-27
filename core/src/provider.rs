@@ -437,6 +437,53 @@ mod tests {
         );
     }
 
+    /// `openai/gpt-oss-*` is served by GROQ, not OpenAI. The prefix rule
+    /// in `from_model_id` must miss it (it keys on a bare `gpt-` start,
+    /// and this id starts with `openai/`) so the exact catalog lookup
+    /// gets to answer. This became load-bearing on 2026-08-27, when
+    /// `openai/gpt-oss-120b` replaced the retired Llama as
+    /// DEFAULT_LLM_MODEL: were the prefix to match, every fresh install
+    /// would POST a Groq model to api.openai.com.
+    #[test]
+    fn groq_gpt_oss_ids_resolve_to_groq_not_openai() {
+        for id in ["openai/gpt-oss-120b", "openai/gpt-oss-20b"] {
+            assert_eq!(
+                Provider::from_model_id(id),
+                None,
+                "{id} must not be claimed by the prefix rule"
+            );
+            assert_eq!(
+                Provider::from_catalog_model_id(id),
+                Some(Provider::Groq),
+                "{id} must resolve to Groq via the catalog"
+            );
+        }
+        // The shipped default has to survive that same path.
+        assert_eq!(
+            Provider::from_model_id(crate::DEFAULT_LLM_MODEL)
+                .or_else(|| Provider::from_catalog_model_id(crate::DEFAULT_LLM_MODEL)),
+            Some(Provider::Groq)
+        );
+    }
+
+    #[test]
+    fn from_catalog_model_id_is_exact_not_prefix() {
+        // A vendor-unique id resolves...
+        assert_eq!(
+            Provider::from_catalog_model_id("whisper-large-v3-turbo"),
+            Some(Provider::Groq)
+        );
+        // ...but a partial or unknown id must not, or the recap
+        // dispatcher would silently POST to the wrong endpoint.
+        assert_eq!(Provider::from_catalog_model_id("gpt-oss"), None);
+        assert_eq!(Provider::from_catalog_model_id(""), None);
+        assert_eq!(
+            Provider::from_catalog_model_id("llama-3.3-70b-versatile"),
+            None,
+            "retired ids must not resolve — they are gone from the catalog"
+        );
+    }
+
     #[test]
     fn from_model_id_canonical_patterns() {
         assert_eq!(

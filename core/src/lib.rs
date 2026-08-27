@@ -92,7 +92,12 @@ pub const DEFAULT_MODEL: &str = "whisper-large-v3-turbo";
 /// Whisper mimics the style of this text — punctuation, capitalization, etc.
 pub const DEFAULT_PROMPT: &str = "Hello, how are you? Fine, thanks! Today we'll discuss an interesting topic. Ciao, come stai? Bene, grazie! Oggi parliamo di un argomento interessante.";
 pub const DEFAULT_LLM_URL: &str = "https://api.groq.com/openai/v1/chat/completions";
-pub const DEFAULT_LLM_MODEL: &str = "llama-3.3-70b-versatile";
+/// Must name a model Groq still serves — this is what a fresh install
+/// and every config missing `llm_api_model` dispatches to. Groq retired
+/// `llama-3.3-70b-versatile` (the previous value) on 2026-08-27 and it
+/// now 404s, so the default itself was the bug: two users on two OSes
+/// hit it the same morning. Validate with `scripts/dev/check-model-ids.py`.
+pub const DEFAULT_LLM_MODEL: &str = "openai/gpt-oss-120b";
 #[allow(dead_code)] // Used by native UI via FFI recording logic
 const MAX_RECORDING_SECS: usize = 30 * 60; // 30 minutes hard cap
 const MAX_LOG_BYTES: u64 = 1_048_576; // 1 MB log rotation threshold
@@ -1365,7 +1370,62 @@ fn migrate_decommissioned_models(cfg: &mut AppConfig) {
         log("[Config] upgrading Anthropic LLM 'claude-sonnet-4-20250514' → 'claude-sonnet-4-6'");
         cfg.llm_api_model = "claude-sonnet-4-6".to_string();
     }
+    // ── Groq LLM: both Llama ids retired (HTTP 404 on
+    //    /openai/v1/chat/completions). Dropping them from
+    //    `assets/model-catalog.json` only fixes the PICKER — the saved
+    //    choice lives in config.json, so an existing install keeps
+    //    404ing on every dictation rewrite until this rewrites it.
+    //    No URL guard: both spellings are Groq-exclusive (Together and
+    //    OpenRouter namespace their Llamas `meta-llama/...`), so the
+    //    id alone identifies the provider.
+    for (dead, live) in GROQ_RETIRED_LLM {
+        if cfg.llm_api_model == dead {
+            log(&format!(
+                "[Config] migrating retired Groq LLM model '{dead}' → '{live}'"
+            ));
+            cfg.llm_api_model = live.to_string();
+        }
+        // The recap override is a separate field and accepts both the
+        // legacy bare id and the `cloud:`-prefixed shape — see
+        // `ffi::parse_recap_override`.
+        if cfg.recap_model_override == dead {
+            log(&format!(
+                "[Config] migrating retired Groq recap model '{dead}' → '{live}'"
+            ));
+            cfg.recap_model_override = live.to_string();
+        } else if cfg.recap_model_override == format!("cloud:{dead}") {
+            log(&format!(
+                "[Config] migrating retired Groq recap model 'cloud:{dead}' → 'cloud:{live}'"
+            ));
+            cfg.recap_model_override = format!("cloud:{live}");
+        }
+    }
+
+    // Postcondition: no field may still name a model we know 404s.
+    for (dead, _) in GROQ_RETIRED_LLM {
+        assert_ne!(
+            cfg.llm_api_model, dead,
+            "migration left a retired Groq id in llm_api_model"
+        );
+        assert_ne!(
+            cfg.recap_model_override, dead,
+            "migration left a retired Groq id in recap_model_override"
+        );
+    }
 }
+
+/// Groq LLM ids we shipped that Groq has since retired, each paired
+/// with the closest same-tier model it still serves. Verified against
+/// `https://api.groq.com/openai/v1/models` on 2026-08-27: the dead ids
+/// return HTTP 404, the live ones HTTP 200.
+///
+/// Kept next to [`migrate_decommissioned_models`] and asserted against
+/// the embedded catalog by `catalog::tests::retired_ids_are_not_in_the_catalog`,
+/// so a re-added id fails the build instead of the user's dictation.
+pub(crate) const GROQ_RETIRED_LLM: [(&str, &str); 2] = [
+    ("llama-3.3-70b-versatile", "openai/gpt-oss-120b"),
+    ("llama-3.1-8b-instant", "openai/gpt-oss-20b"),
+];
 
 /// Migrate from old "pai-voice" config/keyring to "dimmy" for existing users.
 pub fn migrate_from_pai_voice() {
@@ -2023,6 +2083,124 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Retired-model migration ─────────────────────────────────
+    //
+    // `migrate_decommissioned_models` had no coverage at all until
+    // 2026-08-27, when the Groq Llama ids it should have handled
+    // 404ed in production for two users on two OSes. These pin both
+    // the new Groq entries and the pre-existing rules, so a future
+    // edit to the function can't silently drop one.
+
+    fn groq_cfg(llm_model: &str) -> AppConfig {
+        AppConfig {
+            llm_api_url: DEFAULT_LLM_URL.to_string(),
+            llm_api_model: llm_model.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn retired_groq_llm_models_are_migrated_to_live_ones() {
+        for (dead, live) in GROQ_RETIRED_LLM {
+            let mut cfg = groq_cfg(dead);
+            migrate_decommissioned_models(&mut cfg);
+            assert_eq!(cfg.llm_api_model, live, "{dead} must migrate to {live}");
+        }
+    }
+
+    #[test]
+    fn retired_groq_ids_are_migrated_in_the_recap_override_too() {
+        // The recap override is a separate field with two accepted
+        // shapes; a user can hold a dead id in either one.
+        for (dead, live) in GROQ_RETIRED_LLM {
+            let mut bare = AppConfig {
+                recap_model_override: dead.to_string(),
+                ..Default::default()
+            };
+            migrate_decommissioned_models(&mut bare);
+            assert_eq!(bare.recap_model_override, live);
+
+            let mut prefixed = AppConfig {
+                recap_model_override: format!("cloud:{dead}"),
+                ..Default::default()
+            };
+            migrate_decommissioned_models(&mut prefixed);
+            assert_eq!(prefixed.recap_model_override, format!("cloud:{live}"));
+        }
+    }
+
+    #[test]
+    fn migration_leaves_live_and_unrelated_models_alone() {
+        // A model Groq still serves must survive untouched...
+        let mut live = groq_cfg("qwen/qwen3.6-27b");
+        migrate_decommissioned_models(&mut live);
+        assert_eq!(live.llm_api_model, "qwen/qwen3.6-27b");
+
+        // ...and so must another vendor's Llama, whose id is spelled
+        // differently precisely so the two can't be confused.
+        let mut together = AppConfig {
+            llm_api_url: "https://api.together.xyz/v1/chat/completions".to_string(),
+            llm_api_model: "meta-llama/Llama-3.3-70B-Instruct-Turbo".to_string(),
+            ..Default::default()
+        };
+        migrate_decommissioned_models(&mut together);
+        assert_eq!(
+            together.llm_api_model,
+            "meta-llama/Llama-3.3-70B-Instruct-Turbo"
+        );
+
+        // An empty recap override means "inherit"; it must stay empty.
+        let mut inherit = AppConfig::default();
+        migrate_decommissioned_models(&mut inherit);
+        assert!(inherit.recap_model_override.is_empty());
+    }
+
+    #[test]
+    fn preexisting_decommissioned_rules_still_fire() {
+        let mut groq_stt = AppConfig {
+            api_url: DEFAULT_API_URL.to_string(),
+            api_model: "distil-whisper-large-v3-en".to_string(),
+            ..Default::default()
+        };
+        migrate_decommissioned_models(&mut groq_stt);
+        assert_eq!(groq_stt.api_model, "whisper-large-v3-turbo");
+
+        let gemini_stt_url = "https://generativelanguage.googleapis.com/v1beta/openai/audio";
+        for (from, to) in [
+            ("gemini-3.1-flash", "gemini-3.1-flash-lite"),
+            ("gemini-3.1-pro", "gemini-3.1-flash-lite"),
+            ("gemini-3-pro-preview", "gemini-3-flash-preview"),
+            ("gemini-2.5-pro", "gemini-2.5-flash"),
+        ] {
+            let mut cfg = AppConfig {
+                api_url: gemini_stt_url.to_string(),
+                api_model: from.to_string(),
+                ..Default::default()
+            };
+            migrate_decommissioned_models(&mut cfg);
+            assert_eq!(cfg.api_model, to, "Gemini STT {from} must migrate to {to}");
+        }
+
+        let mut anthropic = AppConfig {
+            llm_api_url: "https://api.anthropic.com/v1/messages".to_string(),
+            llm_api_model: "claude-sonnet-4-20250514".to_string(),
+            ..Default::default()
+        };
+        migrate_decommissioned_models(&mut anthropic);
+        assert_eq!(anthropic.llm_api_model, "claude-sonnet-4-6");
+    }
+
+    #[test]
+    fn migrating_the_shipped_defaults_is_a_no_op() {
+        // The compiled-in defaults must already be live models, or a
+        // fresh install starts out broken — which is exactly what
+        // happened when DEFAULT_LLM_MODEL was a retired Groq id.
+        let mut cfg = AppConfig::default();
+        let before = (cfg.api_model.clone(), cfg.llm_api_model.clone());
+        migrate_decommissioned_models(&mut cfg);
+        assert_eq!((cfg.api_model, cfg.llm_api_model), before);
+    }
 
     #[test]
     fn truncate_utf8_ascii_exact_and_short() {

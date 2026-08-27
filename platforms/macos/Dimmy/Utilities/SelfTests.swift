@@ -95,8 +95,12 @@ enum SelfTests {
                    "LLM preset '\(preset.id)' URL must be HTTPS")
         }
 
-        let found = LlmPreset.find(url: "https://api.groq.com/openai/v1/chat/completions", model: "llama-3.3-70b-versatile")
-        assert(found?.model == "llama-3.3-70b-versatile", "LlmPreset.find must resolve the Groq llama preset")
+        // Must name a model the embedded catalog still lists: presets are
+        // derived from it, so a retired id makes `find` return nil and this
+        // assertion crashes the app on first launch. Groq dropped
+        // `llama-3.3-70b-versatile` (the previous value) on 2026-08-27.
+        let found = LlmPreset.find(url: "https://api.groq.com/openai/v1/chat/completions", model: "openai/gpt-oss-120b")
+        assert(found?.model == "openai/gpt-oss-120b", "LlmPreset.find must resolve the Groq GPT-OSS preset")
     }
 
     // MARK: - Enum counts must match Rust

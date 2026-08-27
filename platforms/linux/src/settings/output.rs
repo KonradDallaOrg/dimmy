@@ -11,7 +11,7 @@ use adw::prelude::*;
 
 /// LLM provider presets: (display name, api_url, model)
 const LLM_PRESETS: &[(&str, &str, &str)] = &[
-    ("Groq — llama-3.3-70b-versatile", "https://api.groq.com/openai/v1/chat/completions", "llama-3.3-70b-versatile"),
+    ("Groq — openai/gpt-oss-120b", "https://api.groq.com/openai/v1/chat/completions", "openai/gpt-oss-120b"),
     ("OpenAI — gpt-4o-mini", "https://api.openai.com/v1/chat/completions", "gpt-4o-mini"),
     ("OpenRouter — llama-3.3-70b", "https://openrouter.ai/api/v1/chat/completions", "meta-llama/llama-3.3-70b-instruct"),
     ("OpenRouter — deepseek-r1", "https://openrouter.ai/api/v1/chat/completions", "deepseek/deepseek-r1"),

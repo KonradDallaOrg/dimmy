@@ -68,6 +68,67 @@ mod tests {
         }
     }
 
+    /// The catalog must never list an id the provider has retired: it
+    /// feeds every picker, so a dead id there is a 404 the user only
+    /// discovers mid-dictation. Burned 2026-08-27 — `llama-3.3-70b-versatile`
+    /// and `llama-3.1-8b-instant` stayed listed (and one of them was the
+    /// core's DEFAULT_LLM_MODEL) after Groq dropped them.
+    #[test]
+    fn retired_ids_are_not_in_the_catalog() {
+        let v = parse();
+        for (dead, live) in crate::GROQ_RETIRED_LLM {
+            let mut ids = v["providers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|p| p["models"].as_array().unwrap())
+                .filter_map(|m| m["id"].as_str());
+            assert!(
+                !ids.clone().any(|id| id == dead),
+                "catalog still lists retired model {dead} — it 404s at runtime"
+            );
+            assert!(
+                ids.any(|id| id == live),
+                "migration target {live} for {dead} must itself be in the catalog"
+            );
+        }
+    }
+
+    /// The compiled-in defaults are what a fresh install dispatches to,
+    /// so they must name models the catalog actually offers.
+    #[test]
+    fn core_defaults_are_listed_in_the_catalog() {
+        let v = parse();
+        for (url, model, task) in [
+            (crate::DEFAULT_LLM_URL, crate::DEFAULT_LLM_MODEL, "llm"),
+            (crate::DEFAULT_API_URL, crate::DEFAULT_MODEL, "stt"),
+        ] {
+            let key = if task == "llm" { "llm_url" } else { "stt_url" };
+            let provider = v["providers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|p| p[key].as_str() == Some(url))
+                .unwrap_or_else(|| panic!("no catalog provider serves default {task} url {url}"));
+            let m = provider["models"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|m| m["id"].as_str() == Some(model))
+                .unwrap_or_else(|| {
+                    panic!("default {task} model {model} is not in the catalog for {url}")
+                });
+            assert!(
+                m["tasks"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|t| t.as_str() == Some(task)),
+                "default {task} model {model} does not declare task {task}"
+            );
+        }
+    }
+
     #[test]
     fn every_model_is_well_formed_and_task_urls_exist() {
         let v = parse();
