@@ -136,8 +136,11 @@ public sealed class UpdateService
 
     /// <summary>One pass of check + download. Public so the Settings
     /// "Check for updates now" button can force-run it. Swallows all
-    /// exceptions (logged) — never throws to the caller.</summary>
-    public async Task CheckAndDownloadAsync(CancellationToken ct = default)
+    /// exceptions (logged) — never throws to the caller, but reports
+    /// what happened via the returned <see cref="UpdateCheckResult"/>
+    /// so the button can render a concrete answer. The background loop
+    /// discards the result.</summary>
+    public async Task<UpdateCheckResult> CheckAndDownloadAsync(CancellationToken ct = default)
     {
         try
         {
@@ -153,7 +156,7 @@ public sealed class UpdateService
             if (!LicenseService.HasScope(LicenseService.ScopeNames.AutoUpdate))
             {
                 App.Log("auto_update scope absent — skipping check (license-gated)", "Update");
-                return;
+                return new UpdateCheckResult(UpdateCheckOutcome.NoLicense, "", null);
             }
 
             var prefs = UiPreferences.Load();
@@ -182,14 +185,17 @@ public sealed class UpdateService
             if (!_manager.IsInstalled)
             {
                 App.Log("dev build / no Velopack metadata — skipping check", "Update");
-                return;
+                return new UpdateCheckResult(UpdateCheckOutcome.DevBuild, "", null);
             }
 
             var info = await _manager.CheckForUpdatesAsync().ConfigureAwait(false);
             if (info is null)
             {
                 App.Log($"no update (channel={prefs.UpdateChannel}, current={_manager.CurrentVersion})", "Update");
-                return;
+                return new UpdateCheckResult(
+                    UpdateCheckOutcome.UpToDate,
+                    _manager.CurrentVersion?.ToString() ?? "",
+                    null);
             }
 
             App.Log($"update available: {info.TargetFullRelease.Version}; downloading", "Update");
@@ -202,11 +208,16 @@ public sealed class UpdateService
             // (early startup race), the event still fires synchronously
             // and subscribers handle dispatch themselves.
             App.Instance?.RunOnUI(() => UpdateReady?.Invoke(this, EventArgs.Empty));
+            return new UpdateCheckResult(
+                UpdateCheckOutcome.UpdateReady,
+                info.TargetFullRelease.Version.ToString(),
+                null);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
             App.Log($"CheckAndDownload exc: {ex.GetType().Name}: {ex.Message}", "Update");
+            return new UpdateCheckResult(UpdateCheckOutcome.Failed, "", ex.Message);
         }
     }
 

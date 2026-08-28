@@ -1626,6 +1626,29 @@
                         </StackPanel>
                       </Button>
                     </StackPanel>
+                    <!-- Result of the last "Check for updates" press.
+                         Without this the button was a no-op on screen
+                         whenever the answer was "already current" — the
+                         check ran, logged, and changed nothing visible. -->
+                    <StackPanel x:Name="UpdateCheckStatus"
+                                Orientation="Horizontal" Spacing="6"
+                                Visibility="Collapsed"
+                                Margin="0,8,0,0">
+                      <ProgressRing x:Name="UpdateCheckSpinner"
+                                    Width="14" Height="14"
+                                    IsActive="False"
+                                    Visibility="Collapsed"
+                                    VerticalAlignment="Center" />
+                      <FontIcon x:Name="UpdateCheckGlyph"
+                                Glyph="&#xE73E;" FontSize="13"
+                                Visibility="Collapsed"
+                                VerticalAlignment="Center" />
+                      <TextBlock x:Name="UpdateCheckText"
+                                 FontSize="12"
+                                 TextWrapping="Wrap"
+                                 VerticalAlignment="Center"
+                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
                   </StackPanel>
 
                   <!-- Big chat-bubble Dimmy logo on the right -->

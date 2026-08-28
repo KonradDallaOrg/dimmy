@@ -20,7 +20,10 @@ struct MacAboutPage: View {
             // user sees prerelease builds. Status alone stays
             // visible in Simple.
             statusOnlyGroup
-            if appState.showAdvanced {
+            // Channel picker is meaningless without the auto_update
+            // scope — Windows collapses `UpdateChannelCard` for the
+            // same reason.
+            if appState.showAdvanced && updates.isLicensed {
                 updateChannelGroup
             }
 
@@ -68,7 +71,10 @@ struct MacAboutPage: View {
                     description: updates.statusText,
                     showsDivider: false
                 ) {
-                    if updates.isUpdateReady {
+                    if updates.isChecking {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else if updates.isUpdateReady {
                         Circle()
                             .fill(Color.accentColor)
                             .frame(width: 8, height: 8)
@@ -112,9 +118,11 @@ struct MacAboutPage: View {
                     Button {
                         updates.checkForUpdatesNow()
                     } label: {
-                        Label("Check for updates...", systemImage: "arrow.down.circle.fill")
+                        Label(updates.isChecking ? "Checking..." : "Check for updates...",
+                              systemImage: "arrow.down.circle.fill")
                     }
                     .buttonStyle(.borderedProminent)
+                    .disabled(updates.isChecking)
 
                     Button {
                         if let url = URL(string: "https://github.com/KonradDallaOrg/dimmy/releases") {
