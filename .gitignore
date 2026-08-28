@@ -55,3 +55,7 @@ mockup/
 # generated UI screenshots (scripts/dev/capture-settings-ui.ps1)
 docs/ui-shots/
 default.profraw
+
+# Python bytecode (scripts/ci helpers)
+__pycache__/
+*.pyc
