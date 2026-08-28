@@ -163,6 +163,14 @@ final class UpdateService: NSObject, ObservableObject {
     /// could sit behind other windows; and an unlicensed user got the
     /// same silent no-op as a licensed one who is already current.
     func checkForUpdatesNow() {
+        // applyLicenseGate() reports "not licensed" while the core is
+        // still coming up, which is the right default for the silent
+        // scheduler but the wrong answer for a button press: it would
+        // send a paying user to the download page. Say so instead.
+        guard DimmyCore.shared.isInitialized else {
+            statusText = "Still starting up. Try again in a moment."
+            return
+        }
         guard applyLicenseGate() else {
             statusText = "In-app updates need an active plan"
             if let url = URL(string: "https://dimmy.app/download") {
