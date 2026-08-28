@@ -611,8 +611,16 @@ jobs:
           # Generator + its tests live in scripts/ci/ so this logic is
           # runnable without cutting a release. Two bugs shipped from the
           # inline version that used to sit here; see the module docstring.
+          # Generate to a temp file and only move it into place once it
+          # is verified. This step has no `set -e`, so a redirect
+          # straight onto $APPCAST would leave a TRUNCATED file behind
+          # on failure — and the upload step gates on
+          # `hashFiles(...) != ''`, which an empty file satisfies. That
+          # would --clobber the durable auto-update feed with junk and
+          # break updates for every Mac user until the next release.
           APPCAST="platforms/macos/build/appcast.xml"
-          python3 scripts/ci/build_appcast.py \
+          APPCAST_TMP="$RUNNER_TEMP/appcast.xml"
+          if ! python3 scripts/ci/build_appcast.py \
             --version "$VERSION" \
             --build-version "$BUILD_VERSION" \
             --channel "$CHANNEL" \
@@ -621,7 +629,22 @@ jobs:
             --pub-date "$PUB_DATE" \
             --min-os "$MIN_OS_VERSION" \
             --signature "$SIG_LINE" \
-            $PREV_ARG > "$APPCAST"
+            $PREV_ARG > "$APPCAST_TMP"; then
+            echo "::error::appcast generation failed - refusing to publish a feed"
+            rm -f "$APPCAST_TMP"
+            exit 1
+          fi
+          if [ ! -s "$APPCAST_TMP" ]; then
+            echo "::error::generated appcast is empty - refusing to publish a feed"
+            rm -f "$APPCAST_TMP"
+            exit 1
+          fi
+          if ! grep -q "$BUILD_VERSION" "$APPCAST_TMP"; then
+            echo "::error::generated appcast does not mention $BUILD_VERSION - refusing to publish"
+            rm -f "$APPCAST_TMP"
+            exit 1
+          fi
+          mv "$APPCAST_TMP" "$APPCAST"
 
           echo "=== appcast.xml ==="
           cat "$APPCAST"
