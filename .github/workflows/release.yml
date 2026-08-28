@@ -243,7 +243,21 @@ jobs:
           if [ -z "$VERSION" ]; then echo "::error::could not parse version from core/Cargo.toml"; exit 1; fi
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Mac build version: $VERSION"
+
+          # BUILD_VERSION carries the rc suffix; VERSION does not.
+          # Cargo.toml holds the marketing number and stays at 0.6.73
+          # across rc1, rc2 and the final stable, so using it as
+          # CFBundleVersion made every rc INDISTINGUISHABLE from the
+          # stable that follows it: Sparkle compares CFBundleVersion,
+          # saw 0.6.73 == 0.6.73, and never offered the stable to
+          # anyone sitting on an rc. The tag is the only value that is
+          # unique per build, so it becomes CFBundleVersion (and the
+          # appcast's sparkle:version) while VERSION stays
+          # CFBundleShortVersionString for display.
+          BUILD_VERSION="${GITHUB_REF_NAME#v}"
+          if [ -z "$BUILD_VERSION" ]; then echo "::error::could not derive build version from tag"; exit 1; fi
+          echo "BUILD_VERSION=$BUILD_VERSION" >> "$GITHUB_ENV"
+          echo "Mac build version: $VERSION (build $BUILD_VERSION)"
 
       # ── Developer ID signing + notarization (graceful-skip) ──────────
       # Mirror of staging-tester.yml. With MACOS_CERT_P12 present the prod
@@ -301,7 +315,7 @@ jobs:
               -configuration Release \
               -derivedDataPath build/derived \
               MARKETING_VERSION="$VERSION" \
-              CURRENT_PROJECT_VERSION="$VERSION" \
+              CURRENT_PROJECT_VERSION="$BUILD_VERSION" \
               build \
               CODE_SIGN_STYLE=Manual \
               CODE_SIGN_IDENTITY="$SIGN_IDENTITY" \
@@ -314,7 +328,7 @@ jobs:
               -configuration Release \
               -derivedDataPath build/derived \
               MARKETING_VERSION="$VERSION" \
-              CURRENT_PROJECT_VERSION="$VERSION" \
+              CURRENT_PROJECT_VERSION="$BUILD_VERSION" \
               build \
               CODE_SIGN_IDENTITY="-"
           fi
@@ -564,41 +578,51 @@ jobs:
           PUB_DATE=$(LC_TIME=en_US.UTF-8 date -u +"%a, %d %b %Y %H:%M:%S +0000")
           MIN_OS_VERSION="12.0"
 
-          # GitHub treats releases marked "prerelease" as prereleases —
-          # surface that in the appcast so users on the prerelease
-          # channel pick it up. github.event.release is populated
-          # because this job is triggered by `release.created`.
-          IS_PRERELEASE="${{ github.event.release.prerelease }}"
-          CHANNEL_TAG=""
-          if [ "$IS_PRERELEASE" = "true" ]; then
-            CHANNEL_TAG="<sparkle:channel>prerelease</sparkle:channel>"
+          # Which Sparkle channel this build belongs to. The old code read
+          # `github.event.release.prerelease`, but this workflow is
+          # triggered by `on: push: tags` — that context is EMPTY here, so
+          # the channel tag was never emitted and every rc was published
+          # into the STABLE channel. Mac users on "stable" were being
+          # auto-updated to release candidates. Use the same tag-shape
+          # predicate the create-release job already uses for the GitHub
+          # prerelease flag, so the two can never disagree.
+          CHANNEL=stable
+          if [ "${{ contains(github.ref_name, '-') }}" = "true" ]; then
+            CHANNEL=prerelease
+          fi
+          echo "Publishing to channel: $CHANNEL"
+
+          # The feed must always carry BOTH the newest stable and the
+          # newest prerelease. It only ever held one item, so with the
+          # channel tag fixed, publishing an rc would empty the stable
+          # channel and strand every stable user on "up to date" forever,
+          # including users behind the last stable release. Fetch the
+          # live feed so the generator can carry over the item for the
+          # channel we are NOT publishing. A miss is non-fatal: the
+          # generator warns and emits a single-item feed.
+          PREV_ARG=""
+          if curl -fsSL -o /tmp/prev-appcast.xml \
+               "https://github.com/${{ github.repository }}/releases/download/auto-update/appcast.xml"; then
+            PREV_ARG="--previous /tmp/prev-appcast.xml"
+          else
+            echo "::warning::no previous appcast at the auto-update tag - publishing a single-item feed"
           fi
 
+          # Generator + its tests live in scripts/ci/ so this logic is
+          # runnable without cutting a release. Two bugs shipped from the
+          # inline version that used to sit here; see the module docstring.
           APPCAST="platforms/macos/build/appcast.xml"
-          cat > "$APPCAST" <<EOF
-          <?xml version="1.0" standalone="yes"?>
-          <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
-            <channel>
-              <title>Dimmy</title>
-              <link>$DMG_URL</link>
-              <description>Dimmy macOS release feed</description>
-              <language>en</language>
-              <item>
-                <title>Dimmy $VERSION</title>
-                <link>$RELEASE_NOTES_URL</link>
-                <sparkle:version>$VERSION</sparkle:version>
-                <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
-                $CHANNEL_TAG
-                <pubDate>$PUB_DATE</pubDate>
-                <sparkle:minimumSystemVersion>$MIN_OS_VERSION</sparkle:minimumSystemVersion>
-                <enclosure
-                  url="$DMG_URL"
-                  type="application/octet-stream"
-                  $SIG_LINE />
-              </item>
-            </channel>
-          </rss>
-          EOF
+          python3 scripts/ci/build_appcast.py \
+            --version "$VERSION" \
+            --build-version "$BUILD_VERSION" \
+            --channel "$CHANNEL" \
+            --dmg-url "$DMG_URL" \
+            --notes-url "$RELEASE_NOTES_URL" \
+            --pub-date "$PUB_DATE" \
+            --min-os "$MIN_OS_VERSION" \
+            --signature "$SIG_LINE" \
+            $PREV_ARG > "$APPCAST"
+
           echo "=== appcast.xml ==="
           cat "$APPCAST"
 

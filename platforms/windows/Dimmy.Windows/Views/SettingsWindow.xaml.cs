@@ -5204,26 +5204,63 @@ public sealed partial class SettingsWindow : Window
         // build where Velopack metadata isn't present. Either way the
         // user still gets a way to get the latest version.
         if (sender is Button btn) btn.IsEnabled = false;
+        ShowUpdateCheckBusy("Checking for updates...");
         try
         {
             var svc = Services.UpdateService.Instance;
             if (svc is null
                 || !Services.LicenseService.HasScope(Services.LicenseService.ScopeNames.AutoUpdate))
             {
+                ShowUpdateCheckResult(false,
+                    "In-app updates need an active plan. Opening the download page...");
                 await global::Windows.System.Launcher.LaunchUriAsync(
                     new Uri("https://dimmy.app/download"));
                 return;
             }
-            await svc.CheckAndDownloadAsync();
+
+            var channel = Services.UiPreferences.Load().UpdateChannel;
+            var result = await svc.CheckAndDownloadAsync();
+            // On UpdateReady the UpdateCard has already appeared via the
+            // UpdateReady event; this line just closes the loop on the
+            // click so the press is never a silent no-op.
+            var (ok, message) = Services.UpdateCheckMessages.For(
+                result.Outcome, result.Version, channel);
+            ShowUpdateCheckResult(ok, message);
         }
         catch (Exception ex)
         {
             App.Log($"CheckUpdates_Click exc: {ex.Message}", "Update");
+            ShowUpdateCheckResult(false, "Update check failed. Try again in a moment.");
         }
         finally
         {
             if (sender is Button btn2) btn2.IsEnabled = true;
         }
+    }
+
+    private void ShowUpdateCheckBusy(string message)
+    {
+        if (UpdateCheckStatus is null) return;
+        UpdateCheckStatus.Visibility = Visibility.Visible;
+        UpdateCheckSpinner.Visibility = Visibility.Visible;
+        UpdateCheckSpinner.IsActive = true;
+        UpdateCheckGlyph.Visibility = Visibility.Collapsed;
+        UpdateCheckText.Text = message;
+    }
+
+    /// <summary>Terminal state for the check. <paramref name="ok"/> picks
+    /// the checkmark vs the warning glyph — the two outcomes users need to
+    /// tell apart at a glance are "nothing to do" and "something went
+    /// wrong", not the five internal outcome codes.</summary>
+    private void ShowUpdateCheckResult(bool ok, string message)
+    {
+        if (UpdateCheckStatus is null) return;
+        UpdateCheckStatus.Visibility = Visibility.Visible;
+        UpdateCheckSpinner.IsActive = false;
+        UpdateCheckSpinner.Visibility = Visibility.Collapsed;
+        UpdateCheckGlyph.Glyph = ok ? "" : ""; // CheckMark / Warning
+        UpdateCheckGlyph.Visibility = Visibility.Visible;
+        UpdateCheckText.Text = message;
     }
 
     private async void ReleaseNotes_Click(object sender, RoutedEventArgs e)
