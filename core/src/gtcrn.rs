@@ -40,6 +40,11 @@ const N_FFT: usize = 512;
 const HOP: usize = 256;
 const BINS: usize = N_FFT / 2 + 1; // 257
 
+/// ONNX Runtime intra-op threads for this session. See the rationale where
+/// the session is built: more threads is measurably SLOWER here, because the
+/// graph is tiny and runs once per frame.
+const INTRA_THREADS: usize = 2;
+
 /// Cache shapes exactly as the ONNX graph declares them. Kept as arrays so
 /// the tensor construction below and the buffer sizes cannot drift apart.
 const CONV_CACHE_SHAPE: [i64; 5] = [2, 1, 16, 16, 33];
@@ -86,8 +91,28 @@ impl GtcrnDenoiser {
         // No explicit optimisation level: this ONNX Runtime build rejects the
         // setting, and at 48.2K parameters graph optimisation buys nothing
         // worth a compatibility risk.
+        //
+        // The thread cap is NOT a micro-optimisation. This graph is invoked
+        // once per 16 ms STFT frame (see `process`), so a 25 s dictation is
+        // ~1560 separate `run()` calls of ~0.5 MMACs each. At that size the
+        // arithmetic is free and the whole cost is thread-pool wake/park per
+        // call, which grows with the pool. ORT defaults to one thread per
+        // physical core; measured on an i7-12700H (14 cores):
+        //
+        //   threads=14 -> 1.95 ms/frame     threads=2 -> 1.11 ms/frame
+        //   threads=8  -> 1.26 ms/frame     threads=1 -> 1.22 ms/frame
+        //
+        // The default is the worst value available, and the wide pool also
+        // makes the cost hostage to whatever else is scheduling on the box:
+        // the same binary, model and audio measured RTF 0.11 one day and
+        // RTF 0.87 three days later, a 21.7 s stall in front of a 2 s
+        // whisper pass. Two threads is the measured floor and is stable.
         let session = Session::builder()
             .map_err(|e| format!("gtcrn session builder: {e}"))?
+            .with_intra_threads(INTRA_THREADS)
+            .map_err(|e| format!("gtcrn intra threads: {e}"))?
+            .with_inter_threads(1)
+            .map_err(|e| format!("gtcrn inter threads: {e}"))?
             .commit_from_file(model_path)
             .map_err(|e| format!("gtcrn load {}: {e}", model_path.display()))?;
 
@@ -305,6 +330,31 @@ mod tests {
                 "COLA violated at {i}: {sum} (analysis*synthesis must sum to 1)"
             );
         }
+    }
+
+    #[test]
+    fn intra_threads_is_capped_well_below_the_ort_default() {
+        // ORT defaults the intra-op pool to one thread per physical core.
+        // That default is actively harmful for this graph: it is invoked once
+        // per 16 ms frame, so pool wake/park dominates and MORE threads means
+        // MORE time per frame (1.95 ms at 14 threads vs 1.11 ms at 2 on the
+        // machine this was measured on). Pinning the constant so a future
+        // "let ORT decide" cleanup has to argue with the measurement.
+        assert!(
+            INTRA_THREADS >= 1,
+            "an intra-op pool of 0 threads is not a valid ORT configuration"
+        );
+        let default_pool = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
+        assert!(
+            INTRA_THREADS <= default_pool,
+            "cap must not EXCEED what ORT would have chosen ({default_pool}),              otherwise it is not a cap"
+        );
+        assert!(
+            INTRA_THREADS <= 4,
+            "measured optimum is 2; anything above 4 is back in the regime              where the pool costs more than the arithmetic"
+        );
     }
 
     #[test]
