@@ -905,7 +905,20 @@ impl Default for AppConfig {
             streaming_dictation: false,
             telegram_enabled: false,
             telegram_auto_process: false,
-            preprocessing_enabled: true,
+            // Default-OFF since 2026-08-31. The three stages behind this flag
+            // (highpass, RNNoise VAD, AGC) were written before the denoiser
+            // existed and have cost more than they returned: the VAD trims
+            // 40-60% of the samples and misjudges exactly the quiet-microphone
+            // case it was meant to rescue (2026-07-01: a 45 s dictation
+            // transcribed to "Ah!"), and the AGC clipped every one of 38
+            // measured captures until 2026-08-04. Whisper is level-robust and
+            // noise-robust on its own; the evidence for leaving this on was
+            // never collected, while the evidence against it was, repeatedly.
+            //
+            // This only moves the default. An existing `config.json` carries
+            // an explicit value, which `unwrap_or(defaults.…)` still honours,
+            // so nobody who chose this loses their choice.
+            preprocessing_enabled: false,
             audio_debug_enabled: false,
             ggml_debug_logging: false,
             use_keyring: false,

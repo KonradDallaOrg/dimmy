@@ -418,6 +418,27 @@ mod tests {
     }
 
     #[test]
+    fn the_denoise_is_off_unless_explicitly_asked_for() {
+        // Measured on 70 real dictations 2026-08-31: denoising cost half the
+        // recordings nothing at all and cost the other half punctuation,
+        // capitalisation and occasionally whole words. Silence is not a
+        // neutral default here — it is the measured better one, and a stray
+        // value in the environment must not quietly switch it back on.
+        assert!(!denoise_enabled_from(None), "unset must mean off");
+        assert!(!denoise_enabled_from(Some("")), "empty must mean off");
+        assert!(!denoise_enabled_from(Some("0")), "0 must mean off");
+        // Only the one explicit opt-in turns it on. Not "true", not "yes":
+        // a typo must fail closed, toward the default that measured better.
+        assert!(denoise_enabled_from(Some("1")), "1 must mean on");
+        for typo in ["true", "TRUE", "yes", "on", "2", " 1"] {
+            assert!(
+                !denoise_enabled_from(Some(typo)),
+                "{typo:?} must not enable the denoise"
+            );
+        }
+    }
+
+    #[test]
     fn window_squared_sums_to_unity_at_fifty_percent_overlap() {
         // The COLA property the overlap-add relies on. If this drifts the
         // output gets amplitude-modulated at the frame rate rather than
@@ -472,13 +493,48 @@ mod tests {
     }
 }
 
-/// The denoise pass for the STT path. ON by default, `DIMMY_GTCRN=0` to skip.
+/// Is the denoise pass switched on? OFF by default, `DIMMY_GTCRN=1` to enable.
 ///
-/// Default-on because this REPLACES the RNNoise stage that used to run
-/// unconditionally upstream of AEC3 — leaving it off would have been a silent
-/// removal of noise suppression, not a swap. Env var rather than a config
-/// field for now: the field means schema + FFI + two host UIs, and that is
-/// worth doing once we know which default users actually want.
+/// **It was default-ON from 2026-08-10 to 2026-08-31, and that was wrong.**
+/// The original reasoning — that it REPLACED an RNNoise stage, so leaving it
+/// off would be a silent removal of noise suppression rather than a swap — only
+/// ever weighed levels and latency. Nobody measured what it did to the TEXT,
+/// and the comment here said the default would be settled "once we know which
+/// default users actually want". It was settled on 2026-08-31 by measuring, on
+/// 70 real dictations, with `core/src/bin/denoise_ab.rs`:
+///
+/// - 38 of 70 transcripts came out **identical** — half the recordings paid for
+///   nothing at all;
+/// - across the 32 that differed, denoised audio lost **33% of the punctuation
+///   and 53% of the capitalisation**;
+/// - the 8 "Grazie"-shaped hallucinations on near-silent clips appeared in
+///   BOTH arms — it removed none of the failures it was partly there for;
+/// - reading the 10 most divergent pairs by hand: raw won 6, tied 2, one was
+///   ambiguous, denoised won 0, and one clean sentence came back as garbage
+///   ("Non ho registrato proprio niente" → "Uzzanno nel registrato
+///   popioniente").
+///
+/// That matches the published result that speech enhancement in front of a
+/// modern ASR usually hurts (arXiv:2512.17562 found raw beating enhanced in
+/// 40 of 40 configurations): whisper trained on vast noisy audio is already
+/// noise-robust, while the enhancer's artifacts are a distribution it has
+/// never seen.
+///
+/// The code stays, and so does the switch: a genuinely loud room, or the
+/// meeting path's system audio, was never covered by that measurement. It just
+/// no longer runs unless asked.
+fn denoise_enabled() -> bool {
+    denoise_enabled_from(std::env::var("DIMMY_GTCRN").ok().as_deref())
+}
+
+/// The decision itself, split out so it can be tested without mutating a
+/// process-global env var underneath tests running in parallel.
+fn denoise_enabled_from(value: Option<&str>) -> bool {
+    value == Some("1")
+}
+
+/// The denoise pass for the STT path. See [`denoise_enabled`] for why it is
+/// off unless asked.
 ///
 /// Placed on the 16 kHz STT input rather than in the capture chain, so the
 /// audio we ARCHIVE keeps its full band and stays re-transcribable from the
@@ -491,7 +547,7 @@ pub fn maybe_denoise_16k(samples_16k: &[f32]) -> std::borrow::Cow<'_, [f32]> {
     use std::borrow::Cow;
     use std::sync::Mutex;
 
-    if std::env::var("DIMMY_GTCRN").as_deref() == Ok("0") {
+    if !denoise_enabled() {
         return Cow::Borrowed(samples_16k);
     }
     if samples_16k.is_empty() {
@@ -604,7 +660,7 @@ pub mod live {
     /// The recording then denoises at the end, as before.
     pub fn begin(sample_rate: u32, buffer: Arc<Mutex<Vec<f32>>>) -> bool {
         assert!(sample_rate > 0, "gtcrn live: sample_rate must be > 0");
-        if std::env::var("DIMMY_GTCRN").as_deref() == Ok("0") {
+        if !super::denoise_enabled() {
             return false;
         }
         let Some(downsampler) = crate::preprocess::StreamingDownsampler16k::new(sample_rate) else {

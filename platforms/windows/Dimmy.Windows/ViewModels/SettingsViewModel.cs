@@ -553,7 +553,11 @@ public partial class SettingsViewModel : ObservableObject
             Shortcut = r.TryGetProperty("shortcut", out var sc) ? sc.GetString() ?? "Win+Alt" : "Win+Alt";
             ShortcutMode = r.TryGetProperty("shortcut_mode", out var sm) ? sm.GetString() ?? "toggle" : "toggle";
             SelectedDevice = r.TryGetProperty("selected_device", out var dev) ? dev.GetString() : null;
-            PreprocessingEnabled = !r.TryGetProperty("preprocessing_enabled", out var pe) || pe.GetBoolean();
+            // Absent means off, matching the core's default since 2026-08-31.
+            // The core is the single writer of config.json, so a fallback here
+            // that disagrees with it would show the toggle ON while the audio
+            // path runs OFF.
+            PreprocessingEnabled = r.TryGetProperty("preprocessing_enabled", out var pe) && pe.GetBoolean();
             ChunkStreamingEnabled = r.TryGetProperty("chunk_streaming_enabled", out var cs) && cs.GetBoolean();
             StreamingDictation = r.TryGetProperty("streaming_dictation", out var sd) && sd.GetBoolean();
             LiveCaptionsEnabled = !r.TryGetProperty("live_captions_enabled", out var lce) || lce.GetBoolean();
