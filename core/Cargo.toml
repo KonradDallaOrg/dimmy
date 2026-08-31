@@ -90,6 +90,15 @@ required-features = ["local-stt-parakeet-fluid"]
 name = "denoise_offline"
 path = "src/bin/denoise_offline.rs"
 
+# Decides whether the denoise earns its place: transcribes real captures with
+# and without it. Unlike denoise_offline, which guards every gtcrn reference
+# with a #[cfg], this binary is ABOUT gtcrn, so it declares the feature instead
+# of pretending it can be built without it.
+[[bin]]
+name = "denoise_ab"
+path = "src/bin/denoise_ab.rs"
+required-features = ["denoise-gtcrn", "local-stt"]
+
 [features]
 default = ["local-stt", "telemetry-sentry"]
 local-stt = ["dep:whisper-rs"]
