@@ -73,6 +73,29 @@ pub struct GtcrnDenoiser {
     conv_cache: Vec<f32>,
     tra_cache: Vec<f32>,
     inter_cache: Vec<f32>,
+
+    // ── Streaming state ────────────────────────────────────────────────
+    // The denoiser is frame-by-frame by construction (see `run_frame`), so
+    // the only thing standing between it and a live stream is the STFT
+    // framing. Keeping that framing here — instead of rebuilding it per call
+    // — is what makes `push` chunk-size-independent: feeding a recording in
+    // 100 ms slices produces the SAME samples as feeding it in one go, which
+    // `process` relies on and `streaming_matches_batch_exactly` pins.
+    //
+    // `buf` and `ola` are windows onto an absolute timeline that starts with
+    // `HOP` samples of zero padding, so absolute index `HOP` is input sample 0.
+    /// Padded input still needed by a future frame, starting at `base`.
+    buf: Vec<f32>,
+    /// Overlap-add accumulator covering the same range as `buf`.
+    ola: Vec<f32>,
+    /// Absolute index of `buf[0]` / `ola[0]`.
+    base: usize,
+    /// Absolute position of the next frame to run.
+    next_frame: usize,
+    /// Absolute index of the next output sample to emit.
+    produced: usize,
+    /// Input samples pushed since the last `reset`.
+    pushed: usize,
 }
 
 impl GtcrnDenoiser {
@@ -138,6 +161,12 @@ impl GtcrnDenoiser {
             conv_cache: vec![0.0; CONV_CACHE_LEN],
             tra_cache: vec![0.0; TRA_CACHE_LEN],
             inter_cache: vec![0.0; INTER_CACHE_LEN],
+            buf: vec![0.0; HOP],
+            ola: vec![0.0; HOP],
+            base: 0,
+            next_frame: 0,
+            produced: HOP,
+            pushed: 0,
         })
     }
 
@@ -148,9 +177,23 @@ impl GtcrnDenoiser {
         self.conv_cache.fill(0.0);
         self.tra_cache.fill(0.0);
         self.inter_cache.fill(0.0);
+        // One hop of leading context so frame 0 sees a full window.
+        self.buf.clear();
+        self.buf.resize(HOP, 0.0);
+        self.ola.clear();
+        self.ola.resize(HOP, 0.0);
+        self.base = 0;
+        self.next_frame = 0;
+        self.produced = HOP;
+        self.pushed = 0;
     }
 
-    /// Enhance a 16 kHz mono buffer. Returns the same number of samples.
+    /// Enhance a 16 kHz mono buffer in one shot. Returns the same number of
+    /// samples.
+    ///
+    /// A thin wrapper over the streaming API so there is exactly one framing
+    /// implementation: whatever this returns, feeding the same audio through
+    /// `push`/`flush` in arbitrary slices returns byte-for-byte the same thing.
     pub fn process(&mut self, samples_16k: &[f32]) -> Result<Vec<f32>, String> {
         assert!(
             !samples_16k.is_empty(),
@@ -161,22 +204,70 @@ impl GtcrnDenoiser {
             "gtcrn: input contains NaN/Inf"
         );
 
-        let n = samples_16k.len();
-        // One hop of leading context so frame 0 has a full window, and enough
-        // tail to flush the last hop back out.
-        let mut padded = vec![0.0f32; HOP];
-        padded.extend_from_slice(samples_16k);
-        padded.resize(padded.len() + N_FFT, 0.0);
+        self.reset();
+        let mut enhanced = self.push(samples_16k)?;
+        enhanced.extend_from_slice(&self.flush()?);
 
-        let mut out = vec![0.0f32; padded.len()];
+        assert_eq!(
+            enhanced.len(),
+            samples_16k.len(),
+            "gtcrn: output length must match input length"
+        );
+        assert!(
+            enhanced.iter().all(|s| s.is_finite()),
+            "gtcrn: produced NaN/Inf"
+        );
+        Ok(enhanced)
+    }
+
+    /// Feed the next slice of a live recording; returns whatever output has
+    /// become final. Output lags the input by up to one window, which at
+    /// 16 kHz is 32 ms — the rest arrives from `flush`.
+    ///
+    /// Chunk size is free: the caller may push 10 ms or 10 s at a time and the
+    /// concatenated result is identical, because the framing state lives in
+    /// `self` rather than in the call.
+    pub fn push(&mut self, samples_16k: &[f32]) -> Result<Vec<f32>, String> {
+        assert!(
+            samples_16k.iter().all(|s| s.is_finite()),
+            "gtcrn: pushed audio contains NaN/Inf"
+        );
+        self.buf.extend_from_slice(samples_16k);
+        self.ola.resize(self.buf.len(), 0.0);
+        self.pushed += samples_16k.len();
+        self.drain_ready()
+    }
+
+    /// Close the stream: flush the frames still holding the tail and return the
+    /// last samples. After this the denoiser is empty but its noise state is
+    /// intact; call `reset` before an unrelated recording.
+    pub fn flush(&mut self) -> Result<Vec<f32>, String> {
+        // Enough trailing silence for the final hops to overlap-add out.
+        self.buf.resize(self.buf.len() + N_FFT, 0.0);
+        self.ola.resize(self.buf.len(), 0.0);
+        let tail = self.drain_ready()?;
+        assert_eq!(
+            self.produced,
+            HOP + self.pushed,
+            "gtcrn: flush must emit exactly as many samples as were pushed"
+        );
+        Ok(tail)
+    }
+
+    /// Run every frame whose window is fully buffered, then hand back the
+    /// output samples no later frame can still touch.
+    fn drain_ready(&mut self) -> Result<Vec<f32>, String> {
         let mut spectrum = self.fft.make_output_vec();
         let mut frame = vec![0.0f32; N_FFT];
         let mut synth = vec![0.0f32; N_FFT];
 
-        let mut pos = 0usize;
-        while pos + N_FFT <= padded.len() {
-            for i in 0..N_FFT {
-                frame[i] = padded[pos + i] * self.window[i];
+        while self.next_frame + N_FFT <= self.base + self.buf.len() {
+            let off = self.next_frame - self.base;
+            for (windowed, (sample, w)) in frame
+                .iter_mut()
+                .zip(self.buf[off..off + N_FFT].iter().zip(&self.window))
+            {
+                *windowed = sample * w;
             }
             self.fft
                 .process(&mut frame, &mut spectrum)
@@ -206,26 +297,41 @@ impl GtcrnDenoiser {
 
             // realfft's inverse is unnormalised.
             let norm = 1.0 / N_FFT as f32;
-            for i in 0..N_FFT {
-                out[pos + i] += synth[i] * norm * self.window[i];
+            for ((acc, s), w) in self.ola[off..off + N_FFT]
+                .iter_mut()
+                .zip(&synth)
+                .zip(&self.window)
+            {
+                *acc += s * norm * w;
             }
-            pos += HOP;
+            self.next_frame += HOP;
         }
 
-        let enhanced: Vec<f32> = out[HOP..HOP + n]
-            .iter()
-            .map(|s| s.clamp(-1.0, 1.0))
-            .collect();
-        assert_eq!(
-            enhanced.len(),
-            n,
-            "gtcrn: output length must match input length"
-        );
-        assert!(
-            enhanced.iter().all(|s| s.is_finite()),
-            "gtcrn: produced NaN/Inf"
-        );
-        Ok(enhanced)
+        // Frames run in order and each one starts a hop later than the last, so
+        // once the frame at `pos` has run nothing can still write below
+        // `pos + HOP` — which is exactly `next_frame`.
+        let limit = (HOP + self.pushed).min(self.next_frame);
+        let out: Vec<f32> = if limit > self.produced {
+            self.ola[self.produced - self.base..limit - self.base]
+                .iter()
+                .map(|s| s.clamp(-1.0, 1.0))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        self.produced = self.produced.max(limit);
+
+        // Retire the prefix no future frame reads and no future output needs.
+        let retire = self.produced.min(self.next_frame);
+        if retire > self.base {
+            let n = retire - self.base;
+            self.buf.drain(..n);
+            self.ola.drain(..n);
+            self.base = retire;
+        }
+
+        assert!(out.iter().all(|s| s.is_finite()), "gtcrn: produced NaN/Inf");
+        Ok(out)
     }
 
     fn run_frame(&mut self, mix: &[f32]) -> Result<Vec<f32>, String> {
@@ -451,4 +557,226 @@ pub fn model_path() -> std::path::PathBuf {
         }
     }
     crate::local_stt::model_path(MODEL_FILE)
+}
+
+/// Denoising a recording while it is still being captured.
+///
+/// The denoiser is bit-for-bit indifferent to how the audio is sliced (pinned
+/// by `streaming_matches_batch_exactly`), so the work can be spread across the
+/// recording instead of landing on the user at the end. At the measured RTF of
+/// 0.057 that is roughly 6% of one core while you speak, against 5 seconds of
+/// dead wait after an 87-second dictation.
+///
+/// Armed only for the `Raw` preprocess route. The other routes run a VAD and an
+/// AGC across the WHOLE 48 kHz buffer before this stage sees anything, so the
+/// denoiser input does not exist until the recording stops and there is nothing
+/// to overlap; those recordings denoise at the end exactly as before. Lifting
+/// that restriction means moving the VAD to 16 kHz (`silero.rs` is already in
+/// the tree), which is a change to the audio pipeline in its own right.
+pub mod live {
+    use super::{GtcrnDenoiser, REQUIRED_RATE};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    /// How often the worker folds newly captured audio into the denoiser. Sets
+    /// the worst-case tail left for `finish`: at RTF 0.057 a 250 ms backlog is
+    /// about 14 ms of work.
+    const POLL: std::time::Duration = std::time::Duration::from_millis(250);
+
+    struct Session {
+        denoiser: GtcrnDenoiser,
+        downsampler: crate::preprocess::StreamingDownsampler16k,
+        /// Capture-rate samples already folded in.
+        consumed: usize,
+        /// Denoised 16 kHz output so far.
+        out: Vec<f32>,
+        stop: Arc<AtomicBool>,
+    }
+
+    static SESSION: Mutex<Option<Session>> = Mutex::new(None);
+    /// Result waiting for `stt_input_16k`, tagged with the capture-rate length
+    /// it was built from so it can never be applied to a different recording.
+    static PREPARED: Mutex<Option<(usize, Vec<f32>)>> = Mutex::new(None);
+
+    /// Arm live denoising and start the worker that feeds it. Returns false â€”
+    /// harmlessly â€” when the model is missing, the capture rate is not one the
+    /// streaming downsampler can match exactly, or denoising is switched off.
+    /// The recording then denoises at the end, as before.
+    pub fn begin(sample_rate: u32, buffer: Arc<Mutex<Vec<f32>>>) -> bool {
+        assert!(sample_rate > 0, "gtcrn live: sample_rate must be > 0");
+        if std::env::var("DIMMY_GTCRN").as_deref() == Ok("0") {
+            return false;
+        }
+        let Some(downsampler) = crate::preprocess::StreamingDownsampler16k::new(sample_rate) else {
+            crate::log(&format!(
+                "[GTCRN] live denoise off: {sample_rate} Hz is not an exact multiple of {REQUIRED_RATE}"
+            ));
+            return false;
+        };
+        let mut denoiser = match GtcrnDenoiser::load(&super::model_path()) {
+            Ok(d) => d,
+            Err(e) => {
+                crate::log(&format!("[GTCRN] live denoise off: {e}"));
+                return false;
+            }
+        };
+        denoiser.reset();
+
+        let stop = Arc::new(AtomicBool::new(false));
+        {
+            let Ok(mut slot) = SESSION.lock() else {
+                return false;
+            };
+            *slot = Some(Session {
+                denoiser,
+                downsampler,
+                consumed: 0,
+                out: Vec::new(),
+                stop: stop.clone(),
+            });
+        }
+        if let Ok(mut prepared) = PREPARED.lock() {
+            *prepared = None;
+        }
+
+        std::thread::Builder::new()
+            .name("dimmy-denoise".to_string())
+            .spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    std::thread::sleep(POLL);
+                    feed_from(&buffer);
+                }
+            })
+            .expect("denoise thread spawn must succeed");
+        crate::log("[GTCRN] live denoise armed");
+        true
+    }
+
+    /// Fold whatever the capture thread has appended since last time.
+    fn feed_from(buffer: &Mutex<Vec<f32>>) {
+        let Ok(mut slot) = SESSION.lock() else { return };
+        let Some(session) = slot.as_mut() else { return };
+
+        // Hold the capture lock only long enough to copy the tail: the mic
+        // callback appends under it, and ONNX inference must never stall it.
+        let tail: Vec<f32> = match buffer.lock() {
+            Ok(b) if b.len() > session.consumed => b[session.consumed..].to_vec(),
+            _ => return,
+        };
+        session.consumed += tail.len();
+
+        let _no_throttle = crate::win_qos::NoThrottle::for_local_inference();
+        let sixteen_k = session.downsampler.push(&tail);
+        if sixteen_k.is_empty() {
+            return;
+        }
+        match session.denoiser.push(&sixteen_k) {
+            Ok(enhanced) => session.out.extend_from_slice(&enhanced),
+            Err(e) => {
+                crate::log(&format!(
+                    "[GTCRN] live denoise failed ({e}) â€” falling back"
+                ));
+                session.stop.store(true, Ordering::Relaxed);
+                *slot = None;
+            }
+        }
+    }
+
+    /// Close the recording: fold the tail the worker has not reached, flush,
+    /// and park the result for `stt_input_16k`. A no-op when live denoising was
+    /// never armed or has already given up.
+    pub fn finish(raw: &[f32]) {
+        let Ok(mut slot) = SESSION.lock() else { return };
+        let Some(mut session) = slot.take() else {
+            return;
+        };
+        session.stop.store(true, Ordering::Relaxed);
+
+        let backlog = raw.len().saturating_sub(session.consumed);
+        let t0 = std::time::Instant::now();
+        let _no_throttle = crate::win_qos::NoThrottle::for_local_inference();
+
+        if backlog > 0 {
+            let sixteen_k = session.downsampler.push(&raw[session.consumed..]);
+            session.consumed = raw.len();
+            if !sixteen_k.is_empty() {
+                match session.denoiser.push(&sixteen_k) {
+                    Ok(enhanced) => session.out.extend_from_slice(&enhanced),
+                    Err(e) => {
+                        crate::log(&format!("[GTCRN] live tail failed ({e}) â€” falling back"));
+                        return;
+                    }
+                }
+            }
+        }
+        // The worker reads the same buffer the caller just drained, so a `raw`
+        // shorter than what we consumed means the two disagree about which
+        // recording this is. Fall back rather than guess.
+        if session.consumed != raw.len() {
+            crate::log(&format!(
+                "[GTCRN] live denoise saw {} samples but the recording is {} â€” falling back",
+                session.consumed,
+                raw.len()
+            ));
+            return;
+        }
+        match session.denoiser.flush() {
+            Ok(tail) => session.out.extend_from_slice(&tail),
+            Err(e) => {
+                crate::log(&format!("[GTCRN] live flush failed ({e}) â€” falling back"));
+                return;
+            }
+        }
+
+        let rate = capture_rate(raw.len(), session.out.len());
+        crate::log(&format!(
+            "[GTCRN] live denoise done: {:.1}s covered during capture, {:.1}s tail in {} ms",
+            (raw.len() - backlog) as f32 / rate,
+            backlog as f32 / rate,
+            t0.elapsed().as_millis()
+        ));
+
+        if let Ok(mut prepared) = PREPARED.lock() {
+            *prepared = Some((raw.len(), session.out));
+        }
+    }
+
+    /// Capture rate implied by how much 16 kHz output a given input produced.
+    /// Only ever used to make the log line read in seconds.
+    fn capture_rate(raw_len: usize, out_len: usize) -> f32 {
+        if out_len == 0 {
+            return REQUIRED_RATE as f32;
+        }
+        (raw_len as f32 / out_len as f32) * REQUIRED_RATE as f32
+    }
+
+    /// Drop any armed session and any parked result. For recordings that end
+    /// without reaching transcription.
+    pub fn abandon() {
+        if let Ok(mut slot) = SESSION.lock() {
+            if let Some(session) = slot.take() {
+                session.stop.store(true, Ordering::Relaxed);
+            }
+        }
+        if let Ok(mut prepared) = PREPARED.lock() {
+            *prepared = None;
+        }
+    }
+
+    /// The denoised 16 kHz stream for a recording of exactly `raw_len`
+    /// capture-rate samples, if one was prepared during capture. Consumed on
+    /// take: a second caller gets `None` and denoises normally.
+    pub fn take_prepared(raw_len: usize) -> Option<Vec<f32>> {
+        let mut prepared = PREPARED.lock().ok()?;
+        match prepared.take() {
+            Some((len, out)) if len == raw_len => Some(out),
+            Some((len, _)) => {
+                crate::log(&format!(
+                    "[GTCRN] parked denoise is for {len} samples, asked for {raw_len} â€” ignoring"
+                ));
+                None
+            }
+            None => None,
+        }
+    }
 }

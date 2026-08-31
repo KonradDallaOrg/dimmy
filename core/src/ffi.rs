@@ -840,6 +840,30 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
         })
     });
 
+    // Denoise as the audio arrives instead of in one lump once the hotkey is
+    // released — the cost then rides along with the recording rather than
+    // landing on the user as dead wait. Only for the passthrough preprocess
+    // route: the VAD + AGC routes rewrite the whole 48 kHz buffer at stop, so
+    // until then there is nothing for this to work on. See `gtcrn::live`.
+    #[cfg(feature = "denoise-gtcrn")]
+    {
+        let stt_mode = st
+            .stt_mode
+            .lock()
+            .map(|m| m.clone())
+            .unwrap_or_else(|_| "cloud".to_string());
+        let preprocessing = st.preprocessing_enabled.lock().map(|p| *p).unwrap_or(true);
+        let route = crate::preprocess::preprocess_route(preprocessing, &stt_mode);
+        if stt_mode == "local" && matches!(route, crate::preprocess::PreprocessRoute::Raw) {
+            crate::gtcrn::live::begin(
+                crate::audio::MEETING_CANONICAL_RATE,
+                st.audio_buffer.clone(),
+            );
+        } else {
+            crate::gtcrn::live::abandon();
+        }
+    }
+
     // Realtime streaming dictation. When `streaming_dictation` is on the
     // host types each finished segment at the cursor as you speak. Engine
     // choice follows the user's STT mode:
@@ -1389,6 +1413,18 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
     // highpass-only path as file-load (removes rumble, touches nothing else).
     // preprocessing_enabled=false still means full passthrough (raw).
     let route = crate::preprocess::preprocess_route(preprocessing, &stt_mode);
+
+    // Close the live denoise started at `dimmy_start_recording`: fold whatever
+    // the worker has not reached yet, flush, and park the result for
+    // `stt_input_16k`. On any other route nothing was armed and this drops
+    // whatever is left over from an earlier recording.
+    #[cfg(feature = "denoise-gtcrn")]
+    if matches!(route, crate::preprocess::PreprocessRoute::Raw) {
+        crate::gtcrn::live::finish(&raw.samples);
+    } else {
+        crate::gtcrn::live::abandon();
+    }
+
     let processed = match route {
         // Passthrough — unchanged from the pre-refactor behaviour.
         crate::preprocess::PreprocessRoute::Raw => raw.preprocess(false),
