@@ -414,6 +414,10 @@ pub fn maybe_denoise_16k(samples_16k: &[f32]) -> std::borrow::Cow<'_, [f32]> {
     // Each call is an independent recording; carrying state across them would
     // denoise the start of this one against the previous one's noise.
     d.reset();
+    // One ONNX call per 16 ms frame is the exact shape EcoQoS punishes hardest:
+    // 5.72 ms/frame throttled against 1.02 ms/frame exempt, measured. See
+    // `win_qos`.
+    let _no_throttle = crate::win_qos::NoThrottle::for_local_inference();
     let t0 = std::time::Instant::now();
     match d.process(samples_16k) {
         Ok(out) => {

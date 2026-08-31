@@ -340,6 +340,9 @@ fn transcribe_ort(_pcm_16k: &[f32]) -> Result<String, TranscribeError> {
 
 #[cfg(feature = "local-stt-parakeet")]
 fn transcribe_ort(pcm_16k: &[f32]) -> Result<String, TranscribeError> {
+    // ONNX on the CPU: exactly the work EcoQoS demotes to the E-cores. See
+    // `win_qos` for the measurement.
+    let _no_throttle = crate::win_qos::NoThrottle::for_local_inference();
     inference::transcribe(pcm_16k)
 }
 
@@ -356,6 +359,7 @@ fn transcribe_with_word_timestamps_ort(
 fn transcribe_with_word_timestamps_ort(
     pcm_16k: &[f32],
 ) -> Result<(String, String), TranscribeError> {
+    let _no_throttle = crate::win_qos::NoThrottle::for_local_inference();
     inference::transcribe_with_word_timestamps(pcm_16k)
 }
 

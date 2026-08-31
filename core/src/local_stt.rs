@@ -1059,6 +1059,11 @@ pub fn transcribe_local(
     }
 
     // ── Transcribe with cached WhisperContext ────────────────────
+    // whisper runs its heavy matmuls on the GPU, but the CPU side is still
+    // n_threads wide and still gets demoted with the rest of the process:
+    // 3 s throttled against 2 s exempt on the same 25 s recording. Smaller
+    // than the denoise win, real enough to take. See `win_qos`.
+    let _no_throttle = crate::win_qos::NoThrottle::for_local_inference();
     let result = whisper_cache::transcribe(model_file, samples, language, prompt)?;
 
     // ── Postcondition ────────────────────────────────────────────
