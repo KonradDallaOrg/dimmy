@@ -488,6 +488,23 @@ pub fn transcribe_audio_local(
 /// Routing every engine through here makes "exactly one suppressor" a property
 /// of the code rather than something to remember.
 fn stt_input_16k(audio: &crate::audio::ProcessedAudio) -> Vec<f32> {
+    // Did the recording already denoise itself while it was being captured?
+    // Only the passthrough route arms that, and the parked result carries the
+    // sample count it was built from, so it can never be handed to a different
+    // recording. Everything else falls through to the pass below.
+    #[cfg(feature = "denoise-gtcrn")]
+    if let Some(live) = crate::gtcrn::live::take_prepared(audio.samples.len()) {
+        let expected = audio.samples.len() * crate::gtcrn::REQUIRED_RATE as usize
+            / audio.sample_rate.max(1) as usize;
+        assert!(
+            live.len().abs_diff(expected) <= 1,
+            "live denoise produced {} samples where the batch path produces {}",
+            live.len(),
+            expected
+        );
+        return live;
+    }
+
     let samples_16k = crate::preprocess::downsample_to_16k(&audio.samples, audio.sample_rate);
     #[cfg(feature = "denoise-gtcrn")]
     let samples_16k = crate::gtcrn::maybe_denoise_16k(&samples_16k).into_owned();

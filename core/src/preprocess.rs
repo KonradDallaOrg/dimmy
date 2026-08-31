@@ -928,6 +928,79 @@ pub fn chunk_gate_fallback(samples: &[f32], sample_rate: u32) -> Vec<f32> {
 /// Downsample audio to 16kHz for Whisper (which internally resamples to 16kHz anyway).
 /// Uses a lowpass anti-aliasing filter + linear interpolation.
 /// Returns samples at 16kHz. If source is already 16kHz, returns a clone.
+/// The streaming twin of [`downsample_to_16k`], for callers that get their
+/// audio a slice at a time instead of all at once.
+///
+/// Exists because a denoiser that runs DURING capture has to be fed as the
+/// samples arrive, and the anti-aliasing lowpass in `downsample_to` is
+/// stateful: filtering `[a, b]` then `[c, d]` with a fresh filter each time is
+/// not the same as filtering `[a, b, c, d]`. Carrying the filter state — and
+/// the decimation phase — makes the chunked result identical to the batch one,
+/// which `streaming_downsample_matches_batch_exactly` pins.
+///
+/// Only integer ratios, because that is the only case where the batch version
+/// degenerates to plain decimation (`frac` is exactly 0), so "identical" is
+/// exact rather than approximate. Every capture path in this codebase feeds
+/// 48 kHz (see `audio::MEETING_CANONICAL_RATE`); anything else simply gets no
+/// streaming and is downsampled at the end as before.
+pub struct StreamingDownsampler16k {
+    lowpass: Option<DirectForm2Transposed<f32>>,
+    factor: usize,
+    /// Absolute count of filtered samples seen, modulo `factor`.
+    phase: usize,
+}
+
+impl StreamingDownsampler16k {
+    /// `None` when `source_rate` is not an exact multiple of 16 kHz.
+    pub fn new(source_rate: u32) -> Option<Self> {
+        assert!(source_rate > 0, "StreamingDownsampler16k: rate must be > 0");
+        if !source_rate.is_multiple_of(WHISPER_SAMPLE_RATE) {
+            return None;
+        }
+        let factor = (source_rate / WHISPER_SAMPLE_RATE) as usize;
+        // Mirrors `downsample_to` exactly: no filter when there is nothing to
+        // fold down, and none either if the coefficients are rejected.
+        let lowpass = if factor > 1 && source_rate >= 1000 {
+            let cutoff = WHISPER_SAMPLE_RATE as f32 * 0.4375;
+            Coefficients::<f32>::from_params(
+                FilterType::LowPass,
+                (source_rate as f32).hz(),
+                cutoff.hz(),
+                Q_BUTTERWORTH_F32,
+            )
+            .ok()
+            .map(DirectForm2Transposed::<f32>::new)
+        } else {
+            None
+        };
+        Some(Self {
+            lowpass,
+            factor,
+            phase: 0,
+        })
+    }
+
+    /// Filter and decimate the next slice. Chunk size is free.
+    pub fn push(&mut self, samples: &[f32]) -> Vec<f32> {
+        let mut out = Vec::with_capacity(samples.len() / self.factor + 1);
+        for &s in samples {
+            let filtered = match self.lowpass.as_mut() {
+                Some(lp) => lp.run(s),
+                None => s,
+            };
+            if self.phase == 0 {
+                out.push(filtered);
+            }
+            self.phase = (self.phase + 1) % self.factor;
+        }
+        assert!(
+            out.iter().all(|s| s.is_finite()),
+            "StreamingDownsampler16k: emitted NaN/Inf"
+        );
+        out
+    }
+}
+
 pub fn downsample_to_16k(samples: &[f32], source_rate: u32) -> Vec<f32> {
     downsample_to(samples, source_rate, WHISPER_SAMPLE_RATE)
 }
@@ -1857,6 +1930,42 @@ mod tests {
     }
 
     // ---- Route-aware preprocessing (§1) -----------------------------------
+
+    #[test]
+    fn streaming_downsample_matches_batch_exactly() {
+        // The whole point of the streaming twin. If chunking changed even one
+        // sample, denoising during capture would produce different audio from
+        // denoising at the end, and the two paths could not be swapped freely.
+        let src = 48_000u32;
+        let input: Vec<f32> = (0..src as usize * 3)
+            .map(|i| {
+                let t = i as f32 / src as f32;
+                (t * 2.0 * std::f32::consts::PI * 220.0).sin() * 0.4
+                    + (t * 2.0 * std::f32::consts::PI * 9000.0).sin() * 0.2
+            })
+            .collect();
+        let batch = downsample_to_16k(&input, src);
+
+        for chunk in [1usize, 7, 480, 1024, 4800, 100_000] {
+            let mut ds = StreamingDownsampler16k::new(src).expect("48k is a multiple of 16k");
+            let mut streamed = Vec::new();
+            for slice in input.chunks(chunk) {
+                streamed.extend_from_slice(&ds.push(slice));
+            }
+            assert_eq!(streamed.len(), batch.len(), "chunk {chunk}: length drifted");
+            assert_eq!(streamed, batch, "chunk {chunk}: samples drifted");
+        }
+    }
+
+    #[test]
+    fn streaming_downsample_declines_rates_it_cannot_match_exactly() {
+        // 44.1 kHz is not an integer multiple, so the batch path interpolates
+        // and "identical" would be a lie. Better no streaming than silently
+        // different audio.
+        assert!(StreamingDownsampler16k::new(44_100).is_none());
+        assert!(StreamingDownsampler16k::new(48_000).is_some());
+        assert!(StreamingDownsampler16k::new(16_000).is_some());
+    }
 
     #[test]
     fn preprocess_route_maps_cloud_local_disabled() {
