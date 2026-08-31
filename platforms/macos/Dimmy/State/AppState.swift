@@ -1124,7 +1124,10 @@ final class AppState: ObservableObject {
 
     // MARK: - Audio Config
 
-    @Published var preprocessingEnabled: Bool = true
+    // Off, matching the core's default since 2026-08-31. The core is the single
+    // writer of config.json, so an initial value that disagrees with it would
+    // show the toggle ON while the audio path runs OFF.
+    @Published var preprocessingEnabled: Bool = false
     @Published var chunkStreamingEnabled: Bool = false
     @Published var audioDebugEnabled: Bool = false
     @Published var inputGain: Float = 0.5
