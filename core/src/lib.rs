@@ -80,6 +80,7 @@ pub mod telemetry;
 pub mod transcribe;
 #[cfg(target_os = "windows")]
 mod win_paths;
+pub mod win_qos;
 
 use audio::AudioCommand;
 use std::sync::atomic::{AtomicBool, Ordering};
