@@ -487,6 +487,24 @@ pub fn spawn_audio_thread(
             let mut loopback_resampler: Option<LinearResampler> = None;
             let mut loopback_last_src_rate: u32 = 0;
 
+            // Loopback rate mismatch CANARY (alarm-only, no audio mutation).
+            // A host can mis-report the loopback source rate: the macOS
+            // system-audio tap reported its anchor device's nominal 48 kHz
+            // while a Bluetooth-HFP source only delivered 16 kHz of real
+            // content (recovered offline for a user meeting, 2026-07-21 — the
+            // participants' side was 3x fast + chopped). The REAL fix is
+            // host-side: the macOS tap now pins its aggregate to 48 kHz so
+            // CoreAudio resamples the sub-device, and Windows/WASAPI already
+            // delivers canonical. This block does NOT resample or override —
+            // it only WATCHES: raw samples received / wall-clock IS the true
+            // rate, and if it diverges from the claim we log + emit telemetry
+            // so a field regression of the host-side fix is visible. Reset on
+            // claim change (device swap) or Stop.
+            let mut lb_meas_start: Option<std::time::Instant> = None;
+            let mut lb_meas_raw_samples: u64 = 0;
+            let mut lb_claim_at_window_start: u32 = 0;
+            let mut lb_rate_mismatch_reported: bool = false;
+
             // Diagnostic counters for the periodic [Audio/loopback] tick.
             // Cumulative input + output sample counts let "is the tap even
             // delivering?" and "did the resampler do its job?" be answered
@@ -1096,6 +1114,12 @@ pub fn spawn_audio_thread(
                         // clean slate instead of inheriting a stale
                         // value from a prior meeting.
                         LOOPBACK_SAMPLE_RATE_OVERRIDE.store(0, Ordering::Relaxed);
+                        // Reset the rate-mismatch canary window so the next
+                        // meeting re-measures the real delivery rate afresh.
+                        lb_meas_start = None;
+                        lb_meas_raw_samples = 0;
+                        lb_claim_at_window_start = 0;
+                        lb_rate_mismatch_reported = false;
                     }
                     AudioCommand::PushLoopback(samples, source_rate_hint) => {
                         // Decide the effective source rate. Hint from the FFI
@@ -1106,14 +1130,60 @@ pub fn spawn_audio_thread(
                         // treat as canonical (passthrough) — same as the
                         // pre-resample behaviour so we never WORSEN a
                         // missing-rate caller.
-                        let mut effective_src_rate = if source_rate_hint > 0 {
+                        let mut claimed_src_rate = if source_rate_hint > 0 {
                             source_rate_hint
                         } else {
                             LOOPBACK_SAMPLE_RATE_OVERRIDE.load(Ordering::Relaxed)
                         };
-                        if !(8_000..=192_000).contains(&effective_src_rate) {
-                            effective_src_rate = MEETING_CANONICAL_RATE;
+                        if !(8_000..=192_000).contains(&claimed_src_rate) {
+                            claimed_src_rate = MEETING_CANONICAL_RATE;
                         }
+
+                        // CANARY ONLY — watch the CLAIMED rate against the
+                        // MEASURED delivery rate (raw samples / wall-clock) and
+                        // LOG + emit telemetry on a divergence, but do NOT touch
+                        // the audio. The real fix is host-side (macOS tap pinned
+                        // to 48 kHz; WASAPI already canonical). Reactively
+                        // overriding the rate here was rejected as a fragile
+                        // half-measure — this only surfaces a field regression
+                        // of the host fix. Window resets on a claim change.
+                        if claimed_src_rate != lb_claim_at_window_start {
+                            lb_claim_at_window_start = claimed_src_rate;
+                            lb_meas_start = None;
+                            lb_meas_raw_samples = 0;
+                            lb_rate_mismatch_reported = false;
+                        }
+                        if lb_meas_start.is_none() {
+                            lb_meas_start = Some(std::time::Instant::now());
+                        }
+                        lb_meas_raw_samples =
+                            lb_meas_raw_samples.saturating_add(samples.len() as u64);
+                        if !lb_rate_mismatch_reported {
+                            if let Some(t0) = lb_meas_start {
+                                let elapsed = t0.elapsed().as_secs_f64();
+                                if let Some(measured) = reconcile_loopback_rate(
+                                    claimed_src_rate,
+                                    lb_meas_raw_samples,
+                                    elapsed,
+                                ) {
+                                    crate::log(&format!(
+                                        "[Audio/loopback] WARN claimed {} Hz but MEASURED ~{:.0} Hz over {:.1}s ({} samples) — host mis-reporting the loopback rate; system audio may be time-distorted (host-side rate pin failed?)",
+                                        claimed_src_rate,
+                                        lb_meas_raw_samples as f64 / elapsed.max(1e-6),
+                                        elapsed,
+                                        lb_meas_raw_samples,
+                                    ));
+                                    crate::telemetry::track(
+                                        crate::telemetry::Event::LoopbackRateMismatch {
+                                            claimed: std_rate_label(claimed_src_rate),
+                                            measured: std_rate_label(measured),
+                                        },
+                                    );
+                                    lb_rate_mismatch_reported = true;
+                                }
+                            }
+                        }
+                        let effective_src_rate = claimed_src_rate;
 
                         // Rebuild the resampler iff the source rate changed
                         // (first push of this meeting, or a mid-meeting BT /
@@ -1435,6 +1505,75 @@ fn debounce_rate_change(
         *pending = None;
         *streak = 0;
         false
+    }
+}
+
+/// Standard audio sample rates a real capture source ever runs at. Used to
+/// snap a noisy wall-clock measurement to the nearest plausible rate so we
+/// override the claim to a REAL rate (16000), never to a jittery 15837.
+const STANDARD_LOOPBACK_RATES: [u32; 8] = [
+    8_000, 11_025, 16_000, 22_050, 24_000, 32_000, 44_100, 48_000,
+];
+
+/// Snap a measured Hz value to the nearest standard capture rate.
+fn snap_to_standard_loopback_rate(hz: f64) -> u32 {
+    let mut best = STANDARD_LOOPBACK_RATES[0];
+    let mut best_d = f64::INFINITY;
+    for &r in STANDARD_LOOPBACK_RATES.iter() {
+        let d = (r as f64 - hz).abs();
+        if d < best_d {
+            best_d = d;
+            best = r;
+        }
+    }
+    best
+}
+
+/// Pure decision: does the empirically MEASURED loopback delivery rate
+/// diverge from the rate the host CLAIMED enough to FLAG (canary only — the
+/// caller logs + emits telemetry, it does not touch the audio)? The host can
+/// mis-report — the macOS system-audio tap reported its anchor device's
+/// nominal 48 kHz while a Bluetooth-HFP source only delivered 16 kHz, which
+/// shipped `audio_system.wav` 3x too fast with a wrong STT downsample.
+/// Wall-clock is ground truth: `raw_samples / elapsed_secs` IS the true
+/// source rate. Returns `Some(snapped_rate)` when it diverges, else `None`.
+/// Conservative on purpose:
+///   - needs a warmup (>= 4 s and >= 8000 raw samples) before trusting it,
+///   - the measurement must sit CLOSE to a standard rate (within 12 %),
+///   - that standard rate must DIFFER from the claim by > 15 %,
+///
+/// so a correctly-claimed rate is never second-guessed on measurement jitter.
+fn reconcile_loopback_rate(claimed: u32, raw_samples: u64, elapsed_secs: f64) -> Option<u32> {
+    if elapsed_secs < 4.0 || raw_samples < 8_000 || claimed == 0 {
+        return None;
+    }
+    let measured_hz = raw_samples as f64 / elapsed_secs;
+    let snapped = snap_to_standard_loopback_rate(measured_hz);
+    if snapped == claimed {
+        return None;
+    }
+    let close_to_standard = (measured_hz - snapped as f64).abs() <= 0.12 * snapped as f64;
+    let ratio = measured_hz / claimed as f64;
+    if close_to_standard && !(0.85..=1.18).contains(&ratio) {
+        Some(snapped)
+    } else {
+        None
+    }
+}
+
+/// Categorical label for a standard rate — privacy-safe telemetry value
+/// (a rate is a device characteristic, never user content).
+fn std_rate_label(rate: u32) -> &'static str {
+    match rate {
+        8_000 => "8000",
+        11_025 => "11025",
+        16_000 => "16000",
+        22_050 => "22050",
+        24_000 => "24000",
+        32_000 => "32000",
+        44_100 => "44100",
+        48_000 => "48000",
+        _ => "other",
     }
 }
 
@@ -2234,6 +2373,45 @@ mod tests {
         ));
         assert_eq!(streak, 0);
         assert!(pending.is_none());
+    }
+
+    #[test]
+    fn snap_loopback_rate_picks_nearest_standard() {
+        assert_eq!(snap_to_standard_loopback_rate(15_900.0), 16_000);
+        assert_eq!(snap_to_standard_loopback_rate(47_500.0), 48_000);
+        assert_eq!(snap_to_standard_loopback_rate(23_500.0), 24_000);
+        assert_eq!(snap_to_standard_loopback_rate(8_100.0), 8_000);
+    }
+
+    #[test]
+    fn loopback_rate_reconcile_overrides_a_lying_tap() {
+        // The field bug: macOS BT-HFP tap CLAIMS 48000 but DELIVERS 16000
+        // samples/sec. 160k raw samples over 10 s = 16000 Hz → override.
+        assert_eq!(reconcile_loopback_rate(48_000, 160_000, 10.0), Some(16_000));
+        // 2x case: 240k / 10 s = 24000 under a 48000 claim → override.
+        assert_eq!(reconcile_loopback_rate(48_000, 240_000, 10.0), Some(24_000));
+    }
+
+    #[test]
+    fn loopback_rate_reconcile_trusts_a_correct_claim() {
+        // Measured matches the claim → never second-guess it.
+        assert_eq!(reconcile_loopback_rate(48_000, 480_000, 10.0), None);
+        assert_eq!(reconcile_loopback_rate(16_000, 160_000, 10.0), None);
+    }
+
+    #[test]
+    fn loopback_rate_reconcile_waits_for_warmup() {
+        // Too little elapsed time → hold (measurement not yet trustworthy).
+        assert_eq!(reconcile_loopback_rate(48_000, 40_000, 2.0), None);
+        // Too few samples → hold.
+        assert_eq!(reconcile_loopback_rate(48_000, 5_000, 5.0), None);
+    }
+
+    #[test]
+    fn loopback_rate_reconcile_ignores_non_standard_jitter() {
+        // 270k / 10 s = 27000 Hz — not within 12 % of any standard rate
+        // (nearest 24000 is 12.5 % off) → don't override on noise.
+        assert_eq!(reconcile_loopback_rate(48_000, 270_000, 10.0), None);
     }
 
     #[test]

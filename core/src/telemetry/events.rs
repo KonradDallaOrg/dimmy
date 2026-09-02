@@ -284,6 +284,34 @@ pub enum Event {
     /// field alarm for the freeze class that hit a user on 2026-07-06 —
     /// any non-zero rate here means the audio subsystem is wedging.
     MeetingStopTimeout,
+    /// Fired at meeting stop with the ratio of recorded audio seconds
+    /// (samples on disk / rate) to real active recording seconds (elapsed
+    /// minus paused windows). `ge_95` is healthy; a low bucket means the
+    /// capture ran at the wrong rate and `audio.wav` is time-distorted —
+    /// the "voce accelerata 3×" class where a Bluetooth headset flips
+    /// A2DP(44.1k)↔HFP(16k) mid-meeting (ratio ~0.33). The rate-based
+    /// rebuild in `audio.rs` should keep this at `ge_95`; a low bucket in
+    /// the field means a gap slipped through. Bucketed so meeting length
+    /// can't fingerprint a user. Sibling of `DictationCaptureRatio`.
+    MeetingCaptureRatio {
+        /// `lt_50` | `50_85` | `85_95` | `ge_95`
+        ratio_bucket: &'static str,
+    },
+    /// CANARY: fired when the core MEASURES a loopback delivery rate (raw
+    /// samples / wall-clock) that diverges from the rate the host CLAIMED.
+    /// The macOS system-audio tap can claim its anchor device's 48 kHz while
+    /// a Bluetooth-HFP source only delivers 16 kHz — which shipped 3x fast
+    /// system audio + wrong STT (recovered offline for a user meeting,
+    /// 2026-07-21). The real fix is host-side (the tap now pins its aggregate
+    /// to 48 kHz; WASAPI is already canonical); this event does NOT alter the
+    /// audio, it only makes a field regression of that fix visible. Both
+    /// fields are standard rate labels — device characteristics, not content.
+    LoopbackRateMismatch {
+        /// what the host claimed, e.g. "48000"
+        claimed: &'static str,
+        /// what the core measured + snapped to, e.g. "16000"
+        measured: &'static str,
+    },
     /// Fired when the LLM recap completes (success or fail). Lets us
     /// see how often the recap chain breaks vs how often users
     /// actually get a recap out the other end.
@@ -541,6 +569,8 @@ impl Event {
             Event::MeetingPaused => "meeting.paused",
             Event::MeetingResumed => "meeting.resumed",
             Event::MeetingStopTimeout => "meeting.stop_timeout",
+            Event::MeetingCaptureRatio { .. } => "meeting.capture_ratio",
+            Event::LoopbackRateMismatch { .. } => "audio.loopback_rate_mismatch",
             Event::MeetingRecapCompleted { .. } => "meeting.recap_completed",
             Event::MeetingImportedFromFile => "meeting.imported_from_file",
             Event::FileLoadStarted { .. } => "file_load.started",
@@ -668,6 +698,32 @@ mod tests {
         assert_eq!(p["ratio_bucket"], "ge_95");
         assert_eq!(p["source"], "mic");
         // Only the two categorical fields — no counts, paths, or content.
+        assert_eq!(p.as_object().map(|o| o.len()), Some(2));
+    }
+
+    #[test]
+    fn meeting_capture_ratio_name_props_and_no_content() {
+        let e = Event::MeetingCaptureRatio {
+            ratio_bucket: "lt_50",
+        };
+        assert_eq!(e.name(), "meeting.capture_ratio");
+        let p = e.properties();
+        assert_eq!(p["ratio_bucket"], "lt_50");
+        // Only the single categorical bucket — no duration, samples, or content.
+        assert_eq!(p.as_object().map(|o| o.len()), Some(1));
+    }
+
+    #[test]
+    fn loopback_rate_mismatch_name_props_and_no_content() {
+        let e = Event::LoopbackRateMismatch {
+            claimed: "48000",
+            measured: "16000",
+        };
+        assert_eq!(e.name(), "audio.loopback_rate_mismatch");
+        let p = e.properties();
+        assert_eq!(p["claimed"], "48000");
+        assert_eq!(p["measured"], "16000");
+        // Only the two categorical rate labels — device characteristics.
         assert_eq!(p.as_object().map(|o| o.len()), Some(2));
     }
 
