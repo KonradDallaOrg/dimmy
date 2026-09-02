@@ -111,6 +111,80 @@ pub fn scrub_path(path: &str) -> String {
     }
 }
 
+/// Replace every user-directory NAME inside a free-text message with
+/// `<USER>`, leaving the rest of the path intact.
+///
+/// `scrub_path` above handles a string that IS a path. This one handles
+/// the far more common case: a path EMBEDDED in a sentence, which is what
+/// every `format!("… {}", path.display())` error produces. Those strings
+/// reach Sentry through `capture_error` and `before_send`, and until
+/// 2026-09-02 they arrived intact — a real user's Windows account name
+/// sat in an issue TITLE for 59 events:
+/// `local model: model file not found: C:\Users\<name>\AppData\…`.
+///
+/// The rule is STRUCTURAL, not identity-based, and that is the point.
+/// Matching `dirs::home_dir()` only redacts the home of the process that
+/// happens to be reporting, compares case-sensitively (so it misses
+/// `c:\users\…` against a `C:\Users\…` home), and says nothing about a
+/// path belonging to somebody else. Recognising the SHAPE of a user
+/// directory — `/Users/x`, `\Users\x`, `/home/x` — covers all three and
+/// keeps working on a machine whose home sits somewhere unusual.
+///
+/// Everything except the name survives, so the message stays debuggable:
+/// `C:\Users\<USER>\AppData\Roaming\dimmy\models\ggml-large-v3-q5_0.bin`.
+pub fn scrub_user_paths(text: &str) -> String {
+    // Matched case-insensitively: Windows paths round-trip through APIs
+    // that change the case of both the drive letter and `Users`.
+    const MARKERS: [&str; 2] = ["users", "home"];
+
+    // `to_ascii_lowercase` remaps only A-Z, one byte in one byte out, so
+    // `lower` and `text` share byte offsets and can be indexed together.
+    let lower = text.to_ascii_lowercase();
+    let bytes = lower.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+
+    while i < text.len() {
+        // A marker counts only when it is a whole path segment: preceded
+        // by a separator and followed by one. Without that, "chrome/" and
+        // "homepage/" would both look like a home directory.
+        let marker = if i > 0 && is_path_sep_byte(bytes[i - 1]) {
+            MARKERS.iter().find(|m| {
+                lower[i..].starts_with(**m)
+                    && bytes.get(i + m.len()).is_some_and(|b| is_path_sep_byte(*b))
+            })
+        } else {
+            None
+        };
+
+        let Some(marker) = marker else {
+            let step = text[i..].chars().next().map(char::len_utf8).unwrap_or(1);
+            out.push_str(&text[i..i + step]);
+            i += step;
+            continue;
+        };
+
+        // Keep the marker and its separator verbatim (original case),
+        // then swallow the single segment that follows: the account name.
+        let name_start = i + marker.len() + 1;
+        out.push_str(&text[i..name_start]);
+        let name_end = text[name_start..]
+            .find(|c: char| matches!(c, '/' | '\\') || c.is_whitespace())
+            .map(|off| name_start + off)
+            .unwrap_or(text.len());
+        if name_end > name_start {
+            out.push_str("<USER>");
+        }
+        i = name_end;
+    }
+
+    out
+}
+
+fn is_path_sep_byte(b: u8) -> bool {
+    b == b'/' || b == b'\\'
+}
+
 /// Round a floating-point gain value to 0.1 precision so we don't
 /// fingerprint users by an unusual decimal.
 pub fn round_gain(gain: f32) -> f32 {
@@ -311,6 +385,66 @@ mod tests {
             assert!(scrubbed.ends_with("ggml-base.bin"));
             assert!(!scrubbed.contains(home.to_string_lossy().as_ref()));
         }
+    }
+
+    /// The exact string that leaked. Sentry issue RUST-B carried a real
+    /// user's Windows account name in its TITLE for 59 events.
+    #[test]
+    fn scrub_user_paths_redacts_the_string_that_actually_leaked() {
+        let leaked = r"local model: model file not found: C:\Users\gregr\AppData\Roaming\dimmy\models\ggml-large-v3-q5_0.bin";
+        let safe = scrub_user_paths(leaked);
+        assert!(!safe.contains("gregr"), "account name survived: {safe}");
+        assert_eq!(
+            safe,
+            r"local model: model file not found: C:\Users\<USER>\AppData\Roaming\dimmy\models\ggml-large-v3-q5_0.bin"
+        );
+    }
+
+    #[test]
+    fn scrub_user_paths_covers_every_platform_shape() {
+        assert_eq!(
+            scrub_user_paths("/Users/mario/Library/Application Support/dimmy/x.bin"),
+            "/Users/<USER>/Library/Application Support/dimmy/x.bin"
+        );
+        assert_eq!(
+            scrub_user_paths("/home/mario/.config/dimmy/config.json"),
+            "/home/<USER>/.config/dimmy/config.json"
+        );
+        // Case-insensitive: the identity-based filter this replaced
+        // compared with `starts_with` and missed exactly this.
+        assert_eq!(
+            scrub_user_paths(r"c:\users\GREGR\dimmy"),
+            r"c:\users\<USER>\dimmy"
+        );
+    }
+
+    #[test]
+    fn scrub_user_paths_leaves_everything_that_is_not_an_account_name() {
+        // A marker inside a word is not a path segment.
+        assert_eq!(scrub_user_paths("chrome/tabs"), "chrome/tabs");
+        assert_eq!(
+            scrub_user_paths("see the homepage/index"),
+            "see the homepage/index"
+        );
+        // Nothing to redact: unchanged, byte for byte.
+        assert_eq!(scrub_user_paths("HTTP 413"), "HTTP 413");
+        assert_eq!(scrub_user_paths(""), "");
+        // A relative path is not somebody's home.
+        assert_eq!(scrub_user_paths("users/list.json"), "users/list.json");
+        // Trailing separator: no name follows, so nothing is invented.
+        assert_eq!(scrub_user_paths("/home/"), "/home/");
+    }
+
+    #[test]
+    fn scrub_user_paths_handles_several_paths_and_multibyte_text() {
+        assert_eq!(
+            scrub_user_paths(r"copy C:\Users\a\x to /home/b/y"),
+            r"copy C:\Users\<USER>\x to /home/<USER>/y"
+        );
+        // Byte-indexed scanning must never split a UTF-8 character.
+        let s = "però C:\\Users\\josé\\modèles — è finito";
+        let out = scrub_user_paths(s);
+        assert_eq!(out, "però C:\\Users\\<USER>\\modèles — è finito");
     }
 
     #[test]
