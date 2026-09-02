@@ -345,6 +345,17 @@ fn dimmy_init_inner() -> c_int {
                 let _ = writeln!(f, "[{}] {}", ts, msg);
             }
         }
+        // Sentry's panic integration chains AHEAD of this hook (it takes
+        // the previous hook at init and calls it after capturing), so by
+        // now the event is queued on an async transport. If this panic is
+        // about to cross an `extern "C"` boundary the process aborts
+        // within microseconds and that queue is never drained — which is
+        // why issue RUST-Q only ever showed Rust's secondary "panic in a
+        // function that cannot unwind" and never the assertion that
+        // actually failed. Blocking here is what gets the real message
+        // out. Best-effort: a timeout returns false and we carry on
+        // dying.
+        let _ = crate::telemetry::flush_pending();
     }));
     write_init_trace("P2: panic hook installed");
 

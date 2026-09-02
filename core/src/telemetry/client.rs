@@ -230,6 +230,13 @@ fn build_payload(event: &Event) -> Result<String, serde_json::Error> {
         });
         map.entry("session_id".to_string())
             .or_insert_with(|| serde_json::Value::String(session_id().to_string()));
+        // Which BUILD, not just which version. `app_version` is the same
+        // string for every rc of a version, so it cannot answer "did this
+        // start in rc6?" — a question that cost a wrong diagnosis on
+        // 2026-09-02. Categorical build identity, no user content.
+        map.entry("build_id".to_string()).or_insert_with(|| {
+            serde_json::Value::String(crate::telemetry::sentry_pipeline::BUILD_ID.to_string())
+        });
 
         // Privacy: explicitly opt out of PostHog's automatic IP
         // capture. By default the ingest server records the originating

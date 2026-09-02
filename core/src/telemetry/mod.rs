@@ -102,6 +102,12 @@ pub fn capture_error(category: &str, message: &str) {
     sentry_pipeline::capture_error(category, message);
 }
 
+/// Block until queued crash reports are sent (2 s cap). Call this from
+/// the panic hook — see `sentry_pipeline::flush_pending`.
+pub fn flush_pending() -> bool {
+    sentry_pipeline::flush_pending()
+}
+
 /// Capture user-submitted feedback. `kind` is `bug` / `feature` /
 /// `general`. `email` is optional, only included if the user typed it.
 /// Returns a status the UI surfaces truthfully: `1` enqueued · `-2`

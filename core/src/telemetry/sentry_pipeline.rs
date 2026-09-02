@@ -24,6 +24,36 @@ use sentry::ClientInitGuard;
 /// Build-time Sentry DSN. Empty string → init is a no-op.
 const SENTRY_DSN: &str = env!("DIMMY_SENTRY_DSN");
 
+/// Identity of this exact build — a tag (`v0.6.73-rc6`), a branch build
+/// (`staging.1234`), or `local`. Computed in `build.rs::resolve_build_id`.
+pub const BUILD_ID: &str = env!("DIMMY_BUILD_ID");
+
+/// The Sentry release string. Kept separate from `BUILD_ID` and pure so
+/// it can be tested without a build environment.
+///
+/// A Sentry release is the unit that "first seen in" and regression
+/// detection hang off, so two binaries that differ MUST NOT share one.
+/// `CARGO_PKG_VERSION` alone gave every rc of 0.6.73 the same release and
+/// made an abort impossible to attribute to a build — see
+/// `build.rs::resolve_build_id`.
+fn sentry_release(version: &str, build_id: &str) -> String {
+    let build_id = build_id.trim();
+    if build_id.is_empty() || build_id == "local" {
+        return format!("dimmy@{}", version);
+    }
+    // A tag already carries the full version, so it replaces rather than
+    // decorates: `v0.6.73-rc6` -> `dimmy@0.6.73-rc6`, which is what the
+    // GitHub release is called and what the user reports.
+    if let Some(tagged) = build_id.strip_prefix('v') {
+        if tagged.starts_with(|c: char| c.is_ascii_digit()) {
+            return format!("dimmy@{}", tagged);
+        }
+    }
+    // A branch build has no version of its own; semver build metadata
+    // keeps it sorted next to the version it was cut from.
+    format!("dimmy@{}+{}", version, build_id)
+}
+
 #[cfg(feature = "telemetry-sentry")]
 static ENABLED: AtomicBool = AtomicBool::new(true);
 
@@ -74,7 +104,7 @@ pub fn init() {
             sentry::init((
                 SENTRY_DSN,
                 sentry::ClientOptions {
-                    release: sentry::release_name!(),
+                    release: Some(sentry_release(env!("CARGO_PKG_VERSION"), BUILD_ID).into()),
                     environment: Some(detect_environment().into()),
                     // SECURITY: enable_logs=true ships every `log!()`
                     // / `tracing` macro output to Sentry. Our `log()`
@@ -124,6 +154,9 @@ pub fn init() {
             }));
             scope.set_tag("os", crate::telemetry::events::os_name());
             scope.set_tag("arch", crate::telemetry::events::arch_name());
+            // Also a tag, not only part of the release string, so an
+            // issue can be filtered by build without parsing the release.
+            scope.set_tag("build_id", BUILD_ID);
         });
         crate::log("[sentry-init] S3: scope configured, returning guard");
 
@@ -156,6 +189,11 @@ pub fn is_enabled() -> bool {
 
 /// Defensively scrub a free-text message: replace with placeholder
 /// if it matches any of the known secret patterns. Truncate to 4 KB.
+///
+/// Used by `capture_error` AND by `capture_feedback`. The feedback path
+/// builds its envelope by hand and POSTs it straight to the DSN, so it
+/// never passes through `before_send` — the account-name scrub has to
+/// happen here too, not only in `scrub_event`.
 #[cfg(feature = "telemetry-sentry")]
 fn scrub_message(message: &str) -> String {
     use crate::telemetry::sanitize::looks_like_secret;
@@ -170,8 +208,37 @@ fn scrub_message(message: &str) -> String {
     if looks_like_secret(truncated) {
         "<redacted: looked like a secret>".to_string()
     } else {
-        truncated.to_string()
+        crate::telemetry::sanitize::scrub_user_paths(truncated)
     }
+}
+
+/// Block until queued events have been sent, for at most `FLUSH_TIMEOUT`.
+///
+/// Called from the panic hook, and that is the whole reason it exists.
+/// Sentry's own panic integration captures the event onto an ASYNC
+/// transport; a panic that crosses an `extern "C"` boundary aborts the
+/// process immediately afterwards, so nothing is ever sent. What DID
+/// arrive in issue RUST-Q was the second panic — Rust's own "panic in a
+/// function that cannot unwind" — leaving the real message (the failed
+/// assertion, the actual bug) recorded only in the user's local
+/// `dimmy.log`, which we do not have.
+///
+/// Returns false when the flush timed out. Never panics: a panic raised
+/// from inside a panic hook goes straight to `__fastfail`.
+#[cfg(feature = "telemetry-sentry")]
+pub fn flush_pending() -> bool {
+    // Long enough for one small HTTPS round trip on a slow link, short
+    // enough that a crashing app still dies promptly.
+    const FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+    match sentry::Hub::current().client() {
+        Some(client) => client.flush(Some(FLUSH_TIMEOUT)),
+        None => true,
+    }
+}
+
+#[cfg(not(feature = "telemetry-sentry"))]
+pub fn flush_pending() -> bool {
+    true
 }
 
 /// Capture a manually-constructed error message + category.
@@ -285,12 +352,13 @@ fn build_feedback_envelope(
         "timestamp": now.timestamp(),
         "platform": "native",
         "level": "info",
-        "release": env!("CARGO_PKG_VERSION"),
+        "release": sentry_release(env!("CARGO_PKG_VERSION"), BUILD_ID),
         "environment": detect_environment(),
         "tags": {
             "feedback_kind": kind,
             "os": crate::telemetry::events::os_name(),
             "arch": crate::telemetry::events::arch_name(),
+            "build_id": BUILD_ID,
         },
         "user": { "id": crate::telemetry::anonymous_id() },
         "contexts": { "feedback": serde_json::Value::Object(feedback_ctx) },
@@ -400,6 +468,18 @@ fn detect_environment() -> &'static str {
 /// network-bound Sentry payload.
 #[cfg(feature = "telemetry-sentry")]
 fn redact_prose(s: &str) -> String {
+    crate::telemetry::sanitize::scrub_user_paths(&keep_or_redact(s))
+}
+
+/// The keep-or-redact decision, split out so the account-name scrub in
+/// `redact_prose` applies to EVERY branch rather than being repeated in
+/// each. Both branches used to leak: the whitelist deliberately kept
+/// file paths ("can never contain transcript text" — true, but they
+/// contain the user's account name), and the short-string early return
+/// let anything under 24 chars through untouched, which is most of
+/// `C:\Users\gregr`. Sentry issue RUST-B, 59 events. Fixed 2026-09-02.
+#[cfg(feature = "telemetry-sentry")]
+fn keep_or_redact(s: &str) -> String {
     // Empty / one-token → safe; usually a category enum.
     let trimmed = s.trim();
     if trimmed.len() <= 24 {
@@ -549,6 +629,50 @@ mod tests {
         let _ = has_compiled_dsn();
     }
 
+    /// Every rc of 0.6.73 used to report the same Sentry release, which
+    /// is how two aborts on 2026-08-31 ended up attributed to a build
+    /// that did not exist yet when they happened.
+    #[test]
+    fn sentry_release_distinguishes_every_build_of_one_version() {
+        assert_eq!(sentry_release("0.6.73", "v0.6.73-rc6"), "dimmy@0.6.73-rc6");
+        assert_eq!(sentry_release("0.6.73", "v0.6.73-rc8"), "dimmy@0.6.73-rc8");
+        assert_eq!(
+            sentry_release("0.6.73", "v0.6.73-staging.1"),
+            "dimmy@0.6.73-staging.1"
+        );
+        assert_eq!(
+            sentry_release("0.6.73", "staging.1234"),
+            "dimmy@0.6.73+staging.1234"
+        );
+        assert_ne!(
+            sentry_release("0.6.73", "v0.6.73-rc6"),
+            sentry_release("0.6.73", "v0.6.73-rc8")
+        );
+    }
+
+    #[test]
+    fn build_id_is_always_populated() {
+        // build.rs falls back to "local", so an empty value means the
+        // cargo:rustc-env line stopped being emitted and every build
+        // silently collapsed back into one Sentry release.
+        assert!(!BUILD_ID.is_empty(), "DIMMY_BUILD_ID must never be empty");
+        assert!(sentry_release(env!("CARGO_PKG_VERSION"), BUILD_ID).starts_with("dimmy@"));
+    }
+
+    #[test]
+    fn sentry_release_falls_back_to_the_bare_version() {
+        // A contributor's `cargo build` has no CI environment and must
+        // not invent a build identity.
+        assert_eq!(sentry_release("0.6.73", "local"), "dimmy@0.6.73");
+        assert_eq!(sentry_release("0.6.73", ""), "dimmy@0.6.73");
+        assert_eq!(sentry_release("0.6.73", "   "), "dimmy@0.6.73");
+        // A branch that merely starts with `v` is not a version tag.
+        assert_eq!(
+            sentry_release("0.6.73", "verify-thing"),
+            "dimmy@0.6.73+verify-thing"
+        );
+    }
+
     #[test]
     fn init_is_idempotent_and_does_not_panic() {
         init();
@@ -590,6 +714,38 @@ mod tests {
         assert_eq!(redact_prose("ok"), "ok");
         assert_eq!(redact_prose(""), "");
         assert_eq!(redact_prose("panic"), "panic");
+    }
+
+    /// Regression for Sentry issue RUST-B. The whitelist kept
+    /// `local model: …` because it can never contain transcript text —
+    /// true, and beside the point: it contained a real user's Windows
+    /// account name, in the issue TITLE, for 59 events. The scrub now
+    /// runs on the output of EVERY branch, including the ≤ 24-char early
+    /// return, which is where a bare `C:\Users\gregr` would have slipped
+    /// through.
+    #[test]
+    fn redact_prose_never_ships_an_account_name() {
+        let leaked = r"local model: model file not found: C:\Users\gregr\AppData\Roaming\dimmy\models\ggml-large-v3-q5_0.bin";
+        let out = redact_prose(leaked);
+        assert!(!out.contains("gregr"), "account name survived: {out}");
+        assert!(
+            out.starts_with("local model: model file not found:"),
+            "the message must stay debuggable: {out}"
+        );
+        assert!(out.contains("ggml-large-v3-q5_0.bin"));
+
+        // Short enough to hit the ≤ 24-char early return.
+        assert_eq!(redact_prose(r"C:\Users\gregr"), r"C:\Users\<USER>");
+        assert_eq!(redact_prose("/home/mario"), "/home/<USER>");
+    }
+
+    #[test]
+    fn scrub_message_never_ships_an_account_name() {
+        // capture_feedback POSTs its envelope directly, bypassing
+        // before_send, so this is the only filter on that path.
+        let out = scrub_message(r"it broke, see C:\Users\gregr\AppData\Roaming\dimmy\dimmy.log");
+        assert!(!out.contains("gregr"), "account name survived: {out}");
+        assert!(out.contains("dimmy.log"));
     }
 
     #[test]
