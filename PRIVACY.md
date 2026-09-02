@@ -92,10 +92,12 @@ The following are attached to your anonymous-ID record so dashboards can build c
 When the app crashes or hits an error path, we send to Sentry EU:
 - The error message (truncated to 4 KB, secret-shaped substrings replaced with `<redacted>`).
 - A Rust stack trace (function names — currently mangled in shipping builds; source-mapped in a future release).
-- The platform context (OS, arch, app version, environment = `production`).
+- The platform context (OS, arch, app version, build identifier, environment = `production`).
 - The anonymous ID (so we can de-duplicate the same crash from the same user).
 
-We do **not** send: server name, hostname, username, environment variables (`PATH`, `HOME`, `USERPROFILE`, etc. are all stripped), IP addresses (Sentry EU drops them at ingest by default), file paths, microphone device names, transcripts, prompts.
+We do **not** send: server name, hostname, username, environment variables (`PATH`, `HOME`, `USERPROFILE`, etc. are all stripped), IP addresses (Sentry EU drops them at ingest by default), microphone device names, transcripts, prompts.
+
+Some error messages name a file that could not be read or written, so they do contain a path. Your account name is removed from it before the message leaves your machine: `C:\Users\<USER>\AppData\Roaming\dimmy\models\ggml-large-v3.bin`. Until 2026-09-02 this page said we sent no paths at all, and that was wrong: one class of error message carried the full path, account name included. It is fixed, and covered by tests.
 
 ### Feedback
 The **Settings → Send feedback** form goes to Sentry as a tagged message. The text you type is included verbatim. Email is optional and only included if you explicitly type it — we never auto-fill from anywhere.
