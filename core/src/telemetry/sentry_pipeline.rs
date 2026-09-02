@@ -525,6 +525,37 @@ fn keep_or_redact(s: &str) -> String {
     }
 }
 
+/// Keep a panic payload instead of redacting it as prose.
+///
+/// `redact_prose` exists to stop transcript text reaching Sentry, and it
+/// works by keeping only strings that match a known error shape. A panic
+/// payload matches none of them: `sentry-panic` reports the payload RAW,
+/// so what arrives is `assertion failed: left == right` or
+/// `gtcrn: output length must match input length` — no whitelisted
+/// prefix, longer than the 24-char pass-through — and the filter turned
+/// every one of them into `<redacted: prose content>`. A crash report
+/// that cannot say what assertion failed is not a crash report.
+///
+/// The exemption is narrow and defensible: a panic payload is a string
+/// literal from our own source, not model output and not user input. The
+/// house rule that makes it safe is that **an assertion message may
+/// interpolate sizes, rates, counts and enum names — never text that came
+/// from the user**. Everything in `core/` already follows it.
+///
+/// Belt and braces anyway: the secret check has already run, the account
+/// name is stripped, and the payload is capped. A panic message that
+/// needs more than 500 characters is saying too much.
+#[cfg(feature = "telemetry-sentry")]
+fn scrub_panic_message(payload: &str) -> String {
+    const MAX: usize = 500;
+    let scrubbed = crate::telemetry::sanitize::scrub_user_paths(payload.trim());
+    if scrubbed.len() <= MAX {
+        scrubbed
+    } else {
+        format!("{}…<truncated>", crate::truncate_utf8(&scrubbed, MAX))
+    }
+}
+
 #[cfg(feature = "telemetry-sentry")]
 fn scrub_event(
     mut event: sentry::protocol::Event<'static>,
@@ -575,6 +606,8 @@ fn scrub_event(
         if let Some(v) = &ex.value {
             if looks_like_secret(v) {
                 ex.value = Some("<redacted: looked like a secret>".to_string());
+            } else if ex.ty == "panic" {
+                ex.value = Some(scrub_panic_message(v));
             } else {
                 ex.value = Some(redact_prose(v));
             }
@@ -657,6 +690,80 @@ mod tests {
         // silently collapsed back into one Sentry release.
         assert!(!BUILD_ID.is_empty(), "DIMMY_BUILD_ID must never be empty");
         assert!(sentry_release(env!("CARGO_PKG_VERSION"), BUILD_ID).starts_with("dimmy@"));
+    }
+
+    #[cfg(feature = "telemetry-sentry")]
+    fn exception_event(ty: &str, value: &str) -> sentry::protocol::Event<'static> {
+        sentry::protocol::Event {
+            exception: vec![sentry::protocol::Exception {
+                ty: ty.to_string(),
+                value: Some(value.to_string()),
+                ..Default::default()
+            }]
+            .into(),
+            ..Default::default()
+        }
+    }
+
+    #[cfg(feature = "telemetry-sentry")]
+    fn scrubbed_exception_value(ty: &str, value: &str) -> String {
+        let out = scrub_event(exception_event(ty, value)).expect("event must not be dropped");
+        out.exception.values[0]
+            .value
+            .clone()
+            .expect("value must survive")
+    }
+
+    /// The whole point of a crash report. `sentry-panic` reports the RAW
+    /// panic payload, which matches no whitelisted error shape, so
+    /// `redact_prose` used to replace every failed assertion with
+    /// `<redacted: prose content>` — a crash report that cannot say what
+    /// broke.
+    #[cfg(feature = "telemetry-sentry")]
+    #[test]
+    fn a_failed_assertion_reaches_us_intact() {
+        for payload in [
+            "assertion failed: self.produced == HOP + self.pushed",
+            "gtcrn: output length must match input length",
+            "assertion `left == right` failed\n  left: 480\n right: 512",
+            "input_gain must be in [0.0, 2.0]",
+        ] {
+            assert_eq!(
+                scrubbed_exception_value("panic", payload),
+                payload,
+                "the assertion message must survive scrubbing"
+            );
+        }
+    }
+
+    /// The exemption is for panics only. Anything else keeps the strict
+    /// prose filter, because that is where transcript text would appear.
+    #[cfg(feature = "telemetry-sentry")]
+    #[test]
+    fn the_panic_exemption_does_not_widen_to_other_exceptions() {
+        let prose = "the user said the quarterly numbers looked wrong to him";
+        assert_eq!(
+            scrubbed_exception_value("Error", prose),
+            "<redacted: prose content>"
+        );
+        // …and a panic is still stripped of secrets and account names.
+        assert_eq!(
+            scrubbed_exception_value("panic", r"could not open C:\Users\gregr\dimmy\config.json"),
+            r"could not open C:\Users\<USER>\dimmy\config.json"
+        );
+        assert_eq!(
+            scrubbed_exception_value("panic", "token sk-proj-abc123def456ghi789"),
+            "<redacted: looked like a secret>"
+        );
+    }
+
+    #[cfg(feature = "telemetry-sentry")]
+    #[test]
+    fn a_runaway_panic_message_is_capped() {
+        let long = "x".repeat(4000);
+        let out = scrubbed_exception_value("panic", &long);
+        assert!(out.len() < 600, "expected a cap, got {} chars", out.len());
+        assert!(out.ends_with("…<truncated>"));
     }
 
     #[test]

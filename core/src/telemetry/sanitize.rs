@@ -305,17 +305,47 @@ pub fn bucket_recap_model(model: &str) -> &'static str {
 
 /// True if the string looks like it might contain a secret. Used as
 /// a defensive last-ditch check before forwarding any payload.
+///
+/// The key-prefix checks match ANYWHERE in the string, per token. They
+/// used to be `starts_with` against the whole input, which made them
+/// close to useless at the two places that matter most: `client.rs`
+/// hands this an entire serialised JSON document (it begins with `{`, so
+/// no prefix could ever match, and the "last-ditch grep" was really
+/// checking three of its nine patterns), and an error message embeds a
+/// key mid-sentence rather than starting with one.
+///
+/// Per token, not `contains`, because a bare `contains("sk-")` fires on
+/// ordinary words — "task-force" contains it — and a filter that redacts
+/// innocent messages gets removed by the next person who trips over it.
 pub fn looks_like_secret(s: &str) -> bool {
     let lower = s.to_ascii_lowercase();
-    s.starts_with("sk-")
-        || s.starts_with("phc_")
-        || s.starts_with("phx_")
-        || s.starts_with("sntrys_")
-        || s.starts_with("gsk_")
-        || s.starts_with("Bearer ")
-        || lower.contains("api_key=")
+    if lower.contains("api_key=")
         || lower.contains("api-key:")
         || lower.contains("authorization:")
+        // Keeps its space, so it cannot survive tokenisation below.
+        || lower.contains("bearer ")
+    {
+        return true;
+    }
+    s.split(|c: char| {
+        c.is_whitespace()
+            || matches!(
+                c,
+                '"' | '\'' | ',' | ';' | ':' | '=' | '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>'
+            )
+    })
+    .any(token_looks_like_key)
+}
+
+/// A token is key-shaped when it carries a known vendor prefix followed
+/// by enough payload to be an actual credential. The length floor keeps
+/// a bare `sk-` or a truncated fragment from tripping the filter.
+fn token_looks_like_key(token: &str) -> bool {
+    const PREFIXES: [&str; 5] = ["sk-", "phc_", "phx_", "sntrys_", "gsk_"];
+    const MIN_PAYLOAD: usize = 6;
+    PREFIXES
+        .iter()
+        .any(|p| token.starts_with(p) && token.len() >= p.len() + MIN_PAYLOAD)
 }
 
 #[cfg(test)]
@@ -462,6 +492,31 @@ mod tests {
         assert!(looks_like_secret("Bearer eyJhbGciOi"));
         assert!(!looks_like_secret("hello world"));
         assert!(!looks_like_secret("user said: ask not"));
+    }
+
+    /// The prefix checks used to be `starts_with` against the WHOLE
+    /// input, so they never fired on the two shapes that actually carry
+    /// a key: a serialised JSON payload (starts with `{`) and a key
+    /// embedded mid-sentence.
+    #[test]
+    fn looks_like_secret_finds_keys_that_are_not_at_position_zero() {
+        assert!(looks_like_secret("token sk-proj-abc123def456ghi789"));
+        assert!(looks_like_secret(
+            r#"{"event":"llm.failed","properties":{"k":"gsk_abcdefghij"}}"#
+        ));
+        assert!(looks_like_secret("failed to open (phc_owaPfYyvAinx)"));
+    }
+
+    /// A filter that redacts innocent messages gets deleted by the next
+    /// person who trips over it, so the prefixes match per token.
+    #[test]
+    fn looks_like_secret_does_not_fire_on_ordinary_words() {
+        assert!(!looks_like_secret("the task-force reviewed it"));
+        assert!(!looks_like_secret("whisper-large-v3-turbo loaded"));
+        assert!(!looks_like_secret("risk-free, ask-and-answer"));
+        // Prefix with nothing behind it is not a credential.
+        assert!(!looks_like_secret("sk-"));
+        assert!(!looks_like_secret("gsk_ab"));
     }
 
     // ── Bucket helper tests ────────────────────────────────────
