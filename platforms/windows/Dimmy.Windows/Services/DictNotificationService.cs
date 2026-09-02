@@ -103,6 +103,18 @@ public static class DictNotificationService
         Show($"Transcription failed ({who})", $"{detail}. {DictFailureHints.For(category)}");
     }
 
+    /// <summary>The LLM post-processing leg failed. The dictation itself
+    /// survived (the core pastes the raw transcript on failure), so the
+    /// toast says what did not happen rather than announcing a loss.
+    /// Without it the only signal was a pill flash, which is how twelve
+    /// Groq 413s went unexplained in August 2026.</summary>
+    public static void ShowLlmFailed(string provider, string detail, string category)
+    {
+        var who = string.IsNullOrEmpty(provider) || provider == "other"
+            ? "the LLM provider" : provider;
+        Show($"Text not cleaned up ({who})", $"{detail}. {DictFailureHints.For(category)} Your transcript was pasted unchanged.");
+    }
+
     /// <summary>A dictation produced no audio (muted mic / wrong input device /
     /// privacy-blocked). The core detects the all-zero buffer and asks us to
     /// tell the user, since a silent dictation otherwise fails invisibly.</summary>

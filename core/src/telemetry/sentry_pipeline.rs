@@ -241,17 +241,26 @@ pub fn flush_pending() -> bool {
     true
 }
 
-/// Capture a manually-constructed error message + category.
+/// Capture a manually-constructed error message + category + provider.
 /// Used by the Event::Error* variants to mirror to Sentry.
+///
+/// `provider` is the short categorical name (`groq`, `openai`, `local`,
+/// …) — never a URL. It was missing until 2026-09-02, so answering "which
+/// provider is throwing these?" meant leaving Sentry and cross-checking
+/// PostHog, for a field the privacy rules already class as safe to send.
 #[cfg(feature = "telemetry-sentry")]
-pub fn capture_error(category: &str, message: &str) {
+pub fn capture_error(category: &str, provider: &str, message: &str) {
     if !is_enabled() || !has_compiled_dsn() {
         return;
     }
     let scrubbed = scrub_message(message);
+    let provider = provider.to_string();
     sentry::with_scope(
         |scope| {
             scope.set_tag("error_category", category);
+            if !provider.is_empty() {
+                scope.set_tag("provider", provider);
+            }
         },
         || {
             sentry::capture_message(&scrubbed, sentry::Level::Error);
@@ -260,7 +269,7 @@ pub fn capture_error(category: &str, message: &str) {
 }
 
 #[cfg(not(feature = "telemetry-sentry"))]
-pub fn capture_error(_category: &str, _message: &str) {}
+pub fn capture_error(_category: &str, _provider: &str, _message: &str) {}
 
 /// Capture user-submitted feedback (from Settings → Send feedback or
 /// the post-crash dialog).
@@ -802,7 +811,7 @@ mod tests {
     fn capture_error_with_no_dsn_is_silent() {
         // Default cargo test runs without DIMMY_SENTRY_DSN env var, so
         // the embedded value is empty and capture_error returns early.
-        capture_error("test", "this is a test error message");
+        capture_error("test", "groq", "this is a test error message");
     }
 
     // ── Privacy hardening: redact_prose tests ────────────────────

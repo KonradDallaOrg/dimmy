@@ -136,6 +136,8 @@ public partial class App : Application
         {
             if (source == "stt")
                 Services.DictNotificationService.ShowTranscriptionFailed(provider, message, category);
+            else if (source == "llm")
+                Services.DictNotificationService.ShowLlmFailed(provider, message, category);
             else if (source == "capture")
                 Services.DictNotificationService.ShowNoAudioCaptured(message);
         }

@@ -37,6 +37,14 @@ pub fn error_category(message: &str, status: Option<u16>) -> &'static str {
             401 | 403 => "auth",
             404 => "not_found",
             429 => "rate_limit",
+            // Groq answers 413 for BOTH a genuinely oversized request and
+            // a per-minute token allowance that is already spent, and
+            // telling the two apart would mean reading the response body
+            // — which echoes the prompt back, i.e. the transcript. Its
+            // own category, so the hint can cover both honestly without
+            // anyone having to look. See `error.rs` on why bodies never
+            // leave the machine.
+            413 => "too_large",
             500..=599 => "server_error",
             _ => "client_error",
         };

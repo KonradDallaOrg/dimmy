@@ -1853,7 +1853,7 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
                 provider: provider_static,
                 error_category: category,
             });
-            crate::telemetry::capture_error(category, &err_msg);
+            crate::telemetry::capture_error(category, provider_static, &err_msg);
 
             write_to_buf("", out_buf, buf_len)
         }
@@ -1903,12 +1903,37 @@ fn transcript_ready_payload(text: &str) -> String {
 /// pick a toast + hint); `message` is the redacted Display string
 /// (never the response body).
 fn stt_error_event_payload(message: &str, provider: &str, category: &str) -> String {
+    error_event_payload("stt", message, provider, category)
+}
+
+/// The structured `error` payload every host turns into a system toast.
+///
+/// `source` is what decides whether the user sees anything at all: a
+/// message-only `error` event flashes the pill and vanishes, which is
+/// how four Groq 403s in a row went unexplained on 2026-07-04. The STT
+/// path was given a `source` after that; the LLM path was not, so the
+/// Groq 413s of 2026-08-27 repeated the exact same silence one leg
+/// further down the pipeline.
+fn error_event_payload(source: &str, message: &str, provider: &str, category: &str) -> String {
     format!(
-        r#"{{"message":"{}","source":"stt","provider":"{}","category":"{}"}}"#,
+        r#"{{"message":"{}","source":"{}","provider":"{}","category":"{}"}}"#,
         json_escape_str(message),
+        source,
         provider,
         category
     )
+}
+
+/// HTTP status behind an LLM error, when there was one.
+///
+/// Lets the failure be categorised by status rather than by grepping the
+/// Display text, which is what `error_category(msg, None)` was reduced to
+/// — it filed every HTTP failure of the LLM leg under "unknown".
+fn llm_http_status(err: &crate::error::LlmError) -> Option<u16> {
+    match err {
+        crate::error::LlmError::Api { status, .. } => Some(*status),
+        _ => None,
+    }
 }
 
 /// Cancel recording without transcribing.
@@ -3560,16 +3585,19 @@ pub unsafe extern "C" fn dimmy_process_with_llm(
         Err(e) => {
             let err_msg = format!("{}", e);
             log(&format!("ERROR: LLM processing failed: {}", err_msg));
-            let category = crate::telemetry::sanitize::error_category(&err_msg, None);
+            let category =
+                crate::telemetry::sanitize::error_category(&err_msg, llm_http_status(&e));
             crate::telemetry::track(crate::telemetry::Event::LlmFailed {
                 mode: "cloud",
                 provider: llm_provider_static,
                 error_category: category,
             });
-            crate::telemetry::capture_error(category, &err_msg);
+            crate::telemetry::capture_error(category, llm_provider_static, &err_msg);
+            // `source` is what promotes this from a pill flash to a toast
+            // the user can actually read. See `error_event_payload`.
             emit_event(
                 "error",
-                &format!(r#"{{"message":"LLM: {}"}}"#, err_msg.replace('"', "\\\"")),
+                &error_event_payload("llm", &err_msg, llm_provider_static, category),
             );
             // Return original text on LLM failure (graceful degradation)
             write_to_buf(text, out_buf, buf_len)
@@ -10040,6 +10068,41 @@ mod tests {
         let v: serde_json::Value =
             serde_json::from_str(&tricky).expect("escaped payload must be valid JSON");
         assert_eq!(v["message"], r#"path "C:\x" bad"#);
+    }
+
+    /// An LLM failure used to emit `{"message":"LLM: HTTP 413"}` -- no
+    /// `source`, so every host flashed the pill and showed no toast. The
+    /// lesson from four unexplained Groq 403s was applied to the STT leg
+    /// in July and not to this one, and twelve Groq 413s in August went
+    /// exactly as unexplained.
+    #[test]
+    fn llm_error_payload_carries_the_source_that_earns_a_toast() {
+        let p = error_event_payload("llm", "HTTP 413", "groq", "too_large");
+        let v: serde_json::Value = serde_json::from_str(&p).expect("payload must be valid JSON");
+        assert_eq!(v["source"], "llm");
+        assert_eq!(v["provider"], "groq");
+        assert_eq!(v["category"], "too_large");
+        assert_eq!(v["message"], "HTTP 413");
+    }
+
+    /// `error_category(msg, None)` filed every HTTP failure of the LLM
+    /// leg under "unknown", because the status was thrown away before the
+    /// call. 413 gets its own category so the hint can name both causes
+    /// without anyone reading the response body.
+    #[test]
+    fn llm_http_status_reaches_the_category() {
+        let too_large = crate::error::LlmError::Api {
+            status: 413,
+            body: String::new(),
+        };
+        assert_eq!(llm_http_status(&too_large), Some(413));
+        assert_eq!(
+            crate::telemetry::sanitize::error_category("HTTP 413", llm_http_status(&too_large)),
+            "too_large"
+        );
+
+        let offline = crate::error::LlmError::Network("dns failure".into());
+        assert_eq!(llm_http_status(&offline), None);
     }
 
     #[test]
