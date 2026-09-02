@@ -14,6 +14,11 @@ public static class DictFailureHints
     {
         "auth" => "Check your API key in Settings, Providers and keys.",
         "rate_limit" => "Provider rate limit hit. Wait a moment and retry.",
+        // Groq returns 413 for an oversized request AND for a spent
+        // per-minute token allowance, and we deliberately do not read the
+        // response body to tell them apart (it echoes the prompt back).
+        // One line that is true either way.
+        "too_large" => "The request was too large, or over the provider's per-minute limit. Wait a moment, or shorten the text.",
         "network" or "timeout" => "Check your internet connection.",
         "model_load" => "The local model failed to load. Re-download it in Settings.",
         _ => "Details are in dimmy.log (Settings, Advanced).",

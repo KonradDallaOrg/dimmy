@@ -258,12 +258,30 @@ fn main() {
             resolved
         );
     }
+    // Build provenance. See resolve_build_id() for why CARGO_PKG_VERSION
+    // is not enough on its own.
+    let build_id = resolve_build_id();
+    println!("cargo:rustc-env=DIMMY_BUILD_ID={}", build_id);
+    if build_id != "local" {
+        // Echoed into the CI log so the identity a pipeline embedded is
+        // verifiable from the build output alone, without waiting for a
+        // crash report to come back and reveal it.
+        println!(
+            "cargo:warning=DIMMY_BUILD_ID={} (Sentry release + PostHog build_id)",
+            build_id
+        );
+    }
+
     println!("cargo:rerun-if-env-changed=POSTHOG_API_KEY");
     println!("cargo:rerun-if-env-changed=SENTRY_DSN");
     println!("cargo:rerun-if-env-changed=DIMMY_LICENSE_PUBKEY");
     println!("cargo:rerun-if-env-changed=DIMMY_LICENSE_SERVER_URL");
     println!("cargo:rerun-if-env-changed=DIMMY_BUILD_FLAVOR");
     println!("cargo:rerun-if-env-changed=DIMMY_CONFIG_NAMESPACE");
+    println!("cargo:rerun-if-env-changed=DIMMY_BUILD_ID");
+    println!("cargo:rerun-if-env-changed=GITHUB_REF_NAME");
+    println!("cargo:rerun-if-env-changed=GITHUB_REF_TYPE");
+    println!("cargo:rerun-if-env-changed=GITHUB_RUN_NUMBER");
 }
 
 /// Strip leading UTF-8 BOM, then ASCII-trim. Returns owned String so
@@ -273,4 +291,48 @@ fn main() {
 fn sanitize_secret(raw: String) -> String {
     let no_bom = raw.strip_prefix('\u{FEFF}').unwrap_or(&raw);
     no_bom.trim().to_string()
+}
+
+/// Precise identity of THIS build, for the Sentry release tag and the
+/// PostHog `build_id` property.
+///
+/// `CARGO_PKG_VERSION` on its own cannot answer "which binary crashed":
+/// rc4, rc5, rc6, rc7, rc8, every `staging.N` and the eventual stable all
+/// report `0.6.73`. On 2026-09-02 two aborts had to be attributed by
+/// comparing their Sentry timestamps against `gh release list`, and the
+/// answer (rc5, not rc6) inverted the diagnosis — a build published 2 h
+/// after the crashes was briefly blamed for them.
+///
+/// GitHub Actions exports GITHUB_REF_TYPE / GITHUB_REF_NAME /
+/// GITHUB_RUN_NUMBER into every step's environment, so this reads the
+/// build's identity without a single workflow edit — nothing to forget
+/// when a new pipeline is added.
+fn resolve_build_id() -> String {
+    // Escape hatch: a local release-shaped build, or a future pipeline
+    // that is not GitHub Actions, can state its own identity.
+    let explicit = sanitize_secret(std::env::var("DIMMY_BUILD_ID").unwrap_or_default());
+    if !explicit.is_empty() {
+        return explicit;
+    }
+
+    let ref_name = sanitize_secret(std::env::var("GITHUB_REF_NAME").unwrap_or_default());
+    if ref_name.is_empty() {
+        return "local".to_string();
+    }
+
+    // Tag build (`release.yml`, `staging-tester.yml`): the tag IS the
+    // identity — `v0.6.73-rc6`, `v0.6.73-staging.1`.
+    if sanitize_secret(std::env::var("GITHUB_REF_TYPE").unwrap_or_default()) == "tag" {
+        return ref_name;
+    }
+
+    // Branch build (`staging-auto-update.yml`): the run number is what
+    // distinguishes two pushes to `staging`, and it is exactly what that
+    // workflow already packs into the Velopack version.
+    let run = sanitize_secret(std::env::var("GITHUB_RUN_NUMBER").unwrap_or_default());
+    if run.is_empty() {
+        ref_name
+    } else {
+        format!("{}.{}", ref_name, run)
+    }
 }

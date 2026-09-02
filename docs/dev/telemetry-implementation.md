@@ -98,6 +98,7 @@ Plain HTTP POST to `https://eu.i.posthog.com/i/v0/e/`. No SDK dependency.
 
     // common (added by build_payload to every event)
     "app_version": "0.6.20", "os": "windows", "arch": "x86_64",
+    "build_id": "v0.6.73-rc6",   // tag | "<branch>.<run>" | "local"
     "session_id": "<UUIDv4 per process>",
     "$ip": null,
 

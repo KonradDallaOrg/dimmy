@@ -98,8 +98,14 @@ pub fn has_compiled_dsn() -> bool {
 
 /// Capture an error that already happened (e.g. from an Event::Error*
 /// variant). Best-effort, silent.
-pub fn capture_error(category: &str, message: &str) {
-    sentry_pipeline::capture_error(category, message);
+pub fn capture_error(category: &str, provider: &str, message: &str) {
+    sentry_pipeline::capture_error(category, provider, message);
+}
+
+/// Block until queued crash reports are sent (2 s cap). Call this from
+/// the panic hook — see `sentry_pipeline::flush_pending`.
+pub fn flush_pending() -> bool {
+    sentry_pipeline::flush_pending()
 }
 
 /// Capture user-submitted feedback. `kind` is `bug` / `feature` /

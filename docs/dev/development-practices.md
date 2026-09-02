@@ -36,6 +36,15 @@ The principle: prove correctness by the ABSENCE of crashes. Every function asser
 - Include context in message: the value that failed, which function, why
 - Don't assert things that can legitimately happen (use Result for that)
 - DO assert things that indicate logic bugs or corrupted state
+- **Interpolate sizes, rates, counts, indices and enum names — NEVER text
+  that came from the user.** Since 2026-09-02 an assertion message is
+  forwarded to Sentry verbatim (secret-checked, account name stripped,
+  capped at 500 chars) instead of being redacted as prose, because a
+  crash report that cannot name the failed assertion is worthless. That
+  exemption holds only as long as this rule does. A transcript, a prompt,
+  a device name or a dictionary entry in an assertion message would ship
+  user content off the machine. See
+  `telemetry::sentry_pipeline::scrub_panic_message`.
 
 ## Test-Driven Development
 

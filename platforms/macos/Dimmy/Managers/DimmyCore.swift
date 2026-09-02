@@ -1056,10 +1056,12 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
             // (2026-07-04: four Groq HTTP 403 in a row on Win, retried
             // blind). Win parity: AppViewModel.CoreFailure ->
             // DictNotificationService.ShowTranscriptionFailed.
-            if let source = payload["source"] as? String, source == "stt" {
+            let source = payload["source"] as? String ?? ""
+            if source == "stt" || source == "llm" {
                 let rawProvider = payload["provider"] as? String ?? ""
+                let fallbackName = source == "llm" ? "the LLM provider" : "Cloud STT"
                 let provider = (rawProvider.isEmpty || rawProvider == "other")
-                    ? "Cloud STT" : rawProvider
+                    ? fallbackName : rawProvider
                 let hint: String
                 switch payload["category"] as? String ?? "" {
                 case "auth":
@@ -1070,17 +1072,32 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
                     hint = "Check your internet connection."
                 case "model_load":
                     hint = "The local model failed to load. Re-download it in Settings."
+                // Groq answers 413 both for an oversized request and for a
+                // spent per-minute allowance; we do not read the response
+                // body to tell them apart, so one line covers both.
+                case "too_large":
+                    hint = "The request was too large, or over the provider's per-minute limit. Wait a moment, or shorten the text."
                 default:
                     hint = "Details are in the log."
                 }
-                DictToastWindow.show(
-                    kind: .error,
-                    title: "Transcription failed (\(provider))",
-                    body: "\(message). \(hint)")
+                // The dictation survives an LLM failure -- the core pastes
+                // the raw transcript -- so that toast names what did not
+                // happen rather than announcing a loss.
+                if source == "llm" {
+                    DictToastWindow.show(
+                        kind: .error,
+                        title: "Text not cleaned up (\(provider))",
+                        body: "\(message). \(hint) Your transcript was pasted unchanged.")
+                } else {
+                    DictToastWindow.show(
+                        kind: .error,
+                        title: "Transcription failed (\(provider))",
+                        body: "\(message). \(hint)")
+                }
             }
             // A muted mic / wrong input device: the core emits source:"capture"
             // so the user is told instead of a silent dictation failing blind.
-            if let source = payload["source"] as? String, source == "capture" {
+            if source == "capture" {
                 DictToastWindow.show(
                     kind: .error,
                     title: "No audio captured",
