@@ -4,6 +4,222 @@ import CoreAudio
 import Foundation
 import os
 
+/// Derives the tap's TRUE delivery rate from the hardware timestamps
+/// CoreAudio hands the IO proc, instead of trusting the rate the aggregate's
+/// format DECLARES.
+///
+/// On an aggregate device the nominal sample rate is a *request*, not a
+/// fact. With a Bluetooth-HFP headset as default output the sub-device
+/// clocks at 16 kHz while `readTapFormat` keeps reporting the nominal
+/// 48 kHz. The core trusted that claim, saw src == canonical, took the
+/// identity path (no resampler at all) and wrote `audio_system.wav` 3x fast
+/// while the meeting worker zero-filled the 2/3 shortfall — "veloce e a
+/// tratti", participants never transcribed (colleague's Mac, 2026-07-21).
+///
+/// Pinning the aggregate to 48 kHz makes the claim true and stays, but it is
+/// one argument against the HAL with nothing behind it. This measures:
+/// frames delivered over `mHostTime` (mach ticks, the machine's own clock)
+/// *is* the delivery rate, by definition. It settles in ~250 ms.
+///
+/// Pure arithmetic on purpose — `ticksPerSecond` is injected so the whole
+/// decision is unit-testable without CoreAudio or a Mac.
+struct LoopbackRateEstimator: Sendable {
+    /// Rates a real endpoint can clock at. Mirrors the Rust
+    /// `STANDARD_LOOPBACK_RATES` so both ends snap identically.
+    static let standardRates: [Int32] = [
+        8_000, 11_025, 16_000, 22_050, 24_000, 32_000, 44_100, 48_000,
+    ]
+
+    /// Observation window before the FIRST verdict. ~250 ms is ~12 callbacks
+    /// at the 20 ms cycle an HFP aggregate runs, and 16x faster than the
+    /// wall-clock canary in the Rust core it supersedes.
+    static let minObservationSeconds = 0.25
+    /// Window length once a verdict stands. Longer, and a revision needs
+    /// `revisionsRequired` consecutive windows agreeing — see `settled`.
+    static let revisionObservationSeconds = 1.0
+    static let revisionsRequired = 2
+    static let minCallbacks = 8
+    /// The HAL can dump a startup backlog on the opening callbacks, which
+    /// reads as a rate spike. A spike snaps AWAY from a lower true rate, so
+    /// it could only ever make us keep the claim — never adopt a wrong low
+    /// one — but there is no reason to feed it in.
+    static let warmupCallbacksSkipped = 2
+
+    /// Nearest standard rate to a raw measurement.
+    static func snap(_ hz: Double) -> Int32 {
+        var best = standardRates[0]
+        var bestDelta = Double.infinity
+        for rate in standardRates {
+            let delta = abs(Double(rate) - hz)
+            if delta < bestDelta {
+                bestDelta = delta
+                best = rate
+            }
+        }
+        return best
+    }
+
+    /// Nearest standard rate, but only when the measurement actually sits
+    /// close to it (within 12 %). A reading in no-man's-land is noise, not a
+    /// rate — return nil and keep watching rather than latch a guess.
+    static func standardRate(forMeasured hz: Double) -> Int32? {
+        guard hz > 0 else { return nil }
+        let snapped = snap(hz)
+        return abs(hz - Double(snapped)) <= 0.12 * Double(snapped) ? snapped : nil
+    }
+
+    private var callbacks = 0
+    private var windowStart: UInt64?
+    private var windowCallbacks = 0
+    private var accumulatedFrames = 0.0
+    /// Snapshot at the window's midpoint, so the two halves can be compared
+    /// at close. See `isConsistent` — a window straddling a rate change
+    /// averages both phases and must not be believed.
+    private var halfFrames: Double?
+    private var halfElapsed: Double?
+    private var pendingRate: Int32?
+    private var pendingWindows = 0
+
+    private mutating func resetWindow(at hostTime: UInt64) {
+        windowStart = hostTime
+        windowCallbacks = 0
+        accumulatedFrames = 0
+        halfFrames = nil
+        halfElapsed = nil
+    }
+
+    /// Did this window measure ONE rate, or the average of two?
+    ///
+    /// A window spanning a Bluetooth profile flip sees half its frames at
+    /// 48 kHz and half at 16 kHz, which averages to ~32 kHz — itself a
+    /// standard rate, so the proximity filter cannot reject it, and two such
+    /// windows in a row would install a rate the hardware never ran at.
+    /// Demanding both halves agree with the whole turns an inconsistent
+    /// window into a non-measurement instead of a wrong one.
+    private static func isConsistent(
+        whole: Int32, totalFrames: Double, totalElapsed: Double,
+        halfFrames: Double?, halfElapsed: Double?
+    ) -> Bool {
+        guard let halfFrames, let halfElapsed,
+            halfElapsed > 0, totalElapsed > halfElapsed
+        else {
+            // No midpoint snapshot (window closed in one step): nothing to
+            // cross-check, so take the whole-window reading at face value.
+            return true
+        }
+        let first = standardRate(forMeasured: halfFrames / halfElapsed)
+        let second = standardRate(
+            forMeasured: (totalFrames - halfFrames) / (totalElapsed - halfElapsed))
+        return first == whole && second == whole
+    }
+
+    /// The standing verdict. Heavily damped, but NOT frozen.
+    ///
+    /// Frozen was the first design, on the grounds that rebuilding the
+    /// downstream resampler mid-stream tears up its phase state — the reason
+    /// the July reactive-override attempt was reverted as "right sometimes,
+    /// wrong on bursty delivery, flips in the middle". Freezing turned out to
+    /// be wrong for the single most common case on this hardware: a Bluetooth
+    /// headset keeps the SAME device UID while its profile flips A2DP 48 kHz →
+    /// HFP 16 kHz the moment a mic opens. `shouldRebuildForOutputChange`
+    /// compares UIDs, so nothing rebuilds and a frozen verdict would stay
+    /// wrong for the rest of the meeting.
+    ///
+    /// So: revise, but only on `revisionsRequired` CONSECUTIVE full windows
+    /// of `revisionObservationSeconds` that all agree on a different standard
+    /// rate. Two seconds of consistent hardware-clock evidence is not
+    /// "bursty delivery"; one click at the transition beats an hour of audio
+    /// at the wrong speed.
+    private(set) var settled: Int32?
+
+    /// Feed one IO-proc callback. Returns the rate to use and whether THIS
+    /// call changed it, so the caller can log each transition exactly once.
+    /// Nil only while no verdict has ever been reached.
+    mutating func observe(
+        deliveredFrames: Int,
+        hostTime: UInt64,
+        ticksPerSecond: Double
+    ) -> (rate: Int32, isNew: Bool)? {
+        // Every early return reports `standing`, the verdict already reached:
+        // a silent or degenerate callback is not evidence, but it does not
+        // un-know what we already measured. Nil only before the first verdict.
+        let standing: (rate: Int32, isNew: Bool)? = settled.map { ($0, false) }
+
+        guard deliveredFrames > 0, ticksPerSecond > 0 else { return standing }
+
+        callbacks += 1
+        guard callbacks > Self.warmupCallbacksSkipped else { return standing }
+
+        guard let start = windowStart else {
+            // Frames of THIS callback were delivered before the window
+            // opened, so they are not ours to count.
+            windowStart = hostTime
+            return standing
+        }
+        accumulatedFrames += Double(deliveredFrames)
+        windowCallbacks += 1
+
+        let elapsed = Double(hostTime &- start) / ticksPerSecond
+        let required =
+            settled == nil ? Self.minObservationSeconds : Self.revisionObservationSeconds
+
+        if halfFrames == nil, elapsed >= required / 2 {
+            halfFrames = accumulatedFrames
+            halfElapsed = elapsed
+        }
+
+        guard elapsed >= required, windowCallbacks >= Self.minCallbacks else {
+            return standing
+        }
+
+        let totalFrames = accumulatedFrames
+        let firstHalfFrames = halfFrames
+        let firstHalfElapsed = halfElapsed
+        resetWindow(at: hostTime)
+
+        let candidate = Self.standardRate(forMeasured: totalFrames / elapsed)
+        let rateOrNil = candidate.flatMap { rate in
+            Self.isConsistent(
+                whole: rate, totalFrames: totalFrames, totalElapsed: elapsed,
+                halfFrames: firstHalfFrames, halfElapsed: firstHalfElapsed)
+                ? rate : nil
+        }
+
+        guard let rate = rateOrNil else {
+            // Either nowhere near a standard rate, or a window that straddled
+            // a change. Distrust it rather than latch a number nothing can
+            // clock at, and break any pending revision — inconsistent
+            // evidence is not evidence.
+            pendingRate = nil
+            pendingWindows = 0
+            return standing
+        }
+
+        guard let current = settled else {
+            settled = rate
+            return (rate, true)
+        }
+        guard rate != current else {
+            pendingRate = nil
+            pendingWindows = 0
+            return (current, false)
+        }
+
+        // A dissenting window. Require consecutive agreement before acting.
+        if pendingRate == rate {
+            pendingWindows += 1
+        } else {
+            pendingRate = rate
+            pendingWindows = 1
+        }
+        guard pendingWindows >= Self.revisionsRequired else { return (current, false) }
+        pendingRate = nil
+        pendingWindows = 0
+        settled = rate
+        return (rate, true)
+    }
+}
+
 /// System-audio capture via the Core Audio process-tap API (macOS 14.4+).
 ///
 /// Replaces the ScreenCaptureKit loopback path: a process tap records the
@@ -77,6 +293,31 @@ final class SystemAudioProcessTap {
     /// increments, under the same unfair-lock kind as `receivedAudioFlag`.
     private let frameCounter = OSAllocatedUnfairLock<UInt64>(initialState: 0)
     var frameCount: UInt64 { frameCounter.withLock { $0 } }
+
+    /// Measures what the tap ACTUALLY delivers, so the rate handed to the
+    /// core is observed rather than believed. Reset on every teardown so a
+    /// rebuilt tap (default-output change, sleep/wake) re-measures against
+    /// whatever device it just got anchored to. Same unfair-lock kind as the
+    /// counters above: the audio thread only reads/updates a few scalars.
+    private let rateEstimator = OSAllocatedUnfairLock(initialState: LoopbackRateEstimator())
+
+    /// The measured rate once settled, else nil. Diagnostics only.
+    var measuredSampleRate: Int32? { rateEstimator.withLock { $0.settled } }
+
+    /// mach ticks per second for this machine. Computed once, off the audio
+    /// thread — `mach_timebase_info` must not run in an IO proc.
+    private static let hostTicksPerSecond: Double = {
+        var timebase = mach_timebase_info_data_t()
+        guard mach_timebase_info(&timebase) == KERN_SUCCESS,
+            timebase.numer > 0, timebase.denom > 0
+        else {
+            // 1 tick == 1 ns. Wrong only if the timebase call fails, in which
+            // case the reading lands nowhere near a standard rate and the
+            // estimator declines to decide — we keep the declared rate.
+            return 1_000_000_000
+        }
+        return 1_000_000_000.0 * Double(timebase.denom) / Double(timebase.numer)
+    }()
 
     private let ioQueue = DispatchQueue(
         label: "dimmy.systemaudio.tap.io", qos: .userInteractive)
@@ -260,9 +501,11 @@ final class SystemAudioProcessTap {
         let channels = channelCount
         let receivedFlag = receivedAudioFlag
         let frames = frameCounter
+        let estimator = rateEstimator
+        let ticksPerSecond = Self.hostTicksPerSecond
         var newProcID: AudioDeviceIOProcID?
         err = AudioDeviceCreateIOProcIDWithBlock(&newProcID, aggregateID, ioQueue) {
-            _, inInputData, _, _, _ in
+            _, inInputData, inInputTime, _, _ in
             // Heartbeat: bump on EVERY fire (even silent/zero buffers) so the
             // liveness watchdog can see the IO proc is alive and distinguish a
             // quiet-but-healthy tap from a dead one.
@@ -278,7 +521,15 @@ final class SystemAudioProcessTap {
                 NSLog("[SystemAudio/tap] IO proc fired (first frame, %d samples) — capture is live",
                       Self.firstBufferSampleCount(inInputData))
             }
-            Self.forward(inInputData, channels: channels, rate: rate, to: handler)
+            // The rate the aggregate DECLARED is a starting assumption; what
+            // it actually delivers is measured from the timestamps below.
+            let effectiveRate = Self.effectiveRate(
+                declared: rate,
+                inInputTime: inInputTime,
+                inInputData: inInputData,
+                ticksPerSecond: ticksPerSecond,
+                estimator: estimator)
+            Self.forward(inInputData, channels: channels, rate: effectiveRate, to: handler)
         }
         guard err == noErr, let procID = newProcID else {
             NSLog("[SystemAudio/tap] AudioDeviceCreateIOProcIDWithBlock failed: %d", err)
@@ -695,6 +946,61 @@ final class SystemAudioProcessTap {
         return Int(buffer.mDataByteSize) / MemoryLayout<Float>.size
     }
 
+    /// Frames (per-channel sample count) actually delivered in this callback.
+    /// Mirrors `forward`'s own channel handling so the measurement counts the
+    /// same thing the core will receive.
+    private static func deliveredFrameCount(
+        _ inInputData: UnsafePointer<AudioBufferList>
+    ) -> Int {
+        let abl = UnsafeMutableAudioBufferListPointer(
+            UnsafeMutablePointer(mutating: inInputData))
+        guard let buffer = abl.first else { return 0 }
+        let channels = max(Int(buffer.mNumberChannels), 1)
+        return (Int(buffer.mDataByteSize) / MemoryLayout<Float>.size) / channels
+    }
+
+    /// The rate to hand the core for this callback: the MEASURED delivery
+    /// rate once it has settled, the DECLARED one until then — and forever if
+    /// the HAL gives us no usable host time. Never worse than the old
+    /// behaviour, which was to always report the declaration.
+    ///
+    /// Runs on the CoreAudio IO thread. The `NSLog` fires only on a verdict
+    /// TRANSITION — once when the rate is first measured, and once more if a
+    /// Bluetooth profile flip moves it mid-meeting. That line is the
+    /// fingerprint of a lying tap and the first thing to look for when a
+    /// meeting comes back sounding wrong.
+    private static func effectiveRate(
+        declared: Int32,
+        inInputTime: UnsafePointer<AudioTimeStamp>,
+        inInputData: UnsafePointer<AudioBufferList>,
+        ticksPerSecond: Double,
+        estimator: OSAllocatedUnfairLock<LoopbackRateEstimator>
+    ) -> Int32 {
+        let timestamp = inInputTime.pointee
+        guard timestamp.mFlags.contains(.hostTimeValid) else {
+            return estimator.withLock { $0.settled } ?? declared
+        }
+        let verdict = estimator.withLock {
+            $0.observe(
+                deliveredFrames: deliveredFrameCount(inInputData),
+                hostTime: timestamp.mHostTime,
+                ticksPerSecond: ticksPerSecond)
+        }
+        guard let verdict else { return declared }
+        if verdict.isNew {
+            if verdict.rate == declared {
+                NSLog(
+                    "[SystemAudio/tap] measured delivery rate %d Hz — matches the declared rate",
+                    verdict.rate)
+            } else {
+                NSLog(
+                    "[SystemAudio/tap] WARN aggregate DECLARES %d Hz but DELIVERS %d Hz — using the measured rate (48 kHz pin ineffective, or a BT profile flip)",
+                    declared, verdict.rate)
+            }
+        }
+        return verdict.rate
+    }
+
     // MARK: - Realtime forwarding
 
     /// Read the tapped buffer (float32) and forward a mono frame. Runs on
@@ -744,6 +1050,10 @@ final class SystemAudioProcessTap {
         // Reset the diagnostic "first fire" latch so a rebuilt instance
         // logs its first frame again.
         receivedAudioFlag.withLock { $0 = false }
+        // Drop the measured rate: the rebuilt aggregate may be anchored to a
+        // different device (that IS why most rebuilds happen), so the next
+        // instance must measure again rather than inherit the old verdict.
+        rateEstimator.withLock { $0 = LoopbackRateEstimator() }
 
         // Capture the HAL handles and null the instance fields SYNCHRONOUSLY
         // so the object reads as fully torn-down the instant this returns,

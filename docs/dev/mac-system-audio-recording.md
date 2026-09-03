@@ -69,7 +69,50 @@ split is deliberate — see AUDIO-004 in `audio-pipeline.md`.
    `dimmy_set_loopback_sample_rate(sampleRate)` **before** the first buffer
    (`~L241`), so the meeting worker sizes the `audio_system.wav` header + STT
    downsample against what we actually deliver.
-5. IO proc forwards every frame to `onSamples` → `dimmy_push_loopback_audio`
+5. **Measures what the tap really delivers** — `LoopbackRateEstimator`, the
+   second half of the fix (2026-09-03). The pin above is one argument against
+   the HAL with nothing behind it: if it is ever ignored, everything downstream
+   is wrong and nothing says so. So the IO proc no longer discards the
+   `AudioTimeStamp` CoreAudio hands it — frames delivered over `mHostTime`
+   (mach ticks, the machine's own clock) **is** the delivery rate, by
+   definition. It settles in **~250 ms** (≥ 8 callbacks, first 2 skipped so a
+   HAL startup backlog can't read as a rate spike), snaps to the nearest
+   standard rate, and only accepts a reading within 12 % of one — a
+   measurement in no-man's-land is noise, not a rate.
+
+   The verdict is **heavily damped but not frozen**. Freezing was the first
+   design (rebuilding the downstream resampler mid-stream tears up its phase
+   state — the reason the July reactive override was reverted as "right
+   sometimes, wrong on bursty delivery, flips in the middle"), and it was
+   wrong for the most common case on this hardware: a Bluetooth headset keeps
+   the **same device UID** while its profile flips A2DP 48 kHz → HFP 16 kHz
+   the moment a mic opens. `shouldRebuildForOutputChange` compares UIDs, so
+   **nothing rebuilds** and a frozen verdict would stay wrong for the whole
+   meeting. So a revision needs **2 consecutive full 1 s windows** agreeing on
+   a different standard rate — ~2 s of consistent hardware-clock evidence,
+   which is not "bursty delivery".
+
+   Each window must also be **internally consistent**: its two halves are
+   compared and must snap to the same rate as the whole. Without that, a
+   window *straddling* a change averages both phases — 16 kHz with 48 kHz
+   reads as ~32 kHz, itself a standard rate, so the proximity filter cannot
+   reject it, and two such windows would install a rate the hardware never ran
+   at. (Found by simulating the algorithm before writing it; see
+   `LoopbackRateEstimatorTests.testFlappingFasterThanTheWindowNeverWins`.)
+
+   A genuine device switch (unplug the headset, plug a Jabra) changes the
+   default-output UID, tears down the tap, and `teardown()` resets the
+   estimator — so the new aggregate is measured from scratch.
+
+   The rate travels **per push** (`dimmy_push_loopback_audio(ptr, count,
+   rate)`), and the core already rebuilds its resampler when that hint changes
+   — so no Rust change was needed. Until the estimator settles, the declared
+   rate is sent, exactly as before; the first ~250 ms of a lying tap are still
+   captured wrong. Held back deliberately: `align_secondary` pads the system
+   track up to the mic's length, so buffering the head would land the system
+   audio ~250 ms late against the voices.
+
+6. IO proc forwards every frame to `onSamples` → `dimmy_push_loopback_audio`
    (the realtime block captures by value, no `self`, no alloc on the mono fast
    path, `~L245-264`).
 
@@ -142,18 +185,33 @@ field instead of silently shipping distorted audio:
    alarm-only). Measures delivered samples vs claimed rate over a window; if they
    disagree it logs a WARN and emits `Event::LoopbackRateMismatch { claimed,
    measured }` (`audio.loopback_rate_mismatch`) **once per window**. It does
-   **not** override the rate (the host-side 48 kHz pin owns the correction) — it
-   is the canary that the pin failed on some device.
+   **not** override the rate — the host owns the correction (pin + measure,
+   §3.5). This side sees push *arrival* times, not delivery times, so its wall
+   clock is polluted by queueing; it needs 4 s where the host needs 250 ms.
+   Its job is to catch a host whose own measurement is wrong or unavailable —
+   including Windows, which the Swift estimator does not cover.
 
 **What to watch in the log** after each device change during a meeting:
-`[SystemAudio/tap] aggregate pinned to 48000 Hz` should reappear, and neither
-`[Audio/loopback] WARN … MEASURED …` nor `[Meeting] WARN capture ratio …` should
-fire.
+`[SystemAudio/tap] aggregate pinned to 48000 Hz` should reappear, and none of
+`[SystemAudio/tap] WARN aggregate DECLARED … but MEASURED …`,
+`[Audio/loopback] WARN … MEASURED …`, or `[Meeting] WARN capture ratio …`
+should fire. The first of those three is the interesting one: it means the
+48 kHz pin was accepted by the HAL and then ignored, and that the estimator
+caught it — audio is correct, but the pin alone would have shipped it broken.
 
 ## 6. FREEZE invariants — do not break without a reproduced bug + test
 
 - The aggregate **must** be pinned to 48 kHz inside `start()` (so it re-applies on
   every rebuild). Removing it reintroduces the BT-HFP 3× bug.
+- The IO proc block **must** keep receiving `inInputTime` and feeding
+  `LoopbackRateEstimator`. Reverting it to `_, inInputData, _, _, _` and passing
+  the captured `sampleRate` constant is precisely the shape that shipped the 3×
+  bug: a rate read once at setup and repeated for the whole meeting.
+- The estimator's damping is load-bearing: **2 consecutive windows** plus the
+  **half-window consistency check**. Loosening either reintroduces mid-stream
+  flapping (and, without the halves, an averaged rate the hardware never ran
+  at). Tightening it to "never revise" reintroduces the BT profile-flip hole,
+  which no device-change notification covers.
 - `TapAutoStart=false` + explicit `AudioDeviceStart` — do not "simplify" to
   auto-start (Tahoe: zero samples).
 - Publish the rate (`dimmy_set_loopback_sample_rate`) **before** the first push,
