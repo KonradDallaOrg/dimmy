@@ -136,18 +136,36 @@ final class AppStateProviderFilterTests: XCTestCase {
 
     // MARK: - availableLlmPresets
 
-    func testLlmFilterCustomAndClaudeCodeAlwaysPresent() {
+    // NOTE: the synthetic `claude-code` preset was RETIRED. Subscription
+    // users are served by surfacing the real Anthropic preset when
+    // `claudeCodeReady`, so the Authentication picker has somewhere to live
+    // (see `availableLlmPresets`). These two tests asserted the old preset
+    // and, because nothing ran them, kept asserting it for months.
+
+    func testLlmFilterCustomAlwaysPresent() {
         let presets = AppState.shared.availableLlmPresets()
         XCTAssertTrue(presets.contains { $0.id == "custom" },
                       "Custom LLM preset must always be available")
-        XCTAssertTrue(presets.contains { $0.id == "claude-code" },
-                      "Claude Code subscription must always be available — auth handled by local CLI, no API key needed")
     }
 
-    func testLlmFilterEmptyKeystoreShowsOnlyCustomPlusSubscription() {
+    func testLlmFilterEmptyKeystoreShowsOnlyCustom() {
+        // No keys, no subscription: nothing is usable except the
+        // user-supplied endpoint. Offering more would be offering a
+        // provider the user cannot actually call.
         let presets = AppState.shared.availableLlmPresets()
-        XCTAssertEqual(presets.count, 2)
-        XCTAssertTrue(presets.allSatisfy { $0.id == "custom" || $0.id == "claude-code" })
+        XCTAssertEqual(presets.count, 1)
+        XCTAssertEqual(presets.first?.id, "custom")
+    }
+
+    func testLlmFilterClaudeCodeReadySurfacesAnthropic() {
+        // The replacement for the retired synthetic preset: with the CLI
+        // signed in and no API key, Anthropic must still appear so the user
+        // can switch Authentication to Subscription.
+        let s = AppState.shared
+        s.claudeCodeReady = true
+        let presets = s.availableLlmPresets()
+        XCTAssertTrue(presets.contains { $0.apiUrl.contains("anthropic.com") },
+                      "Anthropic must surface when the Claude Code CLI is ready, key or no key")
     }
 
     func testLlmFilterGroqAddsGroqVariants() {
@@ -167,12 +185,25 @@ final class AppStateProviderFilterTests: XCTestCase {
 
     // MARK: - availableRecapModels
 
-    func testRecapFilterAutoAndLocalAlwaysPresent() {
+    func testRecapFilterLocalAlwaysPresentAndAutoIsConditional() {
+        // `local` needs no key, so it always survives. `auto` does NOT:
+        // with nothing connected it would resolve to no provider at all and
+        // the recap call would fail, so the picker hides it and prompts for
+        // an explicit choice instead (see `availableRecapModels`). The old
+        // test asserted Auto was unconditional and never ran to find out.
         let opts = AppState.shared.availableRecapModels()
-        XCTAssertTrue(opts.contains { $0.provider == .auto },
-                      "Auto recap option must always be available — it resolves at call time")
         XCTAssertTrue(opts.contains { $0.provider == .local },
                       "Local Gemma recap options must always be available — no key needed")
+        XCTAssertFalse(opts.contains { $0.provider == .auto },
+                       "Auto must be hidden with an empty keystore — it would resolve to nothing")
+    }
+
+    func testRecapFilterAutoReturnsOnceAProviderIsConnected() {
+        let s = AppState.shared
+        s.recapKeyByVendor["anthropic"] = true
+        let opts = s.availableRecapModels()
+        XCTAssertTrue(opts.contains { $0.provider == .auto },
+                      "Auto must reappear once something for it to resolve to exists")
     }
 
     func testRecapFilterEmptyKeystoreHidesAllCloud() {

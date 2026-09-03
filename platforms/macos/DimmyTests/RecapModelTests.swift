@@ -21,19 +21,34 @@ final class RecapModelTests: XCTestCase {
         XCTAssertEqual(ids.count, Set(ids).count, "Curated model ids must be unique")
     }
 
-    func testCuratedListIncludesExpectedAnthropicModels() {
-        let ids = RecapModelOption.curated.map(\.id)
-        XCTAssertTrue(ids.contains("claude-opus-4-8"))
-        XCTAssertTrue(ids.contains("claude-opus-4-7"))
-        XCTAssertTrue(ids.contains("claude-sonnet-4-6"))
-        XCTAssertTrue(ids.contains("claude-haiku-4-5"))
+    // The curated list is BUILT from the shared model catalog
+    // (`core/assets/model-catalog.json`), which is the single source of
+    // truth precisely so model ids can change in one place. Pinning
+    // specific ids here re-implements the catalog in the test and goes
+    // stale on the next model refresh — which is exactly what happened:
+    // these asserted claude-opus-4-8 and gemini-3.1-pro long after the
+    // catalog moved on, and nothing noticed because nothing ran them.
+    //
+    // Assert the CONTRACT instead: every catalog provider that can write a
+    // recap is represented, and the ids are the catalog's.
+
+    func testCuratedListCoversTheCatalogsRecapModels() {
+        let ids = Set(RecapModelOption.curated.map(\.id))
+        let catalogIds = Set(ModelCatalog.models(task: "recap").map(\.model.id))
+        XCTAssertFalse(catalogIds.isEmpty, "the catalog must offer recap models")
+        XCTAssertTrue(
+            catalogIds.isSubset(of: ids),
+            "every catalog recap model must reach the picker; missing: "
+                + catalogIds.subtracting(ids).sorted().joined(separator: ", "))
     }
 
-    func testCuratedListIncludesExpectedGeminiModels() {
-        let ids = RecapModelOption.curated.map(\.id)
-        XCTAssertTrue(ids.contains("gemini-3.1-pro"))
-        XCTAssertTrue(ids.contains("gemini-2.5-pro"))
-        XCTAssertTrue(ids.contains("gemini-2.5-flash"))
+    func testCuratedListRepresentsTheMajorCloudProviders() {
+        let providers = Set(RecapModelOption.curated.map(\.provider))
+        for expected: RecapModelOption.Provider in [.anthropic, .openai, .gemini, .local] {
+            XCTAssertTrue(
+                providers.contains(expected),
+                "\(expected.rawValue) must be represented in the recap picker")
+        }
     }
 
     func testCuratedListIncludesExpectedOpenaiModels() {

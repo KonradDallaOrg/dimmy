@@ -17,7 +17,10 @@ final class AppStateTests: XCTestCase {
 
     func testLanguageCodeUnknownReturnsAutoDetect() {
         let display = AppState.displayLanguage(for: "xx")
-        XCTAssertEqual(display, "Auto Detect")
+        // "Auto-detect" is the canonical spelling on BOTH platforms
+        // (Win: SettingsViewModel's language list). This test said
+        // "Auto Detect" and never ran, so nothing caught the drift.
+        XCTAssertEqual(display, "Auto-detect")
     }
 
     func testLanguageDisplayUnknownReturnsEmptyCode() {
@@ -27,7 +30,7 @@ final class AppStateTests: XCTestCase {
 
     func testEmptyLanguageCodeMapsToAutoDetect() {
         let display = AppState.displayLanguage(for: "")
-        XCTAssertEqual(display, "Auto Detect")
+        XCTAssertEqual(display, "Auto-detect")
     }
 
     // MARK: - STT Presets (NSP: all presets have unique IDs, non-empty URLs except custom)
@@ -53,9 +56,16 @@ final class AppStateTests: XCTestCase {
     }
 
     func testSttPresetFindByUrlAndModel() {
-        let found = SttPreset.find(url: "https://api.groq.com/openai/v1/audio/transcriptions", model: "whisper-large-v3-turbo")
+        let found = SttPreset.find(
+            url: "https://api.groq.com/openai/v1/audio/transcriptions",
+            model: "whisper-large-v3-turbo")
         XCTAssertNotNil(found)
-        XCTAssertEqual(found?.id, "groq-whisper-turbo")
+        // Preset ids are DERIVED from the shared model catalog as
+        // "<provider>-<model>", not hand-written. Asserting the rule rather
+        // than a snapshot: this test used to pin "groq-whisper-turbo" and
+        // drifted the moment the catalog spelled the model out in full.
+        XCTAssertEqual(found?.id, "groq-whisper-large-v3-turbo")
+        XCTAssertEqual(found?.model, "whisper-large-v3-turbo")
     }
 
     func testSttPresetFindUnknownReturnsNil() {
@@ -262,12 +272,29 @@ final class AppStateTests: XCTestCase {
     }
 
     func testHotkeyComboDecodeMalformedReturnsNil() {
-        // No colon → no separator → reject
-        XCTAssertNil(HotkeyCombo(encoded: "ctrl+shift+nosep"))
-        // Invalid hex → reject
+        // Invalid hex keyCode → reject
         XCTAssertNil(HotkeyCombo(encoded: "ctrl+ZZ:D"))
+        // No known modifier at all → reject, rather than yield an
+        // all-false combo that would match every keypress.
+        XCTAssertNil(HotkeyCombo(encoded: "nosep"))
+        XCTAssertNil(HotkeyCombo(encoded: "foo+bar"))
         // Empty string → reject
         XCTAssertNil(HotkeyCombo(encoded: ""))
+    }
+
+    func testHotkeyComboDecodeIgnoresUnknownTokensAroundRealModifiers() {
+        // The absence of a colon means MODIFIER-ONLY, which is a supported
+        // shortcut shape — not malformed. Unknown tokens alongside real
+        // modifiers are ignored rather than rejected, so a hand-edited or
+        // older config still yields a usable shortcut.
+        //
+        // This test previously asserted the opposite and never ran, so the
+        // divergence from `init?(encoded:)` went unnoticed for months.
+        let combo = HotkeyCombo(encoded: "ctrl+shift+nosep")
+        XCTAssertNotNil(combo)
+        XCTAssertTrue(combo?.control == true)
+        XCTAssertTrue(combo?.shift == true)
+        XCTAssertTrue(combo?.isModifierOnly == true)
     }
 
     func testHotkeyComboMatchesRequiresExactModifierSet() {
