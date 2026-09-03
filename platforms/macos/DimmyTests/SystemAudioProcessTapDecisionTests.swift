@@ -220,6 +220,38 @@ final class LoopbackRateEstimatorTests: XCTestCase {
         XCTAssertEqual(LoopbackRateEstimator.snap(8_100), 8_000)
     }
 
+    func testDisplayVersionPrefersTheTaggedBuild() {
+        // release.yml sets MARKETING_VERSION from Cargo.toml and
+        // CURRENT_PROJECT_VERSION from the tag. rc.1 and rc.2 share the
+        // marketing number, so only the tagged one identifies the build.
+        XCTAssertEqual(
+            UpdateService.displayVersion(short: "0.6.74", build: "0.6.74-rc.2"),
+            "0.6.74-rc.2")
+        // A stable cut: the two are equal, and the answer is unchanged.
+        XCTAssertEqual(
+            UpdateService.displayVersion(short: "0.6.74", build: "0.6.74"), "0.6.74")
+    }
+
+    func testDisplayVersionFallsBackWhenTheBuildDoesNotExtendIt() {
+        // A local Xcode build inherits the .pbxproj defaults, which do not
+        // extend the marketing number. Showing them would present a stale
+        // or meaningless value as fact.
+        XCTAssertEqual(UpdateService.displayVersion(short: "1.0", build: "1"), "1.0")
+        XCTAssertEqual(
+            UpdateService.displayVersion(short: "0.6.74", build: "0.6.65"), "0.6.74")
+        XCTAssertEqual(UpdateService.displayVersion(short: "0.6.74", build: nil), "0.6.74")
+        XCTAssertEqual(UpdateService.displayVersion(short: "0.6.74", build: ""), "0.6.74")
+    }
+
+    func testDisplayVersionNeverReturnsEmpty() {
+        // The hero renders this unconditionally; an empty string would
+        // print "Dimmy " with a dangling space.
+        XCTAssertEqual(UpdateService.displayVersion(short: nil, build: nil), "0.0.0")
+        XCTAssertEqual(UpdateService.displayVersion(short: "", build: ""), "0.0.0")
+        XCTAssertEqual(
+            UpdateService.displayVersion(short: nil, build: "0.6.74-rc.2"), "0.6.74-rc.2")
+    }
+
     func testStandardRateOnlyAcceptsACloseReading() {
         // Within 12 % → accepted; adrift → rejected. Same tolerance as the
         // Rust `reconcile_loopback_rate` canary, so the two ends agree.

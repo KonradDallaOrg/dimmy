@@ -457,9 +457,10 @@ struct MacSettingsContainerView: View {
 
     // MARK: Helpers
 
+    /// Build version, so an rc is identifiable at a glance — see
+    /// `UpdateService.displayVersion`.
     private var currentVersionString: String {
-        let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-        return "v" + (v ?? "0.0.0")
+        UpdateService.runningVersion
     }
 
     private var providerStatusText: String {

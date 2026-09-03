@@ -42,8 +42,10 @@ final class UpdateService: NSObject, ObservableObject {
     /// version. Drives the About-page banner + menubar dot.
     @Published private(set) var isUpdateReady: Bool = false
 
-    /// Last status string for the About page.
-    @Published private(set) var statusText: String = "Idle"
+    /// Last status string for the About page. "Idle" read as "this pane
+    /// is inert" — say what is actually true instead, since the first
+    /// scheduled check lands 5 s after launch and overwrites it.
+    @Published private(set) var statusText: String = "Not checked yet"
 
     /// True while a user-initiated check is in flight — the About page
     /// disables the button and shows a spinner so a press is visibly
@@ -201,12 +203,41 @@ final class UpdateService: NSObject, ObservableObject {
         channel == "prerelease" ? "stable + prerelease" : "stable"
     }
 
-    /// Running app version, from the same Info.plist key the About
-    /// hero renders.
-    static var runningVersion: String {
-        let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-        return "v\(v ?? "0.0.0")"
+    /// The version to SHOW the user, without a `v` prefix.
+    ///
+    /// `CFBundleShortVersionString` is the marketing number, taken from
+    /// `core/Cargo.toml`, and it is IDENTICAL across `0.6.74-rc.1`,
+    /// `0.6.74-rc.2` and the `0.6.74` stable that follows. On its own it
+    /// cannot tell a tester which build they are running — reported from
+    /// the field as "the About page doesn't show the installed version".
+    /// `CFBundleVersion` carries the tag (`0.6.74-rc.2`) precisely because
+    /// Sparkle needs a value that is unique per build; we simply never
+    /// showed it.
+    ///
+    /// Prefer the build version, but only when it EXTENDS the marketing
+    /// one — that is the contract `release.yml` establishes
+    /// (`CURRENT_PROJECT_VERSION` = tag minus `v`, `MARKETING_VERSION` =
+    /// Cargo.toml). A local Xcode build inherits the .pbxproj defaults
+    /// (`1`, or a stale `0.6.65`), which do not extend it: fall back
+    /// rather than present a stale number as fact.
+    nonisolated static func displayVersion(short: String?, build: String?) -> String {
+        let marketing = (short ?? "").trimmingCharacters(in: .whitespaces)
+        let tagged = (build ?? "").trimmingCharacters(in: .whitespaces)
+        guard !marketing.isEmpty else { return tagged.isEmpty ? "0.0.0" : tagged }
+        guard !tagged.isEmpty, tagged.hasPrefix(marketing) else { return marketing }
+        return tagged
     }
+
+    /// Running app version as shown in the About hero, e.g. `0.6.74-rc.2`.
+    nonisolated static var runningVersionPlain: String {
+        displayVersion(
+            short: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString")
+                as? String,
+            build: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)
+    }
+
+    /// Same, `v`-prefixed, for the update status line.
+    nonisolated static var runningVersion: String { "v\(runningVersionPlain)" }
 }
 
 // MARK: - SPUUpdaterDelegate
