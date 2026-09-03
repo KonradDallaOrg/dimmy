@@ -68,6 +68,12 @@ enum MeetingPostProcessService {
                     // -8: socket / DNS / TLS error reaching the
                     // recap endpoint. Network problem, not auth.
                     return "Network error reaching the recap endpoint. Check your connection and try again."
+                case .payloadTooLarge:
+                    // -9: 413 — over the model's context, or over the
+                    // provider's per-minute token allowance. We do not read
+                    // the response body to tell them apart (it echoes the
+                    // transcript), so one line covers both.
+                    return "The recap is too large for this model (413), or over the provider's per-minute limit. Pick a larger-context model in Settings, Recap, or wait a moment."
                 case .truncated:
                     // -10: output hit the token limit even after the
                     // core's 4x headroom retry. A retry-as-is cannot fix
@@ -133,6 +139,7 @@ enum MeetingPostProcessService {
                 "recap_model_bucket": modelLabel,
                 "processing_ms_bucket": processingLabel,
                 "success": false,
+                "error_category": err.category,
             ])
             return .failure(.llm(err))
         case .success(let raw):

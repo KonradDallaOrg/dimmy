@@ -788,6 +788,40 @@ public class SettingsViewModelTests
         Assert.Contains("dimmy.log", msg);
     }
 
+    // ── Recap rc → telemetry category ──
+    // `meeting.recap_completed` used to carry `success: false` and nothing
+    // else, so a 37% failure rate (21 of 57 over 60 days, measured
+    // 2026-09-03) was visible but never explicable. These buckets are the
+    // same vocabulary the Rust sanitizer emits, so the two ends aggregate
+    // together.
+
+    [Theory]
+    [InlineData(-2, "no_api_key")]
+    [InlineData(-4, "model_load")]
+    [InlineData(-5, "not_found")]
+    [InlineData(-6, "auth")]
+    [InlineData(-7, "rate_limit")]
+    [InlineData(-8, "network")]
+    [InlineData(-9, "too_large")]
+    [InlineData(-10, "truncated")]
+    [InlineData(-11, "refusal")]
+    public void RecapRcToCategory_maps_each_documented_rc(int rc, string expected)
+    {
+        Assert.Equal(expected,
+            Dimmy.Windows.Helpers.MeetingRecapHelpers.RecapRcToCategory(rc));
+    }
+
+    [Fact]
+    public void RecapRcToCategory_is_categorical_never_free_text()
+    {
+        // The whole point is that nothing provider-supplied escapes here:
+        // an unmapped rc must degrade to a fixed bucket, never to the code
+        // or a message that could carry transcript text.
+        var cat = Dimmy.Windows.Helpers.MeetingRecapHelpers.RecapRcToCategory(-99);
+        Assert.Equal("unknown", cat);
+        Assert.DoesNotContain("-99", cat);
+    }
+
     [Theory]
     [InlineData(-2, "key")]
     [InlineData(-3, "HTTP")]

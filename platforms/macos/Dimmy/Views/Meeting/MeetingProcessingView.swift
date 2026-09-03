@@ -53,14 +53,28 @@ struct MeetingProcessingView: View {
             // slow model's first word. Tail only: the finished recap is
             // rendered by the Done view, so this is a progress signal, not
             // the deliverable.
-            if !appState.llmStreamText.isEmpty {
+            // Before the first answer token, show the reasoning instead: an
+            // opus recap thinks for well over a minute, and an empty panel
+            // for that long is what made users ask whether it had died. The
+            // moment real text arrives the answer takes the panel over.
+            if !appState.llmStreamText.isEmpty || !appState.llmThinkingText.isEmpty {
+                let showingThinking = appState.llmStreamText.isEmpty
+                let body = showingThinking
+                    ? appState.llmThinkingText : appState.llmStreamText
                 ScrollView {
-                    Text(String(appState.llmStreamText.suffix(1200)))
-                        .font(.system(size: 12))
-                        .foregroundStyle(Color.macTextSecondary)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(12)
+                    VStack(alignment: .leading, spacing: 4) {
+                        if showingThinking {
+                            Text("Thinking...")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(Color.macTextSecondary)
+                        }
+                        Text(String(body.suffix(1200)))
+                            .font(.system(size: 12))
+                            .foregroundStyle(Color.macTextSecondary)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(12)
                 }
                 .frame(maxWidth: 520, maxHeight: 160)
                 .background(Color.primary.opacity(0.05))

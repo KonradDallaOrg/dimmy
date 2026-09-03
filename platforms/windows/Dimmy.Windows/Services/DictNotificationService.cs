@@ -115,6 +115,20 @@ public static class DictNotificationService
         Show($"Text not cleaned up ({who})", $"{detail}. {DictFailureHints.For(category)} Your transcript was pasted unchanged.");
     }
 
+    /// <summary>The meeting recap failed. Until now this was logged and
+    /// nothing else: the user waited in front of a recap that never
+    /// arrived, with no way to tell "still working" from "dead". 21 of 57
+    /// recaps failed over 60 days (2026-09-03) with no user-facing signal
+    /// at all. The transcript is safe on disk either way, so say that —
+    /// the recap can be re-run from the meeting.</summary>
+    public static void ShowRecapFailed(string provider, string detail, string category)
+    {
+        var who = string.IsNullOrEmpty(provider) || provider == "other"
+            ? "the LLM provider" : provider;
+        Show($"Recap failed ({who})",
+             $"{detail}. {DictFailureHints.For(category)} The transcript is saved - you can run the recap again.");
+    }
+
     /// <summary>A dictation produced no audio (muted mic / wrong input device /
     /// privacy-blocked). The core detects the all-zero buffer and asks us to
     /// tell the user, since a silent dictation otherwise fails invisibly.</summary>

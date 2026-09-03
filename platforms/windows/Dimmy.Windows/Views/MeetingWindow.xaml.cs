@@ -1616,6 +1616,7 @@ public sealed partial class MeetingWindow : Window
         var vm = App.Instance?.AppViewModel;
         if (vm == null || LiveRecapCard == null) return;
         vm.LlmStreamText = "";
+        vm.LlmThinkingText = "";
         if (LiveRecapText != null) LiveRecapText.Text = "";
         LiveRecapCard.Visibility = Visibility.Visible;
         vm.PropertyChanged -= OnLlmStreamChanged;
@@ -1631,15 +1632,26 @@ public sealed partial class MeetingWindow : Window
 
     private void OnLlmStreamChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
-        if (e.PropertyName != nameof(ViewModels.AppViewModel.LlmStreamText)) return;
-        var text = App.Instance?.AppViewModel?.LlmStreamText ?? "";
+        if (e.PropertyName != nameof(ViewModels.AppViewModel.LlmStreamText)
+            && e.PropertyName != nameof(ViewModels.AppViewModel.LlmThinkingText)) return;
+        var vm = App.Instance?.AppViewModel;
+        var text = vm?.LlmStreamText ?? "";
+        // Before the first answer token, show the reasoning instead — an opus
+        // recap thinks for well over a minute, and an empty pane for that long
+        // is what made users ask whether it had died. The moment real text
+        // arrives the answer takes the pane over.
+        var showingThinking = text.Length == 0;
+        if (showingThinking) text = vm?.LlmThinkingText ?? "";
         // The event arrives on the core's thread; the UI has its own.
         DispatcherQueue?.TryEnqueue(() =>
         {
             if (LiveRecapText == null) return;
             // Tail only: the finished recap is rendered by the cards below,
             // so this pane is a progress signal, not the deliverable.
-            LiveRecapText.Text = text.Length > 1200 ? text[^1200..] : text;
+            var tail = text.Length > 1200 ? text[^1200..] : text;
+            LiveRecapText.Text = showingThinking && tail.Length > 0
+                ? $"Thinking...\n{tail}"
+                : tail;
         });
     }
 

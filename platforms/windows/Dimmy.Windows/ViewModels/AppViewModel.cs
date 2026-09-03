@@ -69,6 +69,14 @@ public partial class AppViewModel : ObservableObject
     /// Empty between runs; the meeting window clears it when a recap starts.
     [ObservableProperty] private string _llmStreamText = "";
 
+    /// <summary>The model's reasoning trace while it works, when the provider
+    /// sends one (Anthropic with adaptive thinking, Claude Code via
+    /// stream-json). Kept SEPARATE from <see cref="LlmStreamText"/> on
+    /// purpose: this is progress, never recap content. An opus recap runs
+    /// past a minute before its first answer token, and this is what fills
+    /// that silence. Tail-trimmed — nobody reads a 40 KB trace.</summary>
+    [ObservableProperty] private string _llmThinkingText = "";
+
     // ── Local-model download state ──────────────────────────────────
     // The download runs on a background thread (Task.Run → FFI) and keeps
     // going even if the Settings window is closed. The Rust core emits
@@ -415,17 +423,26 @@ public partial class AppViewModel : ObservableObject
                     break;
                 case "llm_stream":
                     {
-                        // phase: start | delta | end. Only the OpenAI-compatible
-                        // providers stream; Anthropic and Gemini-native answer in
-                        // one shot and simply never emit this.
+                        // phase: start | delta | thinking | end.
+                        // OpenAI-compatible, Anthropic and Claude Code all
+                        // stream; Gemini-native still answers in one shot and
+                        // never emits this.
                         var phase = payload.TryGetProperty("phase", out var ph)
                             ? (ph.GetString() ?? "")
                             : "";
                         var chunk = payload.TryGetProperty("delta", out var ld)
                             ? (ld.GetString() ?? "")
                             : "";
-                        if (phase == "start") LlmStreamText = "";
+                        if (phase == "start") { LlmStreamText = ""; LlmThinkingText = ""; }
                         else if (phase == "delta") LlmStreamText += chunk;
+                        else if (phase == "thinking")
+                        {
+                            // Reasoning never joins the answer. Keep a bounded
+                            // tail: a long recap can think for tens of KB and
+                            // only the last lines are worth showing.
+                            var t = LlmThinkingText + chunk;
+                            LlmThinkingText = t.Length > 4000 ? t[^4000..] : t;
+                        }
                     }
                     break;
                 case "stt_chunk":

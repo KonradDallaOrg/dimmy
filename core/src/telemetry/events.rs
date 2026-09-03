@@ -324,6 +324,12 @@ pub enum Event {
         /// "lt_500" | "500_2000" | "2000_10000" | "10000_60000" | "ge_60000"
         processing_ms_bucket: &'static str,
         success: bool,
+        /// Why it failed, when it did: the `sanitize::error_category`
+        /// bucket ("auth" | "rate_limit" | "too_large" | "network" |
+        /// "timeout" | "model_load" | "unknown" | ...), or "" on success.
+        /// Without this the failure rate is visible but never explicable —
+        /// 21 of 57 recaps failed over 60 days and every one was opaque.
+        error_category: String,
     },
     /// Fired when a user clicks "Run recap as meeting" on the File
     /// Load card (Win + Mac). Distinguishes "live mic recording"

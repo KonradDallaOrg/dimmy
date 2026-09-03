@@ -963,9 +963,16 @@ final class AppState: ObservableObject {
     /// `llm_stream` event. A slow open-weight model can take half a minute
     /// before its first word (measured: 35s batch vs 11.7s streamed on
     /// Kimi K3), and an empty panel for that long reads as a hang.
-    /// Only the OpenAI-compatible providers stream — with Anthropic or
-    /// Gemini-native this simply stays empty and the UI shows nothing.
+    /// OpenAI-compatible, Anthropic and Claude Code all stream; with
+    /// Gemini-native this stays empty and the UI shows nothing.
     @Published var llmStreamText: String = ""
+
+    /// The model's reasoning trace while it works, when the provider sends
+    /// one (Anthropic with adaptive thinking, Claude Code via stream-json).
+    /// Deliberately SEPARATE from `llmStreamText`: this is progress, never
+    /// recap content. An opus recap runs past a minute before its first
+    /// answer token, and this is what fills that silence.
+    @Published var llmThinkingText: String = ""
 
     // MARK: - Call detection
 

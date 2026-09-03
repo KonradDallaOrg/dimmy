@@ -357,6 +357,7 @@ extension DimmyCore {
             case -6: return .failure(.unauthorized)
             case -7: return .failure(.rateLimited)
             case -8: return .failure(.networkError)
+            case -9: return .failure(.payloadTooLarge)
             case -10: return .failure(.truncated)
             case -11: return .failure(.refused)
             default: return .failure(.unknown(Int(rc)))
@@ -376,6 +377,7 @@ extension DimmyCore {
         case unauthorized       // -6: 401/403 — bad / missing recap key
         case rateLimited        // -7: 429 — too many requests
         case networkError       // -8: socket / DNS / TLS error
+        case payloadTooLarge    // -9: 413 — request over the context / per-minute limit
         case truncated          // -10: output hit the token limit even after the 4x retry
         case refused            // -11: model declined on safety grounds (stop_reason=refusal)
         case unknown(Int)
@@ -392,9 +394,35 @@ extension DimmyCore {
             case .unauthorized: return "Recap API key is missing or unauthorized — open Settings → Recap"
             case .rateLimited: return "Recap rate limited (429) — try again in a minute"
             case .networkError: return "Network error reaching the recap endpoint — check connection"
+            case .payloadTooLarge: return "The recap is too large for this model (413) — pick a larger-context model"
             case .truncated: return "The recap was cut off at the model token limit even after a retry. Pick a larger-context model."
             case .refused: return "The model declined to process this content. Reword or pick a different model."
             case .unknown(let code): return "llm_call_raw failed (code \(code))"
+            }
+        }
+
+        /// The SAME categorical bucket the Rust sanitizer uses
+        /// (core/src/telemetry/sanitize.rs error_category), so
+        /// `meeting.recap_completed` records WHY a recap failed and not
+        /// merely that it did. Until this existed the event carried
+        /// `success: false` and nothing else: 21 of 57 recaps failed over
+        /// 60 days (2026-09-03) and not one was explicable. Categorical
+        /// only — never the provider's message, which echoes the
+        /// transcript back. Win mirror:
+        /// `MeetingRecapHelpers.RecapRcToCategory`.
+        var category: String {
+            switch self {
+            case .notConfigured: return "no_api_key"
+            case .localModelMissing: return "model_load"
+            case .modelNotSupported: return "not_found"
+            case .unauthorized: return "auth"
+            case .rateLimited: return "rate_limit"
+            case .networkError: return "network"
+            case .payloadTooLarge: return "too_large"
+            case .truncated: return "truncated"
+            case .refused: return "refusal"
+            case .notInitialized, .emptyPrompt, .invalidArgs, .httpError, .unknown:
+                return "unknown"
             }
         }
     }
