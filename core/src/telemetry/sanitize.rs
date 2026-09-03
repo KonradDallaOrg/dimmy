@@ -622,3 +622,38 @@ mod tests {
         let _: &'static str = bucket_recap_model("");
     }
 }
+
+#[cfg(test)]
+mod envelope_guard {
+    /// The secret guard must protect the PROPERTIES, not reject our own
+    /// envelope. `build_payload` puts the PostHog project key (`phc_...`)
+    /// into `api_key`; when `looks_like_secret` learned to match
+    /// mid-string on 2026-09-02 it began recognising that key and dropping
+    /// every event. Silent, because a dropped event is indistinguishable
+    /// from an unused app. These pin both directions.
+    const REAL_KEY: &str = "phc_owaPfYyvAinxuio8PQ4LFmd4iwARoY57Q5jGgZXGB2Mu";
+
+    #[test]
+    fn our_own_envelope_is_not_a_leak() {
+        let envelope = format!(
+            r#"{{"api_key":"{REAL_KEY}","event":"transcription.completed","distinct_id":"abc","properties":{{"os":"windows"}}}}"#
+        );
+        // client.rs scans the properties only -- this asserts WHY that is
+        // necessary: the full envelope trips the filter by design.
+        assert!(super::looks_like_secret(&envelope));
+        assert!(!super::looks_like_secret(
+            r#"{"os":"windows","mode":"local"}"#
+        ));
+    }
+
+    #[test]
+    fn a_key_leaked_into_properties_still_trips() {
+        // The guard must keep doing its job on what it now scans.
+        assert!(super::looks_like_secret(
+            r#"{"os":"windows","note":"sk-proj-abcdefghijklmnop"}"#
+        ));
+        assert!(super::looks_like_secret(&format!(
+            r#"{{"os":"windows","leak":"{REAL_KEY}"}}"#
+        )));
+    }
+}

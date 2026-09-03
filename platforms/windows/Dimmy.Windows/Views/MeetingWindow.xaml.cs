@@ -2652,8 +2652,10 @@ public sealed partial class MeetingWindow : Window
             // empty so the model classifies; a specific key biases emphasis.
             var meetingType = (RecapTypePicker?.SelectedValue as string) ?? "";
             if (meetingType == "auto") meetingType = "";
-            // Recap is a single opaque LLM call — no progress events — so an
-            // indeterminate bar that simply stays up for the whole call.
+            // Indeterminate: the recap has no percentage to report. It is no
+            // longer opaque though — GeneratePostProcessAsync opens the live
+            // pane, which streams the model's reasoning and then its text as
+            // they arrive (OpenAI-compatible, Anthropic and Claude Code).
             RegenProgressBar.IsIndeterminate = true;
             RegenProgressText.Text = "Generating recap…";
             RegenProgressPanel.Visibility = Visibility.Visible;
