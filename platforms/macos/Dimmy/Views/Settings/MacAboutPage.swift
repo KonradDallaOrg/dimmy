@@ -223,9 +223,11 @@ struct MacAboutPage: View {
 
     // MARK: Helpers
 
+    /// Shows the BUILD version (`0.6.74-rc.2`), not just the marketing
+    /// number — rc.1 and rc.2 print the same `CFBundleShortVersionString`,
+    /// so a tester could not tell which one they had installed.
     private var versionString: String {
-        let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-        return v ?? "0.0.0"
+        UpdateService.runningVersionPlain
     }
 
     private var buildDateString: String {
