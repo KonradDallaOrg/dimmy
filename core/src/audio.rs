@@ -1143,10 +1143,18 @@ pub fn spawn_audio_thread(
                         // MEASURED delivery rate (raw samples / wall-clock) and
                         // LOG + emit telemetry on a divergence, but do NOT touch
                         // the audio. The real fix is host-side (macOS tap pinned
-                        // to 48 kHz; WASAPI already canonical). Reactively
-                        // overriding the rate here was rejected as a fragile
-                        // half-measure — this only surfaces a field regression
-                        // of the host fix. Window resets on a claim change.
+                        // to 48 kHz AND measures what it really delivers via
+                        // LoopbackRateEstimator; WASAPI already canonical).
+                        // Overriding the rate HERE was rejected as a fragile
+                        // half-measure: this side sees push arrival times, not
+                        // delivery times, so its wall clock is polluted by
+                        // queueing. The host measures at the source against
+                        // the machine's own clock and settles in ~250 ms
+                        // instead of 4 s. This block stays as the net that
+                        // catches a host whose measurement is itself wrong or
+                        // unavailable. Window resets on a claim change — the
+                        // host switching from declared to measured is exactly
+                        // such a change, so the window restarts there.
                         if claimed_src_rate != lb_claim_at_window_start {
                             lb_claim_at_window_start = claimed_src_rate;
                             lb_meas_start = None;
