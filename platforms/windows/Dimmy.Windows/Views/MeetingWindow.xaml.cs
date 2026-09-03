@@ -1618,6 +1618,8 @@ public sealed partial class MeetingWindow : Window
         vm.LlmStreamText = "";
         vm.LlmThinkingText = "";
         if (LiveRecapText != null) LiveRecapText.Text = "";
+        if (ProcLiveText != null) ProcLiveText.Text = "";
+        if (ProcLiveCard != null) ProcLiveCard.Visibility = Visibility.Collapsed;
         LiveRecapCard.Visibility = Visibility.Visible;
         vm.PropertyChanged -= OnLlmStreamChanged;
         vm.PropertyChanged += OnLlmStreamChanged;
@@ -1628,6 +1630,7 @@ public sealed partial class MeetingWindow : Window
         var vm = App.Instance?.AppViewModel;
         if (vm != null) vm.PropertyChanged -= OnLlmStreamChanged;
         if (LiveRecapCard != null) LiveRecapCard.Visibility = Visibility.Collapsed;
+        if (ProcLiveCard != null) ProcLiveCard.Visibility = Visibility.Collapsed;
     }
 
     private void OnLlmStreamChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -1645,13 +1648,27 @@ public sealed partial class MeetingWindow : Window
         // The event arrives on the core's thread; the UI has its own.
         DispatcherQueue?.TryEnqueue(() =>
         {
-            if (LiveRecapText == null) return;
             // Tail only: the finished recap is rendered by the cards below,
             // so this pane is a progress signal, not the deliverable.
             var tail = text.Length > 1200 ? text[^1200..] : text;
-            LiveRecapText.Text = showingThinking && tail.Length > 0
-                ? $"Thinking...\n{tail}"
-                : tail;
+            var shown = showingThinking && tail.Length > 0 ? $"Thinking...\n{tail}" : tail;
+            // Two panes, one for each state the window can be in while a
+            // recap runs: Processing (a fresh meeting wrapping up) and Done
+            // (Regenerate recap on a past one). Writing both is a couple of
+            // string assignments and removes the class of bug where the
+            // stream lands in whichever ancestor happens to be collapsed.
+            if (LiveRecapText != null) LiveRecapText.Text = shown;
+            if (ProcLiveText != null)
+            {
+                ProcLiveText.Text = shown;
+                if (ProcLiveCard != null)
+                {
+                    ProcLiveCard.Visibility = shown.Length > 0
+                        ? Visibility.Visible : Visibility.Collapsed;
+                }
+                // Follow the tail as it grows.
+                ProcLiveScroll?.ChangeView(null, double.MaxValue, null, true);
+            }
         });
     }
 

@@ -1541,6 +1541,17 @@ async fn read_anthropic_sse(
     if !acc.text.is_empty() {
         emit_recap_stream_event("end", "");
     }
+    crate::log(&format!(
+        "[LLM] anthropic stream: {} text delta(s), {} thinking delta(s), {} chars{}",
+        acc.text_deltas,
+        acc.thinking_deltas,
+        acc.text.len(),
+        if acc.saw_any_event {
+            ""
+        } else {
+            " (NOT streamed — provider answered in one shot)"
+        }
+    ));
 
     // The provider (or a proxy) ignored `stream: true` and answered with an
     // ordinary Messages response. Asking for streaming is an optimisation;
@@ -1606,6 +1617,10 @@ struct AnthropicSseAccumulator {
     stop_reason: Option<String>,
     saw_any_event: bool,
     started: bool,
+    /// Counted so one log line per recap can answer "did streaming
+    /// actually happen?" without guessing from timings.
+    text_deltas: u32,
+    thinking_deltas: u32,
 }
 
 impl AnthropicSseAccumulator {
@@ -1634,6 +1649,7 @@ impl AnthropicSseAccumulator {
                                     emit_recap_stream_event("start", "");
                                 }
                                 self.text.push_str(d);
+                                self.text_deltas += 1;
                                 emit_recap_stream_event("delta", d);
                             }
                         }
@@ -1643,6 +1659,7 @@ impl AnthropicSseAccumulator {
                             if !d.is_empty() {
                                 // Progress only. Deliberately NOT accumulated
                                 // into `text` — see the fn doc.
+                                self.thinking_deltas += 1;
                                 emit_recap_stream_event("thinking", d);
                             }
                         }
