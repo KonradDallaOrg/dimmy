@@ -324,6 +324,13 @@ public partial class AppViewModel : ObservableObject
     /// elapsedMs, chunkCount).
     public event Action<string, string, string, long, int>? MeetingChunkReceived;
 
+    /// <summary>Raised once per meeting when the core starts dropping
+    /// transcription windows because the machine cannot keep up with
+    /// realtime. The RECORDING is unaffected — capture and transcription
+    /// run on separate threads precisely so this stays a transcript
+    /// problem. Arg: the engine that fell behind (whisper|parakeet|cloud).</summary>
+    public event Action<string>? MeetingTranscriptionBehind;
+
     /// Fires when the Rust core emits a file_transcribe_progress
     /// event during dimmy_transcribe_file. Args: (processed_secs,
     /// total_secs, percent 0-100). Used by Settings → Home → file
@@ -625,6 +632,19 @@ public partial class AppViewModel : ObservableObject
                         var elapsedMs = payload.GetProperty("elapsed_ms").GetInt64();
                         var chunkCount = payload.GetProperty("chunk_count").GetInt32();
                         MeetingChunkReceived?.Invoke(dir, speaker, line, elapsedMs, chunkCount);
+                    }
+                    break;
+                case "meeting_transcription_behind":
+                    // The machine cannot transcribe as fast as it records.
+                    // Fired ONCE per meeting, while it is still running, so
+                    // the user can switch engine instead of finding out at
+                    // stop time. The recording itself is unaffected — the
+                    // capture and transcription threads are separate.
+                    {
+                        var engine = payload.TryGetProperty("engine", out var enEl)
+                            ? (enEl.GetString() ?? "") : "";
+                        Log?.Invoke($"transcription behind (engine={engine}) — audio recording unaffected", "Meeting");
+                        MeetingTranscriptionBehind?.Invoke(engine);
                     }
                     break;
                 case "audio.stream_error":

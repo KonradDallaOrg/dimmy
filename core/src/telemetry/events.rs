@@ -297,6 +297,20 @@ pub enum Event {
         /// `lt_50` | `50_85` | `85_95` | `ge_95`
         ratio_bucket: &'static str,
     },
+    /// Fired ONCE per meeting, the first time transcription falls far
+    /// enough behind that windows are being dropped. This is not a fault:
+    /// it means the machine cannot transcribe as fast as it records, and
+    /// the honest answer is a lighter engine (parakeet), a smaller model,
+    /// or cloud STT. Audio recording is unaffected by design — the whole
+    /// point of the capture/transcribe split — so the transcript can be
+    /// regenerated from the file afterwards.
+    MeetingTranscriptionBehind {
+        /// Which engine could not keep up: `whisper` | `parakeet` | `cloud`.
+        engine: &'static str,
+        /// `lt_30` | `30_120` | `120_600` | `ge_600` — how far into the
+        /// meeting the transcriber first fell behind. Bucketed, never raw.
+        elapsed_bucket: &'static str,
+    },
     /// CANARY: fired when the core MEASURES a loopback delivery rate (raw
     /// samples / wall-clock) that diverges from the rate the host CLAIMED.
     /// The macOS system-audio tap can claim its anchor device's 48 kHz while
@@ -576,6 +590,7 @@ impl Event {
             Event::MeetingResumed => "meeting.resumed",
             Event::MeetingStopTimeout => "meeting.stop_timeout",
             Event::MeetingCaptureRatio { .. } => "meeting.capture_ratio",
+            Event::MeetingTranscriptionBehind { .. } => "meeting.transcription_behind",
             Event::LoopbackRateMismatch { .. } => "audio.loopback_rate_mismatch",
             Event::MeetingRecapCompleted { .. } => "meeting.recap_completed",
             Event::MeetingImportedFromFile => "meeting.imported_from_file",

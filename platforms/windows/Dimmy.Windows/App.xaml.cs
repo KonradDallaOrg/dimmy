@@ -146,6 +146,20 @@ public partial class App : Application
         catch (Exception ex) { PttLog($"OnCoreFailure exc: {ex.Message}"); }
     }
 
+    /// <summary>The core is dropping transcription windows because this
+    /// machine cannot keep up with realtime. Fires once per meeting, while
+    /// it is still running. The recording is unaffected — capture and
+    /// transcription are separate threads — so the toast points at the
+    /// choice the user can still make.</summary>
+    private void OnMeetingTranscriptionBehind(string engine)
+    {
+        try
+        {
+            RunOnUI(() => Services.DictNotificationService.ShowTranscriptionBehind(engine));
+        }
+        catch (Exception ex) { PttLog($"OnMeetingTranscriptionBehind exc: {ex.Message}"); }
+    }
+
     private void OnDictationLongWarning()
     {
         try
@@ -575,6 +589,12 @@ public partial class App : Application
             // Error flash alone proved invisible (2026-07-04: four Groq
             // HTTP 403 in a row, retried blind, cause found only in logs).
             _appViewModel.CoreFailure += OnCoreFailure;
+
+            // 2f. Transcription falling behind during a meeting. Subscribed
+            // HERE, not in MeetingWindow: the meeting lifecycle is decoupled
+            // from its window, so closing the window must not silence the one
+            // warning the user can still act on.
+            _appViewModel.MeetingTranscriptionBehind += OnMeetingTranscriptionBehind;
 
             // 3. Load config into ViewModel
             LoadConfigIntoViewModel();

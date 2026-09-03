@@ -115,6 +115,25 @@ public static class DictNotificationService
         Show($"Text not cleaned up ({who})", $"{detail}. {DictFailureHints.For(category)} Your transcript was pasted unchanged.");
     }
 
+    /// <summary>Transcription cannot keep up with recording on this machine,
+    /// so the core is dropping windows. Said ONCE per meeting, while it is
+    /// still running, because at stop time it is too late to act. The
+    /// recording is safe by construction (capture and transcription are
+    /// separate threads), so the message names the real choice: a lighter
+    /// engine now, or regenerate the transcript from the audio later.</summary>
+    public static void ShowTranscriptionBehind(string engine)
+    {
+        var hint = engine switch
+        {
+            "whisper" => "Try Parakeet or a smaller model in Settings, Transcription.",
+            "parakeet" => "Try a cloud provider in Settings, Transcription.",
+            "cloud" => "Check your connection, or switch to a local model.",
+            _ => "Try a lighter model in Settings, Transcription.",
+        };
+        Show("Transcription is falling behind",
+             $"Your recording is safe and continues normally. {hint} You can also regenerate the transcript from the audio after the meeting.");
+    }
+
     /// <summary>The meeting recap failed. Until now this was logged and
     /// nothing else: the user waited in front of a recap that never
     /// arrived, with no way to tell "still working" from "dead". 21 of 57

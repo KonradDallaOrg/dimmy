@@ -1222,6 +1222,33 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
         appState.liveCaptionIsFinal = isFinal
         appState.liveCaptionTick &+= 1
 
+    case "meeting_transcription_behind":
+        // The machine cannot transcribe as fast as it records, so the core
+        // is dropping windows. Emitted ONCE per meeting, while it is still
+        // running, because at stop time it is too late to change engine.
+        // The RECORDING is unaffected by construction: capture and
+        // transcription run on separate threads precisely so this stays a
+        // transcript problem. Payload: { "engine": "whisper" | "parakeet" |
+        // "cloud", "elapsed_secs": <u64> }
+        let engine = (payload["engine"] as? String) ?? ""
+        let hint: String
+        switch engine {
+        case "whisper":
+            hint = "Try Parakeet or a smaller model in Settings, Transcription."
+        case "parakeet":
+            hint = "Try a cloud provider in Settings, Transcription."
+        case "cloud":
+            hint = "Check your connection, or switch to a local model."
+        default:
+            hint = "Try a lighter model in Settings, Transcription."
+        }
+        NSLog("[DimmyCore] transcription behind (engine=\(engine)) — recording unaffected")
+        DictToastWindow.show(
+            kind: .error,
+            title: "Transcription is falling behind",
+            body: "Your recording is safe and continues normally. \(hint) "
+                + "You can also regenerate the transcript from the audio after the meeting.")
+
     case "meeting_chunk":
         // Emitted by the Rust meeting worker every time it processes
         // a chunk (~15 s cadence). MeetingViewModel listens to the
