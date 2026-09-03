@@ -25,7 +25,6 @@
 //! same wall-clock second don't collide.
 
 use std::fs::{File, OpenOptions};
-use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -582,6 +581,312 @@ fn mix_windows(mic: &[f32], system: &[f32]) -> Vec<f32> {
         .collect()
 }
 
+/// Coarse bucket for "how far into the meeting did this happen".
+/// Categorical so telemetry never carries a raw timing.
+fn bucket_elapsed_secs(secs: f64) -> &'static str {
+    match secs {
+        s if s < 30.0 => "lt_30",
+        s if s < 120.0 => "30_120",
+        s if s < 600.0 => "120_600",
+        _ => "ge_600",
+    }
+}
+
+/// Work handed from the capture worker to the transcription thread.
+///
+/// Owned data only: the capture worker copies the window out from under
+/// the buffer lock and gives it away, so the transcription side never
+/// touches a lock the audio callbacks are waiting on.
+enum SttJob {
+    Chunk {
+        mic: Vec<f32>,
+        system: Vec<f32>,
+        elapsed_ms: u128,
+    },
+    /// A `[paused Ns]` marker, queued rather than written inline so it
+    /// keeps its place in transcripts.txt relative to the chunks around it.
+    Paused { elapsed_ms: u128, dur_ms: u128 },
+}
+
+/// How many chunk jobs may wait in the queue before the capture worker
+/// starts dropping them.
+///
+/// This is the knob that decides what happens when the machine cannot
+/// transcribe as fast as it records. It drops TRANSCRIPT, never audio:
+/// the recording is already on disk and "Regenerate transcript" can redo
+/// the whole thing afterwards from the file. Four jobs of a default 15 s
+/// chunk at 48 kHz is roughly 24 MB of queued PCM — enough to absorb a
+/// slow patch, small enough that a wedged transcriber cannot grow the
+/// process without bound.
+const STT_QUEUE_DEPTH: usize = 4;
+
+/// Everything the transcription thread owns outright. Bundled so the
+/// thread takes one argument instead of a dozen.
+struct SttThreadCtx {
+    stt: SttSnapshot,
+    resolved_local_model: Option<std::path::PathBuf>,
+    cloud_rt: Option<tokio::runtime::Runtime>,
+    language: String,
+    vad_trim: bool,
+    mix_active: bool,
+    mic_label: &'static str,
+    device_sample_rate: u32,
+    system_sample_rate: u32,
+    dir_str: String,
+    transcripts_file: std::fs::File,
+    /// Shared so the capture worker can read the count even when the
+    /// join times out on a wedged transcriber.
+    chunk_count: Arc<std::sync::atomic::AtomicU32>,
+}
+
+/// Transcription thread: receives windows, runs STT, appends to
+/// transcripts.txt, emits `meeting_chunk`.
+///
+/// Everything slow, everything that can wedge, and everything that calls
+/// back into the host lives HERE — deliberately, because none of it may
+/// ever stand between captured audio and the disk. See the module-level
+/// note on `worker_loop`. Exits when the sender is dropped and the queue
+/// has drained.
+/// Returns the per-speaker accumulators joined as a fallback transcript,
+/// used only when transcripts.txt cannot be read back at stop.
+fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx) -> String {
+    use std::io::Write as _;
+
+    let mut mic_accum = String::new();
+    let mut system_accum = String::new();
+
+    // Helper: downsample a slice (if needed) and run STT through
+    // whichever backend the user has configured. The caller MUST
+    // pass the source rate of THE SPECIFIC slice — mic chunks
+    // come at device_sample_rate, system chunks at system_sample_rate
+    // (different in BT-HFP-mic + speakers-A2DP-loopback setups).
+    // Mixing them up = sending 48k-sampled data with a 16k WAV
+    // header to the cloud STT, which Gemini returns as empty
+    // because the speech is 3x compressed and unintelligible.
+    let transcribe = |slice: Vec<f32>, source_sr: u32| -> String {
+        if slice.is_empty() {
+            return String::new();
+        }
+        // Silence trim before the model sees the window. An idle
+        // chunk collapses to empty here and never reaches whisper,
+        // which is what stops the phantom "grazie" on the mic track.
+        let slice = if ctx.vad_trim {
+            crate::preprocess::process_chunk_vad_only(&slice, source_sr)
+        } else {
+            slice
+        };
+        if slice.is_empty() {
+            return String::new();
+        }
+        let pcm_16k = if source_sr == 16_000 {
+            slice
+        } else {
+            crate::preprocess::downsample_to_16k(&slice, source_sr)
+        };
+        if pcm_16k.is_empty() {
+            return String::new();
+        }
+        if ctx.stt.mode == "cloud" {
+            let wav = pcm16k_to_wav_bytes(&pcm_16k);
+            match (&ctx.cloud_rt, &ctx.stt.api_key) {
+                (Some(rt), Some(key)) => {
+                    // First call only: dump url/model/key-present
+                    // so 404s and auth bugs are debuggable.
+                    static LOGGED: std::sync::Once = std::sync::Once::new();
+                    LOGGED.call_once(|| {
+                        let key_tail = if key.len() > 4 {
+                            &key[key.len() - 4..]
+                        } else {
+                            "?"
+                        };
+                        crate::log(&format!(
+                            "[Meeting] cloud STT: POST {} model={} lang={} key_suffix=...{} wav_bytes={}",
+                            ctx.stt.api_url, ctx.stt.api_model, ctx.language, key_tail, wav.len()
+                        ));
+                    });
+                    let result = rt.block_on(async {
+                        crate::transcribe::transcribe_audio(
+                            &ctx.stt.api_url,
+                            &ctx.stt.api_model,
+                            key,
+                            &wav,
+                            &ctx.language,
+                            &ctx.stt.prompt,
+                        )
+                        .await
+                    });
+                    match result {
+                        Ok(t) => t,
+                        Err(e) => {
+                            crate::log(&format!("[Meeting] cloud STT error: {}", e));
+                            String::new()
+                        }
+                    }
+                }
+                _ => {
+                    crate::log("[Meeting] cloud STT unavailable: missing key or runtime");
+                    String::new()
+                }
+            }
+        } else if ctx.stt.local_backend == "parakeet" {
+            // Parakeet TDT v3 — same path the dictation chunked
+            // worker uses. The 3 ONNX sessions live in a global
+            // OnceLock cache so each call only pays mel/encoder/
+            // decoder inference, not model load. No .bin file
+            // needed — the bundle ships separately.
+            match crate::parakeet::transcribe(&pcm_16k) {
+                Ok(t) => t,
+                Err(e) => {
+                    crate::log(&format!("[Meeting] parakeet error: {}", e));
+                    String::new()
+                }
+            }
+        } else {
+            // Default = whisper. Routes through the cached
+            // WhisperContext via local_stt::transcribe_local.
+            match &ctx.resolved_local_model {
+                Some(model_path) => {
+                    match crate::local_stt::transcribe_local(
+                        model_path,
+                        &pcm_16k,
+                        &ctx.language,
+                        &ctx.stt.prompt,
+                    ) {
+                        Ok(t) => t,
+                        Err(e) => {
+                            crate::log(&format!("[Meeting] whisper error: {}", e));
+                            String::new()
+                        }
+                    }
+                }
+                None => {
+                    crate::log("[Meeting] local STT skipped: no usable .bin model");
+                    String::new()
+                }
+            }
+        }
+    };
+
+    while let Ok(job) = rx.recv() {
+        let (mic_slice, system_slice, elapsed_ms) = match job {
+            SttJob::Paused { elapsed_ms, dur_ms } => {
+                let line = format!(
+                    "[{:>6} ms] [paused] (resumed after {} ms)\n",
+                    elapsed_ms, dur_ms
+                );
+                let _ = ctx.transcripts_file.write_all(line.as_bytes());
+                let _ = ctx.transcripts_file.flush();
+                continue;
+            }
+            SttJob::Chunk {
+                mic,
+                system,
+                elapsed_ms,
+            } => (mic, system, elapsed_ms),
+        };
+
+        let mic_text = transcribe(mic_slice, ctx.device_sample_rate);
+        let system_text = if ctx.mix_active {
+            transcribe(system_slice, ctx.system_sample_rate)
+        } else {
+            String::new()
+        };
+
+        // Append helper: dedup vs the per-speaker accumulator,
+        // append the delta to the speaker's accumulator, emit a
+        // labeled line into transcripts.txt, AND fire a
+        // `meeting_chunk` event so host UIs can refresh their
+        // live transcript view without polling the on-disk file.
+        let mut emit = |speaker: &str, text: &str, accum: &mut String| {
+            if text.trim().is_empty() {
+                return;
+            }
+            let delta = crate::chunked_stt::dedup_last_3_words(accum, text);
+            if delta.is_empty() {
+                return;
+            }
+            if !accum.is_empty() && !accum.ends_with(' ') {
+                accum.push(' ');
+            }
+            accum.push_str(&delta);
+            let count = ctx
+                .chunk_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                + 1;
+            let line = format!("[{:>6} ms] [{}] {}\n", elapsed_ms, speaker, delta);
+            let _ = ctx.transcripts_file.write_all(line.as_bytes());
+            let _ = ctx.transcripts_file.flush();
+
+            // Push event to host UIs. Payload mirrors the line
+            // we just wrote so consumers can either re-render
+            // from transcripts.txt at open + tail this event, or
+            // build their own rolling buffer from `line` deltas.
+            let payload = serde_json::json!({
+                "dir": ctx.dir_str,
+                "speaker": speaker,
+                "elapsed_ms": elapsed_ms as u64,
+                "chunk_count": count,
+                "line": line,
+            })
+            .to_string();
+            crate::ffi::emit_event("meeting_chunk", &payload);
+        };
+
+        emit(ctx.mic_label, &mic_text, &mut mic_accum);
+        if ctx.mix_active {
+            emit("system", &system_text, &mut system_accum);
+        }
+
+        // Stats: this chunk contributed transcribed words. Mirrors the
+        // bookkeeping `dimmy_stop_recording` does for pill dictation so
+        // the Settings → Stats card reflects meeting usage too. Words
+        // are approximated from the FULL chunk text (not the post-dedup
+        // delta) — the overlap dedup removes 1-3 words per chunk-pair,
+        // ~1-3% over-count, well inside "approximate counter" budget.
+        let chunk_words = (mic_text.split_whitespace().count()
+            + system_text.split_whitespace().count())
+            as std::os::raw::c_int;
+        if chunk_words > 0 {
+            let _ = crate::ffi::dimmy_update_stats(chunk_words, 0.0);
+        }
+    }
+
+    let mut fallback = String::new();
+    if !mic_accum.trim().is_empty() {
+        fallback.push_str(&format!(
+            "[{}] {}
+",
+            ctx.mic_label, mic_accum
+        ));
+    }
+    if !system_accum.trim().is_empty() {
+        fallback.push_str(&format!(
+            "[system] {}
+",
+            system_accum
+        ));
+    }
+    fallback
+}
+
+/// Capture worker: drains the audio buffers to disk and hands windows to
+/// the transcription thread.
+///
+/// # The one rule
+///
+/// **Nothing may stand between captured audio and the disk.** Transcription,
+/// host callbacks, model loads and network calls all live on the STT thread
+/// (`stt_thread_loop`); this loop only reads the shared buffer, writes the
+/// three track sinks, and moves its cursor. If the transcriber wedges, falls
+/// behind, or dies, the recording keeps landing on disk at full fidelity.
+///
+/// Before 2026-09-03 the two were the same thread. A real 34-minute meeting
+/// produced an 11-minute file: the loop stalled for 22 minutes after a chunk
+/// (the stall was NOT inside whisper — no `whisper_full` was logged in that
+/// window — which is precisely why the fix cannot be "make STT faster"), the
+/// audio piled up in RAM, stop timed out at its 120 s join, and the buffer
+/// was gone by the time the loop came back. 23 minutes of a real
+/// conversation, unrecoverable.
 #[allow(clippy::too_many_arguments)]
 fn worker_loop(
     audio_buffer: Arc<Mutex<Vec<f32>>>,
@@ -679,9 +984,6 @@ fn worker_loop(
     // speaker so they get independent contexts. The merged ordered
     // transcript lives in transcripts.txt (one labeled line per chunk
     // emitted in time order).
-    let mut mic_accum = String::new();
-    let mut system_accum = String::new();
-    let mut chunk_count: u32 = 0;
     let started = Instant::now();
     // Speaker labels routed by AudioSource. Mic-only and Mix put the
     // user-mic stream as "mic"; System-only puts the loopback as
@@ -692,7 +994,7 @@ fn worker_loop(
     };
 
     let transcripts_path = dir.join("transcripts.txt");
-    let mut transcripts_file = match OpenOptions::new()
+    let transcripts_file = match OpenOptions::new()
         .create(true)
         .append(true)
         .open(&transcripts_path)
@@ -709,6 +1011,38 @@ fn worker_loop(
             };
         }
     };
+
+    // Transcription runs on its own thread from here on. The handoff is a
+    // bounded queue of owned windows; this thread keeps every cursor and
+    // never waits on the other side. See `worker_loop`'s doc comment for
+    // why that separation is not negotiable.
+    let chunk_count_shared = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let (stt_tx, stt_rx) = std::sync::mpsc::sync_channel::<SttJob>(STT_QUEUE_DEPTH);
+    let stt_ctx = SttThreadCtx {
+        stt: stt.clone(),
+        resolved_local_model,
+        cloud_rt,
+        language: language.clone(),
+        vad_trim,
+        mix_active,
+        mic_label,
+        device_sample_rate,
+        system_sample_rate,
+        dir_str: dir.to_string_lossy().to_string(),
+        transcripts_file,
+        chunk_count: Arc::clone(&chunk_count_shared),
+    };
+    let stt_handle = thread::Builder::new()
+        .name("dimmy-meeting-stt".into())
+        .spawn(move || stt_thread_loop(stt_rx, stt_ctx))
+        .ok();
+    if stt_handle.is_none() {
+        // Could not spawn: record anyway. A meeting with audio and no
+        // transcript is recoverable; the reverse is not.
+        crate::log("[Meeting] could not spawn the transcription thread — recording audio only");
+    }
+    let mut stt_dropped_chunks: u32 = 0;
+    let mut stt_disconnected_logged = false;
 
     // Track sinks — created HERE (on the worker thread) because the
     // Vorbis encoder is !Send and can't cross the spawn boundary. Each
@@ -882,7 +1216,7 @@ fn worker_loop(
                 clock_on_secondary,
                 samples_written,
                 last_processed,
-                chunk_count,
+                chunk_count_shared.load(std::sync::atomic::Ordering::Relaxed),
                 paused.load(Ordering::SeqCst),
                 mix_active,
             ));
@@ -949,15 +1283,14 @@ fn worker_loop(
             ));
             samples_written = snap;
             last_processed = snap;
-            // Note the gap in the transcripts file so the recap LLM
-            // sees the timeline jump.
-            let elapsed_ms = started.elapsed().as_millis();
-            let line = format!(
-                "[{:>6} ms] [paused] (resumed after {} ms)\n",
-                elapsed_ms, dur_ms
-            );
-            let _ = transcripts_file.write_all(line.as_bytes());
-            let _ = transcripts_file.flush();
+            // Note the gap in the transcripts file so the recap LLM sees
+            // the timeline jump. Queued rather than written here so it
+            // keeps its position relative to the surrounding chunks — and
+            // so this thread never touches the transcripts file.
+            let _ = stt_tx.try_send(SttJob::Paused {
+                elapsed_ms: started.elapsed().as_millis(),
+                dur_ms,
+            });
         }
 
         // Take a snapshot of the SYNCED stream length up to which we'll
@@ -1021,15 +1354,31 @@ fn worker_loop(
             }
         }
 
-        // Fire a chunk transcribe if enough new audio has accumulated.
-        // Whisper.cpp via local_stt::transcribe_local — the same path
-        // dictation uses. Falls in line with whatever local model the
-        // user has configured (no hardcoded engine).
+        // Hand a window to the transcription thread if enough new audio
+        // has accumulated. EXTRACTION ONLY: the slices are copied out
+        // from under the buffer lock and given away. This loop never runs
+        // a model, never calls the host, and never blocks on either.
         let want_end = last_processed + chunk_samples;
         if buf_len_now >= want_end || (cancelled && buf_len_now > last_processed) {
             let start = last_processed.saturating_sub(overlap_samples);
             let end = if cancelled {
-                buf_len_now
+                // Final window. Normally this is one chunk's worth or less,
+                // but if the transcriber fell far behind, `buf_len_now` can
+                // be minutes away — one giant slice would allocate hundreds
+                // of MB and hand whisper an input it cannot use anyway. Cap
+                // it; the audio is on disk regardless and "Regenerate
+                // transcript" can redo the lot from the file.
+                let capped = (last_processed + chunk_samples * 4).min(buf_len_now);
+                if capped < buf_len_now {
+                    crate::log(&format!(
+                        "[Meeting] final window capped: {} of {} samples transcribed at stop \
+                         (transcriber was behind) — audio is complete on disk, \
+                         use Regenerate transcript",
+                        capped - last_processed,
+                        buf_len_now - last_processed
+                    ));
+                }
+                capped
             } else {
                 want_end.min(buf_len_now)
             };
@@ -1053,202 +1402,80 @@ fn worker_loop(
                 Vec::new()
             };
 
-            // Helper: downsample a slice (if needed) and run STT through
-            // whichever backend the user has configured. The caller MUST
-            // pass the source rate of THE SPECIFIC slice — mic chunks
-            // come at device_sample_rate, system chunks at system_sample_rate
-            // (different in BT-HFP-mic + speakers-A2DP-loopback setups).
-            // Mixing them up = sending 48k-sampled data with a 16k WAV
-            // header to the cloud STT, which Gemini returns as empty
-            // because the speech is 3x compressed and unintelligible.
-            let transcribe = |slice: Vec<f32>, source_sr: u32| -> String {
-                if slice.is_empty() {
-                    return String::new();
-                }
-                // Silence trim before the model sees the window. An idle
-                // chunk collapses to empty here and never reaches whisper,
-                // which is what stops the phantom "grazie" on the mic track.
-                let slice = if vad_trim {
-                    crate::preprocess::process_chunk_vad_only(&slice, source_sr)
-                } else {
-                    slice
-                };
-                if slice.is_empty() {
-                    return String::new();
-                }
-                let pcm_16k = if source_sr == 16_000 {
-                    slice
-                } else {
-                    crate::preprocess::downsample_to_16k(&slice, source_sr)
-                };
-                if pcm_16k.is_empty() {
-                    return String::new();
-                }
-                if stt.mode == "cloud" {
-                    let wav = pcm16k_to_wav_bytes(&pcm_16k);
-                    match (&cloud_rt, &stt.api_key) {
-                        (Some(rt), Some(key)) => {
-                            // First call only: dump url/model/key-present
-                            // so 404s and auth bugs are debuggable.
-                            static LOGGED: std::sync::Once = std::sync::Once::new();
-                            LOGGED.call_once(|| {
-                                let key_tail = if key.len() > 4 {
-                                    &key[key.len() - 4..]
-                                } else {
-                                    "?"
-                                };
-                                crate::log(&format!(
-                                    "[Meeting] cloud STT: POST {} model={} lang={} key_suffix=...{} wav_bytes={}",
-                                    stt.api_url, stt.api_model, language, key_tail, wav.len()
-                                ));
-                            });
-                            let result = rt.block_on(async {
-                                crate::transcribe::transcribe_audio(
-                                    &stt.api_url,
-                                    &stt.api_model,
-                                    key,
-                                    &wav,
-                                    &language,
-                                    &stt.prompt,
-                                )
-                                .await
-                            });
-                            match result {
-                                Ok(t) => t,
-                                Err(e) => {
-                                    crate::log(&format!("[Meeting] cloud STT error: {}", e));
-                                    String::new()
-                                }
-                            }
-                        }
-                        _ => {
-                            crate::log("[Meeting] cloud STT unavailable: missing key or runtime");
-                            String::new()
-                        }
+            // try_send, never send: a full queue means the machine cannot
+            // transcribe as fast as it records, and the correct answer is
+            // to drop TRANSCRIPT and keep recording. Blocking here would
+            // reintroduce exactly the coupling this split removes.
+            let job = SttJob::Chunk {
+                mic: mic_chunk,
+                system: system_chunk,
+                elapsed_ms: started.elapsed().as_millis(),
+            };
+            match stt_tx.try_send(job) {
+                Ok(()) => {}
+                Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                    stt_dropped_chunks += 1;
+                    if stt_dropped_chunks == 1 || stt_dropped_chunks.is_multiple_of(10) {
+                        crate::log(&format!(
+                            "[Meeting] transcription is behind — dropped {} window(s) so far; \
+                             audio recording is UNAFFECTED \
+                             (regenerate the transcript afterwards)",
+                            stt_dropped_chunks
+                        ));
                     }
-                } else if stt.local_backend == "parakeet" {
-                    // Parakeet TDT v3 — same path the dictation chunked
-                    // worker uses. The 3 ONNX sessions live in a global
-                    // OnceLock cache so each call only pays mel/encoder/
-                    // decoder inference, not model load. No .bin file
-                    // needed — the bundle ships separately.
-                    match crate::parakeet::transcribe(&pcm_16k) {
-                        Ok(t) => t,
-                        Err(e) => {
-                            crate::log(&format!("[Meeting] parakeet error: {}", e));
-                            String::new()
-                        }
-                    }
-                } else {
-                    // Default = whisper. Routes through the cached
-                    // WhisperContext via local_stt::transcribe_local.
-                    match &resolved_local_model {
-                        Some(model_path) => {
-                            match crate::local_stt::transcribe_local(
-                                model_path,
-                                &pcm_16k,
-                                &language,
-                                &stt.prompt,
-                            ) {
-                                Ok(t) => t,
-                                Err(e) => {
-                                    crate::log(&format!("[Meeting] whisper error: {}", e));
-                                    String::new()
-                                }
-                            }
-                        }
-                        None => {
-                            crate::log("[Meeting] local STT skipped: no usable .bin model");
-                            String::new()
-                        }
+                    // Tell the user ONCE, while it is still happening and
+                    // they can act on it. Finding out at stop time is too
+                    // late to change engine for this meeting.
+                    if stt_dropped_chunks == 1 {
+                        let engine: &'static str = if stt.mode == "cloud" {
+                            "cloud"
+                        } else if stt.local_backend == "parakeet" {
+                            "parakeet"
+                        } else {
+                            "whisper"
+                        };
+                        let secs = started.elapsed().as_secs_f64();
+                        crate::telemetry::track(
+                            crate::telemetry::Event::MeetingTranscriptionBehind {
+                                engine,
+                                elapsed_bucket: bucket_elapsed_secs(secs),
+                            },
+                        );
+                        crate::ffi::emit_event(
+                            "meeting_transcription_behind",
+                            &serde_json::json!({
+                                "engine": engine,
+                                "elapsed_secs": secs as u64,
+                            })
+                            .to_string(),
+                        );
                     }
                 }
-            };
-
-            let mic_text = transcribe(mic_chunk, device_sample_rate);
-            let system_text = if mix_active {
-                transcribe(system_chunk, system_sample_rate)
-            } else {
-                String::new()
-            };
-            let elapsed_ms = started.elapsed().as_millis();
-
-            // Append helper: dedup vs the per-speaker accumulator,
-            // append the delta to the speaker's accumulator, emit a
-            // labeled line into transcripts.txt, AND fire a
-            // `meeting_chunk` event so host UIs can refresh their
-            // live transcript view without polling the on-disk file.
-            // Replaces the 1-2 s DispatcherTimer polling that Win
-            // MeetingWindow used to run on transcripts.txt — event-
-            // driven so Mac (which had no equivalent poll) also lights
-            // up, and idle CPU drops to zero between chunks.
-            let dir_str = dir.to_string_lossy().to_string();
-            let mut emit = |speaker: &str, text: &str, accum: &mut String| {
-                if text.trim().is_empty() {
-                    return;
+                Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                    // Transcriber died. Keep recording; say so once.
+                    if !stt_disconnected_logged {
+                        stt_disconnected_logged = true;
+                        crate::log(
+                            "[Meeting] transcription thread is gone — continuing to record audio",
+                        );
+                    }
                 }
-                let delta = crate::chunked_stt::dedup_last_3_words(accum, text);
-                if delta.is_empty() {
-                    return;
-                }
-                if !accum.is_empty() && !accum.ends_with(' ') {
-                    accum.push(' ');
-                }
-                accum.push_str(&delta);
-                chunk_count += 1;
-                let line = format!("[{:>6} ms] [{}] {}\n", elapsed_ms, speaker, delta);
-                let _ = transcripts_file.write_all(line.as_bytes());
-                let _ = transcripts_file.flush();
-
-                // Push event to host UIs. Payload mirrors the line
-                // we just wrote so consumers can either re-render
-                // from transcripts.txt at open + tail this event, or
-                // build their own rolling buffer from `line` deltas.
-                let payload = serde_json::json!({
-                    "dir": dir_str,
-                    "speaker": speaker,
-                    "elapsed_ms": elapsed_ms as u64,
-                    "chunk_count": chunk_count,
-                    "line": line,
-                })
-                .to_string();
-                crate::ffi::emit_event("meeting_chunk", &payload);
-            };
-
-            emit(mic_label, &mic_text, &mut mic_accum);
-            if mix_active {
-                emit("system", &system_text, &mut system_accum);
             }
 
-            // Stats: this chunk contributed transcribed words +
-            // captured audio time. Mirror the bookkeeping that
-            // `dimmy_stop_recording` does for pill dictation so the
-            // Settings → Stats card ("Total words", "Time saved")
-            // reflects meeting usage too. Time is counted ONCE per
-            // chunk window (mic + system cover the same wall-time);
-            // words sum across both speakers.
-            //
-            // We approximate words from the FULL chunk text (not the
-            // post-dedup `delta`) — the overlap dedup removes 1-3
-            // words per chunk-pair which is ~1-3% over-count, well
-            // inside "Settings shows an approximate counter" budget.
-            // The line that lands on disk in transcripts.txt is the
-            // delta — but the user's STT minutes are spent on the
-            // full chunk, so counting full text is also more honest
-            // about throughput.
-            let chunk_words = mic_text.split_whitespace().count() as std::os::raw::c_int
-                + if mix_active {
-                    system_text.split_whitespace().count() as std::os::raw::c_int
-                } else {
-                    0
-                };
+            // Time captured for this window counts regardless of whether the
+            // transcriber took it: the audio IS recorded. Deliberately the
+            // same `end - start` span the single-threaded version used
+            // (overlap included), so the Settings "Time saved" figure does
+            // not shift. Words are added separately by the transcription
+            // thread — the only side that knows them — and the two calls sum
+            // to exactly what the single call did.
             let chunk_secs = if device_sample_rate > 0 {
                 (end - start) as f64 / device_sample_rate as f64
             } else {
                 0.0
             };
-            if chunk_words > 0 || chunk_secs > 0.0 {
-                let _ = crate::ffi::dimmy_update_stats(chunk_words, chunk_secs);
+            if chunk_secs > 0.0 {
+                let _ = crate::ffi::dimmy_update_stats(0, chunk_secs);
             }
 
             last_processed = end;
@@ -1259,7 +1486,14 @@ fn worker_loop(
         }
     }
 
-    // Finalize all three track sinks (Ogg trailer / WAV header) + meta.
+    // ORDER MATTERS. Close the audio FIRST, then wait on the transcriber.
+    //
+    // The Ogg trailer / WAV header rewrite is what makes the recording a
+    // valid, seekable file. Doing it before the join means a wedged
+    // transcriber can cost the tail of the transcript and nothing else —
+    // the audio is already complete and playable on disk by the time we
+    // wait for anything.
+    //
     // Collect the FIRST failure into MeetingResult.error — a finalize
     // error (disk-full mid-header-rewrite) leaves the audio file
     // incomplete on disk and the user must hear about it at stop time.
@@ -1275,6 +1509,42 @@ fn worker_loop(
             finalize_error.get_or_insert(format!("system track incomplete: {e}"));
         }
     }
+
+    // Audio is safe. NOW wait for the transcriber to drain what is queued.
+    //
+    // Dropping the sender ends its `recv()` once the queue empties. The
+    // wait is bounded twice over: the queue holds at most STT_QUEUE_DEPTH
+    // windows, and the join gives up after 90 s. A transcriber wedged
+    // inside a model call is abandoned (it holds no lock the audio path
+    // needs, and the process is about to be idle) — we keep the chunk
+    // count it reached and move on.
+    drop(stt_tx);
+    let stt_fallback = match stt_handle {
+        Some(h) => match join_bounded(h, Duration::from_secs(90)) {
+            BoundedJoin::Done(s) => s,
+            BoundedJoin::Panicked => {
+                crate::log("[Meeting] transcription thread panicked — audio is unaffected");
+                String::new()
+            }
+            BoundedJoin::TimedOut => {
+                crate::log(
+                    "[Meeting] transcription thread still busy at stop — abandoning it; \
+                     the recording and everything transcribed so far are already on disk",
+                );
+                String::new()
+            }
+        },
+        None => String::new(),
+    };
+    if stt_dropped_chunks > 0 {
+        crate::log(&format!(
+            "[Meeting] {} window(s) never reached the transcriber (machine slower than realtime); \
+             audio.ogg is complete — Regenerate transcript re-runs the whole recording",
+            stt_dropped_chunks
+        ));
+    }
+    let chunk_count = chunk_count_shared.load(std::sync::atomic::Ordering::Relaxed);
+
     let duration_secs = started.elapsed().as_secs_f64();
     // Capture-integrity guard — the meeting sibling of the dictation
     // capture-ratio at StopRec (ffi.rs). Compares audio actually on disk
@@ -1319,16 +1589,10 @@ fn worker_loop(
     let merged_transcript = std::fs::read_to_string(&transcripts_path)
         .ok()
         .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| {
-            let mut s = String::new();
-            if !mic_accum.trim().is_empty() {
-                s.push_str(&format!("[{}] {}\n", mic_label, mic_accum));
-            }
-            if !system_accum.trim().is_empty() {
-                s.push_str(&format!("[system] {}\n", system_accum));
-            }
-            s
-        });
+        // Fallback: the transcriber's own accumulators, returned when it
+        // joined cleanly. Empty when it was abandoned — the audio file is
+        // complete either way.
+        .unwrap_or(stt_fallback);
 
     MeetingResult {
         id,
@@ -1768,6 +2032,147 @@ pub fn list_orphans() -> Vec<serde_json::Value> {
         }));
     }
     out
+}
+
+#[cfg(test)]
+mod audio_never_blocked {
+    //! The rule: nothing may stand between captured audio and the disk.
+    //!
+    //! These drive the real handoff primitive the capture worker uses —
+    //! `sync_channel(STT_QUEUE_DEPTH)` + `try_send` — against a consumer
+    //! that is slow, wedged, or dead. What is pinned is that the producer
+    //! keeps going at full speed in every case. A 34-minute meeting once
+    //! produced an 11-minute file because the two shared a thread
+    //! (2026-09-02); the split is the fix and this is its proof.
+    use super::*;
+    use std::sync::mpsc::TrySendError;
+
+    /// The queue must be bounded, or a slow transcriber becomes a memory
+    /// leak instead of a dropped window.
+    #[test]
+    fn the_queue_is_bounded_and_small() {
+        assert!(
+            STT_QUEUE_DEPTH > 0 && STT_QUEUE_DEPTH <= 8,
+            "queue depth {} is outside the range that bounds memory while \
+             absorbing a slow patch",
+            STT_QUEUE_DEPTH
+        );
+    }
+
+    #[test]
+    fn a_wedged_consumer_never_blocks_the_producer() {
+        // Consumer takes one job then wedges forever, exactly like a
+        // whisper call that does not return.
+        let (tx, rx) = std::sync::mpsc::sync_channel::<u32>(STT_QUEUE_DEPTH);
+        let wedged = thread::spawn(move || {
+            let _first = rx.recv();
+            thread::sleep(Duration::from_secs(30));
+        });
+
+        // The producer's whole meeting: 500 windows, no blocking allowed.
+        let started = Instant::now();
+        let mut sent = 0u32;
+        let mut dropped = 0u32;
+        for i in 0..500 {
+            match tx.try_send(i) {
+                Ok(()) => sent += 1,
+                Err(TrySendError::Full(_)) => dropped += 1,
+                Err(TrySendError::Disconnected(_)) => break,
+            }
+        }
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "the producer stalled for {:?} behind a wedged consumer — this is \
+             precisely the coupling that lost 23 minutes of a real meeting",
+            elapsed
+        );
+        assert_eq!(sent + dropped, 500, "every window was accounted for");
+        assert!(dropped > 0, "a wedged consumer must cause drops, not waits");
+        drop(tx);
+        let _ = wedged.join();
+    }
+
+    #[test]
+    fn a_dead_consumer_never_blocks_the_producer() {
+        // Transcriber thread panicked or exited: the producer must notice
+        // and carry on recording, not die with it.
+        let (tx, rx) = std::sync::mpsc::sync_channel::<u32>(STT_QUEUE_DEPTH);
+        drop(rx);
+
+        let started = Instant::now();
+        let mut disconnected = 0;
+        for i in 0..500 {
+            if let Err(TrySendError::Disconnected(_)) = tx.try_send(i) {
+                disconnected += 1;
+            }
+        }
+        assert_eq!(disconnected, 500, "every send reported the dead consumer");
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "a dead consumer must not slow the producer down"
+        );
+    }
+
+    #[test]
+    fn a_consumer_that_keeps_up_loses_nothing() {
+        // The happy path must be unchanged: when the machine can transcribe
+        // as fast as it records, every window is delivered, in order.
+        let (tx, rx) = std::sync::mpsc::sync_channel::<u32>(STT_QUEUE_DEPTH);
+        let consumer = thread::spawn(move || {
+            let mut seen = Vec::new();
+            while let Ok(v) = rx.recv() {
+                seen.push(v);
+            }
+            seen
+        });
+
+        let mut dropped = 0;
+        for i in 0..200 {
+            // A real worker polls between windows; the consumer drains
+            // faster than that, so nothing should ever be dropped.
+            if tx.try_send(i).is_err() {
+                dropped += 1;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        drop(tx);
+        let seen = consumer.join().expect("consumer joined");
+
+        assert_eq!(dropped, 0, "a consumer that keeps up must lose nothing");
+        assert_eq!(seen.len(), 200);
+        assert!(
+            seen.windows(2).all(|w| w[0] < w[1]),
+            "windows must arrive in capture order"
+        );
+    }
+
+    #[test]
+    fn dropping_the_sender_ends_the_consumer() {
+        // How stop() unblocks the transcriber: drop the sender, the queue
+        // drains, `recv()` returns Err, the thread exits on its own. If this
+        // ever stops holding, stop() would rely entirely on its join timeout.
+        let (tx, rx) = std::sync::mpsc::sync_channel::<u32>(STT_QUEUE_DEPTH);
+        let consumer = thread::spawn(move || {
+            let mut n = 0;
+            while rx.recv().is_ok() {
+                n += 1;
+            }
+            n
+        });
+        for i in 0..STT_QUEUE_DEPTH as u32 {
+            let _ = tx.try_send(i);
+        }
+        drop(tx);
+        match join_bounded(consumer, Duration::from_secs(5)) {
+            BoundedJoin::Done(n) => assert_eq!(n, STT_QUEUE_DEPTH),
+            other => panic!(
+                "consumer did not exit after the sender dropped: {:?}",
+                other
+            ),
+        }
+    }
 }
 
 #[cfg(test)]

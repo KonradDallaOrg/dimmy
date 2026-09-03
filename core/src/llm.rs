@@ -1246,6 +1246,12 @@ async fn send_raw_prompt_request(
                 ));
             }
         }
+        // Streamed for the same measured reason as the OpenAI branch, and
+        // this is the branch that needed it most: `opus` recaps run over a
+        // minute with adaptive thinking on, and until now the user watched
+        // an empty box the whole time. `read_anthropic_sse` falls back to
+        // the ordinary Messages shape if the endpoint ignores this.
+        body["stream"] = serde_json::Value::Bool(true);
         client
             .post(api_url)
             .header("x-api-key", api_key)
@@ -1352,45 +1358,12 @@ async fn send_raw_prompt_request(
     }
 
     if is_anthropic {
-        // Anthropic: content is Vec of blocks; each block has a type
-        // ("text" | "thinking" | "tool_use" | ...). When extended thinking
-        // is enabled, the array contains a "thinking" block BEFORE the
-        // "text" block — we skip thinking blocks (their reasoning traces
-        // are useful for debugging but not for the user-visible recap).
-        #[derive(serde::Deserialize)]
-        struct AnthropicResponse {
-            content: Vec<AnthropicContent>,
-            #[serde(default)]
-            stop_reason: Option<String>,
-        }
-        #[derive(serde::Deserialize)]
-        struct AnthropicContent {
-            #[serde(rename = "type")]
-            block_type: String,
-            #[serde(default)]
-            text: Option<String>,
-        }
-        let parsed: AnthropicResponse = response.json().await?;
-        // Fable 5+ can decline via stop_reason=refusal on HTTP 200. Pre-output
-        // refusals carry an EMPTY content array; a mid-generation refusal may
-        // carry partial text that must be discarded. Either way, Ok("") here
-        // would surface as a silently-empty command result / recap.
-        if parsed.stop_reason.as_deref() == Some("refusal") {
-            return Err(crate::error::LlmError::Refusal);
-        }
-        let truncated = parsed.stop_reason.as_deref() == Some("max_tokens");
-        Ok((
-            parsed
-                .content
-                .into_iter()
-                .filter(|c| c.block_type == "text")
-                .filter_map(|c| c.text)
-                .collect::<Vec<_>>()
-                .join("\n")
-                .trim()
-                .to_string(),
-            truncated,
-        ))
+        // Streamed. Thinking blocks are still skipped (their reasoning is
+        // progress, not recap content) — `read_anthropic_sse` reports them
+        // on their own phase and never folds them into the answer, the same
+        // contract the batch parser had. Refusal + max_tokens handling
+        // lives in there too, including for the non-streaming fallback.
+        read_anthropic_sse(response).await
     } else if is_gemini_native {
         // Gemini native: { candidates: [{ content: { parts: [{ text }] } }] }
         let raw: serde_json::Value = response.json().await?;
@@ -1540,6 +1513,170 @@ impl SseAccumulator {
     }
 }
 
+/// Consume an Anthropic Messages `"stream": true` response.
+///
+/// Why: the recap's slowest, most-used path was the only one NOT streaming.
+/// Measured over 60 days (2026-09-03): 78 % of successful recaps took more
+/// than 60 s, and they are overwhelmingly `opus` — i.e. exactly this branch.
+/// A Groq user watched text appear; an Opus user watched nothing, could not
+/// tell "thinking" from "dead", and 37 % of the time it never arrived.
+///
+/// Wire format differs from OpenAI's: `event:` + `data: {json}` pairs, no
+/// `[DONE]` sentinel, and the interesting frames are
+/// `content_block_delta` (`delta.type` = `text_delta` | `thinking_delta`)
+/// and `message_delta` (carries `stop_reason`).
+///
+/// `thinking_delta` is reported as its own `thinking` phase and is NEVER
+/// appended to the answer: extended thinking is on for Opus 4.7+
+/// (`thinking.type=adaptive`), and folding a reasoning trace into the recap
+/// would corrupt it. The batch path already discarded thinking blocks; this
+/// keeps that contract and merely lets the host show them as progress.
+async fn read_anthropic_sse(
+    mut response: reqwest::Response,
+) -> Result<(String, bool), crate::error::LlmError> {
+    let mut acc = AnthropicSseAccumulator::default();
+    while let Some(bytes) = response.chunk().await? {
+        acc.feed(&String::from_utf8_lossy(&bytes));
+    }
+    if !acc.text.is_empty() {
+        emit_recap_stream_event("end", "");
+    }
+    crate::log(&format!(
+        "[LLM] anthropic stream: {} text delta(s), {} thinking delta(s), {} chars{}",
+        acc.text_deltas,
+        acc.thinking_deltas,
+        acc.text.len(),
+        if acc.saw_any_event {
+            ""
+        } else {
+            " (NOT streamed — provider answered in one shot)"
+        }
+    ));
+
+    // The provider (or a proxy) ignored `stream: true` and answered with an
+    // ordinary Messages response. Asking for streaming is an optimisation;
+    // declining it is not an error. Parse it the old way rather than fail.
+    if !acc.saw_any_event {
+        #[derive(serde::Deserialize)]
+        struct AnthropicResponse {
+            content: Vec<AnthropicContent>,
+            #[serde(default)]
+            stop_reason: Option<String>,
+        }
+        #[derive(serde::Deserialize)]
+        struct AnthropicContent {
+            #[serde(rename = "type")]
+            block_type: String,
+            #[serde(default)]
+            text: Option<String>,
+        }
+        if let Ok(parsed) = serde_json::from_str::<AnthropicResponse>(&acc.raw) {
+            if parsed.stop_reason.as_deref() == Some("refusal") {
+                return Err(crate::error::LlmError::Refusal);
+            }
+            return Ok((
+                parsed
+                    .content
+                    .into_iter()
+                    .filter(|c| c.block_type == "text")
+                    .filter_map(|c| c.text)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+                    .trim()
+                    .to_string(),
+                parsed.stop_reason.as_deref() == Some("max_tokens"),
+            ));
+        }
+        return Err(crate::error::LlmError::Api {
+            status: 200,
+            body: "response was neither SSE nor a Messages completion".to_string(),
+        });
+    }
+
+    // Fable 5+ can decline on HTTP 200. A pre-output refusal streams no text
+    // at all; a mid-generation one streams a partial answer that must be
+    // discarded. Ok("") would surface as a silently-empty recap either way.
+    if acc.stop_reason.as_deref() == Some("refusal") {
+        return Err(crate::error::LlmError::Refusal);
+    }
+    Ok((
+        acc.text.trim().to_string(),
+        acc.stop_reason.as_deref() == Some("max_tokens"),
+    ))
+}
+
+/// Incremental parser for an Anthropic SSE body. Split out for the same
+/// reason as `SseAccumulator`: chunk boundaries land mid-line and even
+/// mid-JSON, and `stop_reason` arrives on a LATER frame than the last text.
+#[derive(Default)]
+struct AnthropicSseAccumulator {
+    pending: String,
+    /// Every byte received, so a non-streaming answer stays parseable.
+    raw: String,
+    text: String,
+    stop_reason: Option<String>,
+    saw_any_event: bool,
+    started: bool,
+    /// Counted so one log line per recap can answer "did streaming
+    /// actually happen?" without guessing from timings.
+    text_deltas: u32,
+    thinking_deltas: u32,
+}
+
+impl AnthropicSseAccumulator {
+    fn feed(&mut self, chunk: &str) {
+        self.raw.push_str(chunk);
+        self.pending.push_str(chunk);
+        while let Some(nl) = self.pending.find('\n') {
+            let line: String = self.pending.drain(..=nl).collect();
+            let line = line.trim();
+            // `event:` lines carry the same type as the payload's `type`
+            // field, so the payload alone is enough — skip everything else.
+            let Some(payload) = line.strip_prefix("data: ") else {
+                continue;
+            };
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) else {
+                continue;
+            };
+            self.saw_any_event = true;
+            match v["type"].as_str().unwrap_or("") {
+                "content_block_delta" => match v["delta"]["type"].as_str().unwrap_or("") {
+                    "text_delta" => {
+                        if let Some(d) = v["delta"]["text"].as_str() {
+                            if !d.is_empty() {
+                                if !self.started {
+                                    self.started = true;
+                                    emit_recap_stream_event("start", "");
+                                }
+                                self.text.push_str(d);
+                                self.text_deltas += 1;
+                                emit_recap_stream_event("delta", d);
+                            }
+                        }
+                    }
+                    "thinking_delta" => {
+                        if let Some(d) = v["delta"]["thinking"].as_str() {
+                            if !d.is_empty() {
+                                // Progress only. Deliberately NOT accumulated
+                                // into `text` — see the fn doc.
+                                self.thinking_deltas += 1;
+                                emit_recap_stream_event("thinking", d);
+                            }
+                        }
+                    }
+                    _ => {}
+                },
+                "message_delta" => {
+                    if let Some(sr) = v["delta"]["stop_reason"].as_str() {
+                        self.stop_reason = Some(sr.to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 /// Publish recap/command text as it arrives, so a host can render it
 /// progressively instead of showing nothing for 35 seconds.
 ///
@@ -1547,7 +1684,7 @@ impl SseAccumulator {
 /// same channel, same shape — because CLAUDE.md's no-polling rule makes the
 /// event callback the only sanctioned way to push core state at a host.
 /// Emitting it costs nothing when no host subscribes yet.
-fn emit_recap_stream_event(phase: &str, delta: &str) {
+pub(crate) fn emit_recap_stream_event(phase: &str, delta: &str) {
     crate::ffi::emit_event(
         "llm_stream",
         &serde_json::json!({ "phase": phase, "delta": delta }).to_string(),
@@ -1582,6 +1719,122 @@ mod tests {
         acc.feed(&whole[mid..]);
         assert_eq!(acc.text, "Ciao come stai");
         assert!(acc.saw_any_event);
+    }
+
+    fn anthropic_text_frame(delta: &str) -> String {
+        format!(
+            "event: content_block_delta\ndata: {}\n\n",
+            serde_json::json!({
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {"type": "text_delta", "text": delta}
+            })
+        )
+    }
+
+    fn anthropic_thinking_frame(delta: &str) -> String {
+        format!(
+            "event: content_block_delta\ndata: {}\n\n",
+            serde_json::json!({
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "thinking_delta", "thinking": delta}
+            })
+        )
+    }
+
+    #[test]
+    fn anthropic_sse_reassembles_text_split_across_network_chunks() {
+        // Same hazard as the OpenAI reader: a chunk boundary lands wherever
+        // TCP decides, including mid-JSON. Dropping a partial line yields a
+        // recap that looks complete and silently lost a piece.
+        let whole = format!(
+            "{}{}{}",
+            anthropic_text_frame("Ciao "),
+            anthropic_text_frame("come "),
+            anthropic_text_frame("stai")
+        );
+        let mut acc = AnthropicSseAccumulator::default();
+        let mid = whole.len() / 2;
+        acc.feed(&whole[..mid]);
+        acc.feed(&whole[mid..]);
+        assert_eq!(acc.text, "Ciao come stai");
+        assert!(acc.saw_any_event);
+    }
+
+    #[test]
+    fn anthropic_sse_never_folds_thinking_into_the_answer() {
+        // THE invariant of this reader. Opus 4.7+ runs with
+        // `thinking.type=adaptive`, so a reasoning trace always precedes the
+        // answer. Appending it would put the model's private deliberation
+        // straight into the user's recap. It is progress, not content.
+        let whole = format!(
+            "{}{}{}",
+            anthropic_thinking_frame("Let me consider the agenda..."),
+            anthropic_thinking_frame(" and the action items."),
+            anthropic_text_frame("# Recap\n- point one")
+        );
+        let mut acc = AnthropicSseAccumulator::default();
+        acc.feed(&whole);
+        assert_eq!(acc.text, "# Recap\n- point one");
+        assert!(!acc.text.contains("consider"));
+        assert!(!acc.text.contains("action items"));
+    }
+
+    #[test]
+    fn anthropic_sse_takes_stop_reason_from_a_later_frame() {
+        // `stop_reason` arrives on `message_delta`, AFTER the last text —
+        // reading it too early would mark every answer as un-truncated.
+        let whole = format!(
+            "{}{}",
+            anthropic_text_frame("done"),
+            format!(
+                "event: message_delta\ndata: {}\n\n",
+                serde_json::json!({
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "max_tokens"}
+                })
+            )
+        );
+        let mut acc = AnthropicSseAccumulator::default();
+        acc.feed(&whole);
+        assert_eq!(acc.text, "done");
+        assert_eq!(acc.stop_reason.as_deref(), Some("max_tokens"));
+    }
+
+    #[test]
+    fn anthropic_sse_ignores_frames_it_does_not_know() {
+        // message_start / content_block_start / ping / content_block_stop all
+        // arrive on the same wire. None carries answer text; none may break
+        // the parse or count as an answer.
+        let mut acc = AnthropicSseAccumulator::default();
+        acc.feed("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{}}\n\n");
+        acc.feed(": ping\n\n");
+        acc.feed(
+            "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+        );
+        assert_eq!(acc.text, "");
+        assert!(
+            acc.saw_any_event,
+            "known frames still prove it IS an SSE body"
+        );
+    }
+
+    #[test]
+    fn anthropic_non_sse_body_is_recognised_as_such() {
+        // A proxy that ignores `stream: true` answers with a plain Messages
+        // response. `saw_any_event` staying false is what routes the reader
+        // to its batch fallback instead of returning an empty recap.
+        let mut acc = AnthropicSseAccumulator::default();
+        acc.feed(
+            &serde_json::json!({
+                "content": [{"type": "text", "text": "hello"}],
+                "stop_reason": "end_turn"
+            })
+            .to_string(),
+        );
+        assert!(!acc.saw_any_event);
+        assert_eq!(acc.text, "");
     }
 
     #[test]

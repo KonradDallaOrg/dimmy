@@ -415,6 +415,25 @@
                 <TextBlock x:Name="ProcStep3Text" Text="Extracting action items"/>
               </StackPanel>
             </StackPanel>
+
+            <!-- The model's reasoning, then its text, as they arrive. This
+                 lives HERE and not only in the Done panel: during a recap the
+                 window is in Processing state, so a card inside DonePanel is
+                 inside a collapsed ancestor and renders nothing. That is why
+                 the live pane was never visible on a fresh meeting (found
+                 2026-09-03). An opus recap runs past a minute; this is what
+                 fills that wait. Mac parity: MeetingProcessingView. -->
+            <Border x:Name="ProcLiveCard" Visibility="Collapsed"
+                    MaxWidth="560" MaxHeight="180"
+                    Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                    BorderThickness="1" CornerRadius="8" Padding="14">
+              <ScrollViewer x:Name="ProcLiveScroll" VerticalScrollBarVisibility="Auto">
+                <TextBlock x:Name="ProcLiveText" TextWrapping="Wrap" FontSize="12"
+                           IsTextSelectionEnabled="True"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+              </ScrollViewer>
+            </Border>
           </StackPanel>
 
           <!-- DONE: meeting detail (also reused when sidebar selects a past meeting) -->

@@ -1057,9 +1057,9 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
             // blind). Win parity: AppViewModel.CoreFailure ->
             // DictNotificationService.ShowTranscriptionFailed.
             let source = payload["source"] as? String ?? ""
-            if source == "stt" || source == "llm" {
+            if source == "stt" || source == "llm" || source == "recap" {
                 let rawProvider = payload["provider"] as? String ?? ""
-                let fallbackName = source == "llm" ? "the LLM provider" : "Cloud STT"
+                let fallbackName = source == "stt" ? "Cloud STT" : "the LLM provider"
                 let provider = (rawProvider.isEmpty || rawProvider == "other")
                     ? fallbackName : rawProvider
                 let hint: String
@@ -1088,6 +1088,14 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
                         kind: .error,
                         title: "Text not cleaned up (\(provider))",
                         body: "\(message). \(hint) Your transcript was pasted unchanged.")
+                } else if source == "recap" {
+                    // The transcript is already on disk; only the summary
+                    // is missing, and it can be re-run. Say that rather
+                    // than let the user think the meeting was lost.
+                    DictToastWindow.show(
+                        kind: .error,
+                        title: "Recap failed (\(provider))",
+                        body: "\(message). \(hint) The transcript is saved - you can run the recap again.")
                 } else {
                     DictToastWindow.show(
                         kind: .error,
@@ -1180,15 +1188,24 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
 
     case "llm_stream":
         // Recap/command text as the model writes it. Payload:
-        //   { "phase": "start" | "delta" | "end", "delta": "<new text>" }
-        // Emitted only by the OpenAI-compatible providers; Anthropic and
-        // Gemini-native answer in one shot and never send this.
+        //   { "phase": "start" | "delta" | "thinking" | "end",
+        //     "delta": "<new text>" }
+        // OpenAI-compatible, Anthropic and Claude Code all stream;
+        // Gemini-native still answers in one shot and never sends this.
         let phase = (payload["phase"] as? String) ?? ""
         let delta = (payload["delta"] as? String) ?? ""
         if phase == "start" {
             appState.llmStreamText = ""
+            appState.llmThinkingText = ""
         } else if phase == "delta" {
             appState.llmStreamText += delta
+        } else if phase == "thinking" {
+            // Reasoning is progress, never recap content — kept in its own
+            // property so it can never reach the answer. Bounded tail: a long
+            // recap thinks for tens of KB and only the last lines matter.
+            let combined = appState.llmThinkingText + delta
+            appState.llmThinkingText = combined.count > 4000
+                ? String(combined.suffix(4000)) : combined
         }
 
     case "stt_chunk":
@@ -1204,6 +1221,33 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
         appState.liveCaptionCumulative = cumulative
         appState.liveCaptionIsFinal = isFinal
         appState.liveCaptionTick &+= 1
+
+    case "meeting_transcription_behind":
+        // The machine cannot transcribe as fast as it records, so the core
+        // is dropping windows. Emitted ONCE per meeting, while it is still
+        // running, because at stop time it is too late to change engine.
+        // The RECORDING is unaffected by construction: capture and
+        // transcription run on separate threads precisely so this stays a
+        // transcript problem. Payload: { "engine": "whisper" | "parakeet" |
+        // "cloud", "elapsed_secs": <u64> }
+        let engine = (payload["engine"] as? String) ?? ""
+        let hint: String
+        switch engine {
+        case "whisper":
+            hint = "Try Parakeet or a smaller model in Settings, Transcription."
+        case "parakeet":
+            hint = "Try a cloud provider in Settings, Transcription."
+        case "cloud":
+            hint = "Check your connection, or switch to a local model."
+        default:
+            hint = "Try a lighter model in Settings, Transcription."
+        }
+        NSLog("[DimmyCore] transcription behind (engine=\(engine)) — recording unaffected")
+        DictToastWindow.show(
+            kind: .error,
+            title: "Transcription is falling behind",
+            body: "Your recording is safe and continues normally. \(hint) "
+                + "You can also regenerate the transcript from the audio after the meeting.")
 
     case "meeting_chunk":
         // Emitted by the Rust meeting worker every time it processes

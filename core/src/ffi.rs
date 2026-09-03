@@ -5734,6 +5734,22 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
                 crate::truncate_utf8(&display_short, 200)
             ));
 
+            // Report it. Until now this branch returned an rc and told
+            // NOBODY: no Sentry, no PostHog, and `meeting.recap_completed`
+            // carried only `success: false`. 21 of 57 recaps failed over
+            // 60 days (2026-09-03) and not one of them is diagnosable,
+            // while the user sat in front of a recap that never arrived.
+            // Same shape as the dictation LLM path so both read alike.
+            let provider_static: &'static str =
+                crate::telemetry::sanitize::provider_from_url(&effective_url);
+            let category =
+                crate::telemetry::sanitize::error_category(&display_short, llm_http_status(&e));
+            crate::telemetry::capture_error(category, provider_static, &display_short);
+            emit_event(
+                "error",
+                &error_event_payload("recap", &display_short, provider_static, category),
+            );
+
             // Categorize the error so the UI can render a specific,
             // actionable message instead of a generic "failed". The
             // body INSPECTION here is INTERNAL only — only the
@@ -8259,6 +8275,9 @@ pub unsafe extern "C" fn dimmy_telemetry_track_typed(
                 ],
             ),
             success: prop_bool("success"),
+            // Categorical bucket, never free text — the host passes the
+            // category it got from the `error` event, or "" on success.
+            error_category: prop_str("error_category"),
         }),
         "meeting.imported_from_file" => Some(crate::telemetry::Event::MeetingImportedFromFile),
         "file_load.started" => Some(crate::telemetry::Event::FileLoadStarted {

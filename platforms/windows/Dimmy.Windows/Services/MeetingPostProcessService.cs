@@ -72,14 +72,20 @@ public static class MeetingPostProcessService
             if (rc <= 0)
             {
                 var msg = RecapRcToUserMessage(rc, modelOverride);
-                App.Log($"recap (shared) failed rc={rc}: {msg}", "MeetingRecap");
+                var category = Helpers.MeetingRecapHelpers.RecapRcToCategory(rc);
+                App.Log($"recap (shared) failed rc={rc} category={category}: {msg}", "MeetingRecap");
                 DimmyNative.TrackEvent("meeting.recap_completed", new
                 {
                     provider = TelemetryBuckets.Provider(ReadLlmApiUrl()),
                     recap_model_bucket = TelemetryBuckets.RecapModel(modelOverride),
                     processing_ms_bucket = TelemetryBuckets.ProcessingMs(stopwatch.ElapsedMilliseconds),
                     success = false,
+                    error_category = category,
                 });
+                // Tell the user. This path used to log and stop there: the
+                // recap simply never appeared and nothing said why.
+                Services.DictNotificationService.ShowRecapFailed(
+                    TelemetryBuckets.Provider(ReadLlmApiUrl()), msg, category);
                 return new RecapResult { Success = false, Dir = dir, Error = msg };
             }
 

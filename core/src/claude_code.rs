@@ -762,6 +762,38 @@ impl std::error::Error for ClaudeCodeError {}
 ///
 /// `prompt` is written to stdin and only stdin — never as a CLI
 /// arg. Anthropic's CLI accepts any length there.
+/// Does the installed CLI accept `--include-partial-messages`?
+///
+/// Probed once from `--help` and cached. An older `claude` rejects an
+/// unknown flag with a non-zero exit, which would turn every recap and
+/// rewrite for a subscription user into a hard failure — so streaming is
+/// opt-in on evidence, never assumed. When this is false the call takes the
+/// byte-for-byte path it took before streaming existed.
+fn cli_supports_partial_messages(binary: &Path) -> bool {
+    static SUPPORTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *SUPPORTED.get_or_init(|| {
+        let mut cmd = Command::new(binary);
+        cmd.arg("--help");
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::null());
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000);
+        }
+        let supported = cmd
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).contains("--include-partial-messages"))
+            .unwrap_or(false);
+        crate::log(&format!(
+            "[ClaudeCode] --include-partial-messages supported: {}",
+            supported
+        ));
+        supported
+    })
+}
+
 pub fn run_blocking(
     prompt: &str,
     model: &str,
@@ -773,6 +805,10 @@ pub fn run_blocking(
     };
     if !has_credentials() {
         return Err(ClaudeCodeError::NotLoggedIn);
+    }
+
+    if cli_supports_partial_messages(&binary) {
+        return run_blocking_streaming(&binary, prompt, model, timeout);
     }
 
     let mut cmd = Command::new(&binary);
@@ -871,6 +907,195 @@ pub fn run_blocking(
 
     crate::log(&format!(
         "[ClaudeCode] success prompt_chars={} response_chars={}",
+        prompt.len(),
+        text.len()
+    ));
+    Ok(text)
+}
+
+/// Same contract as `run_blocking`, but reads the CLI's `stream-json`
+/// output as it arrives so the host can show progress.
+///
+/// Two deliberate choices:
+///
+/// 1. **The answer comes from the `result` line, not from the deltas.**
+///    `stream-json` ends with `{"type":"result","result":"<full text>"}`,
+///    which is exactly as authoritative as today's `--output-format text`.
+///    The `stream_event` deltas drive the UI only, so a bug in delta
+///    parsing can dull the progress display but can never corrupt a recap.
+/// 2. **Thinking deltas ride their own phase.** They are the model's
+///    private deliberation; folding them into the answer would put them in
+///    the user's recap. Same contract as the Anthropic SSE reader.
+fn run_blocking_streaming(
+    binary: &Path,
+    prompt: &str,
+    model: &str,
+    timeout: Duration,
+) -> Result<String, ClaudeCodeError> {
+    use std::io::{BufRead, BufReader};
+
+    let mut cmd = Command::new(binary);
+    cmd.arg("--print");
+    cmd.arg("--output-format");
+    cmd.arg("stream-json");
+    // stream-json refuses to emit without --verbose under --print.
+    cmd.arg("--verbose");
+    cmd.arg("--include-partial-messages");
+    if !model.is_empty() {
+        cmd.arg("--model");
+        cmd.arg(model);
+    }
+    cmd.stdin(Stdio::piped());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    // See run_blocking: without CREATE_NO_WINDOW a GUI app gets a console
+    // flash on every call.
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
+
+    crate::log(&format!(
+        "[ClaudeCode] spawn (streaming) binary={:?} model={:?} prompt_chars={}",
+        binary,
+        model,
+        prompt.len()
+    ));
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| ClaudeCodeError::Spawn(format!("{}", e)))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        if let Err(e) = stdin.write_all(prompt.as_bytes()) {
+            let _ = child.kill();
+            return Err(ClaudeCodeError::Spawn(format!("stdin write: {}", e)));
+        }
+        drop(stdin);
+    } else {
+        let _ = child.kill();
+        return Err(ClaudeCodeError::Spawn("no stdin handle".into()));
+    }
+
+    // Read stdout on its own thread: the main thread must stay free to
+    // enforce the deadline, and a blocking read would defeat that.
+    let stdout = match child.stdout.take() {
+        Some(s) => s,
+        None => {
+            let _ = child.kill();
+            return Err(ClaudeCodeError::Spawn("no stdout handle".into()));
+        }
+    };
+    let collected = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let collected_writer = std::sync::Arc::clone(&collected);
+    let reader = std::thread::spawn(move || {
+        let mut started = false;
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
+                continue; // a non-JSON line is not fatal, just not ours
+            };
+            match v["type"].as_str().unwrap_or("") {
+                "stream_event" => {
+                    let ev = &v["event"];
+                    if ev["type"].as_str() == Some("content_block_delta") {
+                        match ev["delta"]["type"].as_str().unwrap_or("") {
+                            "text_delta" => {
+                                if let Some(d) = ev["delta"]["text"].as_str() {
+                                    if !d.is_empty() {
+                                        if !started {
+                                            started = true;
+                                            crate::llm::emit_recap_stream_event("start", "");
+                                        }
+                                        crate::llm::emit_recap_stream_event("delta", d);
+                                    }
+                                }
+                            }
+                            "thinking_delta" => {
+                                if let Some(d) = ev["delta"]["thinking"].as_str() {
+                                    if !d.is_empty() {
+                                        crate::llm::emit_recap_stream_event("thinking", d);
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                "result" => {
+                    // The authoritative answer. `is_error` marks a CLI-level
+                    // failure whose `result` is a message, not an answer.
+                    if v["is_error"].as_bool() == Some(true) {
+                        continue;
+                    }
+                    if let Some(text) = v["result"].as_str() {
+                        if let Ok(mut guard) = collected_writer.lock() {
+                            *guard = text.to_string();
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if started {
+            crate::llm::emit_recap_stream_event("end", "");
+        }
+    });
+
+    // Identical deadline policy to run_blocking: 100 ms polling, kill on
+    // expiry. Killing the child closes stdout, which ends the reader.
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_status)) => break,
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = reader.join();
+                    return Err(ClaudeCodeError::Timeout);
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) => {
+                let _ = child.kill();
+                let _ = reader.join();
+                return Err(ClaudeCodeError::Spawn(format!("wait: {}", e)));
+            }
+        }
+    }
+    let _ = reader.join();
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| ClaudeCodeError::Spawn(format!("collect: {}", e)))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let excerpt: String = stderr.chars().take(500).collect();
+        crate::log(&format!(
+            "[ClaudeCode] non-zero exit code={:?} stderr={}",
+            output.status.code(),
+            excerpt
+        ));
+        return Err(ClaudeCodeError::NonZeroExit {
+            code: output.status.code().unwrap_or(-1),
+            stderr_excerpt: excerpt,
+        });
+    }
+
+    let text = collected
+        .lock()
+        .map(|g| g.clone())
+        .unwrap_or_else(|_| String::new());
+    if text.is_empty() {
+        // Exit 0 but no result line: treat as a failure rather than hand
+        // back an empty recap that reads as a successful one.
+        return Err(ClaudeCodeError::NonZeroExit {
+            code: 0,
+            stderr_excerpt: "stream-json produced no result line".into(),
+        });
+    }
+    crate::log(&format!(
+        "[ClaudeCode] success (streaming) prompt_chars={} response_chars={}",
         prompt.len(),
         text.len()
     ));

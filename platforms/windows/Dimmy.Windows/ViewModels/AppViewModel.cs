@@ -69,6 +69,14 @@ public partial class AppViewModel : ObservableObject
     /// Empty between runs; the meeting window clears it when a recap starts.
     [ObservableProperty] private string _llmStreamText = "";
 
+    /// <summary>The model's reasoning trace while it works, when the provider
+    /// sends one (Anthropic with adaptive thinking, Claude Code via
+    /// stream-json). Kept SEPARATE from <see cref="LlmStreamText"/> on
+    /// purpose: this is progress, never recap content. An opus recap runs
+    /// past a minute before its first answer token, and this is what fills
+    /// that silence. Tail-trimmed — nobody reads a 40 KB trace.</summary>
+    [ObservableProperty] private string _llmThinkingText = "";
+
     // ── Local-model download state ──────────────────────────────────
     // The download runs on a background thread (Task.Run → FFI) and keeps
     // going even if the Settings window is closed. The Rust core emits
@@ -316,6 +324,13 @@ public partial class AppViewModel : ObservableObject
     /// elapsedMs, chunkCount).
     public event Action<string, string, string, long, int>? MeetingChunkReceived;
 
+    /// <summary>Raised once per meeting when the core starts dropping
+    /// transcription windows because the machine cannot keep up with
+    /// realtime. The RECORDING is unaffected — capture and transcription
+    /// run on separate threads precisely so this stays a transcript
+    /// problem. Arg: the engine that fell behind (whisper|parakeet|cloud).</summary>
+    public event Action<string>? MeetingTranscriptionBehind;
+
     /// Fires when the Rust core emits a file_transcribe_progress
     /// event during dimmy_transcribe_file. Args: (processed_secs,
     /// total_secs, percent 0-100). Used by Settings → Home → file
@@ -415,17 +430,26 @@ public partial class AppViewModel : ObservableObject
                     break;
                 case "llm_stream":
                     {
-                        // phase: start | delta | end. Only the OpenAI-compatible
-                        // providers stream; Anthropic and Gemini-native answer in
-                        // one shot and simply never emit this.
+                        // phase: start | delta | thinking | end.
+                        // OpenAI-compatible, Anthropic and Claude Code all
+                        // stream; Gemini-native still answers in one shot and
+                        // never emits this.
                         var phase = payload.TryGetProperty("phase", out var ph)
                             ? (ph.GetString() ?? "")
                             : "";
                         var chunk = payload.TryGetProperty("delta", out var ld)
                             ? (ld.GetString() ?? "")
                             : "";
-                        if (phase == "start") LlmStreamText = "";
+                        if (phase == "start") { LlmStreamText = ""; LlmThinkingText = ""; }
                         else if (phase == "delta") LlmStreamText += chunk;
+                        else if (phase == "thinking")
+                        {
+                            // Reasoning never joins the answer. Keep a bounded
+                            // tail: a long recap can think for tens of KB and
+                            // only the last lines are worth showing.
+                            var t = LlmThinkingText + chunk;
+                            LlmThinkingText = t.Length > 4000 ? t[^4000..] : t;
+                        }
                     }
                     break;
                 case "stt_chunk":
@@ -608,6 +632,19 @@ public partial class AppViewModel : ObservableObject
                         var elapsedMs = payload.GetProperty("elapsed_ms").GetInt64();
                         var chunkCount = payload.GetProperty("chunk_count").GetInt32();
                         MeetingChunkReceived?.Invoke(dir, speaker, line, elapsedMs, chunkCount);
+                    }
+                    break;
+                case "meeting_transcription_behind":
+                    // The machine cannot transcribe as fast as it records.
+                    // Fired ONCE per meeting, while it is still running, so
+                    // the user can switch engine instead of finding out at
+                    // stop time. The recording itself is unaffected — the
+                    // capture and transcription threads are separate.
+                    {
+                        var engine = payload.TryGetProperty("engine", out var enEl)
+                            ? (enEl.GetString() ?? "") : "";
+                        Log?.Invoke($"transcription behind (engine={engine}) — audio recording unaffected", "Meeting");
+                        MeetingTranscriptionBehind?.Invoke(engine);
                     }
                     break;
                 case "audio.stream_error":

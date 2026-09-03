@@ -672,4 +672,27 @@ public static class MeetingRecapHelpers
             _ => $"LLM call returned {rc} — see dimmy.log.",
         };
     }
+
+    /// <summary>Map a recap return code to the SAME categorical bucket the
+    /// Rust sanitizer uses (core/src/telemetry/sanitize.rs error_category),
+    /// so `meeting.recap_completed` says WHY it failed and not merely that
+    /// it did.
+    ///
+    /// Until this existed the event carried `success: false` and nothing
+    /// else: 21 of 57 recaps failed over 60 days (2026-09-03) and not one
+    /// was explicable. Categorical strings only — never the provider's
+    /// message, which echoes the transcript back.</summary>
+    public static string RecapRcToCategory(int rc) => rc switch
+    {
+        -2 => "no_api_key",
+        -4 => "model_load",
+        -5 => "not_found",
+        -6 => "auth",
+        -7 => "rate_limit",
+        -8 => "network",
+        -9 => "too_large",
+        -10 => "truncated",
+        -11 => "refusal",
+        _ => "unknown",
+    };
 }

@@ -17,6 +17,7 @@ Cross-platform voice-transcription overlay. Records audio via global hotkey, tra
 | Cutting a release | [`docs/RELEASING.md`](docs/RELEASING.md) |
 | Development philosophy (mandatory reading) | [`docs/dev/development-practices.md`](docs/dev/development-practices.md) |
 | Audio DSP pipeline, VAD, AGC rules | [`docs/dev/audio-pipeline.md`](docs/dev/audio-pipeline.md) |
+| **Meeting audio durability — why capture and transcription are separate threads (MUST read before touching `meeting.rs`)** | [`docs/dev/meeting-audio-durability.md`](docs/dev/meeting-audio-durability.md) |
 | Known bugs — read before touching audio, macOS FFI, Windows transparency | [`docs/dev/known-bugs.md`](docs/dev/known-bugs.md) |
 | Per-module reference (providers, STT, LLM, history, etc.) | [`docs/dev/modules.md`](docs/dev/modules.md) |
 | **Known-good baseline (v0.6.66) — as-built behavior + FREEZE invariants of the load-bearing features (meeting/system-audio, recap, shortcuts, API/providers, dictation)** | [`docs/dev/known-good-baseline.md`](docs/dev/known-good-baseline.md) |
@@ -223,7 +224,7 @@ A fresh session must know these exist too — all in the shared core, so each is
 | Add an FFI entry | `core/src/ffi.rs` + `core/tests/v2_ffi.rs` (round-trip) + each platform's interop wrapper |
 | Add an app-rule trigger | `core/src/app_rules.rs::resolve` + UI capture (Win: `Helpers/AppContextCapture.cs`, Mac: `NSWorkspace`) |
 | Fix audio bug | Reproduce in `preprocess.rs` test FIRST, read `docs/dev/audio-pipeline.md`, then fix |
-| Add a meeting feature | `core/src/meeting.rs` (worker + transcripts.txt) + UI window + LLM raw handoff. Lifecycle is decoupled from UI: closing the window doesn't stop the recording — `MEETING` static lives in `ffi.rs` |
+| Add a meeting feature | `core/src/meeting.rs` + UI window + LLM raw handoff. Lifecycle is decoupled from UI: closing the window doesn't stop the recording — `MEETING` static lives in `ffi.rs`. **Two threads: `worker_loop` writes audio and may never block; `stt_thread_loop` owns transcription + `transcripts.txt` + host events. Read THE AUDIO RULE below before adding anything to the capture loop.** |
 | Touch meeting pause/resume | `meeting.rs::MeetingSession::{pause,resume,is_paused}` + FFI rc contract (1 / 0 / -1). Worker excludes paused window from `audio.wav` and adds `[paused]` line in `transcripts.txt` |
 | Touch the AEC / Mix-mode echo path | `core/src/aec.rs` — 10 ms frames @ 48 kHz, ref ring zero-padding when loopback empty. Reference signal comes from cpal loopback, capture from mic |
 | Touch the file-load pipeline | `dimmy_transcribe_file` in `ffi.rs` — rc table is contractual, don't renumber. Uses `preprocess::process_buffer_for_file_load` (highpass-only). Do NOT call full `RawAudio::preprocess` — AGC NaN destroys long files |
@@ -243,6 +244,42 @@ A fresh session must know these exist too — all in the shared core, so each is
 | Add a doc | `docs/dev/` (permanent) or `docs/superpowers/handoffs/` (time-bound). DO NOT link handoffs from `CLAUDE.md` — they decay; this file describes the codebase, not work-in-progress. |
 
 ## Critical invariants (beyond the philosophy)
+
+### 🔴 THE AUDIO RULE — nothing may stand between captured audio and the disk
+
+**Recording the audio is the one thing that cannot be redone.** A transcript
+can be regenerated from the file, a recap can be re-run, a summary can be
+rewritten. Audio that was never written is gone, and with it the meeting.
+Every other consideration in the capture path yields to this one.
+
+Concretely, in `core/src/meeting.rs`:
+
+- The capture worker (`worker_loop`) reads the shared buffer, writes the
+  three track sinks, and moves its cursor. **That is all it may do.**
+- Transcription, model loads, network calls, host callbacks
+  (`emit_event`) and anything else that can block, wedge or be slow lives
+  on the transcription thread (`stt_thread_loop`), reached through a
+  **bounded** queue with `try_send` — never `send`.
+- When the queue is full the window is **dropped**, and the user is told
+  once (`meeting_transcription_behind`). Dropping transcript is correct;
+  waiting is not.
+- At stop, the audio sinks are **finalized BEFORE** joining the
+  transcriber. A wedged transcriber costs the tail of the transcript and
+  nothing else.
+
+Paid for on 2026-09-02: a 34-minute meeting produced an 11-minute file.
+The single worker thread stalled for 22 minutes after a chunk — **not
+inside whisper**, which is why "make STT faster" was never the fix — the
+audio piled up in RAM, `stop()` hit its 120 s join timeout, and the buffer
+was gone by the time the loop came back. 23 minutes of a real conversation,
+unrecoverable. The capture-ratio alarm existed and never fired, because it
+only runs at stop and stop had already given up.
+
+If you are about to add anything to the capture loop, the question is not
+"is this fast?" — it is "can this ever block?". If the answer is anything
+but a provable no, it belongs on the other thread. Regression guards:
+`core/src/meeting.rs` `mod audio_never_blocked`. Full incident write-up,
+design and FREEZE list: [`docs/dev/meeting-audio-durability.md`](docs/dev/meeting-audio-durability.md).
 
 ### Audio pipeline
 - **NEVER feed zero-amplitude samples to dagc (AGC).** It produces permanent NaN corruption. See `docs/dev/audio-pipeline.md` and `docs/dev/known-bugs.md` AUDIO-001.

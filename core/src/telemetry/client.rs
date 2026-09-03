@@ -173,7 +173,19 @@ pub fn track(event: Event) {
     // contains something that looks like a secret, drop the event and
     // increment the counter. This guards against a future code change
     // that accidentally puts user content into a property.
-    if looks_like_secret(&payload) {
+    //
+    // Scanned WITHOUT the envelope, because the envelope legitimately
+    // carries one: `build_payload` sets `"api_key": POSTHOG_API_KEY`, and
+    // PostHog project keys start `phc_`. When `looks_like_secret` learned
+    // to find prefixes mid-string (2026-09-02, closing a real hole where a
+    // key inside a longer string slipped through), it started recognising
+    // our own key and dropped EVERY event — silently, since a dropped
+    // event looks exactly like an app nobody used. Caught 2026-09-03 from
+    // `secret-guard tripped on event=transcription.completed` in a live
+    // log. The properties are where user content could actually leak, and
+    // they are what this guard was written to protect.
+    let scanned = event.properties().to_string();
+    if looks_like_secret(&scanned) {
         DROPPED_SECRET_GUARD.fetch_add(1, Ordering::Relaxed);
         crate::log(&format!(
             "[telemetry] dropped: secret-guard tripped on event={}",

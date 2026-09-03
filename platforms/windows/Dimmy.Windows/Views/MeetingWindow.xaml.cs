@@ -1616,7 +1616,10 @@ public sealed partial class MeetingWindow : Window
         var vm = App.Instance?.AppViewModel;
         if (vm == null || LiveRecapCard == null) return;
         vm.LlmStreamText = "";
+        vm.LlmThinkingText = "";
         if (LiveRecapText != null) LiveRecapText.Text = "";
+        if (ProcLiveText != null) ProcLiveText.Text = "";
+        if (ProcLiveCard != null) ProcLiveCard.Visibility = Visibility.Collapsed;
         LiveRecapCard.Visibility = Visibility.Visible;
         vm.PropertyChanged -= OnLlmStreamChanged;
         vm.PropertyChanged += OnLlmStreamChanged;
@@ -1627,19 +1630,45 @@ public sealed partial class MeetingWindow : Window
         var vm = App.Instance?.AppViewModel;
         if (vm != null) vm.PropertyChanged -= OnLlmStreamChanged;
         if (LiveRecapCard != null) LiveRecapCard.Visibility = Visibility.Collapsed;
+        if (ProcLiveCard != null) ProcLiveCard.Visibility = Visibility.Collapsed;
     }
 
     private void OnLlmStreamChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
-        if (e.PropertyName != nameof(ViewModels.AppViewModel.LlmStreamText)) return;
-        var text = App.Instance?.AppViewModel?.LlmStreamText ?? "";
+        if (e.PropertyName != nameof(ViewModels.AppViewModel.LlmStreamText)
+            && e.PropertyName != nameof(ViewModels.AppViewModel.LlmThinkingText)) return;
+        var vm = App.Instance?.AppViewModel;
+        var text = vm?.LlmStreamText ?? "";
+        // Before the first answer token, show the reasoning instead — an opus
+        // recap thinks for well over a minute, and an empty pane for that long
+        // is what made users ask whether it had died. The moment real text
+        // arrives the answer takes the pane over.
+        var showingThinking = text.Length == 0;
+        if (showingThinking) text = vm?.LlmThinkingText ?? "";
         // The event arrives on the core's thread; the UI has its own.
         DispatcherQueue?.TryEnqueue(() =>
         {
-            if (LiveRecapText == null) return;
             // Tail only: the finished recap is rendered by the cards below,
             // so this pane is a progress signal, not the deliverable.
-            LiveRecapText.Text = text.Length > 1200 ? text[^1200..] : text;
+            var tail = text.Length > 1200 ? text[^1200..] : text;
+            var shown = showingThinking && tail.Length > 0 ? $"Thinking...\n{tail}" : tail;
+            // Two panes, one for each state the window can be in while a
+            // recap runs: Processing (a fresh meeting wrapping up) and Done
+            // (Regenerate recap on a past one). Writing both is a couple of
+            // string assignments and removes the class of bug where the
+            // stream lands in whichever ancestor happens to be collapsed.
+            if (LiveRecapText != null) LiveRecapText.Text = shown;
+            if (ProcLiveText != null)
+            {
+                ProcLiveText.Text = shown;
+                if (ProcLiveCard != null)
+                {
+                    ProcLiveCard.Visibility = shown.Length > 0
+                        ? Visibility.Visible : Visibility.Collapsed;
+                }
+                // Follow the tail as it grows.
+                ProcLiveScroll?.ChangeView(null, double.MaxValue, null, true);
+            }
         });
     }
 
@@ -2640,8 +2669,10 @@ public sealed partial class MeetingWindow : Window
             // empty so the model classifies; a specific key biases emphasis.
             var meetingType = (RecapTypePicker?.SelectedValue as string) ?? "";
             if (meetingType == "auto") meetingType = "";
-            // Recap is a single opaque LLM call — no progress events — so an
-            // indeterminate bar that simply stays up for the whole call.
+            // Indeterminate: the recap has no percentage to report. It is no
+            // longer opaque though — GeneratePostProcessAsync opens the live
+            // pane, which streams the model's reasoning and then its text as
+            // they arrive (OpenAI-compatible, Anthropic and Claude Code).
             RegenProgressBar.IsIndeterminate = true;
             RegenProgressText.Text = "Generating recap…";
             RegenProgressPanel.Visibility = Visibility.Visible;
