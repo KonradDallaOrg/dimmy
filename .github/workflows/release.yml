@@ -232,6 +232,46 @@ jobs:
         run: |
           xcodebuild -project Dimmy.xcodeproj -resolvePackageDependencies
 
+      # Swift unit tests. `platforms/macos/DimmyTests/` has existed for
+      # months and NOTHING ran it: every workflow called `xcodebuild build`
+      # and none called `xcodebuild test`, so a dozen test files gave the
+      # appearance of coverage while never executing (found 2026-09-03).
+      #
+      # The zero-test guard below is the point of the step. Schemes are not
+      # shared in this project, so `-scheme Dimmy` uses one Xcode
+      # auto-generates; if DimmyTests is not in its Test action, xcodebuild
+      # exits 0 having run nothing. A green step that tested nothing is
+      # worse than no step, so the count is asserted explicitly.
+      - name: Swift unit tests
+        working-directory: platforms/macos
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -project Dimmy.xcodeproj \
+            -scheme Dimmy \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            -derivedDataPath build/test-derived \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee "$RUNNER_TEMP/swift-tests.log"
+
+          # Both output shapes: the "Executed N tests" summary, and the
+          # per-case lines newer Xcode emits.
+          EXECUTED=$(grep -oE 'Executed [0-9]+ test' "$RUNNER_TEMP/swift-tests.log" \
+            | grep -oE '[0-9]+' | sort -rn | head -1 || true)
+          if [ -z "$EXECUTED" ]; then
+            EXECUTED=$(grep -cE "^Test Case .* (passed|failed)" "$RUNNER_TEMP/swift-tests.log" || true)
+          fi
+          echo "Swift tests executed: ${EXECUTED:-0}"
+          if [ "${EXECUTED:-0}" -lt 1 ]; then
+            echo "::error::xcodebuild test ran ZERO tests. The Dimmy scheme's Test action \
+          probably does not include DimmyTests — add a shared scheme rather than \
+          letting this step pass while testing nothing."
+            exit 1
+          fi
+
       - name: Sync Mac app version from Cargo.toml
         id: mac-version
         run: |
@@ -1469,11 +1509,11 @@ jobs:
 
       - name: Clippy
         working-directory: platforms/linux
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --locked -- -D warnings
 
       - name: Test
         working-directory: platforms/linux
-        run: cargo test
+        run: cargo test --locked
 
       - name: Build release
         working-directory: platforms/linux
@@ -1484,7 +1524,7 @@ jobs:
           # Licensing v2 — same env var the other build steps inject.
           DIMMY_LICENSE_PUBKEY: ${{ secrets.DIMMY_LICENSE_PUBKEY }}
           DIMMY_LICENSE_SERVER_URL: https://license.dimmy.app
-        run: cargo build --release --features license-client
+        run: cargo build --release --locked --features license-client
 
       - name: Package AppImage
         run: |

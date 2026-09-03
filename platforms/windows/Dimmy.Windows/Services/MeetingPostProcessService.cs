@@ -205,7 +205,11 @@ public static class MeetingPostProcessService
     /// only to derive a categorical provider tag for telemetry
     /// (see TelemetryBuckets.Provider). Returns empty on any
     /// error so the bucket falls to "unset".
-    private static string ReadLlmApiUrl()
+    /// <summary>The configured recap endpoint URL, for the provider
+    /// bucket. Internal so the meeting window's own recap path can report
+    /// the same way this service does — before that, regenerated recaps
+    /// emitted no telemetry at all.</summary>
+    internal static string ReadLlmApiUrl()
     {
         try
         {

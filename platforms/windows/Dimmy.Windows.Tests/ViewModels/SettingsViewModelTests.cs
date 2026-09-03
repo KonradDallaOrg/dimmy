@@ -811,6 +811,84 @@ public class SettingsViewModelTests
             Dimmy.Windows.Helpers.MeetingRecapHelpers.RecapRcToCategory(rc));
     }
 
+    // ── Recap markdown -> HTML (the rich half of the clipboard) ──
+    // Copy used to put ONLY markdown on the clipboard, so a recap pasted
+    // into Outlook or Teams arrived full of `##` and `**`. These pin the
+    // shapes BuildMarkdownFromSections actually emits, and the escaping.
+
+    [Fact]
+    public void MarkdownToHtml_renders_the_shapes_a_recap_contains()
+    {
+        var md = """
+            # Weekly sync
+
+            ## Decisions
+
+            - Ship **Friday**
+            - Defer *the rest*
+
+            ## Actions
+
+            1. Konrad to write it up
+            2. Review Monday
+            """;
+        var html = Dimmy.Windows.Helpers.MeetingRecapHelpers.MarkdownToHtml(md);
+
+        Assert.Contains("<h1>Weekly sync</h1>", html);
+        Assert.Contains("<h2>Decisions</h2>", html);
+        Assert.Contains("<li>Ship <strong>Friday</strong></li>", html);
+        Assert.Contains("<li>Defer <em>the rest</em></li>", html);
+        Assert.Contains("<ol>", html);
+        Assert.Contains("<li>Konrad to write it up</li>", html);
+        // Lists must be closed, or the paste swallows what follows.
+        Assert.Equal(
+            System.Text.RegularExpressions.Regex.Matches(html, "<ul>").Count,
+            System.Text.RegularExpressions.Regex.Matches(html, "</ul>").Count);
+        Assert.Equal(
+            System.Text.RegularExpressions.Regex.Matches(html, "<ol>").Count,
+            System.Text.RegularExpressions.Regex.Matches(html, "</ol>").Count);
+        // No stray markdown survives into the rich paste.
+        Assert.DoesNotContain("##", html);
+        Assert.DoesNotContain("**", html);
+    }
+
+    [Fact]
+    public void MarkdownToHtml_escapes_transcript_text_before_marking_it_up()
+    {
+        // A recap quotes what people said. If someone said "<script>" it must
+        // arrive as text in the email, not as markup.
+        var html = Dimmy.Windows.Helpers.MeetingRecapHelpers
+            .MarkdownToHtml("- He said <script>alert(1)</script> & laughed");
+        Assert.Contains("&lt;script&gt;", html);
+        Assert.Contains("&amp;", html);
+        Assert.DoesNotContain("<script>", html);
+    }
+
+    [Fact]
+    public void MarkdownToHtml_drops_the_invisible_type_tag()
+    {
+        // `<!-- dimmy-type: ... -->` is bookkeeping under the title. It must
+        // never reach a pasted recap.
+        var html = Dimmy.Windows.Helpers.MeetingRecapHelpers
+            .MarkdownToHtml("""
+                # Title
+                <!-- dimmy-type: standup -->
+
+                ## TL;DR
+
+                All good
+                """);
+        Assert.DoesNotContain("dimmy-type", html);
+        Assert.Contains("<h1>Title</h1>", html);
+    }
+
+    [Fact]
+    public void MarkdownToHtml_is_empty_for_empty_input()
+    {
+        Assert.Equal("", Dimmy.Windows.Helpers.MeetingRecapHelpers.MarkdownToHtml(""));
+        Assert.Equal("", Dimmy.Windows.Helpers.MeetingRecapHelpers.MarkdownToHtml("   \n  \n"));
+    }
+
     [Fact]
     public void RecapRcToCategory_is_categorical_never_free_text()
     {

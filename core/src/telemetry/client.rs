@@ -103,7 +103,43 @@ pub fn set_enabled(enabled: bool) {
 
 /// Read the runtime enabled flag.
 pub fn is_enabled() -> bool {
-    ENABLED.load(Ordering::Relaxed)
+    ENABLED.load(Ordering::Relaxed) && !is_automated_run()
+}
+
+/// True when this process is a build-machine smoke test rather than a
+/// person using Dimmy.
+///
+/// `test-install.yml` installs and launches Dimmy on a clean Windows VM on
+/// every release, and those VMs reported telemetry like real users: 60 of
+/// the 76 "users" who started onboarding over 60 days were our own runners
+/// (measured 2026-09-03). Every funnel computed before that date was built
+/// on ~79 % noise — the onboarding completion rate looked like 13 % when
+/// the real figure for humans was 63 %.
+///
+/// Set `DIMMY_TELEMETRY_OPT_OUT=1` in any automated environment. The
+/// standard CI variables are honoured too, so a runner that forgets the
+/// explicit flag still stays out of the numbers. Read once and cached:
+/// this is a property of the process, not of the moment.
+fn is_automated_run() -> bool {
+    static AUTOMATED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *AUTOMATED.get_or_init(|| {
+        let flagged = |k: &str| {
+            std::env::var(k)
+                .map(|v| {
+                    let v = v.trim().to_ascii_lowercase();
+                    !v.is_empty() && v != "0" && v != "false"
+                })
+                .unwrap_or(false)
+        };
+        let automated = flagged("DIMMY_TELEMETRY_OPT_OUT")
+            || flagged("CI")
+            || flagged("GITHUB_ACTIONS")
+            || flagged("TF_BUILD");
+        if automated {
+            crate::log("[telemetry] automated environment detected — this process reports nothing");
+        }
+        automated
+    })
 }
 
 fn http_client() -> &'static reqwest::Client {
@@ -735,5 +771,34 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&p).expect("json");
         assert_eq!(v["properties"]["scope"], "llm");
         assert_eq!(v["properties"]["provider"], "openai");
+    }
+
+    // ── Automated runs must not pollute the numbers ──────────────────
+    // `test-install.yml` installs and launches Dimmy on a clean VM for
+    // every release. Those runs reported as real users: 60 of 76 people
+    // who "started onboarding" over 60 days were our own runners
+    // (2026-09-03), which is why the completion rate read 13 % instead of
+    // the real 63 %. These pin the recognition rule; the env var itself is
+    // process-wide and cached, so it is tested through the pure helper.
+
+    fn looks_automated(value: &str) -> bool {
+        let v = value.trim().to_ascii_lowercase();
+        !v.is_empty() && v != "0" && v != "false"
+    }
+
+    #[test]
+    fn ci_flag_values_that_mean_yes() {
+        for v in ["1", "true", "TRUE", "yes", "on"] {
+            assert!(looks_automated(v), "{v:?} should read as automated");
+        }
+    }
+
+    #[test]
+    fn ci_flag_values_that_mean_no() {
+        // GitHub sets CI=true, but other systems set CI=false or leave it
+        // empty. Treating those as automated would silence real users.
+        for v in ["", "0", "false", "FALSE", "  "] {
+            assert!(!looks_automated(v), "{v:?} must NOT read as automated");
+        }
     }
 }

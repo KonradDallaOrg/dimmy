@@ -63,6 +63,14 @@ jobs:
       SETUP_PATTERN: ${{ inputs.setup_pattern }}
       INSTALL_DIR: ${{ inputs.install_dir }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # This job installs and launches Dimmy for real, so without an opt-out
+      # the VM reports telemetry indistinguishable from a person's. It ran on
+      # every release: 60 of the 76 "users" who started onboarding over 60
+      # days were these runners (measured 2026-09-03), which made every funnel
+      # ~79 % noise — onboarding completion read 13 % when the figure for
+      # humans was 63 %. GITHUB_ACTIONS/CI are also honoured by the core, this
+      # is the explicit belt to that pair of braces.
+      DIMMY_TELEMETRY_OPT_OUT: "1"
 
     steps:
       - name: Runner baseline (what's already installed)

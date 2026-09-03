@@ -1375,6 +1375,29 @@ public sealed partial class MeetingWindow : Window
 
     // ── Post-process pipeline (LLM recap + actions) ──────────────
 
+    /// <summary>Emit `meeting.recap_completed` for a recap run from this
+    /// window. Same event, same buckets and the same categorical vocabulary
+    /// as <see cref="Services.MeetingPostProcessService"/>, so recaps
+    /// generated at stop and recaps regenerated later aggregate together
+    /// instead of only the former being counted.</summary>
+    private static void TrackRecapCompleted(
+        string modelOverride, long elapsedMs, bool success, string errorCategory)
+    {
+        try
+        {
+            DimmyNative.TrackEvent("meeting.recap_completed", new
+            {
+                provider = Services.TelemetryBuckets.Provider(
+                    Services.MeetingPostProcessService.ReadLlmApiUrl()),
+                recap_model_bucket = Services.TelemetryBuckets.RecapModel(modelOverride),
+                processing_ms_bucket = Services.TelemetryBuckets.ProcessingMs(elapsedMs),
+                success,
+                error_category = errorCategory,
+            });
+        }
+        catch (Exception ex) { App.Log($"recap telemetry exc: {ex.Message}", "Meeting"); }
+    }
+
     private async Task GeneratePostProcessAsync(string dir, string transcript, string meetingType = "")
     {
         try
@@ -1383,6 +1406,12 @@ public sealed partial class MeetingWindow : Window
             var modelOverride = PickRecapModel();
             App.Log($"recap with model='{modelOverride}', prompt {prompt.Length} chars", "Meeting");
             BeginLiveRecap();
+            // This path reported NOTHING until 2026-09-03, so no regenerated
+            // recap ever reached the numbers — and a regenerate is most often
+            // what a user does right after one failed, i.e. exactly the sample
+            // worth having. The service path has always emitted this; now both
+            // do, with the same buckets.
+            var recapTimer = System.Diagnostics.Stopwatch.StartNew();
             var buf = new byte[1 << 18];
             // 16000 max_tokens leaves room for the Anthropic extended-thinking
             // budget (10000) + the actual response (~4-6k tokens for a rich
@@ -1399,9 +1428,12 @@ public sealed partial class MeetingWindow : Window
                 // the user has one click between "recap failed" and
                 // the picker they need to fix.
                 var actionable = rc == -5 || rc == -6 || rc == -7;
+                TrackRecapCompleted(modelOverride, recapTimer.ElapsedMilliseconds, false,
+                    Helpers.MeetingRecapHelpers.RecapRcToCategory(rc));
                 ShowDoneFallback(transcript, msg, actionable);
                 return;
             }
+            TrackRecapCompleted(modelOverride, recapTimer.ElapsedMilliseconds, true, "");
             var raw = System.Text.Encoding.UTF8.GetString(buf, 0, rc);
             var sections = Helpers.MeetingRecapHelpers.ParseStructuredRecap(raw);
 
@@ -2568,9 +2600,30 @@ public sealed partial class MeetingWindow : Window
                 return;
             }
             var dp = new global::Windows.ApplicationModel.DataTransfer.DataPackage();
+            // BOTH formats, one click, no new button. Outlook, Teams, Word
+            // and Notion take the HTML and paste a formatted recap; editors
+            // and chat boxes take the markdown exactly as before. Sending a
+            // recap to someone used to mean pasting raw `##` and `**` into an
+            // email, which read as broken output rather than a summary.
             dp.SetText(md);
+            try
+            {
+                var html = Helpers.MeetingRecapHelpers.MarkdownToHtml(md);
+                if (!string.IsNullOrEmpty(html))
+                {
+                    dp.SetHtmlFormat(
+                        global::Windows.ApplicationModel.DataTransfer.HtmlFormatHelper
+                            .CreateHtmlFormat(html));
+                }
+            }
+            catch (Exception ex)
+            {
+                // Rich formatting is a bonus; the markdown above is the
+                // guarantee. Never fail the copy over it.
+                App.Log($"copy recap html exc: {ex.Message}", "Meeting");
+            }
             global::Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dp);
-            ShowToast("Recap copied as markdown.");
+            ShowToast("Recap copied - paste as text or formatted.");
         }
         catch (Exception ex)
         {
