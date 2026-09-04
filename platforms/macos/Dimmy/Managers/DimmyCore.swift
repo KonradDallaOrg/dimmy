@@ -1149,6 +1149,39 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
         if appState.meetingActive != active { appState.meetingActive = active }
         if appState.meetingIsPaused != paused { appState.meetingIsPaused = paused }
 
+    case "telegram_state":
+        // Single source of truth for the login state machine + pending
+        // badge. Drives the Settings card + the connect sheet.
+        appState.telegramPhase = payload["phase"] as? String ?? "disabled"
+        appState.telegramAccount = payload["account"] as? String ?? ""
+        appState.telegramPending = payload["pending"] as? Int ?? 0
+
+    case "telegram_pending":
+        // A new audio landed in Saved Messages. Hand to the orchestrator
+        // (auto-process, or a one-at-a-time nudge).
+        if let msgId = payload["msg_id"] as? Int {
+            let filename = payload["filename"] as? String ?? ""
+            let size = (payload["size"] as? Int).map { Int64($0) } ?? 0
+            let isBacklog = payload["backlog"] as? Bool ?? false
+            TelegramService.shared.onPending(
+                msgId: Int32(msgId), filename: filename,
+                sizeBytes: size, isBacklog: isBacklog)
+        }
+
+    case "telegram_audio":
+        // The worker finished downloading. Run transcribe + recap.
+        if let msgId = payload["msg_id"] as? Int,
+           let path = payload["path"] as? String {
+            let filename = payload["filename"] as? String ?? ""
+            TelegramService.shared.onAudioReady(
+                msgId: Int32(msgId), path: path, filename: filename)
+        }
+
+    case "telegram_error":
+        let message = payload["message"] as? String ?? "Telegram error"
+        appState.telegramError = message
+        print("[DimmyCore] telegram_error: \(message)")
+
     case "model_download_progress":
         if let downloaded = payload["downloaded"] as? Int,
            let total = payload["total"] as? Int,

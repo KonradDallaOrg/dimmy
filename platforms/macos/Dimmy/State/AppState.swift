@@ -1254,6 +1254,33 @@ final class AppState: ObservableObject {
     /// False = user clicks the "Send to Notion" button per meeting.
     @Published var notionAutoSend: Bool = false
 
+    // MARK: - Telegram audio inbox
+
+    /// Master switch. The Rust `telegram` worker runs only when this is
+    /// true AND the build has the feature + credentials. Config-mirror;
+    /// round-trips via `dimmy_set_config_json`, which also starts/stops
+    /// the worker.
+    @Published var telegramEnabled: Bool = false
+
+    /// When true the host auto-processes every shared audio (download +
+    /// transcribe + recap) without the nudge prompt. Config-mirror.
+    @Published var telegramAutoProcess: Bool = false
+
+    /// Live login-state-machine phase from the `telegram_state` event:
+    /// disabled | no_credentials | logged_out | wait_code | wait_password
+    /// | connected | error. NOT persisted — recomputed from the worker.
+    @Published var telegramPhase: String = "disabled"
+    /// Connected account display name (empty unless phase == connected).
+    @Published var telegramAccount: String = ""
+    /// Count of un-handled audio messages waiting in the inbox.
+    @Published var telegramPending: Int = 0
+    /// True if this build has the `telegram` feature compiled in.
+    @Published var telegramCompiled: Bool = false
+    /// True if this build embeds Telegram API id/hash credentials.
+    @Published var telegramHasCredentials: Bool = false
+    /// Last worker error (from `telegram_error`), shown inline in Settings.
+    @Published var telegramError: String?
+
     // MARK: - Custom vocabulary / user dictionary
 
     /// Words / short phrases the user has flagged to boost in STT.
@@ -1459,6 +1486,8 @@ final class AppState: ObservableObject {
         if let arr = config["call_detect_excluded_apps"] as? [String] {
             callDetectExcludedApps = arr.map { $0.lowercased() }
         }
+        if let v = config["telegram_enabled"] as? Bool { telegramEnabled = v }
+        if let v = config["telegram_auto_process"] as? Bool { telegramAutoProcess = v }
 
         // Local LLM
         if let v = config["llm_mode"] as? String { llmMode = v }
@@ -1918,6 +1947,12 @@ final class AppState: ObservableObject {
             // notion_auto_send IS safe to round-trip (bool toggle,
             // not a load-bearing identifier).
             "notion_auto_send": notionAutoSend,
+            // telegram_{enabled,auto_process} are safe bool round-trips
+            // (setting telegram_enabled also starts/stops the worker in
+            // the Rust core). The login session itself lives on disk in
+            // <config>/telegram/, never in config.json.
+            "telegram_enabled": telegramEnabled,
+            "telegram_auto_process": telegramAutoProcess,
             "user_dict": userDictWords,
             "app_rules": appRules.map { $0.toDict() },
         ]

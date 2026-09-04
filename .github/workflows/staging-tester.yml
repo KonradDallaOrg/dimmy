@@ -177,10 +177,16 @@ jobs:
           # same Velopack packId as prod for channel-prerelease auto-update)
           # does NOT set this — its users share the prod config dir.
           DIMMY_CONFIG_NAMESPACE: dimmy-staging
+          # Telegram audio-inbox: bake the API id/hash so the Mac staging
+          # build can actually connect (mirror of the Windows build). The
+          # `telegram` cargo feature + these creds are required together;
+          # without either the worker reports phase=no_credentials.
+          DIMMY_TELEGRAM_API_ID: ${{ secrets.DIMMY_TELEGRAM_API_ID }}
+          DIMMY_TELEGRAM_API_HASH: ${{ secrets.DIMMY_TELEGRAM_API_HASH }}
         run: |
           cargo clean --release 2>/dev/null
           cargo build --lib --release --target aarch64-apple-darwin \
-            --features local-stt-metal,local-llm-metal,local-stt-parakeet-coreml,local-stt-parakeet-fluid,local-dfn,license-client
+            --features local-stt-metal,local-llm-metal,local-stt-parakeet-coreml,local-stt-parakeet-fluid,local-dfn,license-client,telegram
 
       - name: Verify static library
         run: |
