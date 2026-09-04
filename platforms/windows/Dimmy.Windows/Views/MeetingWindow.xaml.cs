@@ -175,6 +175,7 @@ public sealed partial class MeetingWindow : Window
         if (App.Instance?.AppViewModel is { } vm)
         {
             vm.MeetingChunkReceived += OnMeetingChunkReceived;
+            vm.MeetingFinishingTranscription += OnFinishingTranscription;
             // Drive the Done-view regenerate progress bar from the
             // file_transcribe_progress event the core already emits per
             // chunk during dimmy_meeting_retranscribe.
@@ -199,6 +200,7 @@ public sealed partial class MeetingWindow : Window
             if (App.Instance?.AppViewModel is { } vmClose)
             {
                 vmClose.MeetingChunkReceived -= OnMeetingChunkReceived;
+                vmClose.MeetingFinishingTranscription -= OnFinishingTranscription;
                 vmClose.FileTranscribeProgress -= OnRegenTranscribeProgress;
                 vmClose.PropertyChanged -= OnAppVmPropertyChanged;
             }
@@ -875,6 +877,14 @@ public sealed partial class MeetingWindow : Window
                 SetState(MeetingState.Processing);
                 ResetProcSteps();
                 SetProcStep(1, true);
+                // The recap is running on the SERVICE path (pill stop), which
+                // has no UI of its own — but the stream events come from the
+                // core either way, so the live pane can still show them.
+                // Without this the window sat on "Wrapping up..." for the
+                // whole recap while the model was visibly writing on the
+                // other path (reported 2026-09-04). EndLiveRecap runs from
+                // ApplyDoneSections / ShowDoneFallback as usual.
+                BeginLiveRecap();
                 // ProcStep 2 (recap) is in flight on the pill side;
                 // NotifyMeetingRecapSaved will land us on Done with
                 // the final artefacts once the LLM returns.
@@ -1355,6 +1365,28 @@ public sealed partial class MeetingWindow : Window
         SetProcStep(1, false);
         SetProcStep(2, false);
         SetProcStep(3, false);
+        // Restore the default label — a previous stop may have rewritten it
+        // to the transcription-backlog wording.
+        if (ProcStep2Text != null) ProcStep2Text.Text = ProcStep2Default;
+    }
+
+    private const string ProcStep2Default = "Generating recap with LLM...";
+
+    /// <summary>The core is draining the transcriber's backlog before the
+    /// recap can start. Say so: the wait was up to 90 s with nothing on
+    /// screen and no way to tell working from wedged, and the recap has not
+    /// been dispatched yet so there is no stream to show either
+    /// (measured 2026-09-04 at exactly 90 s with 42 windows outstanding).
+    /// </summary>
+    private void OnFinishingTranscription(int droppedWindows)
+    {
+        DispatcherQueue?.TryEnqueue(() =>
+        {
+            if (ProcStep2Text == null) return;
+            ProcStep2Text.Text = droppedWindows > 0
+                ? "Finishing transcription, then the recap..."
+                : "Finishing transcription...";
+        });
     }
 
     private void SetProcStep(int n, bool done)
@@ -1980,6 +2012,10 @@ public sealed partial class MeetingWindow : Window
             SetProcStep(1, true);
             SetProcStep(2, true);
             SetProcStep(3, true);
+            // Unsubscribe the live stream pane opened when the external stop
+            // put us in Processing. Leaking the handler would keep appending
+            // a later command-mode stream into this window.
+            EndLiveRecap();
             SetState(MeetingState.Done);
         }
         LoadHistory();

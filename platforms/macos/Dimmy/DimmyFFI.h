@@ -708,4 +708,44 @@ int32_t dimmy_call_detector_state(char * _Nonnull out_buf, int32_t buf_len);
 int32_t dimmy_hotkey_combos_conflict(const char * _Nullable a,
                                      const char * _Nullable b);
 
+// ── Telegram inbox source ───────────────────────────────────────────
+// Rust core/src/telegram.rs — the "Saved Messages audio inbox". Every
+// entry exists regardless of the `telegram` cargo feature (stable C ABI)
+// and returns -100 when the core was built without it. Outcomes are
+// async, delivered via the telegram_state / _pending / _audio / _error
+// events on the existing event callback.
+
+/// Master start/stop of the Telegram worker thread. Idempotent.
+void dimmy_telegram_set_enabled(int32_t enabled);
+
+/// Request a login code for `phone` (E.164). 0 queued, -1 arg/channel,
+/// -100 not compiled. Success emits telegram_state {phase:"wait_code"}.
+int32_t dimmy_telegram_start_login(const char * _Nonnull phone);
+
+/// Submit the login code (after phase=wait_code). 0/-1/-100.
+int32_t dimmy_telegram_submit_code(const char * _Nonnull code);
+
+/// Submit the 2FA cloud password (after phase=wait_password). 0/-1/-100.
+int32_t dimmy_telegram_submit_password(const char * _Nonnull password);
+
+/// Sign out; emits telegram_state {phase:"logged_out"}. 0/-1/-100.
+int32_t dimmy_telegram_logout(void);
+
+/// Accept a pending audio: download it, then emit telegram_audio {path}.
+/// 0/-1/-100.
+int32_t dimmy_telegram_process(int32_t msg_id);
+
+/// Reject a pending audio without processing (never re-offered). 0/-1/-100.
+int32_t dimmy_telegram_dismiss(int32_t msg_id);
+
+/// Mark an audio fully handled after the host transcribed it. 0/-1/-100.
+int32_t dimmy_telegram_mark_processed(int32_t msg_id);
+
+/// JSON status snapshot {compiled,has_credentials,phase,account,pending}.
+/// Bytes written / needed-size; standard out_buf/buf_len contract.
+int32_t dimmy_telegram_status(char * _Nonnull out_buf, int32_t buf_len);
+
+/// JSON array of pending audio {msg_id,filename,date,size}. "[]" when empty.
+int32_t dimmy_telegram_pending(char * _Nonnull out_buf, int32_t buf_len);
+
 #endif /* DimmyFFI_h */

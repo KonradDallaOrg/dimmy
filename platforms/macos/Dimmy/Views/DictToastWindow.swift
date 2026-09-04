@@ -2,7 +2,8 @@ import AppKit
 import SwiftUI
 
 /// Self-dismissing in-app toast for dictionary feedback. Top-centre of
-/// the active screen, ~4 s lifetime. Bespoke window instead of
+/// the active screen; it stays up long enough to read (see
+/// `visibleSeconds`). Bespoke window instead of
 /// `UNUserNotification` because we want immediate visual feedback
 /// inline with the user's flow — UN-pushed notifications are
 /// throttled, batched, and may not surface at all if the user has
@@ -110,9 +111,33 @@ final class DictToastWindow {
         window.orderFrontRegardless()
 
         current = window
-        dismissTimer = Timer.scheduledTimer(withTimeInterval: 4.0, repeats: false) { _ in
+        dismissTimer = Timer.scheduledTimer(
+            withTimeInterval: visibleSeconds(title: title, body: body), repeats: false
+        ) { _ in
             Task { @MainActor in dismissCurrent() }
         }
+    }
+
+    /// How long to leave the toast up, from how long it takes to read.
+    ///
+    /// This was a flat 4 s, which suits "Added to dictionary" and nothing
+    /// else. The toasts added in 2026-09 carry the user's next step — "try
+    /// Parakeet or a smaller model", "the transcript is saved, you can run
+    /// the recap again" — and those disappeared before they could be read
+    /// (reported on Windows 2026-09-04; the Mac had the same flat timer).
+    ///
+    /// Win parity: `Services/ToastDuration.cs`, same constants.
+    nonisolated static func visibleSeconds(title: String, body: String) -> TimeInterval {
+        let minSecs = 3.0
+        let maxSecs = 12.0
+        let wordsPerMinute = 180.0   // glanced at, not read attentively
+        let noticeSecs = 1.2         // finding the toast before reading it
+
+        let words = (title + " " + body)
+            .split(whereSeparator: { $0.isWhitespace })
+            .count
+        let total = noticeSecs + Double(words) / wordsPerMinute * 60.0
+        return Swift.min(Swift.max(total, minSecs), maxSecs)
     }
 
     static func showAdded(word: String) {

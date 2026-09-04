@@ -498,6 +498,8 @@ final class MeetingViewModel: ObservableObject {
         isWorking = true
         phase = .processing
         processingStep = .saving
+        // Fresh stop: the core will raise this again if it has a backlog.
+        AppState.shared.meetingFinishingTranscription = false
         statusLabel = "Stopping & finalising..."
         subStatusLabel = ""
         stopRecordingPolling()

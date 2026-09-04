@@ -109,6 +109,50 @@ never for a meeting.
 | A wedged transcriber cannot grow memory | `STT_QUEUE_DEPTH = 4` (~24 MB of PCM) |
 | A wedged transcriber cannot cost the recording | Sinks are **finalized before** the join |
 
+### The buffer is reclaimed, not just indexed
+
+The capture buffer used to only ever grow. Both cursors were indices into
+it and nothing removed what had already been written, so a meeting held
+every sample it had ever captured in RAM alongside the copy on disk.
+
+Measured over a real 22-minute meeting (2026-09-04), from the worker's own
+diagnostic:
+
+```
+   76s →  27.0 MiB      1161s → 406.3 MiB
+  147s →  53.0 MiB      1232s → 432.2 MiB
+  289s → 104.8 MiB      1305s → 458.8 MiB
+```
+
+Linear at **0.366 MiB/s** end to end (48 kHz × 4 bytes × 2 tracks), i.e.
+1.3 GiB at an hour and **2.6 GiB at two**.
+
+`drainable_samples` now decides how much to remove the leading samples that are both
+written to disk AND behind the next chunk's read window:
+
+```rust
+safe = min(samples_written, last_processed - overlap_samples)
+```
+
+Both buffers are drained by the same amount, so the mic/system alignment
+`align_secondary` maintains is preserved, and both cursors shift down with
+them. `DRAIN_THRESHOLD_SAMPLES` (10 s) keeps the memmove rare and the
+retained tail small.
+
+Two consequences worth knowing:
+
+- `samples_written` is now an INDEX, not a total. The capture-integrity
+  ratio needs a total, so `total_written` accumulates monotonically and is
+  what the ratio and the diagnostic report.
+- Draining is skipped while paused: the resume edge re-derives both cursors
+  from the live buffer length, and moving the floor under it would make the
+  resume skip the wrong window.
+
+When the transcriber falls far behind, little can be reclaimed and the
+buffer grows — that is correct, the audio is still needed. Guards:
+`mod buffer_reclaim`, including a two-hour simulation that asserts the
+buffer stays under 40 MiB.
+
 ### Stop ordering — the part that matters most
 
 ```rust
@@ -171,6 +215,12 @@ deficit and only survives on the silence gaps.
 - Audio sinks are finalized **before** the transcriber is joined.
 - The transcription thread owns `transcripts.txt` outright. Two writers on
   that file would interleave lines mid-meeting.
+- `drainable_samples` must stay the MINIMUM of the writer cursor and
+  `last_processed - overlap`. Raising it past the writer drops audio that is
+  not on disk yet; raising it past the overlap hands whisper a window that
+  starts mid-word. Both directions are pinned by `mod buffer_reclaim`.
+- `total_written` is the only absolute count left. Anything reporting "how
+  much audio did we capture" must read it, never `samples_written`.
 
 ## Regression guards
 
@@ -191,10 +241,11 @@ dead:
 - The capture-ratio guard only runs at stop, so it cannot fire when stop
   itself times out. A periodic version during recording would have caught
   this incident in its first minute.
-- `primary_len` was observed shrinking from 31.8 M to 1.3 M samples across
-  the stall. No code path in `meeting.rs` shortens that buffer, and
-  neither `Start command received` nor `device-change auto-recovery`
-  appears in the log for that meeting. Unexplained; it does not change the
-  design above, but it is a loose thread.
+- ~~`primary_len` shrinking from 31.8 M to 1.3 M across the stall~~
+  RESOLVED 2026-09-04, observed live: a NON-recovery `AudioCommand::Start`
+  clears the buffers, a recovery one preserves them (`is_recovery_start`,
+  `audio.rs`). A Bluetooth headset dropping mid-meeting produced the
+  recovery path and `primary_len` correctly froze and resumed; the 2 Sept
+  case went through a plain Start after the stop had already timed out.
 - Nothing yet re-runs transcription automatically over the audio when
   windows were dropped. Today the user must press Regenerate transcript.

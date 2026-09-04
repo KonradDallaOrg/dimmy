@@ -259,7 +259,9 @@ Concretely, in `core/src/meeting.rs`:
 - Transcription, model loads, network calls, host callbacks
   (`emit_event`) and anything else that can block, wedge or be slow lives
   on the transcription thread (`stt_thread_loop`), reached through a
-  **bounded** queue with `try_send` — never `send`.
+  **bounded** queue with `try_send` — never `send`. This binds the LOOP;
+  after it exits and the sinks are finalized, a blocking callback can no
+  longer cost a sample, which is where the one teardown `emit_event` lives.
 - When the queue is full the window is **dropped**, and the user is told
   once (`meeting_transcription_behind`). Dropping transcript is correct;
   waiting is not.
