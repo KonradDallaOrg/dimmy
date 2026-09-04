@@ -233,6 +233,11 @@ public sealed class UpdateService
             App.Log("ApplyAndRestart called with no pending update", "Update");
             return;
         }
+        if (!MayEndProcess(out int rc))
+        {
+            App.Log($"apply+restart REFUSED: meeting recording (rc={rc})", "Update");
+            return;
+        }
         var version = _pendingUpdate.TargetFullRelease.Version.ToString();
         App.Log($"applying update v{version} + restart", "Update");
 
@@ -309,6 +314,19 @@ public sealed class UpdateService
     public void ApplyOnExit()
     {
         if (_manager is null || _pendingUpdate is null) return;
+        // WaitExitThenApplyUpdates spawns `Update.exe apply --waitPid <us>`,
+        // which then lies in wait for this process to exit for ANY reason —
+        // a clean quit, a crash, an external kill — and applies the update.
+        // That is why the guard belongs HERE and not at the exit: once armed
+        // we no longer control what happens. A meeting killed this way
+        // survives as playable audio but is cut short, never finalized and
+        // left orphaned. Burned 2026-09-04. The update simply waits for the
+        // next quit instead; it is one launch late, which costs nothing.
+        if (!MayEndProcess(out int rc))
+        {
+            App.Log($"apply-on-exit NOT armed: meeting recording (rc={rc})", "Update");
+            return;
+        }
         try
         {
             _manager.WaitExitThenApplyUpdates(_pendingUpdate, silent: true, restart: false);
@@ -318,4 +336,20 @@ public sealed class UpdateService
             App.Log($"ApplyOnExit exc: {ex.GetType().Name}: {ex.Message}", "Update");
         }
     }
+
+    /// <summary>Ask the core whether a meeting is recording. A failure to
+    /// read the state is treated as "recording" by
+    /// <see cref="UpdateGate.MayEndProcess"/> — see the rationale there —
+    /// and so is a throwing P/Invoke.</summary>
+    private static bool MayEndProcess(out int rc)
+    {
+        try { rc = Interop.DimmyNative.dimmy_meeting_is_active(); }
+        catch { rc = -1; }
+        return UpdateGate.MayEndProcess(rc);
+    }
+
+    /// <summary>True when an update is downloaded but must wait because a
+    /// meeting is recording. Lets the quit path skip the "apply now?"
+    /// dialog rather than ask a question whose answer it would ignore.</summary>
+    public bool IsBlockedByActiveMeeting => IsUpdateReady && !MayEndProcess(out _);
 }

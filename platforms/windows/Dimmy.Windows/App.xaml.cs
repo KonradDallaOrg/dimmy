@@ -2660,7 +2660,16 @@ public partial class App : Application
         // download + ask before apply. ApplyAndRestart never returns
         // (Velopack swaps the EXE and re-spawns); ApplyOnExit stages
         // the swap so the next normal launch picks up the new version.
-        if (UpdateService.Instance?.IsUpdateReady == true)
+        // A recording meeting takes the whole question off the table: both
+        // answers end with the EXE being swapped, which cuts the recording
+        // short and orphans it (burned 2026-09-04). UpdateService refuses
+        // either way; skipping the dialog means not asking a question whose
+        // answer we would ignore.
+        if (UpdateService.Instance?.IsBlockedByActiveMeeting == true)
+        {
+            Log("update deferred: meeting recording", "Update");
+        }
+        else if (UpdateService.Instance?.IsUpdateReady == true)
         {
             var apply = await AskApplyUpdateAsync();
             if (apply == true)

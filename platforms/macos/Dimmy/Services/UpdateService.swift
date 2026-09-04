@@ -244,6 +244,49 @@ final class UpdateService: NSObject, ObservableObject {
 
 extension UpdateService: SPUUpdaterDelegate {
 
+    /// Refuse an update check, and refuse to proceed with one already
+    /// found, while a meeting is recording. Installing relaunches the app,
+    /// which kills the capture threads mid-write: the audio survives
+    /// (the sinks flush continuously) but the recording is cut short,
+    /// never finalized, and orphaned with no recap. Burned on Windows
+    /// 2026-09-04 — a 6-minute meeting lost that way; this is the Mac
+    /// mirror of `UpdateGate.MayEndProcess`.
+    ///
+    /// Both hooks are needed: `mayPerformUpdateCheck` stops the automatic
+    /// background check, and `shouldProceedWithUpdate` covers a meeting
+    /// that starts between a check and its install.
+    nonisolated func updater(
+        _ updater: SPUUpdater, mayPerformUpdateCheck updateCheck: SPUUpdateCheck
+    ) throws {
+        try Self.refuseWhileRecording()
+    }
+
+    nonisolated func updater(
+        _ updater: SPUUpdater, shouldProceedWithUpdate updateItem: SUAppcastItem,
+        updateCheck: SPUUpdateCheck
+    ) throws {
+        try Self.refuseWhileRecording()
+    }
+
+    /// Only an explicit 0 permits the update. A lock failure — or any
+    /// value we did not expect — counts as recording: when we cannot tell
+    /// whether audio is being captured, the safe answer is the one that
+    /// cannot destroy it. An update always waits; a lost meeting never
+    /// comes back. (Note this is deliberately stricter than
+    /// `DimmyCore.meetingIsActive`, whose `== 1` is right for gating a
+    /// hotkey and wrong for gating a relaunch.)
+    nonisolated static func mayEndProcess(_ meetingActiveRc: Int32) -> Bool {
+        meetingActiveRc == 0
+    }
+
+    nonisolated static func refuseWhileRecording() throws {
+        let rc = dimmy_meeting_is_active()
+        guard mayEndProcess(rc) else {
+            NSLog("[Update] refused: meeting recording (rc=\(rc))")
+            throw UpdateGateError.meetingRecording
+        }
+    }
+
     /// Filter appcast items by the user's channel preference.
     nonisolated func allowedChannels(for updater: SPUUpdater) -> Set<String> {
         let stored = UserDefaults.standard.string(forKey: "dimmy.update_channel") ?? "stable"
@@ -306,6 +349,19 @@ extension UpdateService: SPUUpdaterDelegate {
             self.isChecking = false
             self.statusText = "Couldn't reach the update server. Try again in a moment."
             NSLog("[Update] aborted (\(nsErr.domain) \(nsErr.code)): \(msg)")
+        }
+    }
+}
+
+/// Sparkle vetoes are expressed by throwing; the message reaches the user
+/// when the check was one they asked for.
+enum UpdateGateError: LocalizedError {
+    case meetingRecording
+
+    var errorDescription: String? {
+        switch self {
+        case .meetingRecording:
+            return "A meeting is recording. Dimmy will update once the recording ends."
         }
     }
 }
