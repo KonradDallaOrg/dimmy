@@ -34,6 +34,13 @@ pub const AVAILABLE_LLM_MODELS: &[LlmModel] = &[
     // Google official q4_0) do NOT load in the bundled llama.cpp — both fail
     // with `missing tensor 'blk.15.attn_k.weight'` (the E-series QAT export
     // ── Gemma 4 family (Google, Apache 2.0, 140+ languages) ─────
+    //
+    // The `-it` in every filename is INSTRUCTION-TUNED, not Italian — Google's
+    // suffix for the instruct variant, against `-pt` for the raw pretrained
+    // one that only completes text. The gguf puts it in `general.finetune`
+    // ("qat-it"), not in any language field. One model covers every language;
+    // there is no per-language build to list, which is why a recap of an
+    // Italian meeting comes back in Italian without being asked.
     LlmModel {
         // QAT = quantization-aware training: Google trains the model with the
         // 4-bit quantisation in the loop instead of quantising afterwards, so
