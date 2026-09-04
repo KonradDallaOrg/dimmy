@@ -271,7 +271,18 @@ ort = { version = "=2.0.0-rc.10", optional = true, features = ["ndarray", "load-
 realfft = { version = "3.5", optional = true }
 ndarray = { version = "0.16", optional = true }
 anyhow = { version = "1", optional = true }
-llama-cpp-4 = { git = "https://github.com/KonradDallaOrg/llama-cpp-rs", optional = true, default-features = false }
+# Upstream instead of our fork: the fork exists ONLY to patch the fused
+# Gated Delta Net asserts for Gemma 4, and upstream implements GDN natively
+# now. It also pins llama.cpp at e34f0421 (2026-04-10), which predates
+# `shared_kv_layers` — so the Gemma 4 QAT models, whose blocks 15-34 share KV
+# from earlier layers by design, fail to load with
+# `missing tensor blk.15.attn_k.weight`. Bumping is what unblocks them.
+#
+# The hazard here is AUDIO, not the LLM: whisper-rs-sys and llama-cpp-sys-4
+# each carry their own ggml, and a bump has broken whisper STT before. That is
+# what `dynamic-link` on the vulkan/metal features is for — it keeps llama's
+# ggml in its own DLL. Re-verify local transcription after touching this line.
+llama-cpp-4 = { git = "https://github.com/eugenehp/llama-cpp-rs", optional = true, default-features = false }
 rusqlite = { version = "0.31", features = ["bundled"] }
 regex = "1"
 tokio-stream = "0.1"

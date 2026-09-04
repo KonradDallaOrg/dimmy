@@ -33,10 +33,34 @@ pub const AVAILABLE_LLM_MODELS: &[LlmModel] = &[
     // NOTE (2026-06-18): Gemma 4 QAT gguf files (Unsloth UD-Q4_K_XL AND
     // Google official q4_0) do NOT load in the bundled llama.cpp — both fail
     // with `missing tensor 'blk.15.attn_k.weight'` (the E-series QAT export
-    // omits per-layer attn_k that this llama.cpp version requires). The
-    // non-QAT Gemma 4 below loads + generates fine. Adding QAT needs a
-    // llama.cpp fork bump, deliberately deferred. Verified end-to-end on CPU.
     // ── Gemma 4 family (Google, Apache 2.0, 140+ languages) ─────
+    LlmModel {
+        // QAT = quantization-aware training: Google trains the model with the
+        // 4-bit quantisation in the loop instead of quantising afterwards, so
+        // it keeps more of the full-precision quality at a SMALLER size.
+        //
+        // These were excluded until 2026-09-04 because the llama.cpp we
+        // vendored predated `shared_kv_layers` — a QAT model's blocks 15-34
+        // share KV from earlier layers by design, and the loader demanded an
+        // attn_k that is deliberately absent (`missing tensor
+        // blk.15.attn_k.weight`). Moving to upstream llama-cpp-4 fixed it.
+        //
+        // Measured on the same real 35-minute meeting as the plain Q4:
+        // 1224 MiB of VRAM against 1408, and it extracted decisions the plain
+        // quantisation missed entirely (23 against 2, though with repeats).
+        name: "Gemma 4 E2B QAT Q4",
+        filename: "gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf",
+        size_mb: 2500,
+        description: "Recommended. Quantization-aware: better quality, less VRAM (5B params)",
+        url: Some("https://huggingface.co/unsloth/gemma-4-E2B-it-qat-GGUF/resolve/main/gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf"),
+    },
+    LlmModel {
+        name: "Gemma 4 E4B QAT Q4",
+        filename: "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
+        size_mb: 4020,
+        description: "Larger QAT sibling — needs ~6GB VRAM (8B params)",
+        url: Some("https://huggingface.co/unsloth/gemma-4-E4B-it-qat-GGUF/resolve/main/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"),
+    },
     LlmModel {
         name: "Gemma 4 E2B Q4",
         filename: "gemma-4-E2B-it-Q4_K_M.gguf",
@@ -99,7 +123,7 @@ pub const AVAILABLE_LLM_MODELS: &[LlmModel] = &[
         // more" option; not a default until the language is pinned.
         name: "Qwen 3 4B Q4",
         filename: "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
-        size_mb: 2400,
+        size_mb: 2380,
         description: "Slower, but extracts more detail. Answers in English (4B params)",
         url: Some("https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf"),
     },
@@ -604,33 +628,29 @@ mod llm_cache {
         // only the deliberately-creative personas (Gen-Z, emoji, …) get the
         // probabilistic chain. Greedy keeps the repetition penalty so it can't
         // collapse into a loop. 2026-06-06.
-        // Repetition control. `LlamaSampler::penalties_simple` in our
-        // llama-cpp-4 fork is a TRAP: it calls llama_sampler_init_penalties
-        // with the argument order that function had BEFORE upstream changed
-        // it. The header is now
-        //     (penalty_last_n: i32, repeat: f32, freq: f32, present: f32)
-        // and the fork passes
-        //     (n_vocab, special_eos_id, linefeed_id, penalty_last_n).
-        // Same types, so it compiles in silence and configures nonsense:
-        // penalty_repeat becomes the EOS token id — about 106 on Gemma 4,
-        // where anything above ~1.2 is extreme.
+        // Repetition control. These values are load-bearing, and the reason
+        // is worth keeping: until 2026-09-04 this called the fork's
+        // `penalties_simple`, which passed llama_sampler_init_penalties the
+        // argument order that function had years earlier. Same types, so it
+        // compiled in silence and set penalty_repeat to the EOS token id —
+        // about 106, where anything above ~1.2 is extreme.
         //
         // A repeat penalty of 106 forbids the model from reusing any word it
         // has already said, so it reaches for synonyms until the sentence
-        // stops meaning anything. That is what produced every mangled local
-        // recap we looked at on 2026-09-04, and removing it changed one
-        // meeting from 5 extracted points to 26, in correct Italian instead
-        // of broken English.
-        //
-        // `penalties()` is a straight positional pass-through, so calling it
-        // with the values the CURRENT header expects is correct despite its
-        // parameter names. Do NOT "fix" this back to penalties_simple.
+        // stops meaning anything. That produced every mangled local recap we
+        // had: broken grammar, drift into English on an Italian meeting,
+        // collapsed bullet lists. On one real 35-minute meeting, same model
+        // and transcript, it was the difference between 5 extracted points
+        // and 26. Upstream llama-cpp-4 has since corrected the signature, so
+        // the names finally mean what they say — but pass them explicitly
+        // anyway, because the failure mode was invisible.
         const PENALTY_LAST_N: i32 = 64;
         const PENALTY_REPEAT: f32 = 1.1;
         const PENALTY_FREQ: f32 = 0.0;
         const PENALTY_PRESENT: f32 = 0.0;
         let penalties = || {
             LlamaSampler::penalties(
+                cached.model.n_vocab(),
                 PENALTY_LAST_N,
                 PENALTY_REPEAT,
                 PENALTY_FREQ,
