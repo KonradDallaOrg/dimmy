@@ -32,6 +32,7 @@ pub mod gpu_health;
 /// which only exist under `denoise-gtcrn`.
 #[cfg(feature = "denoise-gtcrn")]
 pub mod gtcrn;
+pub mod hardware;
 pub mod history;
 mod hotkey;
 pub mod keystore;

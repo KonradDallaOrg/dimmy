@@ -4,6 +4,34 @@ import Foundation
 
 /// Singleton that owns the Rust core lifecycle.
 /// All methods are thread-safe (Rust uses Mutex internally).
+/// What the Rust core could learn about the graphics device. Mirror of
+/// `core/src/hardware.rs::GpuInfo` plus its verdict, and of the Windows
+/// `Helpers/HardwareInfo.cs`.
+///
+/// `fitness` answers only whether the shipped models FIT, never how fast
+/// they will be: the same 4 GB card ran whisper at 8 s and at 2 s per
+/// window on one day, the difference being a stuck power limit. `line` is
+/// nil when there is nothing honest to say, and the surfaces then render
+/// nothing rather than a placeholder.
+struct HardwareInfo: Sendable, Equatable {
+    let name: String?
+    let vramMB: Int64?
+    let dedicated: Bool
+    let appleSilicon: Bool
+    let fitness: String
+    let line: String?
+
+    /// Which card the onboarding should arrive on. Exact mirror of the
+    /// Windows `OnboardingPreselect.For` — one answer to one question, so
+    /// the two platforms cannot drift into recommending opposite things.
+    ///
+    /// Only "poor" sends the user to the cloud. "unknown" means we could
+    /// not read the GPU, which is not the same as knowing it is weak, and
+    /// local needs no account and works offline. A nudge, never a lock:
+    /// both cards stay tappable.
+    var prefersCloud: Bool { fitness == "poor" }
+}
+
 final class DimmyCore {
     static let shared = DimmyCore()
 
@@ -773,6 +801,35 @@ final class DimmyCore {
               let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
         return dict
+    }
+
+    /// Best-effort description of the graphics device, for the onboarding
+    /// local-vs-cloud choice and the Diagnostics pane. Mirror of Win
+    /// `HardwareInfo.Parse(DimmyNative.HardwareJson())`.
+    ///
+    /// `fitness` answers only whether the shipped models FIT, never how
+    /// fast they will be — see core/src/hardware.rs for why that
+    /// distinction is load-bearing. Returns nil when there is nothing
+    /// honest to report, and callers then show nothing.
+    func hardwareInfo() -> HardwareInfo? {
+        let bufLen: Int32 = 4096
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
+        defer { buffer.deallocate() }
+        buffer[0] = 0
+        let written = dimmy_hardware_json(buffer, bufLen)
+        guard written > 0 else { return nil }
+        let jsonStr = String(cString: buffer)
+        guard let data = jsonStr.data(using: .utf8),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        return HardwareInfo(
+            name: dict["name"] as? String,
+            vramMB: (dict["vram_mb"] as? NSNumber)?.int64Value,
+            dedicated: dict["dedicated"] as? Bool ?? false,
+            appleSilicon: dict["apple_silicon"] as? Bool ?? false,
+            fitness: dict["fitness"] as? String ?? "unknown",
+            line: dict["line"] as? String
+        )
     }
 
     /// Clear the GPU known-bad marker so Metal is re-probed next launch.

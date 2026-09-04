@@ -22,6 +22,18 @@ struct DiagnosticsSettingsView: View {
                        detail: inputMonitoringDescription)
             }
 
+            // Which device, and how much it has. The pane reported STT
+            // mode and model but never what they were running on — the
+            // first thing anyone reading a diagnostics page wants, and the
+            // number that explains why a model spilled to the CPU.
+            Section("Graphics") {
+                let hw = DimmyCore.shared.hardwareInfo()
+                row("Device", hw?.name ?? "not detected")
+                row("Memory", hw.flatMap { $0.vramMB }.map { "\($0) MB" } ?? "—")
+                row("Unified", hw?.appleSilicon == true ? "yes (Apple silicon)" : "no")
+                row("Local models", hw?.fitness ?? "unknown")
+            }
+
             Section("Hotkey") {
                 row("Status", hotkeyDescription)
                 row("Shortcut", appState.shortcut.displayString)

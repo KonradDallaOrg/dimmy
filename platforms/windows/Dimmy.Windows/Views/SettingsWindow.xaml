@@ -2921,7 +2921,8 @@
                                     Label="GPU status"
                                     InfoTip="Dimmy turns the GPU off after a driver crash and falls back to CPU. Update your drivers, then press Retry."
                                     HelpUrl="https://dimmy.app/help/install-issues">
-                <StackPanel Orientation="Horizontal" Spacing="12">
+                <StackPanel Spacing="4">
+                  <StackPanel Orientation="Horizontal" Spacing="12">
                   <TextBlock Text="Enabled"
                              VerticalAlignment="Center"
                              Foreground="#16a34a"
@@ -2937,6 +2938,11 @@
                           Click="RetryGpu_Click"
                           Visibility="{Binding GpuKnownBad, Mode=OneWay,
                                        Converter={StaticResource BoolToVisibilityConverter}}" />
+                  </StackPanel>
+                  <TextBlock Text="{Binding GpuDeviceLine, Mode=OneWay}"
+                             Visibility="{Binding HasGpuDeviceLine, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                             FontSize="12" TextWrapping="Wrap"
+                             Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                 </StackPanel>
               </controls:SettingCard>
               <!-- GPU crash detail card — full-width, only when known-bad. -->

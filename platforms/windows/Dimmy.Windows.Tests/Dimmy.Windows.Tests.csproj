@@ -19,6 +19,7 @@
   <ItemGroup>
     <Compile Include="..\Dimmy.Windows\Services\ToastDuration.cs" Link="Services\ToastDuration.cs" />
     <Compile Include="..\Dimmy.Windows\Services\UpdateGate.cs" Link="Services\UpdateGate.cs" />
+    <Compile Include="..\Dimmy.Windows\Helpers\HardwareInfo.cs" Link="Helpers\HardwareInfo.cs" />
     <Compile Include="..\Dimmy.Windows\ViewModels\AppViewModel.cs" Link="ViewModels\AppViewModel.cs" />
     <Compile Include="..\Dimmy.Windows\ViewModels\SettingsViewModel.cs" Link="ViewModels\SettingsViewModel.cs" />
     <Compile Include="..\Dimmy.Windows\ViewModels\OnboardingViewModel.cs" Link="ViewModels\OnboardingViewModel.cs" />

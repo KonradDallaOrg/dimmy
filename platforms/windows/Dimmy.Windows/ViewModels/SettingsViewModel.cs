@@ -417,6 +417,15 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private string _gpuKnownBadSince = "";
     [ObservableProperty] private string _gpuKnownBadContext = "";
     [ObservableProperty] private bool _gpuFingerprintMatches;
+
+    // Which device, and how much it has. Empty when the probe found nothing
+    // honest to say, and the line collapses. See core/src/hardware.rs for
+    // why this is a floor and not a speed forecast.
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasGpuDeviceLine))]
+    private string _gpuDeviceLine = "";
+
+    public bool HasGpuDeviceLine => !string.IsNullOrEmpty(GpuDeviceLine);
     [ObservableProperty] private string _borderStyle = "Rainbow";
     [ObservableProperty] private string _waveformStyle = "Bars";
     [ObservableProperty] private string _overlayPosition = "Bottom Right";
@@ -943,5 +952,12 @@ public partial class SettingsViewModel : ObservableObject
                 && fm.ValueKind == JsonValueKind.True;
         }
         catch (JsonException) { }
+
+        // The card said Enabled / Disabled without ever naming the device,
+        // which is the first thing anyone reading a diagnostics panel wants
+        // to know — and the number that explains why a model spilled to CPU.
+        var hw = Dimmy.Windows.Helpers.HardwareInfo.Parse(
+            Dimmy.Windows.Interop.DimmyNative.HardwareJson());
+        GpuDeviceLine = hw?.Line ?? "";
     }
 }

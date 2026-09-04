@@ -265,6 +265,9 @@ void dimmy_track_meeting_action(const char * _Nullable source);
 
 /// GPU known-bad marker status as JSON. Returns bytes written, or -1.
 int32_t dimmy_gpu_get_status(char * _Nonnull out_buf, int32_t buf_len);
+// Best-effort GPU description for onboarding + Diagnostics. See
+// core/src/hardware.rs — fitness answers whether models FIT, not how fast.
+int32_t dimmy_hardware_json(char * _Nonnull out_buf, int32_t buf_len);
 
 /// Clear the known-bad GPU marker so we re-probe Metal next launch.
 int32_t dimmy_gpu_clear_known_bad(void);

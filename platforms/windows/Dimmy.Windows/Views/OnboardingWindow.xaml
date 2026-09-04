@@ -71,6 +71,10 @@
                         <TextBlock Text="Your voice never leaves your device"
                                    FontSize="11" TextWrapping="Wrap"
                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                        <TextBlock Text="{Binding HardwareLine, Mode=OneWay}"
+                                   Visibility="{Binding HasHardwareLine, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                                   FontSize="11" TextWrapping="Wrap"
+                                   Foreground="{ThemeResource AccentTextFillColorSecondaryBrush}" />
                         <!-- Model picker. Same shape as Settings → Local model.
                              Default selection is the whisper base file (smallest,
                              fastest first run). Picking a different size or

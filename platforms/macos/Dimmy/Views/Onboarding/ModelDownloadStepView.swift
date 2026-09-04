@@ -26,6 +26,7 @@ struct ModelDownloadStepView: View {
     /// `IsCloudSelected`. Defaults to local on Mac (no key required to
     /// finish the wizard offline).
     @State private var pickedMode: PickedMode = .local
+    @State private var hardware: HardwareInfo?
 
     @State private var groqKey: String = ""
     @State private var cloudState: CloudState = .empty
@@ -77,7 +78,18 @@ struct ModelDownloadStepView: View {
             // Settings before) flips the Cloud card to "Ready" even if
             // the user's current sttMode is still local — they can see
             // the key is there without re-typing.
-            pickedMode = appState.sttMode == "cloud" ? .cloud : .local
+            hardware = DimmyCore.shared.hardwareInfo()
+            // A configured sttMode is the user's own answer and wins. With
+            // no answer yet, the hardware picks: only "poor" sends someone
+            // to the cloud (see HardwareInfo.prefersCloud). Win parity:
+            // OnboardingPreselect.For.
+            if appState.sttMode == "cloud" {
+                pickedMode = .cloud
+            } else if appState.sttMode.isEmpty, hardware?.prefersCloud == true {
+                pickedMode = .cloud
+            } else {
+                pickedMode = .local
+            }
             if DimmyCore.shared.hasApiKey {
                 cloudState = .ready
             }
@@ -101,6 +113,16 @@ struct ModelDownloadStepView: View {
                 Text("Private · offline · runs on your Mac")
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
+
+                // The card promises "runs on your Mac"; say what the Mac
+                // is. Nothing rendered when the probe has nothing honest
+                // to report. Win parity: OnboardingWindow HardwareLine.
+                if let line = hardware?.line {
+                    Text(line)
+                        .font(.system(size: 11))
+                        .foregroundColor(.accentColor)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
                 Picker("", selection: $selection) {
                     parakeetPickerEntry

@@ -49,6 +49,7 @@ dimmy_get_loopback_amplitude
 dimmy_get_version
 dimmy_gpu_clear_known_bad
 dimmy_gpu_get_status
+dimmy_hardware_json
 dimmy_has_api_key
 dimmy_history_delete
 dimmy_history_recent
