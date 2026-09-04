@@ -256,7 +256,7 @@ extension UpdateService: SPUUpdaterDelegate {
     /// background check, and `shouldProceedWithUpdate` covers a meeting
     /// that starts between a check and its install.
     nonisolated func updater(
-        _ updater: SPUUpdater, mayPerformUpdateCheck updateCheck: SPUUpdateCheck
+        _ updater: SPUUpdater, mayPerform updateCheck: SPUUpdateCheck
     ) throws {
         try Self.refuseWhileRecording()
     }
