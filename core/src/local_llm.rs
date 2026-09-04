@@ -246,7 +246,11 @@ fn strip_special_tags(text: &str) -> String {
 
     // 2. Remove remaining standalone special tags
     let re = regex::Regex::new(
-        r"</?(?:think|start_of_turn|end_of_turn|pad|s)>|<\|/?(?:think|end|endoftext|assistant|user|system)\|?>"
+        // `im_start`/`im_end` are the ChatML turn markers. They were missing
+        // here while llm.rs::strip_output_scaffolding (the CLOUD path) has had
+        // them all along, so a local recap could end with a literal
+        // "<|im_end|>" in the user's text — seen 2026-09-04 in a Gemma 4 recap.
+        r"</?(?:think|start_of_turn|end_of_turn|pad|s)>|<\|/?(?:think|end|endoftext|assistant|user|system|im_start|im_end)\|?>"
     ).expect("strip_special_tags regex must compile");
 
     let cleaned = re.replace_all(&text, "");
@@ -421,6 +425,26 @@ mod llm_cache {
             let backend = LlamaBackend::init()
                 .map_err(|e| crate::error::LlmError::LocalModel(format!("backend init: {}", e)))?;
 
+            // On a single-GPU machine whisper and this model compete for the
+            // same VRAM, and whisper stays resident on purpose so meeting
+            // chunks do not reload it. That cache is a SPEED optimisation;
+            // this load is a CORRECTNESS requirement — so the cache yields.
+            //
+            // Measured 2026-09-04 on a 3.9 GB T600: whisper large-v3-turbo
+            // q8_0 held ~2.1 GB, llama.cpp reported "1823 MiB free", loaded
+            // Gemma 4 E2B Q4 anyway (weights ~1.5 GB + 78 MiB KV + 515 MiB
+            // compute), and aborted via GGML_ASSERT two seconds later —
+            // 0xc0000409, the whole process gone. It fails in INFERENCE, not
+            // in load, which is why the load succeeds and looks fine.
+            //
+            // Worst case this costs a 2-5 s whisper reload next time STT
+            // runs. A recap pays nothing (transcription is already done);
+            // a dictation rewrite pays those seconds once. Against losing
+            // the process, that is not a close call.
+            if using_gpu {
+                crate::local_stt::clear_model_cache();
+            }
+
             // See note in local_stt.rs: ggml-vulkan / ggml-cuda can abort the
             // process inside C++ when GPU init fails. The sentinel lets the
             // next run fall back to CPU instead of looping.
@@ -498,7 +522,25 @@ mod llm_cache {
         // ── Create context (per-call, cheap) ────────────────────
         let ctx_size = std::num::NonZeroU32::new((tokens.len() as u32 + max_tokens + 64).max(512))
             .expect("context size must be > 0");
-        let ctx_params = LlamaContextParams::default().with_n_ctx(Some(ctx_size));
+        // n_batch MUST be set alongside n_ctx. We hand llama.cpp the whole
+        // prompt in one decode, and it asserts `n_tokens_all <= n_batch`
+        // (llama-context.cpp:1599) — a GGML_ASSERT, so the failure is the
+        // PROCESS DYING, not an error we can return. llama.cpp defaults
+        // n_batch to 2048 no matter how large n_ctx is, so every prompt over
+        // ~2048 tokens killed the app: roughly any meeting past ten minutes.
+        //
+        // It went unnoticed because a short meeting works. Measured
+        // 2026-09-04: one machine produced a recap at n_ctx 6144 (prompt
+        // ~1984 tokens) while another died at 6656 (~2496) — same GPU, same
+        // llama.cpp, same free VRAM. That looked like a Vulkan/driver/VRAM
+        // problem for a long time and was none of them.
+        //
+        // n_ubatch stays at llama.cpp's default: it is the PHYSICAL batch and
+        // llama.cpp splits the logical batch into ubatch-sized pieces itself,
+        // so raising it only costs compute buffer.
+        let ctx_params = LlamaContextParams::default()
+            .with_n_ctx(Some(ctx_size))
+            .with_n_batch(ctx_size.get());
 
         let mut ctx = cached
             .model
@@ -1051,6 +1093,24 @@ mod tests {
         let input = "<think>reasoning here</think>Actual output text.";
         let result = strip_special_tags(input);
         assert_eq!(result, "Actual output text.");
+    }
+
+    #[test]
+    fn chatml_turn_markers_are_stripped() {
+        // The cloud path stripped these from the start; the local regex did
+        // not list im_start/im_end, so a real Gemma 4 recap ended with a
+        // literal "<|im_end|>" in the user's document (2026-09-04).
+        assert_eq!(strip_special_tags("Recap done.<|im_end|>"), "Recap done.");
+        assert_eq!(
+            strip_special_tags(
+                "<|im_start|>assistant
+Hi"
+            ),
+            "assistant
+Hi"
+        );
+        // Ordinary text that merely mentions them is not a tag.
+        assert_eq!(strip_special_tags("the im_end token"), "the im_end token");
     }
 
     #[test]

@@ -130,4 +130,19 @@
     <Copy SourceFiles="$(OrtDllSource)" DestinationFolder="$(OutputPath)" Condition="Exists('$(OrtDllSource)')" SkipUnchangedFiles="true" />
     <Copy SourceFiles="$(OrtProvidersSharedSource)" DestinationFolder="$(OutputPath)" Condition="Exists('$(OrtProvidersSharedSource)')" SkipUnchangedFiles="true" />
   </Target>
+
+  <!-- Copy llama.cpp + ggml shared libs alongside dimmy_lib.dll. The local-llm
+       feature builds llama-cpp-4 with dynamic-link (ggml.dll/llama.dll/etc.) so
+       llama's ggml stays OUT of dimmy_lib.dll and can't collide with whisper's
+       static ggml (the LNK4006 dedup that broke STT). These DLLs are loaded by
+       dimmy_lib.dll at runtime, so they must sit next to it in the output dir
+       (and thus in the Velopack snapshot). Conditional on Exists() so a build
+       without local-llm-vulkan stays a no-op. -->
+  <Target Name="CopyLlamaDlls" AfterTargets="Build">
+    <ItemGroup>
+      <LlamaDll Include="$(MSBuildThisFileDirectory)..\..\..\core\target\release\ggml*.dll" />
+      <LlamaDll Include="$(MSBuildThisFileDirectory)..\..\..\core\target\release\llama*.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(LlamaDll)" DestinationFolder="$(OutputPath)" Condition="'@(LlamaDll)' != ''" SkipUnchangedFiles="true" />
+  </Target>
 </Project>

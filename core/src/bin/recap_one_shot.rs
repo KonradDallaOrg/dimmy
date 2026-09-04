@@ -187,11 +187,93 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         model,
         api_key.len()
     );
+    // DIMMY_RECAP_SECTION=<NAME> asks for ONE section with a plain
+    // instruction instead of the 11-marker template. A 2-4B quantised model
+    // produced 1 of 11 markers on the full template (measured 2026-09-04);
+    // the question this answers is whether that is the model's ceiling or
+    // the instruction's complexity.
+    // DIMMY_RECAP_SIMPLE=1 uses a four-section template with plain
+    // instructions instead of the eleven-marker one. The full template is
+    // written for a frontier model; a 2-4B quantised model produced 1 of its
+    // 11 markers (measured 2026-09-04) and mangled the prose trying.
+    let prompt = if std::env::var("DIMMY_RECAP_SIMPLE").is_ok() {
+        let mut p = String::with_capacity(transcript.len() + 2048);
+        p.push_str("You are summarising a meeting transcript. The transcript is raw speech-to-text: it has errors, overlapping speakers and filler. Ignore that and report what was actually discussed.
+
+");
+        p.push_str("Write EXACTLY these four sections, each marker alone on its own line. Answer in the SAME LANGUAGE as the transcript.
+
+");
+        p.push_str(
+            "===TLDR===
+Two or three sentences: what this meeting was about and what came out of it.
+
+",
+        );
+        p.push_str(
+            "===TOPICS===
+The main subjects discussed, one per line, each starting with '- '.
+
+",
+        );
+        p.push_str("===DECISIONS===
+Decisions that were actually made, one per line, each starting with '- '. Write '- None' if none were made.
+
+");
+        p.push_str("===ACTIONS===
+Things someone agreed to do, one per line, each starting with '- '. Write '- None' if there are none.
+
+");
+        p.push_str(
+            "Transcript:
+",
+        );
+        p.push_str(&transcript);
+        p
+    } else {
+        prompt
+    };
+
+    let prompt = match std::env::var("DIMMY_RECAP_SECTION") {
+        Ok(sec) if !sec.is_empty() => {
+            let ask = match sec.as_str() {
+                "TLDR" => "Write a two-sentence summary of this meeting.",
+                "ACTIONS" => "List the action items from this meeting, one per line, starting each with '- '.",
+                "DECISIONS" => "List the decisions made in this meeting, one per line, starting each with '- '.",
+                other => panic!("unknown section {other}"),
+            };
+            format!(
+                "{ask}
+
+Transcript:
+{}",
+                transcript
+            )
+        }
+        _ => prompt,
+    };
+
     let t = std::time::Instant::now();
-    let response = dimmy_lib::llm::process_raw_prompt(
-        api_url, model, &api_key, &prompt, max_tokens, "api_key",
-    )
-    .await?;
+    // DIMMY_RECAP_LOCAL=<gguf filename> runs the SAME prompt through the local
+    // model instead of the cloud, so the two are compared on identical input
+    // rather than on two prompts that drifted apart.
+    let response = match std::env::var("DIMMY_RECAP_LOCAL") {
+        Ok(file) if !file.is_empty() => {
+            let path = dimmy_lib::local_llm::model_path(&file);
+            eprintln!("[recap] LOCAL model {}", path.display());
+            let cap: u32 = std::env::var("DIMMY_RECAP_MAX_TOKENS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(1024);
+            dimmy_lib::local_llm::process_raw_prompt_local(&path, &prompt, cap)?
+        }
+        _ => {
+            dimmy_lib::llm::process_raw_prompt(
+                api_url, model, &api_key, &prompt, max_tokens, "api_key",
+            )
+            .await?
+        }
+    };
     let elapsed = t.elapsed().as_secs_f32();
     eprintln!(
         "[recap] received {} chars in {:.1}s",
