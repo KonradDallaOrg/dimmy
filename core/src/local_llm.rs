@@ -589,23 +589,54 @@ mod llm_cache {
         // only the deliberately-creative personas (Gen-Z, emoji, …) get the
         // probabilistic chain. Greedy keeps the repetition penalty so it can't
         // collapse into a loop. 2026-06-06.
+        // Repetition control. `LlamaSampler::penalties_simple` in our
+        // llama-cpp-4 fork is a TRAP: it calls llama_sampler_init_penalties
+        // with the argument order that function had BEFORE upstream changed
+        // it. The header is now
+        //     (penalty_last_n: i32, repeat: f32, freq: f32, present: f32)
+        // and the fork passes
+        //     (n_vocab, special_eos_id, linefeed_id, penalty_last_n).
+        // Same types, so it compiles in silence and configures nonsense:
+        // penalty_repeat becomes the EOS token id — about 106 on Gemma 4,
+        // where anything above ~1.2 is extreme.
+        //
+        // A repeat penalty of 106 forbids the model from reusing any word it
+        // has already said, so it reaches for synonyms until the sentence
+        // stops meaning anything. That is what produced every mangled local
+        // recap we looked at on 2026-09-04, and removing it changed one
+        // meeting from 5 extracted points to 26, in correct Italian instead
+        // of broken English.
+        //
+        // `penalties()` is a straight positional pass-through, so calling it
+        // with the values the CURRENT header expects is correct despite its
+        // parameter names. Do NOT "fix" this back to penalties_simple.
+        const PENALTY_LAST_N: i32 = 64;
+        const PENALTY_REPEAT: f32 = 1.1;
+        const PENALTY_FREQ: f32 = 0.0;
+        const PENALTY_PRESENT: f32 = 0.0;
+        let penalties = || {
+            LlamaSampler::penalties(
+                PENALTY_LAST_N,
+                PENALTY_REPEAT,
+                PENALTY_FREQ,
+                PENALTY_PRESENT,
+            )
+        };
+
         let mut sampler = if creative {
             let seed = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_nanos() as u32)
                 .unwrap_or(0xDEAD_BEEF);
             LlamaSampler::chain_simple([
-                LlamaSampler::penalties_simple(&cached.model, 64),
+                penalties(),
                 LlamaSampler::top_k(40),
                 LlamaSampler::top_p(0.9, 1),
                 LlamaSampler::temp(0.6),
                 LlamaSampler::dist(seed),
             ])
         } else {
-            LlamaSampler::chain_simple([
-                LlamaSampler::penalties_simple(&cached.model, 64),
-                LlamaSampler::greedy(),
-            ])
+            LlamaSampler::chain_simple([penalties(), LlamaSampler::greedy()])
         };
 
         let eos = cached.model.token_eos();

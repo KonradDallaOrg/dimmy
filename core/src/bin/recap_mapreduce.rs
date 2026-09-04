@@ -39,15 +39,47 @@ fn map_prompt(part: usize, total: usize, chunk: &str) -> String {
 /// Group the labelled map lines. Sorting is mechanical here — the model
 /// already made the judgement per line, with the transcript in front of it.
 fn group(notes: &str) -> (Vec<String>, Vec<String>, Vec<String>) {
+    // Be generous about the label's shape. The models emit it faithfully but
+    // not identically: "ACTION : x" (space before the colon) from Gemma 4 and
+    // "DECISION\u{ff1a}x" (a FULL-WIDTH colon) from Qwen were both silently
+    // dropped by an exact `strip_prefix("ACTION:")`, which reported "None" for
+    // sections the model had actually filled in (measured 2026-09-04). A
+    // parser that discards real answers is worse than a model that misses
+    // them: it is invisible.
+    fn label(line: &str) -> Option<(&'static str, String)> {
+        let l = line
+            .trim()
+            .trim_start_matches(['-', '*', '\u{2013}', '\u{2014}', ' ']);
+        for key in ["TOPIC", "DECISION", "ACTION"] {
+            let Some(head) = l.get(..key.len()) else {
+                continue;
+            };
+            if !head.eq_ignore_ascii_case(key) {
+                continue;
+            }
+            let after = l[key.len()..].trim_start();
+            let Some(body) = after
+                .strip_prefix(':')
+                .or_else(|| after.strip_prefix('\u{ff1a}'))
+            else {
+                continue;
+            };
+            let body = body.trim();
+            if body.is_empty() {
+                continue;
+            }
+            return Some((key, body.to_string()));
+        }
+        None
+    }
+
     let (mut t, mut d, mut a) = (Vec::new(), Vec::new(), Vec::new());
     for line in notes.lines() {
-        let l = line.trim().trim_start_matches(['-', '*', ' ']).trim();
-        if let Some(r) = l.strip_prefix("TOPIC:") {
-            t.push(r.trim().to_string());
-        } else if let Some(r) = l.strip_prefix("DECISION:") {
-            d.push(r.trim().to_string());
-        } else if let Some(r) = l.strip_prefix("ACTION:") {
-            a.push(r.trim().to_string());
+        match label(line) {
+            Some(("TOPIC", b)) => t.push(b),
+            Some(("DECISION", b)) => d.push(b),
+            Some(("ACTION", b)) => a.push(b),
+            _ => {}
         }
     }
     (t, d, a)
@@ -73,9 +105,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let output = PathBuf::from(args.get(2).ok_or("missing output path")?);
     let chunk_words: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(1200);
 
-    let model = dimmy_lib::local_llm::model_path(
-        &std::env::var("DIMMY_RECAP_LOCAL").map_err(|_| "set DIMMY_RECAP_LOCAL")?,
-    );
+    // An absolute path is used as-is so a candidate model can be benched from
+    // anywhere without first copying it into the app's model directory.
+    let spec = std::env::var("DIMMY_RECAP_LOCAL").map_err(|_| "set DIMMY_RECAP_LOCAL")?;
+    let as_path = PathBuf::from(&spec);
+    let model = if as_path.is_absolute() {
+        as_path
+    } else {
+        dimmy_lib::local_llm::model_path(&spec)
+    };
     let transcript = std::fs::read_to_string(&input)?;
     let words: Vec<&str> = transcript.split_whitespace().collect();
     let chunks: Vec<String> = words.chunks(chunk_words).map(|c| c.join(" ")).collect();
