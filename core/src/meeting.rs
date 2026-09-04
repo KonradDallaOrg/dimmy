@@ -581,6 +581,38 @@ fn mix_windows(mic: &[f32], system: &[f32]) -> Vec<f32> {
         .collect()
 }
 
+/// Don't touch the buffer until at least this much is provably finished
+/// with. Draining is a memmove of the retained tail under the capture lock,
+/// so doing it every 100 ms tick would pay the cost constantly for nothing;
+/// at 10 s the tail stays a few MiB and the memmove is well under a
+/// millisecond, which the cpal callback can absorb.
+const DRAIN_THRESHOLD_SAMPLES: usize = 48_000 * 10;
+
+/// How many leading samples are provably finished with — written to disk AND
+/// past the window the next chunk will read.
+///
+/// Two cursors index the same buffer and they do NOT move together: the
+/// writer runs ahead, the chunk extractor trails it by up to a chunk, and
+/// the next extraction starts `overlap` samples BEFORE `last_processed`.
+/// The safe point is therefore the minimum of the two, minus the overlap —
+/// get this wrong in either direction and you either leak memory or hand
+/// whisper a window that starts mid-sentence.
+///
+/// Returns 0 when there is nothing worth reclaiming yet.
+fn drainable_samples(
+    samples_written: usize,
+    last_processed: usize,
+    overlap_samples: usize,
+    threshold: usize,
+) -> usize {
+    let safe = samples_written.min(last_processed.saturating_sub(overlap_samples));
+    if safe >= threshold {
+        safe
+    } else {
+        0
+    }
+}
+
 /// Coarse bucket for "how far into the meeting did this happen".
 /// Categorical so telemetry never carries a raw timing.
 fn bucket_elapsed_secs(secs: f64) -> &'static str {
@@ -974,11 +1006,18 @@ fn worker_loop(
         None
     };
 
-    // `samples_written` tracks how many SOURCE-RATE samples have been
-    // streamed into the WAV (per-track WAVs all advance in lockstep
-    // with the synth stream, so a single cursor covers all three).
+    // `samples_written` and `last_processed` are INDICES INTO THE BUFFER,
+    // not totals: `drain_consumed_samples` removes audio that is already on
+    // disk and shifts both cursors down by the same amount. Before that
+    // (until 2026-09-04) the buffer only ever grew, holding every sample of
+    // the meeting in RAM even though it was safely written — 0.366 MiB/s,
+    // measured 459 MiB over 22 minutes, 2.6 GiB over two hours.
     let mut samples_written: usize = 0;
     let mut last_processed: usize = 0;
+    // Monotonic count of everything written since the meeting began. The
+    // capture-integrity ratio at stop needs a TOTAL, which the rebased
+    // cursor above can no longer provide.
+    let mut total_written: usize = 0;
     let mut last_fsync = Instant::now();
     // Per-speaker accumulators. dedup_last_3_words is stateful per
     // speaker so they get independent contexts. The merged ordered
@@ -1214,7 +1253,7 @@ fn worker_loop(
                 s_len,
                 clock_decided,
                 clock_on_secondary,
-                samples_written,
+                total_written,
                 last_processed,
                 chunk_count_shared.load(std::sync::atomic::Ordering::Relaxed),
                 paused.load(Ordering::SeqCst),
@@ -1342,6 +1381,7 @@ fn worker_loop(
             if let Some(ref mut w) = writer_system {
                 w.write(&new_system);
             }
+            total_written += buf_len_now - samples_written;
             samples_written = buf_len_now;
 
             if last_fsync.elapsed() >= FSYNC_INTERVAL {
@@ -1481,6 +1521,43 @@ fn worker_loop(
             last_processed = end;
         }
 
+        // Reclaim what is finished with. The audio is already in the Ogg
+        // files; keeping it in RAM as well cost 0.366 MiB/s for the whole
+        // meeting — 459 MiB at 22 minutes, 2.6 GiB over two hours, measured
+        // 2026-09-04. Both buffers are drained by the SAME amount so the
+        // mic/system alignment `align_secondary` maintains is preserved, and
+        // both cursors shift down with them.
+        //
+        // Skipped while paused: the pause/resume edge re-derives both
+        // cursors from the live buffer length, and moving the floor out from
+        // under it would make the resume skip the wrong window.
+        if !is_paused_now {
+            let drop_n = drainable_samples(
+                samples_written,
+                last_processed,
+                overlap_samples,
+                DRAIN_THRESHOLD_SAMPLES,
+            );
+            if drop_n > 0 {
+                let mut dropped = 0usize;
+                if let Ok(mut b) = audio_buffer.lock() {
+                    let n = drop_n.min(b.len());
+                    b.drain(..n);
+                    dropped = n;
+                }
+                if dropped > 0 {
+                    if mix_active {
+                        if let Ok(mut s) = audio_buffer_secondary.lock() {
+                            let n = dropped.min(s.len());
+                            s.drain(..n);
+                        }
+                    }
+                    samples_written -= dropped;
+                    last_processed -= dropped;
+                }
+            }
+        }
+
         if cancelled {
             break;
         }
@@ -1560,7 +1637,7 @@ fn worker_loop(
     // short meeting can't mis-bucket as unhealthy.
     {
         let active_secs = (duration_secs - total_paused_ms as f64 / 1000.0).max(0.0);
-        let captured_secs = samples_written as f64 / device_sample_rate.max(1) as f64;
+        let captured_secs = total_written as f64 / device_sample_rate.max(1) as f64;
         if active_secs > 5.0 {
             let ratio = captured_secs / active_secs;
             if ratio.is_finite() {
@@ -2032,6 +2109,139 @@ pub fn list_orphans() -> Vec<serde_json::Value> {
         }));
     }
     out
+}
+
+#[cfg(test)]
+mod buffer_reclaim {
+    //! The capture buffer must not hold audio that is already on disk.
+    //!
+    //! Measured 2026-09-04 over a real 22-minute meeting: the buffer grew
+    //! 0.366 MiB/s from the first sample to the last, reaching 459 MiB, and
+    //! nothing ever freed it — 1.3 GiB at an hour, 2.6 GiB at two. Every
+    //! byte of it was already written to the Ogg files.
+    //!
+    //! Reclaiming it means moving a floor that TWO cursors index against,
+    //! and the next chunk read starts BEFORE `last_processed` by the
+    //! overlap. Drop too much and whisper gets a window that starts
+    //! mid-sentence; drop too little and the leak stays. These pin the
+    //! boundary from both sides.
+    use super::*;
+
+    const OVERLAP: usize = 24_000; // 500 ms at 48 kHz
+    const THRESH: usize = DRAIN_THRESHOLD_SAMPLES;
+
+    #[test]
+    fn nothing_is_reclaimed_before_the_threshold() {
+        // Draining is a memmove under the capture lock. Doing it on every
+        // tick would pay that cost constantly to reclaim a few hundred KB.
+        assert_eq!(drainable_samples(1_000, 1_000, OVERLAP, THRESH), 0);
+        assert_eq!(drainable_samples(THRESH - 1, THRESH - 1, 0, THRESH), 0);
+    }
+
+    #[test]
+    fn never_reclaims_past_what_the_writer_has_written() {
+        // The transcriber can run AHEAD of the writer when a window is
+        // extracted before the tick's write completes. Audio that is not yet
+        // on disk must never be dropped — that is the whole invariant.
+        let written = THRESH;
+        let processed = THRESH * 5;
+        assert_eq!(
+            drainable_samples(written, processed, OVERLAP, THRESH),
+            written,
+            "the floor must be the WRITER, not the transcriber"
+        );
+    }
+
+    #[test]
+    fn never_reclaims_the_overlap_the_next_window_needs() {
+        // The next chunk starts at `last_processed - overlap`. Reclaiming
+        // into that range would shift the buffer under a read that has not
+        // happened yet, and the chunk would begin mid-word.
+        let processed = THRESH * 2;
+        let got = drainable_samples(usize::MAX, processed, OVERLAP, THRESH);
+        assert_eq!(got, processed - OVERLAP);
+        assert!(got < processed, "the overlap must survive the drain");
+    }
+
+    #[test]
+    fn a_transcriber_that_has_not_started_blocks_reclaim() {
+        // Before the first chunk, `last_processed` is 0: nothing is safe to
+        // drop however much the writer has written. Underflowing here would
+        // wrap to a colossal count and drain the entire buffer.
+        assert_eq!(drainable_samples(THRESH * 10, 0, OVERLAP, THRESH), 0);
+        assert_eq!(
+            drainable_samples(THRESH * 10, OVERLAP / 2, OVERLAP, THRESH),
+            0
+        );
+    }
+
+    #[test]
+    fn the_buffer_stays_bounded_across_a_long_meeting() {
+        // Simulate two hours at 48 kHz with a transcriber one chunk behind,
+        // draining exactly as the worker does. Without reclaim this reaches
+        // 345.6 M samples (2.6 GiB per track); the point is that it does not.
+        let chunk = 48_000 * 15;
+        let mut buffer_len = 0usize;
+        let mut written = 0usize;
+        let mut processed = 0usize;
+        let mut peak = 0usize;
+
+        for tick in 1..=(2 * 60 * 60 * 10) {
+            buffer_len += 4_800; // 100 ms of capture per tick
+            written = buffer_len;
+            if buffer_len >= processed + chunk {
+                processed += chunk;
+            }
+            let drop_n = drainable_samples(written, processed, OVERLAP, DRAIN_THRESHOLD_SAMPLES);
+            if drop_n > 0 {
+                buffer_len -= drop_n;
+                written -= drop_n;
+                processed -= drop_n;
+            }
+            peak = peak.max(buffer_len);
+            assert!(
+                written <= buffer_len && processed <= buffer_len,
+                "cursors escaped the buffer at tick {tick}"
+            );
+        }
+
+        let peak_mib = peak as f64 * 8.0 / (1024.0 * 1024.0);
+        assert!(
+            peak_mib < 40.0,
+            "buffer peaked at {peak_mib:.0} MiB over two hours — reclaim is not working"
+        );
+    }
+
+    #[test]
+    fn cursors_stay_consistent_when_the_transcriber_falls_far_behind() {
+        // The measured case: whisper at 1.8x realtime, windows dropped. The
+        // transcriber lags badly, so little can be reclaimed and the buffer
+        // grows — that is CORRECT, the audio is still needed. What must not
+        // happen is a cursor going negative or past the end.
+        let mut buffer_len = 0usize;
+        let mut written = 0usize;
+        let mut processed = 0usize;
+
+        for _ in 0..(30 * 60 * 10) {
+            buffer_len += 4_800;
+            written = buffer_len;
+            // Transcriber advances at one third of realtime.
+            if buffer_len >= processed * 3 + 48_000 * 15 {
+                processed += 48_000 * 5;
+            }
+            let drop_n = drainable_samples(written, processed, OVERLAP, DRAIN_THRESHOLD_SAMPLES);
+            assert!(drop_n <= written, "would drop audio that is not on disk");
+            assert!(
+                drop_n <= processed.saturating_sub(OVERLAP),
+                "would drop the next window's overlap"
+            );
+            if drop_n > 0 {
+                buffer_len -= drop_n;
+                written -= drop_n;
+                processed -= drop_n;
+            }
+        }
+    }
 }
 
 #[cfg(test)]

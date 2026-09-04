@@ -875,6 +875,14 @@ public sealed partial class MeetingWindow : Window
                 SetState(MeetingState.Processing);
                 ResetProcSteps();
                 SetProcStep(1, true);
+                // The recap is running on the SERVICE path (pill stop), which
+                // has no UI of its own — but the stream events come from the
+                // core either way, so the live pane can still show them.
+                // Without this the window sat on "Wrapping up..." for the
+                // whole recap while the model was visibly writing on the
+                // other path (reported 2026-09-04). EndLiveRecap runs from
+                // ApplyDoneSections / ShowDoneFallback as usual.
+                BeginLiveRecap();
                 // ProcStep 2 (recap) is in flight on the pill side;
                 // NotifyMeetingRecapSaved will land us on Done with
                 // the final artefacts once the LLM returns.
@@ -1980,6 +1988,10 @@ public sealed partial class MeetingWindow : Window
             SetProcStep(1, true);
             SetProcStep(2, true);
             SetProcStep(3, true);
+            // Unsubscribe the live stream pane opened when the external stop
+            // put us in Processing. Leaking the handler would keep appending
+            // a later command-mode stream into this window.
+            EndLiveRecap();
             SetState(MeetingState.Done);
         }
         LoadHistory();
