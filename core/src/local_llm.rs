@@ -89,6 +89,21 @@ pub const AVAILABLE_LLM_MODELS: &[LlmModel] = &[
     },
     // ── Phi-4 (Microsoft, MIT license) ──────────────────────────
     LlmModel {
+        // Qwen 3 measured against Gemma 4 E2B on the same real 35-minute
+        // meeting, both with the repetition penalty fixed (2026-09-04):
+        // Qwen took 108 s to Gemma's 44 s and produced a far more specific
+        // recap — real system and client names, ten decisions to Gemma's two.
+        // Its weakness is the output LANGUAGE: asked to answer in the
+        // transcript's language it answers in English on an Italian meeting,
+        // where Gemma stays Italian. Worth having as the "slower but says
+        // more" option; not a default until the language is pinned.
+        name: "Qwen 3 4B Q4",
+        filename: "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+        size_mb: 2400,
+        description: "Slower, but extracts more detail. Answers in English (4B params)",
+        url: Some("https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf"),
+    },
+    LlmModel {
         name: "Phi-4 Mini Q4",
         filename: "phi-4-mini-instruct-q4_k_m.gguf",
         size_mb: 2500,
