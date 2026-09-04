@@ -1195,6 +1195,8 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
         let phase = (payload["phase"] as? String) ?? ""
         let delta = (payload["delta"] as? String) ?? ""
         if phase == "start" {
+            // The recap is live now, so the backlog wait is over.
+            appState.meetingFinishingTranscription = false
             appState.llmStreamText = ""
             appState.llmThinkingText = ""
         } else if phase == "delta" {
@@ -1221,6 +1223,14 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
         appState.liveCaptionCumulative = cumulative
         appState.liveCaptionIsFinal = isFinal
         appState.liveCaptionTick &+= 1
+
+    case "meeting_finishing_transcription":
+        // The audio is already finalized; the core is draining the
+        // transcriber's backlog before the recap can be dispatched. Without
+        // this the Processing view claims "Generating recap with LLM..."
+        // for up to 90 s before any recap exists — measured at exactly 90 s
+        // with 42 windows outstanding (2026-09-04).
+        appState.meetingFinishingTranscription = true
 
     case "meeting_transcription_behind":
         // The machine cannot transcribe as fast as it records, so the core

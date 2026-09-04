@@ -11,8 +11,8 @@ namespace Dimmy.Windows.Views;
 /// Self-dismissing in-app toast for dictionary feedback. Positioned in
 /// the bottom-right of the primary screen (the same anchor area Win11
 /// toasts use) so visual muscle memory carries over. Auto-closes after
-/// <see cref="VisibleSecs"/> seconds; can be dismissed earlier by
-/// click.
+/// long enough to read it (<see cref="Services.ToastDuration"/>); can be
+/// dismissed earlier by click.
 ///
 /// Why this instead of <c>Microsoft.Windows.AppNotifications</c>: the
 /// modern AppNotification API requires the app to be MSIX-packaged
@@ -27,7 +27,6 @@ public sealed partial class DictToastWindow : Window
     private const int WindowWidth = 380;
     private const int WindowHeight = 80;
     private const int MarginPx = 16;
-    private const double VisibleSecs = 3.0;
 
     private DispatcherTimer? _closeTimer;
 
@@ -43,11 +42,20 @@ public sealed partial class DictToastWindow : Window
         // Click anywhere on the card → dismiss early.
         ToastCard.PointerPressed += (_, _) => Close();
 
-        // Auto-close. DispatcherTimer is fine here — the timer fires
-        // once on the UI thread + closes the window. We're not racing
-        // any other UI; the constant is a hard product choice
-        // ("toasts feel like ~3 s"), not a kludge waiting for state.
-        _closeTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(VisibleSecs) };
+        // Auto-close after long enough to READ it. DispatcherTimer is fine
+        // here — it fires once on the UI thread and closes the window; we're
+        // not racing any other UI.
+        //
+        // The duration used to be a flat 3 s, which suited the four-word
+        // dictionary toasts it was written for. It does not suit the ones
+        // added since: "Transcription is falling behind ... try Parakeet or a
+        // smaller model ... your recording is safe and continues" is 30 words
+        // and vanished before it could be read (reported 2026-09-04). Those
+        // are exactly the toasts that tell the user what to DO.
+        _closeTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(Services.ToastDuration.For(title, body)),
+        };
         _closeTimer.Tick += (_, _) =>
         {
             _closeTimer.Stop();

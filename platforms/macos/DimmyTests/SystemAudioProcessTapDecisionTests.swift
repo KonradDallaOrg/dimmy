@@ -61,6 +61,58 @@ final class SystemAudioProcessTapDecisionTests: XCTestCase {
     }
 }
 
+// MARK: - ToastDurationTests
+//
+// Every toast showed for a flat 4 s on macOS (3 s on Windows). That suited
+// the dictionary toasts the window was built for and nothing else: the ones
+// added in 2026-09 carry the user's next step and vanished before they could
+// be read. Win parity: Services/ToastDuration.cs.
+
+final class ToastDurationTests: XCTestCase {
+
+    private let shortTitle = "Added to dictionary"
+    private let shortBody = "\"budget\" will boost recognition on future transcriptions."
+
+    private let behindTitle = "Transcription is falling behind"
+    private let behindBody = """
+        Your recording is safe and continues normally. Try Parakeet or a \
+        smaller model in Settings, Transcription. You can also regenerate \
+        the transcript from the audio after the meeting.
+        """
+
+    func testShortToastsKeepTheirBriefFeel() {
+        let secs = DictToastWindow.visibleSeconds(title: shortTitle, body: shortBody)
+        XCTAssertGreaterThanOrEqual(secs, 3.0)
+        XCTAssertLessThanOrEqual(secs, 5.0)
+    }
+
+    func testTheActionableToastStaysLongEnoughToRead() {
+        // ~34 words at 180 wpm is ~11 s. At the old flat 4 s the user saw
+        // about the first line of the thing telling them what to do.
+        let secs = DictToastWindow.visibleSeconds(title: behindTitle, body: behindBody)
+        XCTAssertGreaterThanOrEqual(
+            secs, 8.0, "the toast that tells the user what to do is not readable")
+    }
+
+    func testLongerMessagesNeverGetShorter() {
+        XCTAssertGreaterThan(
+            DictToastWindow.visibleSeconds(title: behindTitle, body: behindBody),
+            DictToastWindow.visibleSeconds(title: shortTitle, body: shortBody))
+    }
+
+    func testFloorAndCeilingHold() {
+        XCTAssertEqual(DictToastWindow.visibleSeconds(title: "", body: ""), 3.0)
+        let huge = Array(repeating: "parola", count: 500).joined(separator: " ")
+        XCTAssertEqual(DictToastWindow.visibleSeconds(title: "Titolo", body: huge), 12.0)
+    }
+
+    func testWhitespaceIsNotContent() {
+        XCTAssertEqual(
+            DictToastWindow.visibleSeconds(title: "a b c", body: "d e f"),
+            DictToastWindow.visibleSeconds(title: "  a   b   c  ", body: "\n d \t e  f \n"))
+    }
+}
+
 // MARK: - LoopbackRateEstimatorTests
 //
 // Pins the decision that stops the core from believing a lying tap. The

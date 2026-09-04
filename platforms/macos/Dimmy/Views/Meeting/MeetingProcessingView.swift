@@ -40,7 +40,14 @@ struct MeetingProcessingView: View {
                 step(title: "Saved audio + transcripts",
                      icon: stepIconName(.saving),
                      color: stepIconColor(.saving))
-                step(title: "Generating recap with LLM...",
+                // Say what the wait IS while the core drains the
+                // transcriber's backlog: the recap has not been dispatched
+                // yet, so there is no stream to show, and the wait reached
+                // 90 s on a real meeting (2026-09-04). Win parity:
+                // MeetingWindow.OnFinishingTranscription.
+                step(title: appState.meetingFinishingTranscription
+                        ? "Finishing transcription..."
+                        : "Generating recap with LLM...",
                      icon: stepIconName(.generatingRecap),
                      color: stepIconColor(.generatingRecap))
                 step(title: "Extracting action items",

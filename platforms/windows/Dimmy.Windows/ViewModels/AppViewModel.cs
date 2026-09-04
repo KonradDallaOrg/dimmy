@@ -331,6 +331,11 @@ public partial class AppViewModel : ObservableObject
     /// problem. Arg: the engine that fell behind (whisper|parakeet|cloud).</summary>
     public event Action<string>? MeetingTranscriptionBehind;
 
+    /// <summary>Raised at stop while the core drains the transcriber's
+    /// backlog, before the recap is dispatched. Arg: how many windows were
+    /// dropped during the meeting (0 when the transcriber kept up).</summary>
+    public event Action<int>? MeetingFinishingTranscription;
+
     /// Fires when the Rust core emits a file_transcribe_progress
     /// event during dimmy_transcribe_file. Args: (processed_secs,
     /// total_secs, percent 0-100). Used by Settings → Home → file
@@ -632,6 +637,19 @@ public partial class AppViewModel : ObservableObject
                         var elapsedMs = payload.GetProperty("elapsed_ms").GetInt64();
                         var chunkCount = payload.GetProperty("chunk_count").GetInt32();
                         MeetingChunkReceived?.Invoke(dir, speaker, line, elapsedMs, chunkCount);
+                    }
+                    break;
+                case "meeting_finishing_transcription":
+                    // The audio is already finalized; the core is draining
+                    // the transcriber's backlog before the recap can start.
+                    // Without this the window sits on "Wrapping up..." for
+                    // up to 90 s with nothing to show — the recap has not
+                    // been dispatched yet, so there is no stream either.
+                    {
+                        var dropped = payload.TryGetProperty("dropped_windows", out var dEl)
+                            ? dEl.GetInt32() : 0;
+                        Log?.Invoke($"finishing transcription backlog (dropped={dropped})", "Meeting");
+                        MeetingFinishingTranscription?.Invoke(dropped);
                     }
                     break;
                 case "meeting_transcription_behind":

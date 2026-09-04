@@ -175,6 +175,7 @@ public sealed partial class MeetingWindow : Window
         if (App.Instance?.AppViewModel is { } vm)
         {
             vm.MeetingChunkReceived += OnMeetingChunkReceived;
+            vm.MeetingFinishingTranscription += OnFinishingTranscription;
             // Drive the Done-view regenerate progress bar from the
             // file_transcribe_progress event the core already emits per
             // chunk during dimmy_meeting_retranscribe.
@@ -199,6 +200,7 @@ public sealed partial class MeetingWindow : Window
             if (App.Instance?.AppViewModel is { } vmClose)
             {
                 vmClose.MeetingChunkReceived -= OnMeetingChunkReceived;
+                vmClose.MeetingFinishingTranscription -= OnFinishingTranscription;
                 vmClose.FileTranscribeProgress -= OnRegenTranscribeProgress;
                 vmClose.PropertyChanged -= OnAppVmPropertyChanged;
             }
@@ -1363,6 +1365,28 @@ public sealed partial class MeetingWindow : Window
         SetProcStep(1, false);
         SetProcStep(2, false);
         SetProcStep(3, false);
+        // Restore the default label — a previous stop may have rewritten it
+        // to the transcription-backlog wording.
+        if (ProcStep2Text != null) ProcStep2Text.Text = ProcStep2Default;
+    }
+
+    private const string ProcStep2Default = "Generating recap with LLM...";
+
+    /// <summary>The core is draining the transcriber's backlog before the
+    /// recap can start. Say so: the wait was up to 90 s with nothing on
+    /// screen and no way to tell working from wedged, and the recap has not
+    /// been dispatched yet so there is no stream to show either
+    /// (measured 2026-09-04 at exactly 90 s with 42 windows outstanding).
+    /// </summary>
+    private void OnFinishingTranscription(int droppedWindows)
+    {
+        DispatcherQueue?.TryEnqueue(() =>
+        {
+            if (ProcStep2Text == null) return;
+            ProcStep2Text.Text = droppedWindows > 0
+                ? "Finishing transcription, then the recap..."
+                : "Finishing transcription...";
+        });
     }
 
     private void SetProcStep(int n, bool done)

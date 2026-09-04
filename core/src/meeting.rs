@@ -1247,13 +1247,20 @@ fn worker_loop(
             let s_len = audio_buffer_secondary.lock().map(|b| b.len()).unwrap_or(0);
             let elapsed = started.elapsed().as_secs_f64();
             crate::log(&format!(
-                "[Meeting/diag] elapsed={:.1}s primary_len={} secondary_len={} clock_decided={} clock_on_secondary={} samples_written={} last_processed={} chunk_count={} paused={} mix_active={}",
+                "[Meeting/diag] elapsed={:.1}s primary_len={} secondary_len={} clock_decided={} clock_on_secondary={} total_written={} write_cursor={} last_processed={} chunk_count={} paused={} mix_active={}",
                 elapsed,
                 p_len,
                 s_len,
                 clock_decided,
                 clock_on_secondary,
+                // Monotonic total: "stuck" here means the writer stalled.
                 total_written,
+                // Index into the DRAINED buffer. `primary_len - write_cursor`
+                // is how far the writer trails the capture, which is the
+                // number THE AUDIO RULE is about — it was invisible for one
+                // build after the drain landed, because this line reported
+                // only the total.
+                samples_written,
                 last_processed,
                 chunk_count_shared.load(std::sync::atomic::Ordering::Relaxed),
                 paused.load(Ordering::SeqCst),
@@ -1596,6 +1603,22 @@ fn worker_loop(
     // needs, and the process is about to be idle) — we keep the chunk
     // count it reached and move on.
     drop(stt_tx);
+    // Say what the wait IS. Stopping a meeting whose transcriber is behind
+    // leaves the user on "Wrapping up..." for up to 90 s with nothing
+    // happening and no way to tell working from wedged — measured at 90 s
+    // exactly on 2026-09-04, with 42 windows outstanding. The recap has not
+    // even been dispatched yet at this point, so there is no stream to show
+    // and only the core knows why.
+    //
+    // Emitted HERE and not from the capture loop: the audio sinks are
+    // already finalized above, so a host callback that blocks can no longer
+    // cost a single sample.
+    if stt_handle.is_some() {
+        crate::ffi::emit_event(
+            "meeting_finishing_transcription",
+            &serde_json::json!({ "dropped_windows": stt_dropped_chunks }).to_string(),
+        );
+    }
     let stt_fallback = match stt_handle {
         Some(h) => match join_bounded(h, Duration::from_secs(90)) {
             BoundedJoin::Done(s) => s,
@@ -2329,23 +2352,36 @@ mod audio_never_blocked {
     fn a_consumer_that_keeps_up_loses_nothing() {
         // The happy path must be unchanged: when the machine can transcribe
         // as fast as it records, every window is delivered, in order.
+        //
+        // The consumer ACKS each item and the producer waits for it, so
+        // "keeping up" is guaranteed rather than hoped for. The first
+        // version slept 1 ms between sends and trusted the scheduler to
+        // drain in time; on a loaded machine it did not, and the test failed
+        // for a reason that had nothing to do with the code under test
+        // (2026-09-04). A test whose pass depends on thread timing tells you
+        // about the machine, not the program.
         let (tx, rx) = std::sync::mpsc::sync_channel::<u32>(STT_QUEUE_DEPTH);
+        let (ack_tx, ack_rx) = std::sync::mpsc::channel::<()>();
         let consumer = thread::spawn(move || {
             let mut seen = Vec::new();
             while let Ok(v) = rx.recv() {
                 seen.push(v);
+                let _ = ack_tx.send(());
             }
             seen
         });
 
         let mut dropped = 0;
         for i in 0..200 {
-            // A real worker polls between windows; the consumer drains
-            // faster than that, so nothing should ever be dropped.
             if tx.try_send(i).is_err() {
                 dropped += 1;
+                continue;
             }
-            thread::sleep(Duration::from_millis(1));
+            // Block until this item has been consumed: the queue is provably
+            // empty again before the next send.
+            ack_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("consumer acked");
         }
         drop(tx);
         let seen = consumer.join().expect("consumer joined");

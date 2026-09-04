@@ -967,6 +967,12 @@ final class AppState: ObservableObject {
     /// Gemini-native this stays empty and the UI shows nothing.
     @Published var llmStreamText: String = ""
 
+    /// True while the core drains the transcriber's backlog at stop, before
+    /// the recap is dispatched. Purely so the Processing view can say what
+    /// the wait is instead of showing "Generating recap" for up to 90 s
+    /// before the recap has even started.
+    @Published var meetingFinishingTranscription: Bool = false
+
     /// The model's reasoning trace while it works, when the provider sends
     /// one (Anthropic with adaptive thinking, Claude Code via stream-json).
     /// Deliberately SEPARATE from `llmStreamText`: this is progress, never
