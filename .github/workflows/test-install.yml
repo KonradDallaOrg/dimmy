@@ -139,6 +139,15 @@ jobs:
           $critical = @(
             'Dimmy.Windows.exe',
             'dimmy_lib.dll',
+            # dimmy_lib.dll links llama.cpp and ggml DYNAMICALLY (llama-cpp-4
+            # `dynamic-link`, to keep llama's ggml out of whisper's way). Miss
+            # one and the app does not start at all, which is exactly the class
+            # of failure this job exists to catch.
+            'ggml.dll',
+            'ggml-base.dll',
+            'ggml-cpu.dll',
+            'ggml-vulkan.dll',
+            'llama.dll',
             'coreclr.dll',
             'hostfxr.dll',
             'Microsoft.UI.Xaml.dll',
