@@ -33,10 +33,34 @@ pub const AVAILABLE_LLM_MODELS: &[LlmModel] = &[
     // NOTE (2026-06-18): Gemma 4 QAT gguf files (Unsloth UD-Q4_K_XL AND
     // Google official q4_0) do NOT load in the bundled llama.cpp — both fail
     // with `missing tensor 'blk.15.attn_k.weight'` (the E-series QAT export
-    // omits per-layer attn_k that this llama.cpp version requires). The
-    // non-QAT Gemma 4 below loads + generates fine. Adding QAT needs a
-    // llama.cpp fork bump, deliberately deferred. Verified end-to-end on CPU.
     // ── Gemma 4 family (Google, Apache 2.0, 140+ languages) ─────
+    LlmModel {
+        // QAT = quantization-aware training: Google trains the model with the
+        // 4-bit quantisation in the loop instead of quantising afterwards, so
+        // it keeps more of the full-precision quality at a SMALLER size.
+        //
+        // These were excluded until 2026-09-04 because the llama.cpp we
+        // vendored predated `shared_kv_layers` — a QAT model's blocks 15-34
+        // share KV from earlier layers by design, and the loader demanded an
+        // attn_k that is deliberately absent (`missing tensor
+        // blk.15.attn_k.weight`). Moving to upstream llama-cpp-4 fixed it.
+        //
+        // Measured on the same real 35-minute meeting as the plain Q4:
+        // 1224 MiB of VRAM against 1408, and it extracted decisions the plain
+        // quantisation missed entirely (23 against 2, though with repeats).
+        name: "Gemma 4 E2B QAT Q4",
+        filename: "gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf",
+        size_mb: 2500,
+        description: "Recommended. Quantization-aware: better quality, less VRAM (5B params)",
+        url: Some("https://huggingface.co/unsloth/gemma-4-E2B-it-qat-GGUF/resolve/main/gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf"),
+    },
+    LlmModel {
+        name: "Gemma 4 E4B QAT Q4",
+        filename: "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
+        size_mb: 4020,
+        description: "Larger QAT sibling — needs ~6GB VRAM (8B params)",
+        url: Some("https://huggingface.co/unsloth/gemma-4-E4B-it-qat-GGUF/resolve/main/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"),
+    },
     LlmModel {
         name: "Gemma 4 E2B Q4",
         filename: "gemma-4-E2B-it-Q4_K_M.gguf",
@@ -88,6 +112,21 @@ pub const AVAILABLE_LLM_MODELS: &[LlmModel] = &[
         url: Some("https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/main/gemma-4-12b-it-UD-Q2_K_XL.gguf"),
     },
     // ── Phi-4 (Microsoft, MIT license) ──────────────────────────
+    LlmModel {
+        // Qwen 3 measured against Gemma 4 E2B on the same real 35-minute
+        // meeting, both with the repetition penalty fixed (2026-09-04):
+        // Qwen took 108 s to Gemma's 44 s and produced a far more specific
+        // recap — real system and client names, ten decisions to Gemma's two.
+        // Its weakness is the output LANGUAGE: asked to answer in the
+        // transcript's language it answers in English on an Italian meeting,
+        // where Gemma stays Italian. Worth having as the "slower but says
+        // more" option; not a default until the language is pinned.
+        name: "Qwen 3 4B Q4",
+        filename: "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+        size_mb: 2380,
+        description: "Slower, but extracts more detail. Answers in English (4B params)",
+        url: Some("https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf"),
+    },
     LlmModel {
         name: "Phi-4 Mini Q4",
         filename: "phi-4-mini-instruct-q4_k_m.gguf",
@@ -376,12 +415,19 @@ mod llm_cache {
     static CACHE: Mutex<Option<CachedLlmModel>> = Mutex::new(None);
 
     /// Load model if needed, run text generation, return result. Lock held during load only.
+    /// `stream`: emit `llm_stream` events as tokens arrive, so the host can
+    /// show the recap being written instead of a still spinner for the 30-90 s
+    /// a local model takes. Mirrors what the cloud path does in
+    /// `llm::send_raw_prompt_request`, and like it, is OFF for the dictation
+    /// rewrite — that one replaces text at the cursor and has no surface that
+    /// wants a running commentary.
     pub fn generate(
         model_path: &std::path::Path,
         system_prompt: &str,
         user_text: &str,
         max_tokens: u32,
         creative: bool,
+        stream: bool,
     ) -> Result<String, crate::error::LlmError> {
         let mut guard = CACHE.lock().map_err(|e| {
             crate::error::LlmError::LocalModel(format!("LLM cache lock poisoned: {}", e))
@@ -589,33 +635,29 @@ mod llm_cache {
         // only the deliberately-creative personas (Gen-Z, emoji, …) get the
         // probabilistic chain. Greedy keeps the repetition penalty so it can't
         // collapse into a loop. 2026-06-06.
-        // Repetition control. `LlamaSampler::penalties_simple` in our
-        // llama-cpp-4 fork is a TRAP: it calls llama_sampler_init_penalties
-        // with the argument order that function had BEFORE upstream changed
-        // it. The header is now
-        //     (penalty_last_n: i32, repeat: f32, freq: f32, present: f32)
-        // and the fork passes
-        //     (n_vocab, special_eos_id, linefeed_id, penalty_last_n).
-        // Same types, so it compiles in silence and configures nonsense:
-        // penalty_repeat becomes the EOS token id — about 106 on Gemma 4,
-        // where anything above ~1.2 is extreme.
+        // Repetition control. These values are load-bearing, and the reason
+        // is worth keeping: until 2026-09-04 this called the fork's
+        // `penalties_simple`, which passed llama_sampler_init_penalties the
+        // argument order that function had years earlier. Same types, so it
+        // compiled in silence and set penalty_repeat to the EOS token id —
+        // about 106, where anything above ~1.2 is extreme.
         //
         // A repeat penalty of 106 forbids the model from reusing any word it
         // has already said, so it reaches for synonyms until the sentence
-        // stops meaning anything. That is what produced every mangled local
-        // recap we looked at on 2026-09-04, and removing it changed one
-        // meeting from 5 extracted points to 26, in correct Italian instead
-        // of broken English.
-        //
-        // `penalties()` is a straight positional pass-through, so calling it
-        // with the values the CURRENT header expects is correct despite its
-        // parameter names. Do NOT "fix" this back to penalties_simple.
+        // stops meaning anything. That produced every mangled local recap we
+        // had: broken grammar, drift into English on an Italian meeting,
+        // collapsed bullet lists. On one real 35-minute meeting, same model
+        // and transcript, it was the difference between 5 extracted points
+        // and 26. Upstream llama-cpp-4 has since corrected the signature, so
+        // the names finally mean what they say — but pass them explicitly
+        // anyway, because the failure mode was invisible.
         const PENALTY_LAST_N: i32 = 64;
         const PENALTY_REPEAT: f32 = 1.1;
         const PENALTY_FREQ: f32 = 0.0;
         const PENALTY_PRESENT: f32 = 0.0;
         let penalties = || {
             LlamaSampler::penalties(
+                cached.model.n_vocab(),
                 PENALTY_LAST_N,
                 PENALTY_REPEAT,
                 PENALTY_FREQ,
@@ -678,6 +720,15 @@ mod llm_cache {
                 continue;
             }
 
+            if stream {
+                // "start" on the first VISIBLE token, not before: a model that
+                // opens with control tokens would otherwise clear the pane and
+                // then sit empty. Same lazy-start rule as the cloud readers.
+                if output.is_empty() {
+                    crate::llm::emit_recap_stream_event("start", "");
+                }
+                crate::llm::emit_recap_stream_event("delta", &piece);
+            }
             output.push_str(&piece);
             n_generated += 1;
 
@@ -690,6 +741,12 @@ mod llm_cache {
 
             ctx.decode(&mut batch)
                 .map_err(|e| crate::error::LlmError::LocalModel(format!("decode failed: {}", e)))?;
+        }
+
+        // After the loop, so it fires on every exit: EOS, the token budget,
+        // a turn marker, or nothing generated at all.
+        if stream {
+            crate::llm::emit_recap_stream_event("end", "");
         }
 
         crate::log(&format!(
@@ -789,6 +846,7 @@ ONLY the resulting text, with no preamble, notes, or tags.\n\n<input>\n{}\n</inp
         &user_turn,
         estimated_tokens,
         creative,
+        false,
     )?;
 
     if result.is_empty() {
@@ -841,7 +899,7 @@ pub fn process_raw_prompt_local(
     }
     // Recap is a format-critical task: greedy decoding (creative=false) so the
     // section markers and structure come out deterministically.
-    let result = llm_cache::generate(model_file, "", prompt, capped, false)?;
+    let result = llm_cache::generate(model_file, "", prompt, capped, false, true)?;
     if result.is_empty() {
         return Err(LlmError::LocalModel(
             "local LLM produced empty output".to_string(),

@@ -84,6 +84,25 @@
     <Warning Text="dimmy_lib.dll not found at $(DimmyDllSource). Run 'cargo build --release --lib' in core first." Condition="!Exists('$(DimmyDllSource)')" />
   </Target>
 
+  <!-- Copy llama.cpp's shared libraries next to dimmy_lib.dll.
+       REQUIRED, not optional: the local-llm-vulkan / local-llm-metal features
+       enable llama-cpp-4's `dynamic-link`, which builds llama.cpp and ggml as
+       SHARED libraries instead of static ones. That is deliberate — whisper-rs
+       and llama-cpp-sys each carry their own ggml, and static-linking both into
+       dimmy_lib.dll makes the linker dedup them (LNK4006) so whichever ggml wins
+       corrupts the other consumer. It broke whisper STT once already.
+       The cost is that these DLLs must SHIP: without them dimmy_lib.dll fails
+       to load at all, so the app does not start. Wildcard rather than a list so
+       a future ggml backend (ggml-cuda.dll, ...) is picked up automatically. -->
+  <Target Name="CopyLlamaSharedLibs" AfterTargets="Build">
+    <ItemGroup>
+      <LlamaSharedLib Include="$(MSBuildThisFileDirectory)..\..\..\core	argetelease\ggml*.dll" />
+      <LlamaSharedLib Include="$(MSBuildThisFileDirectory)..\..\..\core	argetelease\llama*.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(LlamaSharedLib)" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" Condition="'@(LlamaSharedLib)' != ''" />
+    <Warning Text="No ggml*/llama*.dll found next to dimmy_lib.dll. A local-llm build needs them at runtime (llama-cpp-4 dynamic-link) — the app will fail to start. Build the Rust lib with the frozen feature set first." Condition="'@(LlamaSharedLib)' == '' And Exists('$(DimmyDllSource)')" />
+  </Target>
+
   <!-- Copy onnxruntime.dll alongside dimmy_lib.dll when the Parakeet local-STT
        backend is enabled. The DLL is fetched once by scripts/download-onnxruntime.ps1
        (or downloaded manually) into core/target/onnxruntime-win-x64-<ver>/lib/.

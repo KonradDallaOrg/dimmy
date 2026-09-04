@@ -34,6 +34,16 @@ $requiredFiles = @(
     'Dimmy.Windows.exe',
     'Dimmy.Windows.dll',
     'dimmy_lib.dll',
+    # llama.cpp + ggml, linked DYNAMICALLY by dimmy_lib.dll. The
+    # `dynamic-link` feature keeps llama's ggml in its own DLL so it cannot
+    # collide with whisper's static copy (LNK4006, which broke STT once).
+    # The trade is that these have to ship: miss one and dimmy_lib.dll
+    # cannot be loaded, so the app does not start at all.
+    'ggml.dll',
+    'ggml-base.dll',
+    'ggml-cpu.dll',
+    'ggml-vulkan.dll',
+    'llama.dll',
     # Parakeet ort runtime: required by `local-stt-parakeet` feature.
     # Without these the Rust DLL exports `dimmy_parakeet_*` but every
     # call returns LocalModel("ort init failed") at runtime — backend

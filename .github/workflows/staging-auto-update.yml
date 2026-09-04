@@ -746,6 +746,23 @@ jobs:
           # with an older ABI (v0.6.10 crash cause). System32 wins.
           $pubDir = "platforms/windows/Dimmy.Windows/publish"
           Copy-Item "D:\t\release\dimmy_lib.dll" "$pubDir/"
+          # llama.cpp shared libraries. REQUIRED, not an optimisation: the
+          # local-llm-vulkan feature enables llama-cpp-4 `dynamic-link`, which
+          # builds llama.cpp and ggml as SHARED libs. That is deliberate --
+          # whisper-rs and llama-cpp-sys each carry their own ggml, and static
+          # linking both into dimmy_lib.dll makes the linker dedup them
+          # (LNK4006) so whichever ggml wins corrupts the other consumer; it
+          # broke whisper STT once already. The cost is that these must SHIP:
+          # without them dimmy_lib.dll cannot load and the app does not start.
+          # Assert, because "it will not launch" is a terrible thing for a user
+          # to discover.
+          Copy-Item "D:	elease\ggml*.dll" "$pubDir/"
+          Copy-Item "D:	elease\llama*.dll" "$pubDir/"
+          foreach ($need in @("ggml.dll","ggml-base.dll","ggml-cpu.dll","ggml-vulkan.dll","llama.dll")) {
+            if (-not (Test-Path "$pubDir/$need")) {
+              throw "$need missing from publish dir -- dimmy_lib.dll links it dynamically, so the app would fail to start"
+            }
+          }
           # onnxruntime.dll + onnxruntime_providers_shared.dll are the
           # Parakeet ort path's runtime dependency. The .csproj target
           # copies them to bin/ during dotnet build but `dotnet publish`
