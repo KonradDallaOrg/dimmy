@@ -51,6 +51,7 @@
 		AA000709 /* MeetingAudioResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000709 /* MeetingAudioResolverTests.swift */; };
 		AA000710 /* SystemAudioProcessTapDecisionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000710 /* SystemAudioProcessTapDecisionTests.swift */; };
 		AA000711 /* UpdateGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000711 /* UpdateGateTests.swift */; };
+		AA000712 /* HardwareInfoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000712 /* HardwareInfoTests.swift */; };
 		AA000006 /* HotkeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000006 /* HotkeyManager.swift */; };
 		AA000007 /* AudioSimulator.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000007 /* AudioSimulator.swift */; };
 		AA000008 /* TextInjector.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000008 /* TextInjector.swift */; };
@@ -196,6 +197,7 @@
 		AB000709 /* MeetingAudioResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAudioResolverTests.swift; sourceTree = "<group>"; };
 		AB000710 /* SystemAudioProcessTapDecisionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemAudioProcessTapDecisionTests.swift; sourceTree = "<group>"; };
 		AB000711 /* UpdateGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateGateTests.swift; sourceTree = "<group>"; };
+		AB000712 /* HardwareInfoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HardwareInfoTests.swift; sourceTree = "<group>"; };
 		AB000006 /* HotkeyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyManager.swift; sourceTree = "<group>"; };
 		AB000007 /* AudioSimulator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioSimulator.swift; sourceTree = "<group>"; };
 		AB000008 /* TextInjector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextInjector.swift; sourceTree = "<group>"; };
@@ -323,6 +325,7 @@
 				AB000709 /* MeetingAudioResolverTests.swift */,
 				AB000710 /* SystemAudioProcessTapDecisionTests.swift */,
 				AB000711 /* UpdateGateTests.swift */,
+				AB000712 /* HardwareInfoTests.swift */,
 			);
 			path = DimmyTests;
 			sourceTree = "<group>";
@@ -882,6 +885,7 @@ echo \"[gtcrn] bundled $(basename \"$GTCRN_SRC\") into Resources\"
 				AA000709 /* MeetingAudioResolverTests.swift in Sources */,
 				AA000710 /* SystemAudioProcessTapDecisionTests.swift in Sources */,
 				AA000711 /* UpdateGateTests.swift in Sources */,
+				AA000712 /* HardwareInfoTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

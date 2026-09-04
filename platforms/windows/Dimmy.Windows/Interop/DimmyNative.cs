@@ -161,6 +161,9 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_gpu_clear_known_bad();
 
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_hardware_json(byte[] outBuf, int bufLen);
+
     // ── Audio ────────────────────────────────────────────────────────
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern float dimmy_get_amplitude();
@@ -575,6 +578,25 @@ public static class DimmyNative
     public static string? HistoryStats() => ReadBuffer(dimmy_history_stats);
 
     public static string? GpuGetStatus() => ReadBuffer(dimmy_gpu_get_status);
+
+    /// <summary>Best-effort GPU description for the onboarding local-vs-cloud
+    /// line and the GPU diagnostics card. See core/src/hardware.rs — the
+    /// `fitness` field answers whether the models FIT, never how fast they
+    /// will be, and `line` is null when there is nothing honest to say.
+    ///
+    /// Guarded, unlike its neighbours, and for a reason paid for on
+    /// 2026-09-04: a stale dimmy_lib.dll without this export made the
+    /// P/Invoke throw EntryPointNotFoundException while the Settings window
+    /// was being constructed, which Windows turned into 0xc000041d and
+    /// killed Dimmy outright. A cosmetic hardware hint must never be able
+    /// to take a window down — so a missing or misbehaving export degrades
+    /// to "no hint" the way a failed probe already does.</summary>
+    public static string? HardwareJson()
+    {
+        try { return ReadBuffer(dimmy_hardware_json); }
+        catch (EntryPointNotFoundException) { return null; }
+        catch (DllNotFoundException) { return null; }
+    }
 
     // ── Telemetry ────────────────────────────────────────────────
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]

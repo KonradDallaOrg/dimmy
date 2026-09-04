@@ -4,6 +4,35 @@ namespace Dimmy.Windows.ViewModels;
 
 public enum ModelChoice { None, Local, Cloud }
 
+/// <summary>Which card the wizard arrives with already selected.
+///
+/// It used to arrive with NONE, and users stalled there: both cards look
+/// like information, the Continue button is disabled, and nothing says a
+/// choice is required. Observed on real users more than once. Whatever
+/// hardware detection says, SOMETHING must be selected — that is the
+/// actual bug, and it is separate from picking the better option.
+///
+/// `fitness` comes from `dimmy_hardware_json` (see core/src/hardware.rs)
+/// and answers only whether the models FIT, never how fast they will be.
+/// So this picks a starting point, never a lock: every card stays
+/// tappable and the reason is shown on the card itself.</summary>
+public static class OnboardingPreselect
+{
+    public static ModelChoice For(string? fitness) => fitness switch
+    {
+        // Nothing in the catalog fits comfortably. Cloud needs a key, but
+        // landing on a visibly selected Cloud card with the key field
+        // revealed and a line saying why beats landing on nothing.
+        "poor" => ModelChoice.Cloud,
+        // good, tight, unknown, or a value we do not recognise. Local needs
+        // no account, works offline, and is what Dimmy is for; the model
+        // download bootstraps regardless of the choice. "unknown" means we
+        // could not read the GPU, which is not the same as knowing it is
+        // weak — so it does not push the user to the cloud.
+        _ => ModelChoice.Local,
+    };
+}
+
 public partial class OnboardingViewModel : ObservableObject
 {
     public int TotalSteps => 4;
@@ -33,6 +62,16 @@ public partial class OnboardingViewModel : ObservableObject
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(TrialBoxPlaceholder))]
     private string _trialStatus = "";
+
+    // What this machine can actually do, on the card that promises "runs on
+    // your machine". Empty when the probe found nothing to say honestly, and
+    // the TextBlock collapses — a blank line beats a placeholder, and an
+    // invented recommendation beats neither.
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasHardwareLine))]
+    private string _hardwareLine = "";
+
+    public bool HasHardwareLine => !string.IsNullOrEmpty(HardwareLine);
 
     public string TrialBoxPlaceholder =>
         string.IsNullOrEmpty(TrialStatus) ? "Your transcription will appear here." : TrialStatus;

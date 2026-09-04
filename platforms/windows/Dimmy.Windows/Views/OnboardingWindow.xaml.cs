@@ -52,6 +52,29 @@ public sealed partial class OnboardingWindow : Window
         ((FrameworkElement)Content).DataContext = ViewModel;
         Title = "Dimmy";
 
+        // The Local card promises "runs on your machine"; say what the
+        // machine is. One FFI read, and nothing rendered when the probe
+        // has nothing honest to report. See core/src/hardware.rs.
+        var hw = Helpers.HardwareInfo.Parse(Interop.DimmyNative.HardwareJson());
+        if (hw?.Line is { Length: > 0 } line)
+        {
+            ViewModel.HardwareLine = line;
+        }
+
+        // Arrive with a card already chosen. The wizard used to arrive with
+        // ModelChoice.None: both cards read as information, Continue is
+        // disabled, and nothing tells the user a choice is required —
+        // observed stalling real users more than once. The hardware only
+        // decides WHICH card; that one is selected is not optional.
+        if (ViewModel.Choice == ModelChoice.None)
+        {
+            ViewModel.Choice = OnboardingPreselect.For(hw?.Fitness);
+        }
+        App.Log(
+            $"hardware: {hw?.Line ?? "not detected"} (fitness={hw?.Fitness ?? "n/a"}) "
+                + $"-> preselected {ViewModel.Choice}",
+            "Onboarding");
+
         var appWindow = WindowHelper.GetAppWindow(this);
         WindowHelper.ResizeLogical(this, 680, 600);
         if (appWindow?.Presenter is Microsoft.UI.Windowing.OverlappedPresenter presenter)

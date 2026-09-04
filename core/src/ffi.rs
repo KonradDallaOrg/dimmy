@@ -11477,3 +11477,37 @@ mod tests {
         );
     }
 }
+
+/// Best-effort description of the graphics device, for the onboarding
+/// local-vs-cloud decision and the GPU diagnostics card. JSON:
+///
+/// ```json
+/// {"name":"NVIDIA T600 Laptop GPU","vram_mb":4096,"dedicated":true,
+///  "apple_silicon":false,"fitness":"good","line":"NVIDIA T600 · 4 GB — …"}
+/// ```
+///
+/// `fitness` is one of good / tight / poor / unknown and answers only
+/// whether the shipped models FIT — never how fast they will be. See
+/// `hardware.rs` for why that distinction is load-bearing. `line` is
+/// absent when there is nothing honest to say, and the host then renders
+/// no line rather than a placeholder.
+#[no_mangle]
+pub extern "C" fn dimmy_hardware_json(out_buf: *mut c_char, buf_len: c_int) -> c_int {
+    let info = crate::hardware::detect();
+    let fitness = match crate::hardware::assess(&info) {
+        crate::hardware::LocalFitness::Good => "good",
+        crate::hardware::LocalFitness::Tight => "tight",
+        crate::hardware::LocalFitness::Poor => "poor",
+        crate::hardware::LocalFitness::Unknown => "unknown",
+    };
+    let json = serde_json::json!({
+        "name": info.name,
+        "vram_mb": info.vram_mb,
+        "dedicated": info.dedicated,
+        "apple_silicon": info.apple_silicon,
+        "fitness": fitness,
+        "line": crate::hardware::summary_line(&info),
+    });
+    let s = serde_json::to_string(&json).unwrap_or_else(|_| "{}".to_string());
+    write_to_buf(&s, out_buf, buf_len)
+}

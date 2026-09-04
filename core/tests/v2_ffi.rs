@@ -38,12 +38,13 @@ use dimmy_lib::ffi::{
     dimmy_call_meeting_started_external, dimmy_call_signal_session_ended, dimmy_claude_code_ping,
     dimmy_claude_code_status, dimmy_clear_app_context, dimmy_command_transform,
     dimmy_get_active_mic_sample_rate, dimmy_get_config_json, dimmy_get_loopback_amplitude,
-    dimmy_history_save, dimmy_history_update_audio, dimmy_history_update_enhanced,
-    dimmy_history_update_word_timestamps, dimmy_hotkey_combos_conflict, dimmy_hotkey_set_command,
-    dimmy_hotkey_take_command_event, dimmy_init, dimmy_llm_call_raw, dimmy_meeting_is_active,
-    dimmy_meeting_save_post_process, dimmy_model_catalog_json, dimmy_push_loopback_audio,
-    dimmy_set_app_context, dimmy_set_config_json, dimmy_set_loopback_sample_rate,
-    dimmy_transcribe_file, dimmy_user_dict_add, dimmy_user_dict_list_json, dimmy_user_dict_remove,
+    dimmy_hardware_json, dimmy_history_save, dimmy_history_update_audio,
+    dimmy_history_update_enhanced, dimmy_history_update_word_timestamps,
+    dimmy_hotkey_combos_conflict, dimmy_hotkey_set_command, dimmy_hotkey_take_command_event,
+    dimmy_init, dimmy_llm_call_raw, dimmy_meeting_is_active, dimmy_meeting_save_post_process,
+    dimmy_model_catalog_json, dimmy_push_loopback_audio, dimmy_set_app_context,
+    dimmy_set_config_json, dimmy_set_loopback_sample_rate, dimmy_transcribe_file,
+    dimmy_user_dict_add, dimmy_user_dict_list_json, dimmy_user_dict_remove,
 };
 
 // ── Fixture wiring (lifted from ffi_e2e to stay self-contained) ──────
@@ -1540,4 +1541,83 @@ fn hotkey_command_set_take_and_conflict_round_trip() {
             "disabled (null) never conflicts"
         );
     }
+}
+
+// ── Hardware probe (onboarding local-vs-cloud + Diagnostics) ─────────
+
+#[test]
+#[serial]
+fn hardware_json_returns_a_shape_both_hosts_can_read() {
+    // Both hosts parse this into a fixed record (Win HardwareInfo.cs, Mac
+    // HardwareInfo in DimmyCore.swift), so every key must be present even
+    // when the probe learned nothing — a missing key silently becomes a
+    // default on one platform and a null on the other.
+    ensure_init();
+    let mut buf = [0i8; 4096];
+    let written =
+        unsafe { dimmy_hardware_json(buf.as_mut_ptr() as *mut c_char, buf.len() as c_int) };
+    assert!(written > 0, "hardware_json must always write something");
+
+    let json = unsafe { std::ffi::CStr::from_ptr(buf.as_ptr() as *const c_char) }
+        .to_str()
+        .expect("valid UTF-8");
+    let v: serde_json::Value = serde_json::from_str(json).expect("valid JSON");
+    for key in [
+        "name",
+        "vram_mb",
+        "dedicated",
+        "apple_silicon",
+        "fitness",
+        "line",
+    ] {
+        assert!(v.get(key).is_some(), "missing key {key} in {json}");
+    }
+    assert!(v["dedicated"].is_boolean());
+    assert!(v["apple_silicon"].is_boolean());
+
+    // The verdict drives which onboarding card is preselected, so an
+    // unexpected value would silently fall through to Local on both hosts.
+    let fitness = v["fitness"].as_str().expect("fitness is a string");
+    assert!(
+        matches!(fitness, "good" | "tight" | "poor" | "unknown"),
+        "unexpected fitness {fitness}"
+    );
+
+    // A size of zero must be reported as null: hardware.rs asserts on it,
+    // and "0 MB" on a card would read as a broken GPU rather than an
+    // unread one.
+    if let Some(mb) = v["vram_mb"].as_u64() {
+        assert!(mb > 0, "zero VRAM must be null, not 0");
+    }
+}
+
+#[test]
+#[serial]
+fn hardware_json_truncates_safely_into_a_buffer_too_small_to_hold_it() {
+    // write_to_buf TRUNCATES and returns the bytes written — it does not
+    // fail. (This test asserted the opposite first, from an imagined
+    // contract rather than a read one.) So what is worth pinning is that
+    // truncation stays safe: inside the buffer, null-terminated, and the
+    // result is invalid JSON that the hosts already reject — see Win
+    // HardwareInfoTests.A_truncated_payload_yields_null. The end-to-end
+    // effect is no hardware hint, which is the correct degradation.
+    ensure_init();
+    const N: usize = 8;
+    let canary = 0x7fi8;
+    let mut tiny = [canary; N + 4];
+    let rc = unsafe { dimmy_hardware_json(tiny.as_mut_ptr() as *mut c_char, N as c_int) };
+    assert!(rc > 0, "expected a truncated write, got {rc}");
+    assert!(rc < N as c_int, "a truncated write must fit the buffer");
+    assert_eq!(tiny[rc as usize], 0, "must be null-terminated at rc");
+    for (i, byte) in tiny.iter().enumerate().skip(N) {
+        assert_eq!(*byte, canary, "wrote past the buffer at index {i}");
+    }
+
+    let partial = unsafe { std::ffi::CStr::from_ptr(tiny.as_ptr() as *const c_char) }
+        .to_str()
+        .expect("valid UTF-8 prefix");
+    assert!(
+        serde_json::from_str::<serde_json::Value>(partial).is_err(),
+        "a truncated payload must not parse as JSON: {partial}"
+    );
 }
