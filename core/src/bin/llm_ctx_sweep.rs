@@ -15,7 +15,35 @@
 
 use std::path::PathBuf;
 
+/// Count the `llm_stream` events the core emits while generating, so the
+/// local streaming path is verified by OBSERVING it rather than by trusting
+/// that a flag reached a call site.
+static STREAM_DELTAS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static STREAM_START: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static STREAM_END: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+extern "C" fn count_events(json: *const std::os::raw::c_char) {
+    use std::sync::atomic::Ordering;
+    if json.is_null() {
+        return;
+    }
+    let s = unsafe { std::ffi::CStr::from_ptr(json) }
+        .to_string_lossy()
+        .into_owned();
+    if !s.contains("\"llm_stream\"") {
+        return;
+    }
+    if s.contains("\"phase\":\"delta\"") {
+        STREAM_DELTAS.fetch_add(1, Ordering::Relaxed);
+    } else if s.contains("\"phase\":\"start\"") {
+        STREAM_START.fetch_add(1, Ordering::Relaxed);
+    } else if s.contains("\"phase\":\"end\"") {
+        STREAM_END.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 fn main() {
+    dimmy_lib::ffi::dimmy_set_event_callback(count_events);
     let want: usize = std::env::args()
         .nth(1)
         .and_then(|s| s.parse().ok())
@@ -55,6 +83,29 @@ fn main() {
             let warm = dimmy_lib::local_llm::process_raw_prompt_local(&model, &prompt, max_tokens);
             let warm_secs = t1.elapsed();
             let warm_chars = warm.map(|w| w.len()).unwrap_or(0);
+            use std::sync::atomic::Ordering;
+            // And the dictation rewrite must stay SILENT: it replaces text at
+            // the cursor and shares this generator, so a stray delta would put
+            // dictated words into the meeting window's recap pane.
+            let before = STREAM_DELTAS.load(Ordering::Relaxed);
+            let _ = dimmy_lib::local_llm::process_text_local(
+                &model,
+                "allora praticamente ieri sono andato dal meccanico",
+                dimmy_lib::llm::LlmStyle::Correct,
+                dimmy_lib::llm::LlmTone::None,
+                "",
+                "",
+            );
+            println!(
+                "DICTATION deltas={} (must be 0)",
+                STREAM_DELTAS.load(Ordering::Relaxed) - before
+            );
+            println!(
+                "STREAM start={} deltas={} end={}",
+                STREAM_START.load(Ordering::Relaxed),
+                STREAM_DELTAS.load(Ordering::Relaxed),
+                STREAM_END.load(Ordering::Relaxed)
+            );
             println!(
                 "OK cold={:.1}s warm={:.1}s chars={} warm_chars={}",
                 load_and_run.as_secs_f64(),

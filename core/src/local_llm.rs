@@ -415,12 +415,19 @@ mod llm_cache {
     static CACHE: Mutex<Option<CachedLlmModel>> = Mutex::new(None);
 
     /// Load model if needed, run text generation, return result. Lock held during load only.
+    /// `stream`: emit `llm_stream` events as tokens arrive, so the host can
+    /// show the recap being written instead of a still spinner for the 30-90 s
+    /// a local model takes. Mirrors what the cloud path does in
+    /// `llm::send_raw_prompt_request`, and like it, is OFF for the dictation
+    /// rewrite — that one replaces text at the cursor and has no surface that
+    /// wants a running commentary.
     pub fn generate(
         model_path: &std::path::Path,
         system_prompt: &str,
         user_text: &str,
         max_tokens: u32,
         creative: bool,
+        stream: bool,
     ) -> Result<String, crate::error::LlmError> {
         let mut guard = CACHE.lock().map_err(|e| {
             crate::error::LlmError::LocalModel(format!("LLM cache lock poisoned: {}", e))
@@ -713,6 +720,15 @@ mod llm_cache {
                 continue;
             }
 
+            if stream {
+                // "start" on the first VISIBLE token, not before: a model that
+                // opens with control tokens would otherwise clear the pane and
+                // then sit empty. Same lazy-start rule as the cloud readers.
+                if output.is_empty() {
+                    crate::llm::emit_recap_stream_event("start", "");
+                }
+                crate::llm::emit_recap_stream_event("delta", &piece);
+            }
             output.push_str(&piece);
             n_generated += 1;
 
@@ -725,6 +741,12 @@ mod llm_cache {
 
             ctx.decode(&mut batch)
                 .map_err(|e| crate::error::LlmError::LocalModel(format!("decode failed: {}", e)))?;
+        }
+
+        // After the loop, so it fires on every exit: EOS, the token budget,
+        // a turn marker, or nothing generated at all.
+        if stream {
+            crate::llm::emit_recap_stream_event("end", "");
         }
 
         crate::log(&format!(
@@ -824,6 +846,7 @@ ONLY the resulting text, with no preamble, notes, or tags.\n\n<input>\n{}\n</inp
         &user_turn,
         estimated_tokens,
         creative,
+        false,
     )?;
 
     if result.is_empty() {
@@ -876,7 +899,7 @@ pub fn process_raw_prompt_local(
     }
     // Recap is a format-critical task: greedy decoding (creative=false) so the
     // section markers and structure come out deterministically.
-    let result = llm_cache::generate(model_file, "", prompt, capped, false)?;
+    let result = llm_cache::generate(model_file, "", prompt, capped, false, true)?;
     if result.is_empty() {
         return Err(LlmError::LocalModel(
             "local LLM produced empty output".to_string(),
