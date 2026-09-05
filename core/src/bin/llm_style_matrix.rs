@@ -40,6 +40,12 @@ fn models() -> Vec<(&'static str, PathBuf)> {
     if qwen.is_file() {
         v.push(("qwen3-4B", qwen));
     }
+    // TranslateGemma: a Gemma 3 fine-tuned for translation only. Same
+    // architecture we already load, so it costs nothing to try.
+    let tg = PathBuf::from(r"E:\llm-bench\tg\translategemma-4b-it.Q4_K_M.gguf");
+    if tg.is_file() {
+        v.push(("translategemma", tg));
+    }
     v.retain(|(_, p)| p.is_file());
     v
 }
