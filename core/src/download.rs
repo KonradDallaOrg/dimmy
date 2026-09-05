@@ -41,6 +41,28 @@ pub fn hex_lower(bytes: &[u8]) -> String {
     s
 }
 
+/// Ask the origin for `X-Linked-ETag` without following the redirect.
+///
+/// Only huggingface.co knows the file's real SHA-256; the CDN it redirects to
+/// reports its own Xet content hash under the same `etag` name. A normal
+/// request follows the redirect and loses the header, so this makes a second,
+/// cheap HEAD with redirects disabled purely to read it.
+///
+/// Returns None on any failure — a missing hash means the download is verified
+/// by magic bytes alone, which is what happened before HuggingFace served a
+/// hash at all. Never fatal.
+async fn probe_linked_etag(url: &str) -> Option<String> {
+    let probe = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .ok()?;
+    let resp = probe.head(url).send().await.ok()?;
+    let raw = resp.headers().get("x-linked-etag")?.to_str().ok()?;
+    let norm = normalize_etag(raw);
+    is_sha256(&norm).then(|| raw.to_string())
+}
+
 /// Validate a finished file: optional magic-byte prefixes (any one may match) +
 /// (when available) a streaming SHA-256 against `expected_sha`. Streams in 1 MiB
 /// chunks so a multi-GB model is never buffered whole. Sync — callable from
@@ -145,14 +167,23 @@ pub async fn download_resumable(
         ));
     }
 
-    // HuggingFace LFS serves the file's SHA-256 as the (X-Linked-)ETag. Capture it
-    // for the post-download check and persist it for a future resume's If-Range.
-    let raw_etag = resp
-        .headers()
-        .get("x-linked-etag")
-        .or_else(|| resp.headers().get(reqwest::header::ETAG))
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
+    // HuggingFace serves the file's SHA-256 as `X-Linked-ETag` — but only on
+    // the 302 from huggingface.co. Since the Xet storage rollout the CDN's own
+    // response carries an `etag` that is the XET CONTENT HASH, a completely
+    // different number, and reqwest follows the redirect for us so that is all
+    // we are left holding. Taking it as the SHA-256 fails every integrity check
+    // and deletes the download: measured 2026-09-05, when every unsloth model
+    // in our catalogue had become unfetchable.
+    //
+    // So ask the origin separately, without following, and prefer what it says.
+    let linked_etag = probe_linked_etag(url).await;
+    let raw_etag = linked_etag.or_else(|| {
+        resp.headers()
+            .get("x-linked-etag")
+            .or_else(|| resp.headers().get(reqwest::header::ETAG))
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string())
+    });
     if let Some(raw) = &raw_etag {
         let _ = std::fs::write(&meta_path, raw.trim());
     }

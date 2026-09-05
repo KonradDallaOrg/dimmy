@@ -300,7 +300,7 @@ jobs:
           done
 
           missing=""
-          for lib in libllama libggml libggml-base libggml-cpu libggml-metal; do
+          for lib in libllama libllama-common libggml libggml-base libggml-cpu libggml-metal; do
             path="$TGT/$lib.dylib"
             [ -e "$path" ] || missing="$missing $lib(absent)"
             [ -e "$path" ] && [ ! -r "$path" ] && missing="$missing $lib(dangling)"
