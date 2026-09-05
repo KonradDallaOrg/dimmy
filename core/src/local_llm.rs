@@ -69,6 +69,24 @@ pub const AVAILABLE_LLM_MODELS: &[LlmModel] = &[
         url: Some("https://huggingface.co/unsloth/gemma-4-E4B-it-qat-GGUF/resolve/main/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"),
     },
     LlmModel {
+        name: "Gemma 4 12B QAT Q4",
+        filename: "gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
+        size_mb: 6405,
+        description: "Stronger, needs ~8GB VRAM or a 16GB Mac (12B params)",
+        url: Some("https://huggingface.co/unsloth/gemma-4-12B-it-qat-GGUF/resolve/main/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf"),
+    },
+    LlmModel {
+        // Mixture of experts: 26B of knowledge, 4B active per token, so it
+        // reasons like a large model at roughly a small one's speed. The cost
+        // is that ALL of it has to be resident — the 13.6 GB is not optional.
+        // A 32GB Mac, not a 4GB laptop GPU.
+        name: "Gemma 4 26B-A4B QAT Q4",
+        filename: "gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf",
+        size_mb: 13589,
+        description: "Best quality. Mixture-of-experts: 26B smart, 4B fast. Needs ~16GB",
+        url: Some("https://huggingface.co/unsloth/gemma-4-26B-A4B-it-qat-GGUF/resolve/main/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf"),
+    },
+    LlmModel {
         name: "Gemma 4 E2B Q4",
         filename: "gemma-4-E2B-it-Q4_K_M.gguf",
         size_mb: 3100,
