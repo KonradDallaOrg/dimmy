@@ -756,8 +756,8 @@ jobs:
           # without them dimmy_lib.dll cannot load and the app does not start.
           # Assert, because "it will not launch" is a terrible thing for a user
           # to discover.
-          Copy-Item "D:	elease\ggml*.dll" "$pubDir/"
-          Copy-Item "D:	elease\llama*.dll" "$pubDir/"
+          Copy-Item "D:\t\release\ggml*.dll" "$pubDir/"
+          Copy-Item "D:\t\release\llama*.dll" "$pubDir/"
           foreach ($need in @("ggml.dll","ggml-base.dll","ggml-cpu.dll","ggml-vulkan.dll","llama.dll")) {
             if (-not (Test-Path "$pubDir/$need")) {
               throw "$need missing from publish dir -- dimmy_lib.dll links it dynamically, so the app would fail to start"
