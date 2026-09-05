@@ -5,10 +5,10 @@
 > Material: real dictations from the user's own history, never invented text.
 
 The local LLM was believed to be "mediocre". It was not mediocre; it was
-broken in four places, and every one of them was our code. This is the
+broken in six places, and every one of them was our code. This is the
 record, because the same shape of mistake will happen again.
 
-## The four defects
+## The defects
 
 ### 1. `n_batch` was never set — the app DIED
 
@@ -93,14 +93,90 @@ us everywhere else. Phi-4 Mini went from 19 wrong-language answers in 48 to
 Validated on 288 trials over NINE DIFFERENT dictations, none used to choose
 any of this, 15 to 110 words, technical and profane: 1 wrong language.
 
-### 4. The anchor contradicted the translate instruction
+### 4. Translation: three contradictions, found one at a time
 
-Caught before shipping, by testing translation rather than assuming a change
-to the styles was confined to the styles:
+The user reported a translation coming back as three lines — the corrected
+Italian, a heading the model invented (`*****english translation***`), and then
+the English. Three separate causes, each hidden behind the one before it.
 
-    "Write your entire answer in Italian. Then translate the entire output to English."
+**The anchor fought the translate instruction.** "Write your entire answer in
+Italian. Then translate the entire output to English." Caught before shipping,
+by testing translation rather than assuming a change to the styles stayed in
+the styles.
 
-The anchor now stands down whenever a translation is requested.
+**The style instruction fought it too.** Every cloud style ends by pinning the
+language — right until a translation is asked for. `Correct` says "Preserve the
+original meaning, intent, and language exactly", and we appended "then translate
+to English" to it. The clause is now stripped when translating, by clause and
+not by sentence: some of them share a sentence with the task itself ("expand …
+while keeping the same meaning and language" would otherwise delete Elaborate
+entirely). `no_language_clause_survives_a_translation` walks all eleven styles
+and fails if one gets through, which keeps the strip list honest when the
+shared cloud text is reworded.
+
+**And the remaining instruction was still two steps.** "Do X. Then translate the
+result into English" reads as two actions and got answered with two: the styled
+sentence, then a second copy labelled `English:`. The language is now folded
+INTO the transformation — "Translate into English while applying this
+transformation" — so there is one thing to do.
+
+Both wordings stay in that sentence deliberately, because the models are not
+interchangeable about it. Over four target languages:
+
+| phrasing | phi | gemma-QAT | qwen |
+|---|---:|---:|---:|
+| "translate the entire output to X" | 4/4 | 1/4 | 4/4 |
+| "write your entire answer in X" | 1/4 | 4/4 | 4/4 |
+| "translate the result into X" | 4/4 | 0/4 | 4/4 |
+| both together | 4/4 | 3/4 | 4/4 |
+
+Gemma follows an output-language instruction and shrugs at "translate"; Phi-4
+Mini is the exact opposite and echoes the Italian straight back without it.
+Neither is worse — they key on different words — so saying both costs a clause
+and stops the result depending on which model the user picked.
+
+Also fixed here: translating a language into itself asked for a step that does
+not exist, and the model answered by doing the whole job twice. Same source and
+target is now a no-op.
+
+### 5. The model said everything twice, and the marker that showed why
+
+Non-translate styles came back doubled or tripled. The generation loop stopped
+on `<end_of_turn>` (Gemma), `</s>` (Llama) and `<|endoftext|>` — but not on
+`<|im_end|>`, the ChatML pair. Qwen 3 and the unsloth QAT ggufs both use
+ChatML, so the model closed its turn, we kept decoding, it opened a new one and
+said everything again.
+
+The giveaway was a stray `</|im_end|>` reaching a user's text: the strip regex
+expected the slash AFTER the pipe and never matched this spelling. Stripping it
+afterwards had been hiding the cause while keeping the damage.
+
+### 6. A full GPU disabled the feature in silence
+
+Reported from a staging install: whisper transcribed, the recap worked, LLM
+enhancement did nothing, a red pill for two seconds, no notification.
+
+    [ggml ERROR] failed to allocate Vulkan1 buffer of size 316407808
+    ERROR: Local LLM failed: context creation failed
+
+Whisper is evicted when the LLM model is LOADED, but a cached model skips that
+path and whisper reloads whenever STT runs:
+
+    17:41  recap      loads Qwen, evicts whisper, works
+    17:43  dictation  "Using cached LLM model" -> whisper is back -> 316 MB
+                      will not fit -> fail
+
+Order-dependent, not configuration-dependent: the same machine never hit it
+under C:\ because the model was changed between tries, and changing model takes
+the load path. Context creation now retries once after evicting whisper.
+
+The silence was the worse half. The failure emitted a message-only `error`
+event, which flashes the pill and vanishes — the exact shape that left four Groq
+403s unexplained in July and the 413s in August. Both cloud legs were given a
+structured `source` after those; the LOCAL leg was not, so it repeated it a
+third time. And the pill was erased by its own success: an LLM failure degrades
+gracefully and still returns the raw transcript, so the paste succeeded and the
+checkmark overwrote the red before the error timer's five seconds could run.
 
 ## Where each model actually stands
 
@@ -146,6 +222,32 @@ the words that were said. Asking the reduce to sort a flat bullet list into
 sections produced three identical sections.
 
 `core/src/bin/recap_mapreduce.rs` implements this. It is NOT in the product.
+
+## A clause that was measured and thrown away
+
+Verbosity on short dictations was real — a 17-word input coming back as 150
+words. The obvious remedy, telling the model to stay close to the input and
+invent nothing, was written, measured and removed the same day:
+
+| style | without | with |
+|---|---:|---:|
+| Correct | x1.1 | x0.9 |
+| Comprehensible | x1.4 | x1.2 |
+| Professional | x1.4 | x1.2 |
+| Imbruttito | x3.2 | x2.9 |
+
+It shaved 10-15%, left the worst offender essentially untouched, and raised the
+count of outputs the model declined to change at all (Comprehensible 2 of 6 to
+4 of 6). Trading "says too much" for "does nothing" is not a trade.
+
+The verbosity comes from the style instructions themselves: Acronyms hands the
+model twenty acronyms to use, Imbruttito a page of anglicisms. A 4B model reads
+a list and tries to use all of it. Trimming those is the fix, they are shared
+with the cloud path, and it needs its own measured pass.
+
+The first measurement of that clause was worthless and nearly shipped it: the
+sample set was 25-90 word phrases, and the rambling only appears on the 13-23
+word ones. Measuring where it does not break proves nothing.
 
 ## Two lessons that generalise
 
