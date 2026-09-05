@@ -6,6 +6,27 @@ import Foundation
 enum SelfTests {
 
     static func runAll() {
+        // Not under XCTest. These checks validate a REAL launch of the shipped
+        // .app — `testBundleNameIsSet` and the SUFeedURL check read
+        // `Bundle.main`, which under `xcodebuild test` is the test runner's
+        // bundle and carries neither. The assertions then fail, `fatalError`
+        // raises SIGABRT, and the whole test run dies before it can say which
+        // one — reported by xcodebuild only as "Test crashed with signal abrt
+        // before establishing".
+        //
+        // That is what blocked every Release since 2026-09-03: the workflow
+        // creates its GitHub release as a DRAFT and only publishes it at the
+        // end, so a failure here left v0.6.74-rc.5, -rc.7 and v0.7.0-rc1 sitting
+        // invisible while users stayed on rc.6 and the updater truthfully
+        // reported nothing newer.
+        //
+        // The real-launch check is unaffected, and preflight-mac.sh still
+        // launches the actual .app for exactly this reason.
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+            NSLog("[SelfTests] skipped — running under XCTest, Bundle.main is not the app")
+            return
+        }
+
         #if DEBUG
         print("[SelfTests] Running self-tests...")
         testLanguageMappingRoundtrip()
