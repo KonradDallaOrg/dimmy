@@ -489,6 +489,21 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # llama.cpp now vendors a web UI whose paths blow past Windows' 260-char
+      # limit when cargo checks the submodule out under CARGO_HOME:
+      #   .../llama.cpp/tools/ui/src/lib/components/app/chat/ChatAttachments/
+      #   ChatAttachmentsPreview/ChatAttachmentsPreviewCurrentItem/...svelte
+      # cargo's bundled libgit2 fails there; the git CLI with core.longpaths
+      # uses the \?\ APIs and does not. So: tell cargo to shell out to git.
+      - name: Long paths for the llama.cpp submodule (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          git config --global core.longpaths true
+          # And make cargo actually USE that git: it prefers its bundled
+          # libgit2, which is the thing that cannot handle the long path.
+          "CARGO_NET_GIT_FETCH_WITH_CLI=true" | Add-Content -Encoding utf8 $env:GITHUB_ENV
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
