@@ -2752,21 +2752,87 @@ public sealed partial class SettingsWindow : Window
     /// SelectionChanged. The check (U+E73E, Segoe Fluent) replaces the old
     /// "(Ready)" suffix — the size stays in the label only while not
     /// downloaded.</summary>
-    private static ComboBoxItem MakeLocalModelItem(string label, string tag, bool downloaded)
+    private static ComboBoxItem MakeLocalModelItem(
+        string label, string tag, bool downloaded, int sizeMb = 0)
     {
-        if (!downloaded)
-            return new ComboBoxItem { Content = label, Tag = tag };
-
         var panel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
-        panel.Children.Add(new FontIcon
+
+        // Will it RUN here? The check mark says "already on disk", which is
+        // not the same question — the catalogue lists models up to 13 GB and
+        // a 4 GB card cannot start them. Without this the only way to find
+        // out is to download 13 GB and watch it fail, which is what happened
+        // on 2026-09-05: "failed to allocate Vulkan1 buffer".
+        //
+        // Indicative, not a promise. VRAM is a floor and the real cost
+        // depends on context size and on whatever else is resident (whisper
+        // moves in and out), so the dot is deliberately coarse and carries a
+        // tooltip rather than a number.
+        var dot = VramDot(sizeMb);
+        if (dot is not null)
+            panel.Children.Add(dot);
+
+        if (downloaded)
         {
-            Glyph = "", // CheckMark
-            FontSize = 13,
-            Foreground = SolidBrush(OkColor),
-            VerticalAlignment = VerticalAlignment.Center,
-        });
+            panel.Children.Add(new FontIcon
+            {
+                Glyph = "", // CheckMark
+                FontSize = 13,
+                Foreground = SolidBrush(OkColor),
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+        }
+
         panel.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center });
         return new ComboBoxItem { Content = panel, Tag = tag };
+    }
+
+    /// <summary>This machine's VRAM in MB, probed once. Null when unknown —
+    /// no discrete GPU, a probe that failed, or a platform that does not
+    /// report it. `hardware.rs` is explicit that VRAM is a floor and never a
+    /// forecast, so this is only ever used for a coarse hint.</summary>
+    private static long? _vramMb;
+    private static bool _vramProbed;
+    private static long? CachedVramMb()
+    {
+        if (_vramProbed) return _vramMb;
+        _vramProbed = true;
+        _vramMb = HardwareInfo.Parse(DimmyNative.HardwareJson())?.VramMb;
+        return _vramMb;
+    }
+
+    /// <summary>Coarse "does this fit" dot, or null when we cannot tell.
+    ///
+    /// The thresholds come from what was measured on a 4 GB card: a 2963 MB
+    /// model ran with about 3.5 GB free, and failed once whisper had taken
+    /// roughly 2 GB back — so a model needs its own size plus about a
+    /// gigabyte of working room (KV cache and compute buffers) before it is
+    /// comfortable. Green = room to spare, amber = it will be tight and may
+    /// fail while STT is loaded, red = it will not start.
+    ///
+    /// Returns null when the VRAM is unknown, because a guess dressed as a
+    /// signal is worse than no signal.</summary>
+    private static FontIcon? VramDot(int sizeMb)
+    {
+        if (sizeMb <= 0) return null;
+        var vram = CachedVramMb();
+        if (vram is null or <= 0) return null;
+
+        const int WorkingRoomMb = 1000;
+        var (colour, tip) = vram >= sizeMb + WorkingRoomMb
+            ? (OkColor, "Fits comfortably on this machine")
+            : vram >= sizeMb
+                ? (WarnColor, "Tight — may fail while the speech model is loaded")
+                : (ErrColor, "Too large for this machine's VRAM");
+
+        var icon = new FontIcon
+        {
+            Glyph = "", // FullCircleMask
+            FontSize = 9,
+            Foreground = SolidBrush(colour),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        ToolTipService.SetToolTip(icon, tip);
+        return icon;
     }
 
     private void PopulateLocalModels()
@@ -2797,7 +2863,7 @@ public sealed partial class SettingsWindow : Window
 
                 // Downloaded => green check + name; not downloaded => name + size.
                 var label = downloaded ? $"{name}: {desc}" : $"{name}: {desc} ({sizeMb}MB)";
-                LocalModelComboBox.Items.Add(MakeLocalModelItem(label, filename, downloaded));
+                LocalModelComboBox.Items.Add(MakeLocalModelItem(label, filename, downloaded, sizeMb));
 
                 if (ViewModel.LocalSttBackend != "parakeet" && filename == ViewModel.LocalModel)
                     selectedIdx = idx;
@@ -2813,7 +2879,7 @@ public sealed partial class SettingsWindow : Window
             var parakeetLabel = parakeetDownloaded
                 ? "Parakeet TDT v3 FP32: fast, EU-language friendly"
                 : "Parakeet TDT v3 FP32: fast, EU-language friendly (2.5GB)";
-            LocalModelComboBox.Items.Add(MakeLocalModelItem(parakeetLabel, ParakeetTag, parakeetDownloaded));
+            LocalModelComboBox.Items.Add(MakeLocalModelItem(parakeetLabel, ParakeetTag, parakeetDownloaded, 2500));
             if (ViewModel.LocalSttBackend == "parakeet")
                 selectedIdx = idx;
 
@@ -3138,7 +3204,7 @@ public sealed partial class SettingsWindow : Window
                 // not downloaded => name + size. The long catalogue description
                 // is not shown in the picker.
                 var label = downloaded ? name : $"{name} ({sizeMb} MB)";
-                LocalLlmModelComboBox.Items.Add(MakeLocalModelItem(label, filename, downloaded));
+                LocalLlmModelComboBox.Items.Add(MakeLocalModelItem(label, filename, downloaded, sizeMb));
 
                 if (filename == ViewModel.LocalLlmModel)
                     selectedIdx = idx;
@@ -4537,12 +4603,14 @@ public sealed partial class SettingsWindow : Window
 
             foreach (var m in _localLlmModels)
             {
-                var state = m.Downloaded ? "Ready" : $"{m.SizeMb} MB — download in LLM";
-                var item = new ComboBoxItem
-                {
-                    Content = $"Local · {m.Name} ({state})",
-                    Tag = $"local:{m.Filename}",
-                };
+                // Same row shape as the LLM picker: VRAM dot, download check,
+                // name. One visual language for "local model" wherever it is
+                // offered; the download itself still lives on the LLM page,
+                // which is what the trailing hint says.
+                var label = m.Downloaded
+                    ? $"Local · {m.Name}"
+                    : $"Local · {m.Name} ({m.SizeMb} MB — download in LLM)";
+                var item = MakeLocalModelItem(label, $"local:{m.Filename}", m.Downloaded, m.SizeMb);
                 RecapModelComboBox.Items.Insert(insertAt, item);
                 insertAt++;
             }

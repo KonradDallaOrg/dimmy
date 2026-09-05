@@ -44,6 +44,8 @@ public sealed partial class SettingsWindow
     private const string LlmColor = "#6472FF";   // rewrite
     private const string RecapColor = "#C766E6"; // recap
     private const string OkColor = "#2FB37A";    // connected / ready
+    private const string WarnColor = "#E0A03A";  // works, but tight
+    private const string ErrColor = "#D9534F";   // will not run here
 
     /// <summary>Build the provider cards once, lazily, when the page is first
     /// shown. Re-entrant-safe.</summary>
