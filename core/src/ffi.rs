@@ -3466,11 +3466,33 @@ pub unsafe extern "C" fn dimmy_process_with_llm(
             Err(e) => {
                 let err_msg = format!("{}", e);
                 log(&format!("ERROR: Local LLM failed: {}", err_msg));
+                // Structured, so the host raises a toast. A message-only
+                // `error` flashes the pill for two seconds and vanishes —
+                // exactly how four Groq 403s went unexplained in July and the
+                // 413s in August. Both cloud legs were given a `source` after
+                // those; the LOCAL leg was not, and on 2026-09-05 it repeated
+                // the same silence a third time: the user watched the LLM do
+                // nothing, saw a red flash, and had no way to learn it was the
+                // GPU running out of room.
+                //
+                // "out_of_memory" is the category worth separating: it is the
+                // one the user can act on, by picking a smaller model.
+                let category = if err_msg.contains("context creation failed")
+                    || err_msg.to_lowercase().contains("allocate")
+                {
+                    "out_of_memory"
+                } else if err_msg.contains("not found") {
+                    "model_missing"
+                } else {
+                    "local_model"
+                };
                 emit_event(
                     "error",
-                    &format!(
-                        r#"{{"message":"Local LLM: {}"}}"#,
-                        json_escape_str(&err_msg)
+                    &error_event_payload(
+                        "llm",
+                        &format!("Local LLM: {err_msg}"),
+                        "local",
+                        category,
                     ),
                 );
                 return write_to_buf(text, out_buf, buf_len); // graceful degradation

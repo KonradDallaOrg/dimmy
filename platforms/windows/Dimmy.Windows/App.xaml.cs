@@ -2026,8 +2026,19 @@ public partial class App : Application
                     PttLog($"StopAndProcess: pasting text ({result.Text!.Length} chars)");
                     await TextInjectionService.PasteText(result.Text!, _appViewModel.KeepInClipboard);
                 }
-                // Show completing state (checkmark) AFTER paste — PillWindow timer returns to Idle
-                _appViewModel.SetState(AppState.Completing);
+                // Show completing state (checkmark) AFTER paste — PillWindow timer
+                // returns to Idle. NOT when the core already flagged an error:
+                // an LLM failure degrades gracefully and still returns the raw
+                // transcript, so the paste succeeds and the checkmark would
+                // erase the red pill after a couple of seconds. That is what a
+                // user saw on 2026-09-05 — the enhancement silently not
+                // happening, a red flash too short to read, and no way to learn
+                // the GPU had run out of room. Same guard the empty-transcript
+                // path below already has, for the same reason.
+                if (_appViewModel.CurrentState != AppState.Error)
+                    _appViewModel.SetState(AppState.Completing);
+                else
+                    PttLog("StopAndProcess: pasted, but core flagged an error — keeping the Error pill");
                 _targetContext = null; // consumed
             }
             else if (result.IsTimeout)

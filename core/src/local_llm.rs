@@ -707,16 +707,45 @@ mod llm_cache {
         // n_ubatch stays at llama.cpp's default: it is the PHYSICAL batch and
         // llama.cpp splits the logical batch into ubatch-sized pieces itself,
         // so raising it only costs compute buffer.
-        let ctx_params = LlamaContextParams::default()
-            .with_n_ctx(Some(ctx_size))
-            .with_n_batch(ctx_size.get());
+        // Built twice: `new_context` consumes the params, and the retry below
+        // needs an identical set.
+        let ctx_params_for_retry = || {
+            LlamaContextParams::default()
+                .with_n_ctx(Some(ctx_size))
+                .with_n_batch(ctx_size.get())
+        };
 
-        let mut ctx = cached
+        // Creating the context allocates the compute buffers, and on a single-GPU
+        // machine whisper may have moved back into VRAM since this model was
+        // loaded. Clearing whisper at LOAD time is not enough: a cached model
+        // skips that path entirely, so a recap followed by a dictation finds the
+        // GPU full and fails with "failed to allocate Vulkan1 buffer of size
+        // 316407808" (measured on a 4 GB card, 2026-09-05 — the user saw only a
+        // red pill for two seconds).
+        //
+        // So: try, and if the allocation is what failed, evict whisper and try
+        // once more. Whisper reloads in 2-5 s next time STT runs; the
+        // alternative is the feature simply not working.
+        let mut ctx = match cached
             .model
-            .new_context(&cached.backend, ctx_params)
-            .map_err(|e| {
-                crate::error::LlmError::LocalModel(format!("context creation failed: {}", e))
-            })?;
+            .new_context(&cached.backend, ctx_params_for_retry())
+        {
+            Ok(c) => c,
+            Err(first) => {
+                crate::log(&format!(
+                    "[LocalLLM] context creation failed ({first}) — evicting the                      whisper model from VRAM and retrying once"
+                ));
+                crate::local_stt::clear_model_cache();
+                cached
+                    .model
+                    .new_context(&cached.backend, ctx_params_for_retry())
+                    .map_err(|e| {
+                        crate::error::LlmError::LocalModel(format!(
+                            "context creation failed even after freeing the STT model                              ({e}) — the GPU cannot fit this model at this context size"
+                        ))
+                    })?
+            }
+        };
 
         // ── Feed prompt tokens ──────────────────────────────────
         let mut batch = LlamaBatch::new(tokens.len(), 1);
