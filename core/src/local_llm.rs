@@ -314,7 +314,11 @@ fn strip_special_tags(text: &str) -> String {
         // here while llm.rs::strip_output_scaffolding (the CLOUD path) has had
         // them all along, so a local recap could end with a literal
         // "<|im_end|>" in the user's text — seen 2026-09-04 in a Gemma 4 recap.
-        r"</?(?:think|start_of_turn|end_of_turn|pad|s)>|<\|/?(?:think|end|endoftext|assistant|user|system|im_start|im_end)\|?>"
+        // `</|im_end|>` puts the slash BEFORE the pipe, which the second
+        // alternative (expecting `<|` then an optional `/`) never matched — it
+        // reached a user's text verbatim on 2026-09-05. Allow the slash on
+        // either side of the pipe.
+        r"</?(?:think|start_of_turn|end_of_turn|pad|s)>|</?\|/?(?:think|end|endoftext|assistant|user|system|im_start|im_end)\|?>"
     ).expect("strip_special_tags regex must compile");
 
     let cleaned = re.replace_all(&text, "");
@@ -401,7 +405,12 @@ pub fn build_local_system_prompt(
         LlmStyle::Custom => custom_prompt.to_string(),
         other => other.instruction().to_string(),
     };
-    let translating = !translate_to.is_empty() && translate_to != "none";
+    // Translating into the language it is already in asks for a step that does
+    // not exist, and the model answers by doing the job twice — measured
+    // 2026-09-05 on it -> it, which came back as the same sentence repeated.
+    let translating = !translate_to.is_empty()
+        && translate_to != "none"
+        && !translate_to.eq_ignore_ascii_case(lang.trim());
     if translating {
         style_instr = strip_language_clauses(&style_instr);
     }
@@ -414,43 +423,33 @@ pub fn build_local_system_prompt(
         LlmTone::Academic => "Use academic, scholarly language.",
     };
 
-    let translate_instr = if !translate_to.is_empty() && translate_to != "none" {
-        // Use the language NAME, not the bare code — small models ignore
-        // "translate to en" but follow "translate to English" (live flow
-        // matrix, 2026-06-19).
-        // Say it ONCE. Every cloud style instruction ends by telling the model
-        // to keep the original language — correct when no translation is
-        // asked for, and flatly contradictory when one is. A small model
-        // obeys both in sequence: the corrected Italian, a heading it invented,
-        // then the English. Users reported exactly that.
-        //
-        // The cure is to remove the contradiction, not to add a sentence
-        // resolving it: "extra, irrelevant information increases the chance of
-        // contradictions and hallucinations" is the whole finding. And since
-        // 66% of zero-shot translation outputs carry unwanted commentary
-        // unless it is forbidden by name, forbid it by name.
+    // One instruction, not two. "Do X. Then translate the result into English."
+    // reads as two steps and gets answered in two parts: the styled sentence,
+    // then a second labelled "English:" copy of it (measured 2026-09-05 on
+    // Gen-Z + translate). Folding the language INTO the transformation leaves
+    // one thing to do.
+    //
+    // Both wordings stay in it, because the models key on different ones:
+    //
+    //   phrasing                              phi   gemma-QAT   qwen
+    //   "translate the entire output to X"    4/4      1/4      4/4
+    //   "write your entire answer in X"       1/4      4/4      4/4
+    //   both, as two sentences                4/4      3/4      4/4  (but doubles)
+    //
+    // Gemma follows an output-language instruction and shrugs at "translate";
+    // Phi-4 Mini is the opposite and echoes the Italian back without it.
+    let translate_prefix = if translating {
         let name = crate::llm::lang_name(translate_to);
-        // Say it BOTH ways, because the models key on different wordings and
-        // ignore the other. Measured 2026-09-05 over four target languages:
-        //
-        //   phrasing                              phi   gemma   qwen
-        //   "translate the entire output to X"    4/4    1/4     4/4
-        //   "write your entire answer in X"       1/4    4/4     4/4
-        //   "translate the result into X"         4/4    0/4     4/4
-        //   both sentences together               ->  measured below
-        //
-        // Gemma follows an output-language instruction and shrugs at "translate";
-        // Phi-4 Mini is the exact opposite and echoes the Italian back unless
-        // told a translation is the task. One clause each is a cheap way to stop
-        // guessing which model the user picked.
         format!(
-            "Then translate the result into {name}. Write your entire answer in              {name}. Output ONLY the {name} text: no commentary, no heading, no              label, and do not repeat the original."
+            "Translate into {name} while applying this transformation. Your              entire answer must be in {name}, and nothing else may appear: no              commentary, no heading, no label, and no copy of the original.
+
+"
         )
     } else {
         String::new()
     };
 
-    let mut prompt = style_instr;
+    let mut prompt = format!("{translate_prefix}{style_instr}");
     if !tone_instr.is_empty() {
         if !prompt.is_empty() {
             prompt.push(' ');
@@ -458,36 +457,20 @@ pub fn build_local_system_prompt(
         prompt.push_str(tone_instr);
     }
 
-    // NAME the language. "Answer in the same language as the input" asks a 4B
-    // model to reason about its own input; "Write your entire answer in
-    // Italian" does not. The translate instruction below has carried a note
-    // saying exactly this since June — small models ignore "translate to en"
-    // and follow "translate to English" — and the same indirection was quietly
-    // costing us everywhere else.
-    //
-    // Measured 2026-09-05, 192 trials per configuration (4 models x 8 styles x
-    // 6 real dictations), after the repetition-penalty fix made the numbers
-    // mean anything:
-    //
-    //   short instructions, no anchor  (shipped)   54 wrong language, 21 unchanged
-    //   full instructions, no anchor                53                  4
-    //   short instructions + "same language"        32                 25
-    //   full instructions + "same language"         42                  1
-    //   full instructions + language NAMED           1                  2
-    // Not when translating: the anchor and the translate instruction would
-    // contradict each other outright — "Write your entire answer in Italian.
-    // Then translate the entire output to English." The translate instruction
-    // already names its target language, which is the same trick.
-    if !prompt.is_empty() && translate_instr.is_empty() {
+    // The anchor names the language when we are NOT translating; when we are,
+    // the prefix above already did, and saying it twice is the contradiction
+    // this whole path exists to avoid.
+    if !prompt.is_empty() && !translating {
         prompt.push_str(&anchor_text(lang));
     }
 
-    if !translate_instr.is_empty() {
-        prompt.push(' ');
-        prompt.push_str(&translate_instr);
-    }
-
-    prompt
+    // Collapse runs of whitespace. These instructions are long enough to want
+    // wrapping in the source, and a wrapped string literal drags its
+    // indentation into the prompt — measured here, where "Your entire answer"
+    // reached the model as "Your              entire answer". Harmless to the
+    // meaning, but it is noise the model pays for, and fixing the class beats
+    // fixing each occurrence as it appears.
+    prompt.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// The language anchor. Falls back to the self-referential wording when the
@@ -828,11 +811,22 @@ mod llm_cache {
                 .token_to_str(new_token, llama_cpp_4::model::Special::Tokenize)
                 .unwrap_or_default();
 
-            // Stop on turn markers (model trying to generate next turn)
+            // Stop on turn markers (model trying to generate next turn).
+            //
+            // The ChatML pair belongs here as much as Gemma's: Qwen 3 and the
+            // unsloth QAT ggufs both use ChatML, and without these two the
+            // model closes its turn, we keep decoding, and it opens a new one
+            // and SAYS THE WHOLE THING AGAIN. Users saw their dictation come
+            // back two or three times over (2026-09-05); the giveaway was a
+            // stray "</|im_end|>" surviving into the text, which is the same
+            // marker seen from the other side. Stripping it after the fact
+            // hid the cause and kept the duplicate.
             if piece.contains("<end_of_turn>")
                 || piece.contains("<start_of_turn>")
                 || piece.contains("</s>")
                 || piece.contains("<|endoftext|>")
+                || piece.contains("<|im_end|>")
+                || piece.contains("<|im_start|>")
             {
                 break;
             }
@@ -1394,10 +1388,26 @@ mod tests {
         // language clause is stripped first and there is nothing left to
         // translate away from. What has to hold is that the target language is
         // named and nothing else is invited into the output.
+        // Assert the REQUIREMENT, not the wording. This test has now been
+        // rewritten three times chasing rephrasings of the same rule; what has
+        // to hold is that the act and the language are both named and nothing
+        // extra is invited, however that ends up being said.
+        let lower = prompt.to_lowercase();
+        assert!(lower.contains("translate"), "must name the ACT: {prompt}");
         assert!(
-            prompt.contains("translate the result into English"),
-            "must name the act AND the target language: {}",
-            prompt
+            prompt.contains("English"),
+            "must name the target LANGUAGE: {prompt}"
+        );
+        assert!(
+            lower.contains("no heading") && lower.contains("no copy of the original"),
+            "must forbid the extra text by name: {prompt}"
+        );
+        // Rust's line continuation eats the newline but the indentation of a
+        // wrapped string literal can still reach the model. Runs of spaces are
+        // noise in a prompt and cost tokens for nothing.
+        assert!(
+            !prompt.contains("  "),
+            "the prompt carries the source's indentation: {prompt:?}"
         );
         assert!(
             !prompt.to_lowercase().contains("original language"),
@@ -1438,6 +1448,21 @@ mod tests {
         let input = "<think>reasoning here</think>Actual output text.";
         let result = strip_special_tags(input);
         assert_eq!(result, "Actual output text.");
+    }
+
+    #[test]
+    fn the_slash_before_the_pipe_is_stripped_too() {
+        // `</|im_end|>` reached a user's dictation verbatim on 2026-09-05: the
+        // pattern expected `<|` followed by an optional slash, and this spells
+        // it the other way round.
+        assert_eq!(
+            strip_special_tags(
+                "let's ride bikes.
+</|im_end|>"
+            ),
+            "let's ride bikes."
+        );
+        assert_eq!(strip_special_tags("done</|im_start|>"), "done");
     }
 
     #[test]
