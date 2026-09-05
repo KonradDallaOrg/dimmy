@@ -232,12 +232,27 @@ jobs:
           # crate as fresh and never regenerates them. xcodebuild's answer to
           # that is "ld: library 'llama' not found", which says nothing about
           # why. Burned on 2026-09-05 by the llama.cpp bump.
+          # llama-cpp-sys derives where to drop the dylibs from
+          # DYLD_FALLBACK_LIBRARY_PATH, and under `--target` cargo points that
+          # at the HOST artifact dir. So they can land in target/release/ while
+          # the Xcode project searches target/aarch64-apple-darwin/release/.
+          # Bring them over rather than assume; harmless when already right.
+          TGT="core/target/aarch64-apple-darwin/release"
+          for src in core/target/release/libllama*.dylib core/target/release/libggml*.dylib; do
+            [ -e "$src" ] || continue
+            cp -RLf "$src" "$TGT/" 2>/dev/null || true
+          done
+
           missing=""
           for lib in libllama libggml libggml-base libggml-cpu libggml-metal; do
-            path="core/target/aarch64-apple-darwin/release/$lib.dylib"
+            path="$TGT/$lib.dylib"
             [ -e "$path" ] || missing="$missing $lib(absent)"
             [ -e "$path" ] && [ ! -r "$path" ] && missing="$missing $lib(dangling)"
           done
+          if [ -n "$missing" ]; then
+            echo "=== where ARE they? ==="
+            find core/target -name 'libllama*.dylib' -o -name 'libggml*.dylib' 2>/dev/null | head -20
+          fi
           if [ -n "$missing" ]; then
             echo "::error::llama/ggml dylibs unusable:$missing — the rust-cache is stale for this llama.cpp revision; bump the shared-key"
             exit 1

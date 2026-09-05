@@ -25,6 +25,7 @@ Cross-platform voice-transcription overlay. Records audio via global hotkey, tra
 | **Testing strategy — tiers, fixtures, how to run + extend** | [`docs/dev/testing.md`](docs/dev/testing.md) |
 | Native UI status across platforms | [`docs/dev/native-ui-plan.md`](docs/dev/native-ui-plan.md) |
 | Local LLM feasibility study | [`docs/dev/local-llm-feasibility.md`](docs/dev/local-llm-feasibility.md) |
+| **Local LLM quality — the four defects that made it look "mediocre", measured (READ before blaming a local model)** | [`docs/dev/local-llm-quality-2026-09-05.md`](docs/dev/local-llm-quality-2026-09-05.md) |
 | **Telemetry implementation (PostHog + Sentry)** | [`docs/dev/telemetry-implementation.md`](docs/dev/telemetry-implementation.md) |
 | **Licensing v2 PoC — local server, Ed25519 tokens, 7 test scenarios** | [`docs/dev/licensing-poc.md`](docs/dev/licensing-poc.md) |
 | **Licensing flow — state machine + sequence diagrams (ground truth)** | [`docs/dev/licensing-flow.md`](docs/dev/licensing-flow.md) |
