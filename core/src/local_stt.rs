@@ -270,18 +270,36 @@ fn compute_gpu_backend_status() -> GpuBackendStatus {
     if crate::gpu_health::previous_crash_detected() {
         let ctx = crate::gpu_health::crash_context().unwrap_or_else(|| "unknown".to_string());
         let fingerprint = crate::gpu_diag::compute_driver_fingerprint();
+        // Two strikes, not one. The sentinel cannot distinguish an abort
+        // inside the driver from the process being killed for any other
+        // reason -- a test that exits badly, or the OS reclaiming memory --
+        // and both armed the sticky marker on 2026-09-05, after which every
+        // run fell back to the CPU in silence: whisper 2s -> 8s, a recap
+        // 40s -> 230s, with nothing said anywhere. A real driver fault
+        // repeats; a kill does not.
+        let sticky = crate::gpu_health::record_strike(&fingerprint);
+        crate::gpu_health::clear();
+        if !sticky {
+            crate::log(&format!(
+                "[GPU] Previous process aborted during GPU init (context: {}). \
+                 Forcing CPU for THIS session only; the GPU gets another try \
+                 next start. A second consecutive abort on the same driver \
+                 (fingerprint: {}) makes it sticky.",
+                ctx, fingerprint
+            ));
+            crate::gpu_diag::disable_vulkan_loader(
+                "sentinel: aborted during GPU init (first strike)",
+            );
+            return GpuBackendStatus::Unavailable;
+        }
         crate::log(&format!(
-            "[GPU] Previous process aborted during GPU init (context: {}). \
-             Forcing CPU backend for this session and writing sticky \
-             known-bad marker (fingerprint: {}) so future cold starts skip \
-             the GPU path until drivers change.",
+            "[GPU] SECOND consecutive abort during GPU init (context: {}). \
+             Writing sticky known-bad marker (fingerprint: {}) so future cold \
+             starts skip the GPU path until drivers change.",
             ctx, fingerprint
         ));
         crate::gpu_health::mark_known_bad(&ctx, &fingerprint);
-        crate::gpu_health::clear();
-        crate::gpu_diag::disable_vulkan_loader(
-            "sentinel: previous process aborted during GPU init",
-        );
+        crate::gpu_diag::disable_vulkan_loader("sentinel: two consecutive aborts during GPU init");
         return GpuBackendStatus::Unavailable;
     }
 

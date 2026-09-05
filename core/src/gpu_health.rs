@@ -29,6 +29,60 @@ fn known_bad_path() -> Option<PathBuf> {
     crate::config_dir_path().map(|p| p.join(".gpu_known_bad"))
 }
 
+fn first_strike_path() -> Option<PathBuf> {
+    marker_path().map(|p| p.with_file_name(".gpu_first_strike"))
+}
+
+/// Record that the GPU aborted once, and say whether it has now done so
+/// TWICE in a row on the same driver.
+///
+/// One crash is not evidence the GPU is bad. The sentinel cannot tell an
+/// abort inside the driver from the process being killed for any other
+/// reason, and on 2026-09-05 it armed the sticky marker twice in one night
+/// for reasons that had nothing to do with the GPU: a test binary that
+/// exited badly, and Windows killing the process under memory pressure.
+/// Each time, every later run silently fell back to the CPU — whisper from
+/// 2 s to 8 s, a recap from 40 s to 230 s, with nothing said anywhere.
+///
+/// A real driver fault repeats; a kill does not. So the first strike is
+/// remembered and the GPU gets another go, and only a second consecutive
+/// failure on the SAME driver makes it sticky. The cost is one extra crash
+/// on a genuinely broken host, which is cheap against silently halving
+/// performance on a working one.
+pub fn record_strike(fingerprint: &str) -> bool {
+    assert!(
+        !fingerprint.is_empty(),
+        "gpu_health::record_strike: fingerprint must be non-empty"
+    );
+    let Some(path) = first_strike_path() else {
+        // Without somewhere to remember the first strike, fall back to the
+        // old behaviour rather than never marking anything.
+        return true;
+    };
+    let previous = std::fs::read_to_string(&path).ok();
+    match previous.as_deref().map(str::trim) {
+        Some(prev) if prev == fingerprint => {
+            let _ = std::fs::remove_file(&path);
+            true
+        }
+        _ => {
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(&path, fingerprint);
+            false
+        }
+    }
+}
+
+/// Forget the first strike. Called when GPU init SUCCEEDS, so that two
+/// crashes months apart are not treated as consecutive.
+pub fn clear_strike() {
+    if let Some(path) = first_strike_path() {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 /// Snapshot of a recovered GPU-init crash. Written by `mark_known_bad`,
 /// read by `read_known_bad`. Compared against current driver fingerprint
 /// at startup to decide whether to retry GPU.
@@ -67,6 +121,11 @@ pub fn mark_end() {
     if let Some(path) = marker_path() {
         let _ = std::fs::remove_file(path);
     }
+    // Reaching here means the process SURVIVED GPU init, so any earlier
+    // strike is not part of a run of consecutive failures. Without this, two
+    // unrelated crashes months apart would look consecutive and make the
+    // marker sticky on a machine whose GPU works fine.
+    clear_strike();
 }
 
 /// Returns true if a previous process aborted during GPU init.
@@ -162,6 +221,53 @@ mod tests {
             !previous_crash_detected(),
             "mark_end must clear the sentinel"
         );
+    }
+
+    #[test]
+    fn one_abort_is_not_enough_to_condemn_the_gpu() {
+        // The sentinel cannot tell a driver abort from the process being
+        // killed. Both happened on 2026-09-05 and both silently moved every
+        // later run onto the CPU. A real fault repeats; a kill does not.
+        let _g = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_strike();
+
+        assert!(
+            !record_strike("fp-same"),
+            "the first abort must NOT be sticky"
+        );
+        assert!(
+            record_strike("fp-same"),
+            "a second consecutive abort on the same driver must be sticky"
+        );
+    }
+
+    #[test]
+    fn a_working_gpu_forgets_the_earlier_abort() {
+        let _g = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_strike();
+
+        assert!(!record_strike("fp-same"), "first abort");
+        // A run that gets through GPU init calls mark_end, which clears it.
+        clear_strike();
+        assert!(
+            !record_strike("fp-same"),
+            "an abort after a HEALTHY run starts the count again"
+        );
+    }
+
+    #[test]
+    fn a_different_driver_starts_the_count_again() {
+        // A driver update is a new situation, not the second half of an old
+        // one — the same reason the sticky marker is compared by fingerprint.
+        let _g = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_strike();
+
+        assert!(!record_strike("fp-old"), "first abort on the old driver");
+        assert!(
+            !record_strike("fp-new"),
+            "an abort on a DIFFERENT driver is a first strike, not a second"
+        );
+        clear_strike();
     }
 
     #[test]
