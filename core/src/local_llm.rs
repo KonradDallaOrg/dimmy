@@ -160,6 +160,18 @@ pub const AVAILABLE_LLM_MODELS: &[LlmModel] = &[
         url: Some("https://huggingface.co/mradermacher/translategemma-4b-it-GGUF/resolve/main/translategemma-4b-it.Q4_K_M.gguf"),
     },
     LlmModel {
+        // The 12B sibling, for machines that can hold it. Not measured here —
+        // it does not fit the 4 GB card everything else was tested on — but it
+        // is the same fine-tune of a larger base, and larger bases follow
+        // instructions better, which is the one thing the 4B models struggle
+        // with.
+        name: "TranslateGemma 12B Q4",
+        filename: "translategemma-12b-it.Q4_K_M.gguf",
+        size_mb: 6962,
+        description: "Larger TranslateGemma — needs ~8GB VRAM or a 16GB Mac (12B params)",
+        url: Some("https://huggingface.co/mradermacher/translategemma-12b-it-GGUF/resolve/main/translategemma-12b-it.Q4_K_M.gguf"),
+    },
+    LlmModel {
         name: "Qwen 3 4B Q4",
         filename: "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
         size_mb: 2380,
