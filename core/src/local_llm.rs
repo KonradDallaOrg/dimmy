@@ -388,7 +388,11 @@ pub fn build_local_system_prompt(
     //   short instructions + "same language"        32                 25
     //   full instructions + "same language"         42                  1
     //   full instructions + language NAMED           1                  2
-    if !prompt.is_empty() {
+    // Not when translating: the anchor and the translate instruction would
+    // contradict each other outright — "Write your entire answer in Italian.
+    // Then translate the entire output to English." The translate instruction
+    // already names its target language, which is the same trick.
+    if !prompt.is_empty() && translate_instr.is_empty() {
         prompt.push_str(&anchor_text(lang));
     }
 
@@ -1168,6 +1172,27 @@ mod tests {
         assert!(
             prompt.contains("Italian"),
             "the language must be NAMED, not referred to: {prompt}"
+        );
+    }
+
+    #[test]
+    fn translating_does_not_also_pin_the_source_language() {
+        // The two instructions would contradict each other: "Write your entire
+        // answer in Italian. Then translate the entire output to English."
+        let prompt = build_local_system_prompt(
+            crate::llm::LlmStyle::Correct,
+            crate::llm::LlmTone::None,
+            "",
+            "en",
+            "it",
+        );
+        assert!(
+            prompt.contains("English"),
+            "the target language must be named: {prompt}"
+        );
+        assert!(
+            !prompt.contains("Write your entire answer in Italian"),
+            "the source language must NOT be pinned while translating: {prompt}"
         );
     }
 
