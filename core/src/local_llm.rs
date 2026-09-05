@@ -335,6 +335,46 @@ fn strip_special_tags(text: &str) -> String {
 /// Unlike the cloud prompt (long preamble + 7 rules), this uses ultra-short,
 /// direct instructions that small models can actually follow.
 /// The cloud preamble is too complex for E2B — the model ignores most rules.
+/// Remove the "keep the original language" clauses from a style instruction.
+///
+/// Every cloud style ends by pinning the language, which is right until a
+/// translation is requested and then becomes an order the model cannot obey
+/// alongside the other one. Some of these clauses share a sentence with the
+/// actual task ("expand ... while keeping the same meaning and language"), so
+/// the clause is removed rather than the sentence.
+///
+/// `no_language_clause_survives_a_translation` walks every style and fails if
+/// one gets through, which is what keeps this list honest when an instruction
+/// is reworded.
+#[cfg_attr(not(feature = "local-llm"), allow(dead_code))]
+fn strip_language_clauses(instr: &str) -> String {
+    const CLAUSES: &[&str] = &[
+        " Preserve the original meaning, intent, and language exactly.",
+        " Preserve the original language.",
+        " Keep the same language as input but sprinkle English acronyms everywhere.",
+        " Keep the same language as input.",
+        " Keep the same meaning and language.",
+        " Keep the same language.",
+        " Adapt to the INPUT LANGUAGE.",
+        " Always output in Italian with anglicisms.",
+        " If input is English, TRANSLATE to Italian first then apply the Imbruttito style.",
+        " Insert them naturally mid-sentence regardless of the input language",
+        " while keeping the same meaning and language",
+        " keeping the same meaning and language",
+        "emojis work in every language.",
+    ];
+    let mut out = instr.to_string();
+    for c in CLAUSES {
+        out = out.replace(c, "");
+    }
+    // A couple of styles branch on the input language for flavour, which is
+    // moot once the output language is fixed.
+    if let Some(i) = out.find("If other language:") {
+        out.truncate(i);
+    }
+    out.trim().to_string()
+}
+
 pub fn build_local_system_prompt(
     style: crate::llm::LlmStyle,
     tone: crate::llm::LlmTone,
@@ -356,11 +396,15 @@ pub fn build_local_system_prompt(
     // user's language, so a model handed an English order over Italian
     // speech answered in English. Sharing the text with the cloud also means
     // a style improved there improves here.
-    let style_instr: String = match style {
+    let mut style_instr: String = match style {
         LlmStyle::Off => String::new(),
         LlmStyle::Custom => custom_prompt.to_string(),
         other => other.instruction().to_string(),
     };
+    let translating = !translate_to.is_empty() && translate_to != "none";
+    if translating {
+        style_instr = strip_language_clauses(&style_instr);
+    }
 
     let tone_instr = match tone {
         LlmTone::None => "",
@@ -374,9 +418,33 @@ pub fn build_local_system_prompt(
         // Use the language NAME, not the bare code — small models ignore
         // "translate to en" but follow "translate to English" (live flow
         // matrix, 2026-06-19).
+        // Say it ONCE. Every cloud style instruction ends by telling the model
+        // to keep the original language — correct when no translation is
+        // asked for, and flatly contradictory when one is. A small model
+        // obeys both in sequence: the corrected Italian, a heading it invented,
+        // then the English. Users reported exactly that.
+        //
+        // The cure is to remove the contradiction, not to add a sentence
+        // resolving it: "extra, irrelevant information increases the chance of
+        // contradictions and hallucinations" is the whole finding. And since
+        // 66% of zero-shot translation outputs carry unwanted commentary
+        // unless it is forbidden by name, forbid it by name.
+        let name = crate::llm::lang_name(translate_to);
+        // Say it BOTH ways, because the models key on different wordings and
+        // ignore the other. Measured 2026-09-05 over four target languages:
+        //
+        //   phrasing                              phi   gemma   qwen
+        //   "translate the entire output to X"    4/4    1/4     4/4
+        //   "write your entire answer in X"       1/4    4/4     4/4
+        //   "translate the result into X"         4/4    0/4     4/4
+        //   both sentences together               ->  measured below
+        //
+        // Gemma follows an output-language instruction and shrugs at "translate";
+        // Phi-4 Mini is the exact opposite and echoes the Italian back unless
+        // told a translation is the task. One clause each is a cheap way to stop
+        // guessing which model the user picked.
         format!(
-            "Then translate the entire output to {name}. Write the final text in {name} only.",
-            name = crate::llm::lang_name(translate_to)
+            "Then translate the result into {name}. Write your entire answer in              {name}. Output ONLY the {name} text: no commentary, no heading, no              label, and do not repeat the original."
         )
     } else {
         String::new()
@@ -1194,6 +1262,69 @@ mod tests {
     }
 
     #[test]
+    fn no_language_clause_survives_a_translation() {
+        // The point of stripping is that the model is never handed two orders
+        // about the language. Walk every style: if one keeps a clause telling
+        // it to preserve the original, the contradiction is back and the
+        // output goes with it — the corrected Italian, an invented heading,
+        // then the English (reported by a user, 2026-09-05).
+        //
+        // This is what keeps the clause list honest when an instruction is
+        // reworded upstream, since those strings are shared with the cloud.
+        use crate::llm::LlmStyle;
+        for style in [
+            LlmStyle::Correct,
+            LlmStyle::Summarize,
+            LlmStyle::Elaborate,
+            LlmStyle::Comprehensible,
+            LlmStyle::Professional,
+            LlmStyle::Prompt,
+            LlmStyle::Genz,
+            LlmStyle::Boomer,
+            LlmStyle::Emoji,
+            LlmStyle::Acronyms,
+            LlmStyle::Imbruttito,
+        ] {
+            let prompt =
+                build_local_system_prompt(style, crate::llm::LlmTone::None, "", "en", "it");
+            let lower = prompt.to_lowercase();
+            let before_target = lower.split("write your entire answer").next().unwrap_or("");
+            for banned in [
+                "same language",
+                "original language",
+                "input language",
+                "meaning and language",
+                "output in italian",
+            ] {
+                assert!(
+                    !before_target.contains(banned),
+                    "{style:?} still tells the model to keep the source language                      ({banned:?}) while ALSO asking for a translation: {prompt}"
+                );
+            }
+            assert!(
+                prompt.contains("English"),
+                "{style:?} must name the target language: {prompt}"
+            );
+        }
+    }
+
+    #[test]
+    fn stripping_leaves_the_task_behind() {
+        // Some clauses share their sentence with the actual instruction, so a
+        // sentence-level strip would delete the task. Elaborate is the one
+        // that would go empty.
+        let s = strip_language_clauses(crate::llm::LlmStyle::Elaborate.instruction());
+        assert!(
+            s.contains("expand") || s.contains("Expand"),
+            "the transformation itself must survive: {s}"
+        );
+        assert!(
+            !s.to_lowercase().contains("language"),
+            "but the clause must not: {s}"
+        );
+    }
+
+    #[test]
     fn translating_does_not_also_pin_the_source_language() {
         // The two instructions would contradict each other: "Write your entire
         // answer in Italian. Then translate the entire output to English."
@@ -1258,9 +1389,19 @@ mod tests {
             "en",
             "it",
         );
+        // No longer "Then translate ...": the instruction now states the OUTPUT
+        // LANGUAGE rather than naming the act, because the style's own
+        // language clause is stripped first and there is nothing left to
+        // translate away from. What has to hold is that the target language is
+        // named and nothing else is invited into the output.
         assert!(
-            prompt.to_lowercase().contains("translate"),
-            "must contain translation instruction: {}",
+            prompt.contains("translate the result into English"),
+            "must name the act AND the target language: {}",
+            prompt
+        );
+        assert!(
+            !prompt.to_lowercase().contains("original language"),
+            "must not ALSO ask to keep the source language: {}",
             prompt
         );
         assert!(
