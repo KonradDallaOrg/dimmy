@@ -464,6 +464,21 @@ pub fn build_local_system_prompt(
         prompt.push_str(&anchor_text(lang));
     }
 
+    // NOT added here: a clause telling the model to stay close to the input
+    // and invent nothing. It was written, measured and removed on 2026-09-05.
+    // On short dictations — where the rambling actually happens — it shaved
+    // 10-15% off the length (Comprehensible x1.4 -> x1.2, Professional the
+    // same) and left the real offender untouched (Imbruttito x3.2 -> x2.9),
+    // while raising the count of outputs it declined to change at all
+    // (Comprehensible 2 of 6 -> 4 of 6). Trading "says too much" for "does
+    // nothing" is not a trade.
+    //
+    // The verbosity comes from the style instructions themselves: Acronyms
+    // hands the model twenty acronyms to use, Imbruttito a list of anglicisms.
+    // A 4B model reads a list and tries to use all of it. Trimming those lists
+    // is the fix, and it is shared with the cloud path, so it needs its own
+    // measured pass rather than a clause bolted on the end.
+
     // Collapse runs of whitespace. These instructions are long enough to want
     // wrapping in the source, and a wrapped string literal drags its
     // indentation into the prompt — measured here, where "Your entire answer"
