@@ -919,6 +919,10 @@ fn flows_local_gguf() {
                 tone,
                 "",
                 translate,
+                // These flows are Italian dictations; the instruction NAMES the
+                // language, which is what took wrong-language answers from
+                // 54 in 192 to 1 (see build_local_system_prompt).
+                "it",
             ),
             Flow::Transform { selection } => dimmy_lib::local_llm::process_raw_prompt_local(
                 &model_path,

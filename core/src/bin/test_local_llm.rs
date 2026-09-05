@@ -65,8 +65,15 @@ fn main() {
         eprintln!("Input: {}...", &text[..text.len().min(80)]);
 
         let start = Instant::now();
-        let result =
-            dimmy_lib::local_llm::process_text_local(&model_path, text, *style, *tone, "", "none");
+        let result = dimmy_lib::local_llm::process_text_local(
+            &model_path,
+            text,
+            *style,
+            *tone,
+            "",
+            "none",
+            "it",
+        );
         let elapsed = start.elapsed();
 
         match result {

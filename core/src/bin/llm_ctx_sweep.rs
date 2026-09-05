@@ -95,6 +95,7 @@ fn main() {
                 dimmy_lib::llm::LlmTone::None,
                 "",
                 "",
+                "it",
             );
             println!(
                 "DICTATION deltas={} (must be 0)",

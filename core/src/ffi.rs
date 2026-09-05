@@ -3434,6 +3434,12 @@ pub unsafe extern "C" fn dimmy_process_with_llm(
 
         emit_event("status", r#"{"state":"processing"}"#);
 
+        // The configured dictation language, so the instruction can NAME it —
+        // the difference between 54 wrong-language answers in 192 and 1
+        // (see build_local_system_prompt). Empty under auto-detect, where the
+        // builder falls back to a weaker anchor rather than to nothing.
+        let dict_lang = st.language.lock().map(|l| l.clone()).unwrap_or_default();
+
         match crate::local_llm::process_text_local(
             &model_path,
             text,
@@ -3441,6 +3447,7 @@ pub unsafe extern "C" fn dimmy_process_with_llm(
             tone,
             &custom_prompt,
             &translate_to,
+            &dict_lang,
         ) {
             Ok(enhanced) => {
                 let preview = if enhanced.len() > 120 {

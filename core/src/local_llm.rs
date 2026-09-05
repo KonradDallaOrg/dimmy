@@ -322,6 +322,7 @@ pub fn build_local_system_prompt(
     tone: crate::llm::LlmTone,
     custom_prompt: &str,
     translate_to: &str,
+    lang: &str,
 ) -> String {
     use crate::llm::{LlmStyle, LlmTone};
 
@@ -329,21 +330,18 @@ pub fn build_local_system_prompt(
         return String::new();
     }
 
-    // Ultra-short style instructions — small models need direct, simple commands
-    let style_instr = match style {
-        LlmStyle::Off => "",
-        LlmStyle::Correct => "Fix grammar, punctuation, and spelling. Keep the same words.",
-        LlmStyle::Summarize => "Summarize in 1-2 sentences. Keep key facts only.",
-        LlmStyle::Elaborate => "Expand with more detail. Add context and explanations.",
-        LlmStyle::Comprehensible => "Rewrite to be clearer and easier to understand.",
-        LlmStyle::Professional => "Rewrite in formal, professional business tone.",
-        LlmStyle::Prompt => "Rewrite as a clear, structured AI prompt. Fix grammar, organize logically.",
-        LlmStyle::Genz => "Rewrite in Gen-Z slang. Use 'no cap', 'fr fr', 'slay', 'lowkey', 'bussin'.",
-        LlmStyle::Boomer => "Rewrite in a formal, old-fashioned, overly polite tone.",
-        LlmStyle::Emoji => "Rewrite with many emojis. Add 2-4 emojis per sentence.",
-        LlmStyle::Acronyms => "Add common acronyms and abbreviations where possible.",
-        LlmStyle::Imbruttito => "Riscrivi in stile milanese imbruttito. Usa 'performare', 'deliverare', 'taggare', gergo business italiano-inglese.",
-        LlmStyle::Custom => custom_prompt,
+    // The SAME instruction text the cloud path uses. The short forms that
+    // stood here were written on the belief that "small models need direct,
+    // simple commands" -- plausible, never measured, and wrong twice over.
+    // Three words are easy to ignore: a fifth of all outputs came back
+    // untouched (21 of 192), and none of the short forms said to stay in the
+    // user's language, so a model handed an English order over Italian
+    // speech answered in English. Sharing the text with the cloud also means
+    // a style improved there improves here.
+    let style_instr: String = match style {
+        LlmStyle::Off => String::new(),
+        LlmStyle::Custom => custom_prompt.to_string(),
+        other => other.instruction().to_string(),
     };
 
     let tone_instr = match tone {
@@ -366,22 +364,52 @@ pub fn build_local_system_prompt(
         String::new()
     };
 
-    // Compose — keep it SHORT. Every extra word confuses small models.
-    let mut parts: Vec<&str> = Vec::new();
-    if !style_instr.is_empty() {
-        parts.push(style_instr);
-    }
+    let mut prompt = style_instr;
     if !tone_instr.is_empty() {
-        parts.push(tone_instr);
+        if !prompt.is_empty() {
+            prompt.push(' ');
+        }
+        prompt.push_str(tone_instr);
     }
 
-    let mut prompt = parts.join(" ");
+    // NAME the language. "Answer in the same language as the input" asks a 4B
+    // model to reason about its own input; "Write your entire answer in
+    // Italian" does not. The translate instruction below has carried a note
+    // saying exactly this since June — small models ignore "translate to en"
+    // and follow "translate to English" — and the same indirection was quietly
+    // costing us everywhere else.
+    //
+    // Measured 2026-09-05, 192 trials per configuration (4 models x 8 styles x
+    // 6 real dictations), after the repetition-penalty fix made the numbers
+    // mean anything:
+    //
+    //   short instructions, no anchor  (shipped)   54 wrong language, 21 unchanged
+    //   full instructions, no anchor                53                  4
+    //   short instructions + "same language"        32                 25
+    //   full instructions + "same language"         42                  1
+    //   full instructions + language NAMED           1                  2
+    if !prompt.is_empty() {
+        prompt.push_str(&anchor_text(lang));
+    }
 
     if !translate_instr.is_empty() {
-        prompt = format!("{} {}", prompt, translate_instr);
+        prompt.push(' ');
+        prompt.push_str(&translate_instr);
     }
 
     prompt
+}
+
+/// The language anchor. Falls back to the self-referential wording when the
+/// language is unknown (auto-detect leaves it empty): weaker, but it still
+/// beat having none at all — 54 wrong-language answers down to 32.
+fn anchor_text(lang: &str) -> String {
+    let l = lang.trim();
+    if l.is_empty() || l == "auto" || l == "none" {
+        " Answer in the SAME LANGUAGE as the input text.".to_string()
+    } else {
+        format!(" Write your entire answer in {}.", crate::llm::lang_name(l))
+    }
 }
 
 // Note: local inference no longer hand-rolls a prompt string. The real
@@ -805,11 +833,14 @@ pub fn process_text_local(
     tone: crate::llm::LlmTone,
     custom_prompt: &str,
     translate_to: &str,
+    // The dictation's language, so the instruction can NAME it. Empty is
+    // accepted and falls back to a weaker anchor (see anchor_text).
+    lang: &str,
 ) -> Result<String, LlmError> {
     // ── Precondition assertions ─────────────────────────────────
     assert!(!text.is_empty(), "text must not be empty for local LLM");
 
-    let system_prompt = build_local_system_prompt(style, tone, custom_prompt, translate_to);
+    let system_prompt = build_local_system_prompt(style, tone, custom_prompt, translate_to, lang);
     if system_prompt.is_empty() {
         return Ok(text.to_string());
     }
@@ -873,6 +904,7 @@ pub fn process_text_local(
     _tone: crate::llm::LlmTone,
     _custom_prompt: &str,
     _translate_to: &str,
+    _lang: &str,
 ) -> Result<String, LlmError> {
     Err(LlmError::LocalModel(
         "local LLM not available: compile with `local-llm` feature".to_string(),
@@ -1109,24 +1141,54 @@ mod tests {
     // (used as the `system` message) is still covered below.
 
     #[test]
-    fn local_preamble_is_short_and_direct() {
+    fn local_prompt_states_the_task_and_names_the_language() {
+        // This test used to assert `prompt.len() < 200`, "short for small
+        // models". That belief was never measured, and measuring it on
+        // 2026-09-05 (192 trials per configuration: 4 models x 8 styles x 6
+        // real dictations) found it backwards on both counts. The short forms
+        // left a fifth of outputs untouched — three words are easy to ignore —
+        // and none of them named the user's language, so a model handed an
+        // English order over Italian speech answered in English 54 times out
+        // of 192. Full instructions naming the language: 1 out of 192, and 1
+        // out of 288 on phrases never used to tune it.
+        //
+        // So the length assertion is gone and these two take its place,
+        // because they are what actually has to hold.
         let prompt = build_local_system_prompt(
             crate::llm::LlmStyle::Correct,
             crate::llm::LlmTone::None,
             "",
             "none",
+            "it",
         );
         assert!(
-            prompt.contains("Fix grammar"),
-            "Correct style must contain 'Fix grammar': {}",
-            prompt
+            prompt.contains("fix grammar"),
+            "the style's task must be stated: {prompt}"
         );
-        // Local prompts must be short — under 200 chars for small models
         assert!(
-            prompt.len() < 200,
-            "local prompt must be short for small models, got {} chars",
-            prompt.len()
+            prompt.contains("Italian"),
+            "the language must be NAMED, not referred to: {prompt}"
         );
+    }
+
+    #[test]
+    fn an_unknown_language_still_gets_an_anchor() {
+        // Auto-detect leaves the configured language empty. The weaker,
+        // self-referential wording still beat having none (54 wrong-language
+        // answers down to 32), so it is the fallback rather than nothing.
+        for unknown in ["", "auto", "none"] {
+            let prompt = build_local_system_prompt(
+                crate::llm::LlmStyle::Professional,
+                crate::llm::LlmTone::None,
+                "",
+                "none",
+                unknown,
+            );
+            assert!(
+                prompt.contains("SAME LANGUAGE"),
+                "{unknown:?} must still anchor the language: {prompt}"
+            );
+        }
     }
 
     #[test]
@@ -1136,6 +1198,7 @@ mod tests {
             crate::llm::LlmTone::Formal,
             "",
             "none",
+            "it",
         );
         assert!(prompt.contains("professional"), "must contain style");
         assert!(prompt.contains("formal"), "must contain tone: {}", prompt);
@@ -1150,6 +1213,7 @@ mod tests {
             crate::llm::LlmTone::None,
             "",
             "en",
+            "it",
         );
         assert!(
             prompt.to_lowercase().contains("translate"),
@@ -1170,6 +1234,7 @@ mod tests {
             crate::llm::LlmTone::None,
             "",
             "none",
+            "it",
         );
         assert!(prompt.is_empty(), "Off style must produce empty prompt");
     }
@@ -1242,6 +1307,7 @@ Hi"
             crate::llm::LlmTone::None,
             "",
             "none",
+            "it",
         );
         assert!(result.is_err());
         if let Err(LlmError::LocalModel(msg)) = result {
@@ -1266,6 +1332,7 @@ Hi"
             crate::llm::LlmTone::None,
             "",
             "none",
+            "it",
         );
     }
 
@@ -1279,6 +1346,7 @@ Hi"
             crate::llm::LlmTone::None,
             "",
             "none",
+            "it",
         );
         assert!(result.is_err());
         if let Err(LlmError::LocalModel(msg)) = result {
