@@ -146,6 +146,20 @@ pub const AVAILABLE_LLM_MODELS: &[LlmModel] = &[
         // transcript's language it answers in English on an Italian meeting,
         // where Gemma stays Italian. Worth having as the "slower but says
         // more" option; not a default until the language is pinned.
+        // A Gemma 3 fine-tuned for translation, so it loads through the path
+        // we already have. Measured 2026-09-06 against the models we ship, on
+        // the same real dictations: 4 of 4 target languages in roughly half
+        // Qwen's time, and -- unexpectedly -- the best of any of them on the
+        // STYLES too, 0 wrong-language and 0 unchanged in 48 trials. It
+        // actually applies Professional and Imbruttito, where Gemma 4 E2B QAT
+        // hands the input straight back.
+        name: "TranslateGemma 4B Q4",
+        filename: "translategemma-4b-it.Q4_K_M.gguf",
+        size_mb: 2374,
+        description: "Best for translation, and strong on the styles too (4B params)",
+        url: Some("https://huggingface.co/mradermacher/translategemma-4b-it-GGUF/resolve/main/translategemma-4b-it.Q4_K_M.gguf"),
+    },
+    LlmModel {
         name: "Qwen 3 4B Q4",
         filename: "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
         size_mb: 2380,
@@ -318,7 +332,12 @@ fn strip_special_tags(text: &str) -> String {
         // alternative (expecting `<|` then an optional `/`) never matched — it
         // reached a user's text verbatim on 2026-09-05. Allow the slash on
         // either side of the pipe.
-        r"</?(?:think|start_of_turn|end_of_turn|pad|s)>|</?\|/?(?:think|end|endoftext|assistant|user|system|im_start|im_end)\|?>"
+        // `input` is OURS: process_text_local fences the dictation in
+        // <input>...</input> so the model treats it as data rather than as
+        // something to answer. Models echo the closing tag often enough that
+        // it reached users' text — seen across four different models on
+        // 2026-09-06, including a bare "</input>" pasted at the cursor.
+        r"</?(?:think|start_of_turn|end_of_turn|pad|s|input)>|</?\|/?(?:think|end|endoftext|assistant|user|system|im_start|im_end)\|?>"
     ).expect("strip_special_tags regex must compile");
 
     let cleaned = re.replace_all(&text, "");
@@ -1492,6 +1511,31 @@ mod tests {
         let input = "<think>reasoning here</think>Actual output text.";
         let result = strip_special_tags(input);
         assert_eq!(result, "Actual output text.");
+    }
+
+    #[test]
+    fn our_own_input_fence_never_reaches_the_user() {
+        // The fence is ours — process_text_local wraps the dictation in it so
+        // the model treats the text as data. Models echo the closing tag, and
+        // it was landing in what gets pasted at the cursor (four models,
+        // 2026-09-06).
+        assert_eq!(
+            strip_special_tags("Vuoi che ti apra? </input>"),
+            "Vuoi che ti apra?"
+        );
+        assert_eq!(
+            strip_special_tags(
+                "<input>
+ciao
+</input>"
+            ),
+            "ciao"
+        );
+        // A sentence that merely mentions the word is not a tag.
+        assert_eq!(
+            strip_special_tags("check the input field"),
+            "check the input field"
+        );
     }
 
     #[test]
