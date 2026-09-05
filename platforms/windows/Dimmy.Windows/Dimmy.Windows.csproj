@@ -96,8 +96,8 @@
        a future ggml backend (ggml-cuda.dll, ...) is picked up automatically. -->
   <Target Name="CopyLlamaSharedLibs" AfterTargets="Build">
     <ItemGroup>
-      <LlamaSharedLib Include="$(MSBuildThisFileDirectory)..\..\..\core	argetelease\ggml*.dll" />
-      <LlamaSharedLib Include="$(MSBuildThisFileDirectory)..\..\..\core	argetelease\llama*.dll" />
+      <LlamaSharedLib Include="$(MSBuildThisFileDirectory)..\..\..\core\target\release\ggml*.dll" />
+      <LlamaSharedLib Include="$(MSBuildThisFileDirectory)..\..\..\core\target\release\llama*.dll" />
     </ItemGroup>
     <Copy SourceFiles="@(LlamaSharedLib)" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" Condition="'@(LlamaSharedLib)' != ''" />
     <Warning Text="No ggml*/llama*.dll found next to dimmy_lib.dll. A local-llm build needs them at runtime (llama-cpp-4 dynamic-link) — the app will fail to start. Build the Rust lib with the frozen feature set first." Condition="'@(LlamaSharedLib)' == '' And Exists('$(DimmyDllSource)')" />
