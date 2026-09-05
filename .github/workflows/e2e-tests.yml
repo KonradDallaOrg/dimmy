@@ -56,7 +56,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: core
-          shared-key: integration-suites-win
+          shared-key: integration-suites-win-llamacpp061
 
       - name: Cache test fixtures (jfk.wav + ggml-tiny.en-q8_0.bin)
         uses: actions/cache@v5
@@ -133,7 +133,7 @@ jobs:
           # runners during whisper_model_load. GGML_NATIVE=OFF in the test
           # step env prevents recurrence — whisper.cpp now targets generic
           # x86-64 baseline instead of the compile-host's CPU.
-          shared-key: e2e-v3-${{ matrix.os }}
+          shared-key: e2e-v3-${{ matrix.os }}-llamacpp061
 
       - name: Cache test fixtures (jfk.wav + ggml-tiny.en-q8_0.bin)
         uses: actions/cache@v5
@@ -213,7 +213,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: core
-          shared-key: ui-smoke-win
+          shared-key: ui-smoke-win-llamacpp061
 
       - name: Set up .NET 8
         uses: actions/setup-dotnet@v5
@@ -275,7 +275,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: core
-          shared-key: ffi-smoke-${{ matrix.os }}
+          shared-key: ffi-smoke-${{ matrix.os }}-llamacpp061
 
       - name: Install Linux dependencies
         if: matrix.os == 'ubuntu-22.04'

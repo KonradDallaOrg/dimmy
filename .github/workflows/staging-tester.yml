@@ -145,7 +145,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: core
-          shared-key: macos-staging
+          shared-key: macos-staging-llamacpp061
 
       - name: Cache FluidAudio Swift build
         uses: actions/cache@v5
@@ -582,7 +582,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: core
-          shared-key: windows-staging
+          shared-key: windows-staging-llamacpp061
 
       # ── DLL reuse (skip the ~15min build when the Rust core is unchanged) ──
       # Restores dimmy_lib.dll from R2 keyed by a content hash of the core

@@ -226,6 +226,22 @@ jobs:
           rm -f core/target/aarch64-apple-darwin/release/deps/libdimmy_lib.dylib
           echo "=== llama/ggml dylibs in release dir ==="
           ls -la core/target/aarch64-apple-darwin/release/libllama* core/target/aarch64-apple-darwin/release/libggml* 2>/dev/null || echo "No dylibs found"
+          # Assert they RESOLVE, not just that names exist. rust-cache prunes
+          # target/ before saving, and a restored cache can bring back the
+          # symlinks without the libraries they point at; cargo then treats the
+          # crate as fresh and never regenerates them. xcodebuild's answer to
+          # that is "ld: library 'llama' not found", which says nothing about
+          # why. Burned on 2026-09-05 by the llama.cpp bump.
+          missing=""
+          for lib in libllama libggml libggml-base libggml-cpu libggml-metal; do
+            path="core/target/aarch64-apple-darwin/release/$lib.dylib"
+            [ -e "$path" ] || missing="$missing $lib(absent)"
+            [ -e "$path" ] && [ ! -r "$path" ] && missing="$missing $lib(dangling)"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::llama/ggml dylibs unusable:$missing — the rust-cache is stale for this llama.cpp revision; bump the shared-key"
+            exit 1
+          fi
 
       - name: Resolve Sparkle SPM dependency
         working-directory: platforms/macos
@@ -921,7 +937,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: core
-          shared-key: windows-release
+          shared-key: windows-release-llamacpp061
 
       - name: Fetch onnxruntime win-x64 DLL (Parakeet ort path)
         # Mirrors the macOS download-onnxruntime.sh step. ort 2.0.0-rc.10
