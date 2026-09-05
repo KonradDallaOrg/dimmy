@@ -210,6 +210,16 @@ pub async fn download_resumable(
 
     let mut downloaded: u64 = start_at;
     let mut resp = resp;
+    // Report progress on a CLOCK, not per chunk. reqwest hands back 8-64 KB at
+    // a time, so a 2.4 GB model produced tens of thousands of callbacks — each
+    // one a JSON string across the FFI and a marshal onto the host's UI thread.
+    // The download itself was fine (it runs off that thread); the UI drowned in
+    // its own queue and froze until Dimmy was restarted, by which point the
+    // file had quietly finished (reported 2026-09-05).
+    //
+    // Four or five updates a second is more than a progress bar can show.
+    let mut last_report = std::time::Instant::now();
+    let report_every = std::time::Duration::from_millis(200);
     while let Some(chunk) = resp
         .chunk()
         .await
@@ -217,9 +227,14 @@ pub async fn download_resumable(
     {
         file.write_all(&chunk).map_err(|e| format!("write: {e}"))?;
         downloaded += chunk.len() as u64;
-        on_progress(downloaded, total_bytes);
+        if last_report.elapsed() >= report_every {
+            last_report = std::time::Instant::now();
+            on_progress(downloaded, total_bytes);
+        }
     }
     drop(file);
+    // Always land on the true final figure, whatever the clock did.
+    on_progress(downloaded, total_bytes);
 
     // Size: never rename a short file — keep the .part so the next try resumes.
     if total_bytes > 0 && downloaded < total_bytes {

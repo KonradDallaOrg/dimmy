@@ -34,8 +34,11 @@ async fn main() {
     let t = std::time::Instant::now();
     // The callback is Fn, not FnMut, so the progress marker lives in a cell.
     let last = std::cell::Cell::new(0u64);
+    // Count EVERY callback: the throttle's whole point is how many there are.
+    let calls = std::cell::Cell::new(0u64);
     let r =
         dimmy_lib::download::download_resumable(&client, url, &dest, &[b"GGUF"], |done, total| {
+            calls.set(calls.get() + 1);
             let pct = if total > 0 { done * 100 / total } else { 0 };
             if pct >= last.get() + 20 {
                 last.set(pct);
@@ -46,11 +49,12 @@ async fn main() {
 
     match r {
         Ok(()) => println!(
-            "OK  {:.0}s  {} MB",
+            "OK  {:.0}s  {} MB  {} progress callbacks",
             t.elapsed().as_secs_f64(),
             std::fs::metadata(&dest)
                 .map(|m| m.len() / 1_048_576)
-                .unwrap_or(0)
+                .unwrap_or(0),
+            calls.get()
         ),
         Err(e) => println!("FALLITO: {e}"),
     }
