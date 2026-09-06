@@ -623,6 +623,22 @@ mod llm_cache {
         };
 
         if needs_reload {
+            // Drop the previous model FIRST. It is held in `guard` and would
+            // otherwise stay resident for the whole of `load_from_file`, so
+            // switching model asked the GPU to hold BOTH at once. On a 4 GB
+            // card that is the difference between working and not: measured
+            // 2026-09-06, Gemma 4 E2B cached from an earlier recap, Qwen 3 4B
+            // (2330 MB) then failed with "unable to allocate Vulkan0 buffer"
+            // — and the user is told to pick a smaller model when the real
+            // problem is that we never let go of the previous one.
+            //
+            // Freeing before loading costs nothing: `needs_reload` means the
+            // cached model is the WRONG one, so it has no further use.
+            if guard.is_some() {
+                crate::log("[LocalLLM] Freeing the previously cached model before loading");
+                *guard = None;
+            }
+
             crate::log(&format!(
                 "[LocalLLM] Loading model into cache: {}",
                 model_path.display()
