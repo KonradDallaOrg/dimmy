@@ -558,15 +558,44 @@ mod llm_cache {
 
     struct CachedLlmModel {
         model: LlamaModel,
-        backend: LlamaBackend,
         model_path: PathBuf,
     }
 
-    // LlamaModel is Send+Sync. LlamaBackend is Send+Sync.
-    // We protect access with a Mutex.
+    // LlamaModel is Send+Sync. We protect access with a Mutex.
     unsafe impl Send for CachedLlmModel {}
 
     static CACHE: Mutex<Option<CachedLlmModel>> = Mutex::new(None);
+
+    /// The llama.cpp backend is a PROCESS-WIDE singleton: `init()` flips an
+    /// atomic and refuses with `BackendAlreadyInitialized` while a
+    /// `LlamaBackend` is alive, and `Drop` calls `llama_backend_free()`.
+    /// So it must be initialised once and outlive every model.
+    ///
+    /// It used to live in `CachedLlmModel`, which meant switching model —
+    /// picking a different local model, or any reload — called `init()`
+    /// while the previous backend was still held in the cache. The first
+    /// load of a process worked and every later one failed with
+    /// `backend init: BackendAlreadyInitialized`, so the symptom was a
+    /// recap that regenerated fine once and never again until restart.
+    /// Seen 2026-09-06 regenerating a meeting recap after changing the
+    /// recap model.
+    static BACKEND: std::sync::OnceLock<LlamaBackend> = std::sync::OnceLock::new();
+
+    /// The one backend, initialised on first use.
+    ///
+    /// Callers must have resolved `gpu_backend_status()` BEFORE the first
+    /// call: llama.cpp registers ggml-vulkan during backend init and reads
+    /// the loader env vars there, so the sentinel's `VK_DRIVER_FILES` has
+    /// to be in place by then. Serialised by the CACHE lock, so the
+    /// check-then-init below cannot race.
+    pub(super) fn backend() -> Result<&'static LlamaBackend, crate::error::LlmError> {
+        if let Some(b) = BACKEND.get() {
+            return Ok(b);
+        }
+        let b = LlamaBackend::init()
+            .map_err(|e| crate::error::LlmError::LocalModel(format!("backend init: {}", e)))?;
+        Ok(BACKEND.get_or_init(|| b))
+    }
 
     /// Load model if needed, run text generation, return result. Lock held during load only.
     /// `stream`: emit `llm_stream` events as tokens arrive, so the host can
@@ -622,8 +651,7 @@ mod llm_cache {
                 }
             };
 
-            let backend = LlamaBackend::init()
-                .map_err(|e| crate::error::LlmError::LocalModel(format!("backend init: {}", e)))?;
+            let backend = backend()?;
 
             // On a single-GPU machine whisper and this model compete for the
             // same VRAM, and whisper stays resident on purpose so meeting
@@ -651,7 +679,7 @@ mod llm_cache {
             if using_gpu {
                 crate::gpu_health::mark_begin(&format!("llama_load: {}", model_path.display()));
             }
-            let model_result = LlamaModel::load_from_file(&backend, model_path, &model_params);
+            let model_result = LlamaModel::load_from_file(backend, model_path, &model_params);
             if using_gpu {
                 crate::gpu_health::mark_end();
             }
@@ -661,7 +689,6 @@ mod llm_cache {
 
             *guard = Some(CachedLlmModel {
                 model,
-                backend,
                 model_path: model_path.to_path_buf(),
             });
             crate::log("[LocalLLM] Model cached successfully");
@@ -757,10 +784,8 @@ mod llm_cache {
         // So: try, and if the allocation is what failed, evict whisper and try
         // once more. Whisper reloads in 2-5 s next time STT runs; the
         // alternative is the feature simply not working.
-        let mut ctx = match cached
-            .model
-            .new_context(&cached.backend, ctx_params_for_retry())
-        {
+        let llama = backend()?;
+        let mut ctx = match cached.model.new_context(llama, ctx_params_for_retry()) {
             Ok(c) => c,
             Err(first) => {
                 crate::log(&format!(
@@ -769,7 +794,7 @@ mod llm_cache {
                 crate::local_stt::clear_model_cache();
                 cached
                     .model
-                    .new_context(&cached.backend, ctx_params_for_retry())
+                    .new_context(llama, ctx_params_for_retry())
                     .map_err(|e| {
                         crate::error::LlmError::LocalModel(format!(
                             "context creation failed even after freeing the STT model                              ({e}) — the GPU cannot fit this model at this context size"
@@ -1141,6 +1166,27 @@ mod tests {
     #[test]
     fn llm_model_exists_false_for_missing() {
         assert!(!model_exists("nonexistent-model.gguf"));
+    }
+
+    // ── llama.cpp backend lifetime ──────────────────────────────
+
+    /// Switching local model must not fail. The backend is a process-wide
+    /// singleton — `LlamaBackend::init()` returns
+    /// `BackendAlreadyInitialized` while one instance is alive — so holding
+    /// it per cached model made every reload after the first fail with
+    /// `backend init: BackendAlreadyInitialized`. A recap regenerated once,
+    /// then never again until restart (2026-09-06).
+    ///
+    /// Two calls, same pointer: the backend is initialised once and reused.
+    #[cfg(feature = "local-llm")]
+    #[test]
+    fn the_backend_is_initialised_once_and_reused() {
+        let first = super::llm_cache::backend().expect("first backend init");
+        let second = super::llm_cache::backend().expect("a reload must reuse the backend");
+        assert!(
+            std::ptr::eq(first, second),
+            "each call re-initialised the backend; a model switch would fail"
+        );
     }
 
     // ── In-flight dedup tests ───────────────────────────────────
