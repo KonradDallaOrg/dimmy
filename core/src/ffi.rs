@@ -5382,6 +5382,10 @@ pub(crate) fn parse_recap_override(input: &str) -> (&'static str, String) {
 ///   effective recap provider.
 /// - -7 429 rate-limit — too many calls, retry later.
 /// - -8 network / DNS / TLS — couldn't reach the endpoint.
+/// - -12 local model could not be loaded or run because the GPU had
+///   no room. The file IS on disk (that is -4) — what failed is the
+///   allocation. Remedy: free VRAM or pick a smaller model.
+/// - -13 local model failed for some other reason — see dimmy.log.
 ///
 /// # Safety
 /// `prompt_ptr` must be a valid null-terminated UTF-8 C string.
@@ -5523,7 +5527,7 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
                     "[LlmRaw] local failed: {}",
                     crate::truncate_utf8(&msg, 200)
                 ));
-                -3
+                local_failure_rc(&msg)
             }
         };
     }
@@ -5858,6 +5862,32 @@ fn categorize_llm_error_to_rc(err: &crate::error::LlmError) -> c_int {
         // Safety refusal (Fable 5+): rewording the input is the only
         // remedy — very different advice from a generic HTTP failure.
         LlmError::Refusal => -11,
+    }
+}
+
+/// Which return code a LOCAL LLM failure deserves.
+///
+/// The local branch used to return -3 for everything, and -3 is the
+/// host's "LLM HTTP call failed — provider returned an unexpected
+/// error". So a model that did not fit in VRAM was reported as a cloud
+/// provider problem, and the user went looking at their network and
+/// their API key. Seen 2026-09-06: Qwen 3 4B (2330 MB) against 2132 MB
+/// free on a 4 GB card, while the Windows desktop held the rest.
+///
+/// llama.cpp does not give us a typed out-of-memory error — the ggml
+/// "failed to allocate VulkanN buffer" line goes to the log hook, and
+/// what reaches us is a load or context-creation failure. Those two
+/// are overwhelmingly memory on a machine that has the file on disk,
+/// which is why they map to -12; anything else stays generic.
+fn local_failure_rc(msg: &str) -> c_int {
+    let m = msg.to_ascii_lowercase();
+    if m.contains("allocate")
+        || m.contains("load llm model")
+        || m.contains("context creation failed")
+    {
+        -12
+    } else {
+        -13
     }
 }
 
@@ -9818,6 +9848,43 @@ mod tests {
         // the Win UI can render a single "fix your key" message.
         let e = LlmError::NoApiKey("groq".into());
         assert_eq!(categorize_llm_error_to_rc(&e), -6);
+    }
+
+    /// A local model that does not fit in VRAM is not an HTTP failure.
+    ///
+    /// The local branch returned -3 for every error, and the hosts read
+    /// -3 as "LLM HTTP call failed — provider returned an unexpected
+    /// error". A user whose GPU was 200 MB short was told to look at
+    /// their provider. Reproduced 2026-09-06 with Qwen 3 4B on a 4 GB
+    /// card the desktop had already half-filled.
+    #[test]
+    fn a_local_out_of_memory_is_not_reported_as_an_http_error() {
+        for msg in [
+            "failed to load LLM model: null result from llama cpp",
+            "context creation failed (…) — the GPU cannot fit this model",
+            "unable to allocate Vulkan0 buffer",
+        ] {
+            assert_eq!(
+                local_failure_rc(msg),
+                -12,
+                "should read as out-of-VRAM, not as a provider error: {msg}"
+            );
+        }
+    }
+
+    /// Anything we cannot attribute to memory stays generic rather than
+    /// claiming a cause we did not establish.
+    #[test]
+    fn an_unrecognised_local_failure_stays_generic() {
+        assert_eq!(
+            local_failure_rc("LLM cache lock poisoned: PoisonError"),
+            -13
+        );
+        assert_ne!(
+            local_failure_rc("chat msg system: invalid utf-8"),
+            -3,
+            "-3 is the cloud HTTP code; the local path must never return it"
+        );
     }
 
     #[test]

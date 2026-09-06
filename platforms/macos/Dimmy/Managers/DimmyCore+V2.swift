@@ -360,6 +360,8 @@ extension DimmyCore {
             case -9: return .failure(.payloadTooLarge)
             case -10: return .failure(.truncated)
             case -11: return .failure(.refused)
+            case -12: return .failure(.localOutOfMemory)
+            case -13: return .failure(.localModelFailed)
             default: return .failure(.unknown(Int(rc)))
             }
         }
@@ -380,6 +382,8 @@ extension DimmyCore {
         case payloadTooLarge    // -9: 413 — request over the context / per-minute limit
         case truncated          // -10: output hit the token limit even after the 4x retry
         case refused            // -11: model declined on safety grounds (stop_reason=refusal)
+        case localOutOfMemory   // -12: the local model did not fit in the GPU's free memory
+        case localModelFailed   // -13: the local model failed for some other reason
         case unknown(Int)
 
         var description: String {
@@ -397,6 +401,8 @@ extension DimmyCore {
             case .payloadTooLarge: return "The recap is too large for this model (413) — pick a larger-context model"
             case .truncated: return "The recap was cut off at the model token limit even after a retry. Pick a larger-context model."
             case .refused: return "The model declined to process this content. Reword or pick a different model."
+            case .localOutOfMemory: return "The local model did not fit in the GPU's free memory. Close what else is using the GPU, or pick a smaller model."
+            case .localModelFailed: return "The local model failed to run - see dimmy.log"
             case .unknown(let code): return "llm_call_raw failed (code \(code))"
             }
         }
@@ -421,6 +427,8 @@ extension DimmyCore {
             case .payloadTooLarge: return "too_large"
             case .truncated: return "truncated"
             case .refused: return "refusal"
+            case .localOutOfMemory: return "out_of_memory"
+            case .localModelFailed: return "local_model"
             case .notInitialized, .emptyPrompt, .invalidArgs, .httpError, .unknown:
                 return "unknown"
             }

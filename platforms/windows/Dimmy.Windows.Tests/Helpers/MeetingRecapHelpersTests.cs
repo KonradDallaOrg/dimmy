@@ -635,4 +635,33 @@ public class MeetingRecapHelpersTests
         Assert.False(MeetingRecapHelpers.DimmyMarkerLine(""));
     }
 
+    // -- Return-code messages -------------------------------------
+
+    /// <summary>A local model that ran out of GPU memory must not be
+    /// described as a provider failure.
+    ///
+    /// The core returned -3 for every local error and -3 reads as "LLM
+    /// HTTP call failed - provider returned an unexpected error", so a
+    /// user 200 MB short of VRAM went looking at their network and their
+    /// API key. Reproduced 2026-09-06 with Qwen 3 4B on a 4 GB card.</summary>
+    [Fact]
+    public void Out_of_vram_message_talks_about_the_gpu_not_the_provider()
+    {
+        var msg = MeetingRecapHelpers.RecapRcToUserMessage(-12, "Qwen3-4B-Instruct-2507-Q4_K_M.gguf");
+
+        Assert.Contains("Qwen3-4B", msg);
+        Assert.DoesNotContain("HTTP", msg);
+        Assert.DoesNotContain("provider", msg);
+        Assert.Contains("GPU", msg);
+    }
+
+    [Fact]
+    public void Local_failure_codes_carry_their_own_telemetry_bucket()
+    {
+        Assert.Equal("out_of_memory", MeetingRecapHelpers.RecapRcToCategory(-12));
+        Assert.Equal("local_model", MeetingRecapHelpers.RecapRcToCategory(-13));
+        // -3 stays what it was: the cloud HTTP bucket.
+        Assert.Equal("unknown", MeetingRecapHelpers.RecapRcToCategory(-3));
+    }
+
 }

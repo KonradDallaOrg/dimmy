@@ -669,6 +669,8 @@ public static class MeetingRecapHelpers
             -9 => $"The recap is too large for '{modelHint}' (413). Pick a model with a bigger context, or a higher-tier provider.",
             -10 => $"The recap was cut off at the token limit of '{modelHint}' even after a retry. Pick a larger-context model.",
             -11 => "The model declined to process this content. Reword or pick a different model; retrying unchanged will not help.",
+            -12 => $"'{modelHint}' did not fit in the GPU's free memory. Close what else is using the GPU, or pick a smaller model — the dot next to each local model shows which ones fit.",
+            -13 => "The local model failed to run. See dimmy.log.",
             _ => $"LLM call returned {rc} — see dimmy.log.",
         };
     }
@@ -693,6 +695,8 @@ public static class MeetingRecapHelpers
         -9 => "too_large",
         -10 => "truncated",
         -11 => "refusal",
+        -12 => "out_of_memory",
+        -13 => "local_model",
         _ => "unknown",
     };
 
