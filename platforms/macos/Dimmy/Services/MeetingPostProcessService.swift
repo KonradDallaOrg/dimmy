@@ -83,6 +83,15 @@ enum MeetingPostProcessService {
                     // -11: model declined on safety grounds
                     // (stop_reason=refusal). Rewording is the only remedy.
                     return "The model declined to process this content. Pick a different model or adjust the meeting type; retrying unchanged will not help."
+                case .localOutOfMemory:
+                    // -12: the model did not fit in the GPU's free memory.
+                    // Not a provider problem, which is what -3 used to
+                    // claim — the remedy is memory, not the network.
+                    return "The local model did not fit in the GPU's free memory. Close what else is using the GPU, or pick a smaller model in Settings, LLM."
+                case .localModelFailed:
+                    // -13: a local failure we could not attribute. Say so
+                    // rather than name a cause we did not establish.
+                    return "The local model failed to run. See Console.app under \"dimmy\"."
                 case .unknown(let code):
                     return "LLM call failed (rc=\(code)). See Console.app under \"dimmy\"."
                 }
