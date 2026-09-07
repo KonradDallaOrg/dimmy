@@ -273,7 +273,7 @@ jobs:
       # auto-generates; if DimmyTests is not in its Test action, xcodebuild
       # exits 0 having run nothing. A green step that tested nothing is
       # worse than no step, so the count is asserted explicitly.
-      # NON-BLOCKING since 2026-09-06, deliberately and with regret.
+      # BLOCKING again since 2026-09-07: 196 tests ran and passed on rc9.
       #
       # The app aborts (SIGABRT) as the XCTest host launches, and xcodebuild
       # reports only "Test crashed with signal abrt before establishing" —
@@ -294,7 +294,6 @@ jobs:
       # read — it just no longer holds the pipeline hostage. Restore
       # blocking once someone with a Mac can open the .xcresult.
       - name: Swift unit tests
-        continue-on-error: true
         working-directory: platforms/macos
         run: |
           set -o pipefail
@@ -592,6 +591,68 @@ jobs:
           sign --entitlements "$ENTITLEMENTS" "$APP_PATH"
           codesign --verify --deep --strict --verbose=2 "$APP_PATH"
           echo "APP_PATH=$APP_PATH" >> "$GITHUB_ENV"
+
+      # The one check nobody was running. release.yml COMPILED the Mac app
+      # and never launched it, so v0.7.0-rc4 through -rc8 shipped a bundle
+      # that dies in dyld before main() — no window, no message, and nothing
+      # in Sentry, because the process is killed before telemetry exists.
+      # Four releases. The local `scripts/dev/preflight-mac.sh` has launched
+      # the app for 5 s since May precisely for this, and CLAUDE.md says in
+      # so many words that xcodebuild alone is not enough. It just was not
+      # in the pipeline.
+      #
+      # Runs on the SIGNED bundle, before notarisation, and touches nothing
+      # inside it — editing Info.plist here would invalidate the signature
+      # we just made.
+      - name: Launch the signed app (it must survive 8 s)
+        run: |
+          set -euo pipefail
+          APP="platforms/macos/build/derived/Build/Products/Release/Dimmy.app"
+          [ -d "$APP" ] || APP="platforms/macos/build/derived/Build/Products/Release/Dimmy Staging.app"
+          EXE="$APP/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Contents/Info.plist")"
+
+          # Static first: resolve every @rpath dependency against the bundle,
+          # which needs no window server and names the missing file exactly.
+          RPATHS=$(otool -l "$EXE" | awk '/LC_RPATH/{f=1} f&&/path /{print $2; f=0}')
+          echo "runpaths: $RPATHS"
+          MISSING=0
+          for dep in $(otool -L "$EXE" | awk 'NR>1 {print $1}' | grep '^@rpath/'); do
+            base="${dep#@rpath/}"
+            found=""
+            for rp in $RPATHS; do
+              case "$rp" in
+                @executable_path*) cand="$(dirname "$EXE")/${rp#@executable_path/}/$base" ;;
+                @loader_path*)     cand="$(dirname "$EXE")/${rp#@loader_path/}/$base" ;;
+                *)                 cand="$rp/$base" ;;
+              esac
+              [ -f "$cand" ] && { found="$cand"; break; }
+            done
+            if [ -z "$found" ]; then
+              echo "::error::$base is not resolvable through any runpath - the app will not launch"
+              MISSING=1
+            fi
+          done
+          [ "$MISSING" -eq 0 ] || exit 1
+          echo "all @rpath dependencies resolve inside the bundle"
+
+          # Then actually run it. Catches what static analysis cannot: a
+          # SelfTests fatalError, a missing resource, an early abort.
+          LOG="$RUNNER_TEMP/dimmy-launch.log"
+          "$EXE" > "$LOG" 2>&1 &
+          PID=$!
+          sleep 8
+          if kill -0 "$PID" 2>/dev/null; then
+            kill "$PID" 2>/dev/null || true
+            wait "$PID" 2>/dev/null || true
+            echo "the app was still alive after 8 s"
+            grep -E "All [0-9]+ tests passed" "$LOG" | tail -1 || true
+          else
+            wait "$PID" 2>/dev/null || RC=$?
+            echo "::error::the app exited within 8 s (rc=${RC:-?}) - it would not open for a user"
+            echo "--- last 40 lines of its output ---"
+            tail -40 "$LOG" || true
+            exit 1
+          fi
 
       - name: Notarize and staple .app
         if: ${{ env.MACOS_SIGNED == '1' }}
