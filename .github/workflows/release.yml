@@ -77,7 +77,12 @@ jobs:
       - name: Refuse a tag SemVer ranks below a published release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./scripts/check-release-tag.sh "${GITHUB_REF_NAME}"
+        # Invoked through bash rather than as an executable: most .sh in
+        # this repo are committed 100644 (they are authored on Windows,
+        # where the exec bit does not survive), and a mode that depends on
+        # who wrote the file is not a dependency worth having. The bit is
+        # set as well, but this is what makes it work either way.
+        run: bash ./scripts/check-release-tag.sh "${GITHUB_REF_NAME}"
 
       - name: Generate changelog
         run: |
