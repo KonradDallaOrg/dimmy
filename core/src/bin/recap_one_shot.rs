@@ -234,6 +234,21 @@ Things someone agreed to do, one per line, each starting with '- '. Write '- Non
         prompt
     };
 
+    // DIMMY_RECAP_LANG=<Language> names the output language INSIDE the user
+    // prompt, where the host already builds its own "## Output language"
+    // block. If that works, the whole language fix lives host-side and the
+    // core keeps its FFI signature; if only the system role works, it does
+    // not. Measured 2026-09-07.
+    let prompt = match std::env::var("DIMMY_RECAP_LANG") {
+        Ok(l) if !l.is_empty() => prompt.replace(
+            "Answer in the SAME LANGUAGE as the transcript.",
+            &format!(
+                "Write your entire answer in {l}. Keep the ===NAME=== markers                  exactly as written, in English: they are identifiers, not                  headings to translate."
+            ),
+        ),
+        _ => prompt,
+    };
+
     let prompt = match std::env::var("DIMMY_RECAP_SECTION") {
         Ok(sec) if !sec.is_empty() => {
             let ask = match sec.as_str() {

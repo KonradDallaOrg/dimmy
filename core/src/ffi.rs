@@ -5953,6 +5953,59 @@ pub unsafe extern "C" fn dimmy_consent_text(
     write_to_buf(&text, out_buf, buf_len)
 }
 
+/// Which language is SPOKEN in `path_ptr` (an audio file), as its English
+/// name ("Italian") ready to drop into a prompt. Writes 0 bytes when we
+/// cannot say — see below.
+///
+/// The recap needs the language by NAME: told "answer in the transcript's
+/// language" a 4 B local model answers in English on an Italian meeting
+/// (measured 2026-09-07), and told "answer in Italian" it does not. The
+/// settings combo cannot supply that name — it says which language the user
+/// speaks, not which language this meeting was held in, and nobody changes it
+/// before a call with a foreign client.
+///
+/// Deliberately advisory. An empty result is the normal answer whenever the
+/// detection model is absent, the file will not decode, it is too short, or
+/// the sampled windows disagree; the host then keeps the wording it already
+/// uses. Nothing in the recap may depend on this succeeding.
+///
+/// Costs ~1.4 s: `ggml-tiny-q8_0` over five 30 s windows, which agreed with
+/// `large-v3-turbo` on every one of ten real meetings.
+///
+/// Returns bytes written (0 = undecided), or -1 on bad arguments.
+///
+/// # Safety
+/// `path_ptr` must be a valid null-terminated UTF-8 C string; `out_buf` must
+/// point to at least `buf_len` writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_detect_audio_language(
+    path_ptr: *const c_char,
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if path_ptr.is_null() || out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let Ok(path) = CStr::from_ptr(path_ptr).to_str() else {
+        return -1;
+    };
+    if path.is_empty() {
+        return -1;
+    }
+    // The English NAME, not the ISO code: the only consumer is the recap
+    // prompt, and `llm::lang_name` is where that table already lives.
+    // Returning the code would mean a copy of that table in the C# host and
+    // another in the Swift one, which is how the two drift apart.
+    let name = crate::lang_detect::detect_from_audio_file(std::path::Path::new(path))
+        .map(|code| crate::llm::lang_name(&code))
+        // `lang_name` answers "the requested language" for anything it does
+        // not know — fine inside a translate instruction, useless in "write
+        // your entire answer in ...". Unmapped means undetected.
+        .filter(|name| *name != "the requested language")
+        .unwrap_or("");
+    write_to_buf(name, out_buf, buf_len)
+}
+
 /// Localized AI-Act art. 50(5) notice shown above a recap in the UI.
 /// `kind` is "title" or "hint". Returns the byte length written, -1 on bad
 /// args or an unknown kind.

@@ -597,6 +597,23 @@ mod llm_cache {
         Ok(BACKEND.get_or_init(|| b))
     }
 
+    /// How many prompt tokens go into llama.cpp per decode.
+    ///
+    /// This is `n_batch`, and llama.cpp sizes the compute buffer from it. It
+    /// used to be the WHOLE context — the prompt was fed in a single decode
+    /// and llama.cpp asserts `n_tokens_all <= n_batch` with a GGML_ASSERT,
+    /// which kills the process rather than returning an error. Matching
+    /// n_batch to n_ctx made that assert unreachable, and bought a compute
+    /// buffer sized for the entire prompt at once.
+    ///
+    /// On a 4 GB card that buffer is the difference between running and not:
+    /// 2026-09-07, Qwen 3 4B loaded fine and then failed at CONTEXT creation
+    /// on a 15-minute meeting — the weights fit, our own request did not.
+    /// Feeding the prompt in fixed slices keeps the assert satisfied and the
+    /// buffer small. 512 matches llama.cpp's default physical batch
+    /// (`n_ubatch`), so nothing is split twice.
+    const PROMPT_BATCH: u32 = 512;
+
     /// Load model if needed, run text generation, return result. Lock held during load only.
     /// `stream`: emit `llm_stream` events as tokens arrive, so the host can
     /// show the recap being written instead of a still spinner for the 30-90 s
@@ -783,10 +800,30 @@ mod llm_cache {
         // so raising it only costs compute buffer.
         // Built twice: `new_context` consumes the params, and the retry below
         // needs an identical set.
+        //
+        // The KV cache is the other half of the bill, and on some models it is
+        // the bigger half: measured 2026-09-07, Qwen 3 4B asked for 1008 MiB
+        // of KV on a 15-minute meeting — more than Gemma 4 E2B needs for
+        // everything — and the context failed on a 4 GB card while the weights
+        // had loaded fine. Storing it as q8_0 halves that for a perplexity
+        // cost llama.cpp measures in the third decimal. Quantised V needs
+        // flash attention, so the two travel together.
+        //
+        // Not every backend accepts it, hence the ladder below rather than a
+        // flat assumption: we ASK for the cheap context and fall back to the
+        // plain one instead of deciding for the user's GPU from here.
+        let compact_params = || {
+            LlamaContextParams::default()
+                .with_n_ctx(Some(ctx_size))
+                .with_n_batch(PROMPT_BATCH.min(ctx_size.get()))
+                .with_flash_attn_type(llama_cpp_4::context::params::LlamaFlashAttnType::Enabled)
+                .with_cache_type_k(llama_cpp_4::quantize::GgmlType::Q8_0)
+                .with_cache_type_v(llama_cpp_4::quantize::GgmlType::Q8_0)
+        };
         let ctx_params_for_retry = || {
             LlamaContextParams::default()
                 .with_n_ctx(Some(ctx_size))
-                .with_n_batch(ctx_size.get())
+                .with_n_batch(PROMPT_BATCH.min(ctx_size.get()))
         };
 
         // Creating the context allocates the compute buffers, and on a single-GPU
@@ -801,38 +838,66 @@ mod llm_cache {
         // once more. Whisper reloads in 2-5 s next time STT runs; the
         // alternative is the feature simply not working.
         let llama = backend()?;
-        let mut ctx = match cached.model.new_context(llama, ctx_params_for_retry()) {
-            Ok(c) => c,
+        let mut ctx = match cached.model.new_context(llama, compact_params()) {
+            Ok(c) => {
+                crate::log("[LocalLLM] context with q8_0 KV cache");
+                c
+            }
             Err(first) => {
                 crate::log(&format!(
                     "[LocalLLM] context creation failed ({first}) — evicting the                      whisper model from VRAM and retrying once"
                 ));
                 crate::local_stt::clear_model_cache();
-                cached
-                    .model
-                    .new_context(llama, ctx_params_for_retry())
-                    .map_err(|e| {
-                        crate::error::LlmError::LocalModel(format!(
-                            "context creation failed even after freeing the STT model                              ({e}) — the GPU cannot fit this model at this context size"
-                        ))
-                    })?
+                // Second try: same cheap context, now with whisper out of the
+                // way. Third: the plain f16 context, in case this backend
+                // simply refuses a quantised cache — that failure looks
+                // identical to running out of room, and guessing which it was
+                // would be guessing.
+                match cached.model.new_context(llama, compact_params()) {
+                    Ok(c) => {
+                        crate::log("[LocalLLM] context with q8_0 KV cache after freeing STT");
+                        c
+                    }
+                    Err(second) => {
+                        crate::log(&format!(
+                            "[LocalLLM] compact context still refused ({second}) — trying a plain f16 cache"
+                        ));
+                        cached
+                            .model
+                            .new_context(llama, ctx_params_for_retry())
+                            .map_err(|e| {
+                                crate::error::LlmError::LocalModel(format!(
+                                    "context creation failed even after freeing the STT model                                      ({e}) — the GPU cannot fit this model at this context size"
+                                ))
+                            })?
+                    }
+                }
             }
         };
 
         // ── Feed prompt tokens ──────────────────────────────────
-        let mut batch = LlamaBatch::new(tokens.len(), 1);
+        // In PROMPT_BATCH-sized slices. Only the final token of the LAST
+        // slice asks for logits: that is the one we sample from, and asking
+        // for them mid-prompt would allocate an output buffer per token for
+        // nothing.
+        let chunk = PROMPT_BATCH as usize;
         let last_idx = tokens.len() - 1;
-        for (i, &token) in tokens.iter().enumerate() {
-            batch
-                .add(token, i as i32, &[0], i == last_idx)
-                .map_err(|e| {
-                    crate::error::LlmError::LocalModel(format!("batch add failed: {}", e))
-                })?;
+        let mut batch = LlamaBatch::new(chunk.min(tokens.len()), 1);
+        for start in (0..tokens.len()).step_by(chunk) {
+            batch.clear();
+            let end = (start + chunk).min(tokens.len());
+            for (j, &token) in tokens[start..end].iter().enumerate() {
+                let pos = start + j;
+                batch
+                    .add(token, pos as i32, &[0], pos == last_idx)
+                    .map_err(|e| {
+                        crate::error::LlmError::LocalModel(format!("batch add failed: {}", e))
+                    })?;
+            }
+            ctx.decode(&mut batch).map_err(|e| {
+                crate::error::LlmError::LocalModel(format!("prompt decode failed: {}", e))
+            })?;
         }
-
-        ctx.decode(&mut batch).map_err(|e| {
-            crate::error::LlmError::LocalModel(format!("prompt decode failed: {}", e))
-        })?;
 
         // ── Generate tokens ─────────────────────────────────────
         // Probabilistic sampling chain. The previous `[temp(0.3), greedy()]`

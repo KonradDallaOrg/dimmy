@@ -1434,8 +1434,11 @@ public sealed partial class MeetingWindow : Window
     {
         try
         {
-            var prompt = Helpers.MeetingRecapHelpers.BuildStructuredRecapPrompt(transcript, "", meetingType);
             var modelOverride = PickRecapModel();
+            var spokenLanguage =
+                await Services.MeetingPostProcessService.DetectSpokenLanguageAsync(dir, modelOverride);
+            var prompt = Helpers.MeetingRecapHelpers.BuildStructuredRecapPrompt(
+                transcript, "", meetingType, spokenLanguage);
             App.Log($"recap with model='{modelOverride}', prompt {prompt.Length} chars", "Meeting");
             BeginLiveRecap();
             // This path reported NOTHING until 2026-09-03, so no regenerated
