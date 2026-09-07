@@ -298,7 +298,26 @@ jobs:
         working-directory: platforms/macos
         run: |
           set -o pipefail
-          xcodebuild test \
+          # Build and run as two steps so the llama dylibs can be put where
+          # the test host looks BEFORE it launches.
+          #
+          # The crash this fixes was "Test crashed with signal abrt before
+          # establishing connection", which says nothing. The .xcresult was
+          # assumed to be the only place the reason lived; it was in the plain
+          # log all along, forty lines above the failure:
+          #
+          #   dyld: Library not loaded: @loader_path/libllama.0.1.2.dylib
+          #     Referenced from: .../Products/Debug/Dimmy.debug.dylib
+          #     Reason: tried '.../Products/Debug/libllama.0.1.2.dylib'
+          #
+          # In Debug, Xcode splits the app into a launcher plus
+          # `Dimmy.debug.dylib`, and that dylib resolves @loader_path relative
+          # to itself in Products/Debug — not to Contents/Frameworks, where
+          # both the Xcode build phase and release.yml put the dylibs. The
+          # shipped Release app is unaffected, which is why this looked like a
+          # test-only mystery. dyld named the directory it wanted; this copies
+          # the files into it.
+          xcodebuild build-for-testing \
             -project Dimmy.xcodeproj \
             -scheme Dimmy \
             -configuration Debug \
@@ -307,20 +326,37 @@ jobs:
             CODE_SIGN_IDENTITY="-" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee "$RUNNER_TEMP/swift-build.log"
+
+          PRODUCTS="build/test-derived/Build/Products/Debug"
+          RD="../../core/target/aarch64-apple-darwin/release"
+          for name in libllama libggml libggml-base libggml-cpu libggml-metal; do
+            for dylib in "$RD"/${name}*.dylib; do
+              [ -e "$dylib" ] || continue
+              cp -RL "$dylib" "$PRODUCTS/$(basename "$dylib")"
+            done
+          done
+          codesign --force --sign - "$PRODUCTS"/*.dylib 2>/dev/null || true
+          echo "=== dylibs next to the test host ==="
+          ls -la "$PRODUCTS"/*.dylib || echo "NONE — the test host will abort again"
+
+          xcodebuild test-without-building \
+            -project Dimmy.xcodeproj \
+            -scheme Dimmy \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            -derivedDataPath build/test-derived \
             2>&1 | tee "$RUNNER_TEMP/swift-tests.log"
 
           # Both output shapes: the "Executed N tests" summary, and the
           # per-case lines newer Xcode emits.
-          EXECUTED=$(grep -oE 'Executed [0-9]+ test' "$RUNNER_TEMP/swift-tests.log" \
-            | grep -oE '[0-9]+' | sort -rn | head -1 || true)
+          EXECUTED=$(grep -oE 'Executed [0-9]+ test' "$RUNNER_TEMP/swift-tests.log"             | grep -oE '[0-9]+' | sort -rn | head -1 || true)
           if [ -z "$EXECUTED" ]; then
             EXECUTED=$(grep -cE "^Test Case .* (passed|failed)" "$RUNNER_TEMP/swift-tests.log" || true)
           fi
           echo "Swift tests executed: ${EXECUTED:-0}"
           if [ "${EXECUTED:-0}" -lt 1 ]; then
-            echo "::error::xcodebuild test ran ZERO tests. The Dimmy scheme's Test action \
-          probably does not include DimmyTests — add a shared scheme rather than \
-          letting this step pass while testing nothing."
+            echo "::error::xcodebuild test ran ZERO tests. Either DimmyTests is not           in the Dimmy scheme's Test action, or the test host aborted before           bootstrapping - check the dyld lines above."
             exit 1
           fi
 
