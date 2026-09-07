@@ -69,6 +69,16 @@ jobs:
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
+      # A tag that SemVer ranks BELOW a published release is invisible to
+      # every updater — it does not fail, it just never reaches anyone.
+      # v0.7.0-rc10 and -rc11 were published and no Windows client was ever
+      # offered them, because "rc10" < "rc8" character by character. Cheap to
+      # check here, before a single artifact is built.
+      - name: Refuse a tag SemVer ranks below a published release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./scripts/check-release-tag.sh "${GITHUB_REF_NAME}"
+
       - name: Generate changelog
         run: |
           # Shape-matched previous tag: rc / final → previous prod tag,

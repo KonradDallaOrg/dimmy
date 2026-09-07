@@ -338,6 +338,26 @@ Full runbook + recovery procedures: [`docs/RELEASING.md`](docs/RELEASING.md). Wh
 
 **STOP. Before you bump, tag, build a release, or even open a release PR — check what version is already out there.** `core/Cargo.toml` on a branch can be stale (rc1 of a version that's already been final-released, or a number behind because someone else shipped while the branch was open). Bumping based only on Cargo.toml content has caused at least one rollback (2026-05-13: bumped `0.6.37-rc1` → `0.6.37` while `v0.6.38-rc1` had already been tagged the night before; had to cancel the in-flight Staging Release and force-bump to `0.6.38` mid-pipeline).
 
+**Tag shape: `-rc.N`, with the DOT. Not `-rcN`.**
+
+SemVer compares a pre-release identifier that contains letters CHARACTER
+BY CHARACTER. `rc10` against `rc8` is `'1'` against `'8'`, so
+**`0.7.0-rc10` ranks BELOW `0.7.0-rc8`** and every updater keeps people on
+rc8. The dot makes `10` an identifier of its own, all digits, which SemVer
+compares as a NUMBER — `rc.10 > rc.9` as you would expect.
+
+This has now happened twice: `v0.6.73` reached `rc11`, the v0.6.74 line
+quietly switched to dots, nobody wrote it down, and `v0.7.0` went back to
+`rcN` and published two releases (rc10, rc11) that no client could see.
+Once a line has crossed nine WITHOUT dots there is no rescue inside it:
+bump the patch (`0.7.1-rc.1`), because `0.7.1-*` outranks every
+`0.7.0-*`.
+
+`scripts/check-release-tag.sh <tag>` enforces both the shape and the
+ordering, and `release.yml` runs it before building anything. Note that
+`check-release-version.sh` cannot catch this — it compares only the base
+version, and its `sort -V` is more permissive than SemVer.
+
 **Pre-release checklist — run all three, every time:**
 
 1. `gh release list --limit 10` — what's the most recent GitHub release/pre-release?

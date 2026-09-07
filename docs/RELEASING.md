@@ -19,7 +19,24 @@ Three workflows publish artifacts. They look similar but produce binaries that *
 | Goal | Trigger to use | How |
 |---|---|---|
 | Internal smoke build after a `staging` merge (no auto-update visible to users) | `staging-auto-update.yml` | Push to `staging`. Asset URL: `staging-latest`. Download `Dimmy-win-Setup.exe` manually. **Velopack won't see this build** — tag is rolling, not semver. |
-| Ship a pre-release to **prerelease channel** users (Stripe Live, real billing) | `release.yml` | `git tag -a v0.6.46-rc1 -m '...'` + `git push origin v0.6.46-rc1`. GitHub Release is marked `prerelease=true`. **Trial / activation-code free in both modes — only "Buy plan" charges.** |
+| Ship a pre-release to **prerelease channel** users (Stripe Live, real billing) | `release.yml` | `git tag -a v0.6.46-rc.1 -m '...'` + `git push origin v0.6.46-rc.1`. **The dot in `-rc.1` is load-bearing — see "Tag shape" below.** GitHub Release is marked `prerelease=true`. **Trial / activation-code free in both modes — only "Buy plan" charges.** |
+### Tag shape: `-rc.N`, with the dot
+
+SemVer compares a pre-release identifier containing letters character by
+character, so `rc10` is `'1'` against `'8'` and **`0.7.0-rc10` ranks BELOW
+`0.7.0-rc8`**. Published, downloadable, and invisible: every updater keeps
+offering rc8. The dot makes `10` its own all-digit identifier, which SemVer
+compares numerically.
+
+Burned twice — `v0.6.73` reached `rc11`, the fix (dots) was applied to the
+v0.6.74 line and never documented, and `v0.7.0` went back to `rcN` and shipped
+rc10 and rc11 to nobody. Once a line has passed nine without dots, no tag
+inside it can outrank the earlier ones: bump the patch instead.
+
+`scripts/check-release-tag.sh <tag>` checks both shape and ordering, and
+`release.yml` runs it before building. `check-release-version.sh` does NOT
+cover this: it compares only the base version.
+
 | Ship a stable release to **all** users (channel-stable + prerelease) | `release.yml` | Tag `v0.6.46` (no `-rcN` suffix). GitHub Release is marked `prerelease=false`, becomes "Latest". |
 | Test the full pay flow against Stripe Test (Buy → checkout → webhook → license active), side-by-side with a prod install | `staging-tester.yml` | `git tag -a v0.6.46-staging.1 -m '...'` + push. Produces installer that lives in `Local\Dimmy-Staging\` + reads `Roaming\dimmy-staging\`. Both packId and config dir are separate from prod. Doesn't touch the prod install. |
 | Reproduce a bug against the staging licensing endpoint without going through a CI build | Local Debug build | Set `DIMMY_LICENSE_PUBKEY=avlM65... DIMMY_LICENSE_SERVER_URL=https://license-staging.dimmy.app DIMMY_BUILD_FLAVOR=staging`, then `cargo build --release --lib --features local-stt-vulkan,local-stt-parakeet,local-llm-vulkan,license-client`. Drop the DLL into the Debug bin and run from there. Same caveat as `staging-auto-update.yml`: packId stays prod, install dir is prod — your debug runs share license.json with prod. |
