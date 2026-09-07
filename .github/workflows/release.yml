@@ -479,8 +479,34 @@ jobs:
             done
           done
 
+          # Point the EXECUTABLE at them. Copying the files and rewriting
+          # their own id is not enough: the load command inside the binary
+          # still says `@loader_path/libllama.0.1.2.dylib`, and @loader_path
+          # for Contents/MacOS/Dimmy is Contents/MacOS — not Frameworks. The
+          # app then dies at launch with no window and no message, which is
+          # exactly what v0.7.0-rc8 did on macOS. The dylibs reference EACH
+          # OTHER the same way and they all sit in Frameworks together, so
+          # only the executable needs rewriting.
+          EXE="$APP_PATH/Contents/MacOS/Dimmy"
+          for dylib in "$FRAMEWORKS_DIR"/*.dylib; do
+            base="$(basename "$dylib")"
+            install_name_tool -change "@loader_path/$base" "@rpath/$base" "$EXE" 2>/dev/null || true
+          done
+
           # Re-sign all dylibs
           codesign --force --sign - "$FRAMEWORKS_DIR"/*.dylib
+
+          # And prove it. The existing "Validate Frameworks bundle" phase only
+          # checks the files are PRESENT, which is why a bundle that cannot
+          # load them shipped four times. This checks what dyld will actually
+          # resolve.
+          echo "=== executable dependencies ==="
+          otool -L "$EXE" | sed -n '2,$p'
+          if otool -L "$EXE" | grep -qE "@loader_path/(libllama|libggml)"; then
+            echo "::error::the executable still references @loader_path for a bundled dylib - it will not launch"
+            otool -L "$EXE" | grep -E "@loader_path/(libllama|libggml)"
+            exit 1
+          fi
 
           echo "=== Frameworks contents ==="
           ls -la "$FRAMEWORKS_DIR/"
