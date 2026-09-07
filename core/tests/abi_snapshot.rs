@@ -35,9 +35,17 @@ const SYMBOL_PREFIX: &str = "dimmy_";
 
 /// Repo-relative path to the cdylib produced by `cargo build --release --lib`.
 fn cdylib_path() -> PathBuf {
-    let target_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("target")
-        .join("release");
+    // Honour CARGO_TARGET_DIR. Windows builds here and in CI set it (MAX_PATH,
+    // and a cache that lives off the repo drive), and a hardcoded
+    // `<manifest>/target` then points at a directory that may not exist at
+    // all — the test fails with "cdylib still missing after build" and reads
+    // as a broken ABI when nothing is broken.
+    let target_dir = match std::env::var_os("CARGO_TARGET_DIR") {
+        Some(dir) => PathBuf::from(dir).join("release"),
+        None => PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("release"),
+    };
 
     #[cfg(target_os = "windows")]
     let name = "dimmy_lib.dll";
