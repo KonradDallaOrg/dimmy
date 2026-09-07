@@ -134,6 +134,29 @@ public static class DimmyNative
     public static string? ConsentText(string kind, string lang) =>
         ReadBuffer((buf, len) => dimmy_consent_text(kind, lang, buf, len), 4096);
 
+    // ── Spoken-language detection ────────────────────────────────────
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_detect_audio_language(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string path,
+        byte[] outBuf, int bufLen);
+
+    /// <summary>
+    /// ISO 639-1 code of the language SPOKEN in an audio file, or null when it
+    /// could not be established (no detection model, unreadable or short audio,
+    /// windows that disagree). Advisory: callers carry on unchanged on null.
+    /// Costs about 1.4 s.
+    /// </summary>
+    public static string? DetectAudioLanguage(string path)
+    {
+        try
+        {
+            var s = ReadBuffer((buf, len) => dimmy_detect_audio_language(path, buf, len), 16);
+            return string.IsNullOrWhiteSpace(s) ? null : s.Trim();
+        }
+        catch (EntryPointNotFoundException) { return null; }
+        catch (DllNotFoundException) { return null; }
+    }
+
     // ── AI Act art. 50(5) notice ─────────────────────────────────────
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_ai_notice_text(

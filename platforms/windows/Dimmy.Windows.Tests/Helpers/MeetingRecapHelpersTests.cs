@@ -655,6 +655,60 @@ public class MeetingRecapHelpersTests
         Assert.Contains("GPU", msg);
     }
 
+    // -- Output language -------------------------------------------
+
+    /// <summary>When the spoken language has been established, the prompt must
+    /// NAME it. "Answer in the transcript's language" is what the prompt said
+    /// before, and a 4B local model answered in English on an Italian meeting
+    /// (measured 2026-09-07); "Write your entire answer in Italian" fixed it.
+    /// </summary>
+    [Fact]
+    public void A_detected_language_is_named_in_the_prompt()
+    {
+        var prompt = MeetingRecapHelpers.BuildStructuredRecapPrompt(
+            "transcript body", "", "", "Italian");
+
+        Assert.Contains("Write your entire answer in Italian.", prompt);
+        Assert.DoesNotContain("Auto-detect from the transcript", prompt);
+    }
+
+    /// <summary>Undetected means we say nothing new: the wording that shipped
+    /// before stays, rather than naming a language nobody established.</summary>
+    [Fact]
+    public void Without_a_detected_language_the_old_wording_stands()
+    {
+        var prompt = MeetingRecapHelpers.BuildStructuredRecapPrompt("transcript body");
+
+        Assert.Contains("Auto-detect from the transcript", prompt);
+        Assert.DoesNotContain("Write your entire answer in", prompt);
+    }
+
+    /// <summary>Naming the language made the same model emit `===DECISIONI===`
+    /// while the parser looks for `===DECISIONS===`, silently dropping a whole
+    /// section. The sentence that prevents it belongs in the prompt whether or
+    /// not a language was detected.</summary>
+    [Theory]
+    [InlineData("")]
+    [InlineData("Italian")]
+    public void The_section_markers_are_protected_from_translation(string language)
+    {
+        var prompt = MeetingRecapHelpers.BuildStructuredRecapPrompt(
+            "transcript body", "", "", language);
+
+        Assert.Contains("Keep every ===NAME=== marker exactly as written, in English", prompt);
+    }
+
+    [Fact]
+    public void Only_local_recap_models_pay_for_language_detection()
+    {
+        Assert.True(MeetingRecapHelpers.IsLocalRecapModel("local:gemma-4-E2B-it-Q4_K_M.gguf", "cloud"));
+        Assert.False(MeetingRecapHelpers.IsLocalRecapModel("claude-opus-4-7", "local"));
+        Assert.False(MeetingRecapHelpers.IsLocalRecapModel("gpt-5", ""));
+        // Nothing pinned: the configured mode decides.
+        Assert.True(MeetingRecapHelpers.IsLocalRecapModel("", "local"));
+        Assert.False(MeetingRecapHelpers.IsLocalRecapModel("", "cloud"));
+    }
+
     [Fact]
     public void Local_failure_codes_carry_their_own_telemetry_bucket()
     {

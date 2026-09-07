@@ -245,6 +245,15 @@ int32_t dimmy_model_catalog_json(char * _Nullable out_buf, int32_t buf_len);
 int32_t dimmy_consent_text(const char * _Nonnull kind, const char * _Nonnull lang,
                            char * _Nonnull out_buf, int32_t buf_len);
 
+/// Which language is SPOKEN in an audio file, as its English name ("Italian")
+/// ready to drop into a prompt. Writes 0 bytes when it cannot be established
+/// — no detection model on disk, unreadable or short audio, or sampled
+/// windows that disagree — and callers then keep the wording they already
+/// use. Advisory: nothing may depend on it succeeding. Costs ~1.4 s.
+/// Returns bytes written (0 = undecided), or -1 on bad arguments.
+int32_t dimmy_detect_audio_language(const char * _Nonnull path,
+                                    char * _Nonnull out_buf, int32_t buf_len);
+
 /// Localized EU AI Act art. 50(5) notice shown above a recap. `kind` is
 /// "title" or "hint"; `lang` is a BCP-47-ish tag falling back to English.
 /// Returns bytes written, or -1 on null args / unknown kind. Kept separate

@@ -125,8 +125,12 @@ enum MeetingPostProcessService {
         // emphasis. Missing file → empty string → no notes section.
         let notesURL = URL(fileURLWithPath: dir).appendingPathComponent("notes.md")
         let notes = (try? String(contentsOf: notesURL, encoding: .utf8)) ?? ""
-        let prompt = buildStructuredRecapPrompt(transcript: trimmed, notes: notes, meetingType: meetingType)
         let model = (modelOverride?.isEmpty == false) ? modelOverride! : pickRecapModel()
+        let spokenLanguage = detectSpokenLanguage(dir: dir, modelOverride: model)
+        let prompt = buildStructuredRecapPrompt(transcript: trimmed,
+                                                notes: notes,
+                                                meetingType: meetingType,
+                                                spokenLanguage: spokenLanguage)
         // 32K tokens — same ceiling Win uses to give Opus 4.7 / Gemini
         // 3.1 Pro headroom for adaptive-thinking budgets. The provider
         // dispatch in core/src/llm.rs auto-picks the right thinking
@@ -384,13 +388,36 @@ enum MeetingPostProcessService {
             + "Never mention the type tag in the prose.\n"
     }
 
-    static func buildStructuredRecapPrompt(transcript: String, notes: String = "", meetingType: String = "") -> String {
+    static func buildStructuredRecapPrompt(transcript: String,
+                                           notes: String = "",
+                                           meetingType: String = "",
+                                           spokenLanguage: String = "") -> String {
         // Verbatim port of MeetingWindow.xaml.cs::BuildStructuredRecapPrompt.
         // Notion-style recap targeting reasoning-tier models (Opus 4.7
         // adaptive thinking, Gemini 3.1 Pro thinkingLevel=high, GPT-5).
         // Leading spaces matter for the parser ===KEY=== markers — do
         // not reflow.
         let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Told "answer in the transcript's language", a 4B local model answers
+        // in English on an Italian meeting; told "answer in Italian" it does
+        // not (measured 2026-09-07). So when the spoken language has been
+        // established we NAME it, and otherwise keep the wording that shipped
+        // rather than naming one nobody established.
+        //
+        // The marker sentence is not optional: naming the language without it
+        // produced `===DECISIONI===` on the same measurement, and the parser
+        // looks for `===DECISIONS===` — a translated marker silently costs the
+        // user a whole section. Verbatim port of the Windows helper.
+        let languageBlock: String = {
+            let head = "## Output language\n"
+            let named = spokenLanguage.trimmingCharacters(in: .whitespaces)
+            let body = named.isEmpty
+                ? "Auto-detect from the transcript. For mixed languages, pick the dominant one. Do NOT translate. If the transcript is in Italian, write the recap in Italian.\n"
+                : "Write your entire answer in \(named). That is the language spoken in the recording; write in it even where the transcript wandered.\n"
+            let markers = "Keep every ===NAME=== marker exactly as written, in English: they are identifiers, not headings, and translating one loses that section.\n"
+            return head + body + markers
+        }()
+
         let typeBlock = typeGuidanceBlock(meetingType)
         // Listener's notes (notes.md) are the user's own emphasis — fold
         // them in as a HIGH PRIORITY appendix after the transcript so the
@@ -421,8 +448,7 @@ enum MeetingPostProcessService {
         Each line: `[ELAPSED_MS ms] [SPEAKER_LABEL] text`.
         Speaker labels: `[mic]` = the user recording (treat as "you" / first person when the language allows), `[system]` = remote participant(s) coming through speakers/loopback (treat as "the remote party" / "interlocutor" / specific name only if explicitly mentioned in the transcript). When only `[mic]` is present, the recording is monologue / dictation; when only `[system]` is present, the user was a silent listener.
 
-        ## Output language
-        Auto-detect from the transcript. For mixed languages, pick the dominant one. Do NOT translate. If the transcript is in Italian, write the recap in Italian.
+        \(languageBlock)
 
         \(typeBlock)
         ## Sections (emit ALL of them, in this order)
@@ -645,6 +671,47 @@ enum MeetingPostProcessService {
             if !body.isEmpty { result[key] = body }
         }
         return result
+    }
+
+    /// The language spoken in the meeting, as an English name ready for the
+    /// prompt, or "" when it could not be established.
+    ///
+    /// Only for local models. A frontier cloud model already follows "answer
+    /// in the transcript's language"; a 4B local one answers in English on an
+    /// Italian meeting (measured 2026-09-07) and needs the language named.
+    /// Paying ~1.4 s of detection on the cloud path would buy nothing.
+    ///
+    /// Mirrors `MeetingPostProcessService.DetectSpokenLanguageAsync` on
+    /// Windows, including which audio file it prefers: the mixed track, since
+    /// the language of a meeting is not decided by the microphone alone.
+    fileprivate static func detectSpokenLanguage(dir: String, modelOverride: String?) -> String {
+        let model = modelOverride ?? ""
+        let isLocal = model.isEmpty
+            ? currentLlmMode() == "local"
+            : model.hasPrefix("local:")
+        guard isLocal else { return "" }
+
+        let base = URL(fileURLWithPath: dir)
+        for name in ["audio.ogg", "audio.wav", "audio_system.ogg", "audio_mic.ogg"] {
+            let candidate = base.appendingPathComponent(name)
+            guard FileManager.default.fileExists(atPath: candidate.path) else { continue }
+            let lang = DimmyCore.shared.detectAudioLanguage(path: candidate.path) ?? ""
+            NSLog("[Dimmy] recap language detection: '\(lang)' from \(name)")
+            return lang
+        }
+        return ""
+    }
+
+    /// `llm_mode` from the on-disk config, same direct-read pattern as
+    /// `currentLlmApiUrl()` so it works off the main actor.
+    fileprivate static func currentLlmMode() -> String {
+        guard let cfgURL = DimmyCore.shared.configDirURL?
+            .appendingPathComponent("config.json"),
+              let data = try? Data(contentsOf: cfgURL),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let mode = json["llm_mode"] as? String
+        else { return "" }
+        return mode
     }
 
     /// Read `llm_api_url` from the on-disk config so the telemetry

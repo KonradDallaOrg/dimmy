@@ -60,8 +60,12 @@ public static class MeetingPostProcessService
             }
             catch { /* notes are best-effort context, never block the recap */ }
 
-            var prompt = Helpers.MeetingRecapHelpers.BuildStructuredRecapPrompt(transcript, notes, meetingType);
             var modelOverride = MeetingWindow.PickRecapModelInternal();
+
+            var spokenLanguage = await DetectSpokenLanguageAsync(dir, modelOverride);
+
+            var prompt = Helpers.MeetingRecapHelpers.BuildStructuredRecapPrompt(
+                transcript, notes, meetingType, spokenLanguage);
             App.Log($"recap (shared) model='{modelOverride}' prompt {prompt.Length} chars dir='{dir}'",
                 "MeetingRecap");
 
@@ -209,6 +213,68 @@ public static class MeetingPostProcessService
     /// bucket. Internal so the meeting window's own recap path can report
     /// the same way this service does — before that, regenerated recaps
     /// emitted no telemetry at all.</summary>
+    /// <summary>The language actually spoken in the meeting, as an English
+    /// name ready to drop into a prompt, or "" when it could not be
+    /// established.
+    ///
+    /// Only for local models. A frontier cloud model already follows "answer
+    /// in the transcript's language"; a 4B local one answers in English on an
+    /// Italian meeting (measured 2026-09-07) and needs the language by name.
+    /// Paying ~1.4 s of detection on the cloud path would buy nothing.
+    ///
+    /// Lives here rather than in either caller because Windows regenerates a
+    /// recap through TWO paths — this service and the meeting window's own
+    /// button — and a fix wired into one of them is a fix the user does not
+    /// get. That is exactly what happened on the first attempt.</summary>
+    internal static async Task<string> DetectSpokenLanguageAsync(string dir, string? modelOverride)
+    {
+        try
+        {
+            if (!Helpers.MeetingRecapHelpers.IsLocalRecapModel(modelOverride, ReadConfigString("llm_mode")))
+                return "";
+            var audio = FindMeetingAudio(dir);
+            if (audio == null) return "";
+            var lang = await Task.Run(() => DimmyNative.DetectAudioLanguage(audio)) ?? "";
+            App.Log($"recap language detection: '{lang}' from {System.IO.Path.GetFileName(audio)}",
+                "MeetingRecap");
+            return lang;
+        }
+        catch (Exception ex)
+        {
+            // Advisory by design: a recap must never fail because we could not
+            // work out which language it is in.
+            App.Log($"recap language detection failed: {ex.Message}", "MeetingRecap");
+            return "";
+        }
+    }
+
+    /// <summary>The meeting's audio, whichever container it was written in.
+    /// Mixed track first: it carries both sides of the conversation, and the
+    /// language of a meeting is not decided by the microphone alone.</summary>
+    internal static string? FindMeetingAudio(string dir)
+    {
+        foreach (var name in new[] { "audio.ogg", "audio.wav", "audio_system.ogg", "audio_mic.ogg" })
+        {
+            var p = System.IO.Path.Combine(dir, name);
+            if (System.IO.File.Exists(p)) return p;
+        }
+        return null;
+    }
+
+    internal static string ReadConfigString(string key)
+    {
+        try
+        {
+            var buf = new byte[1 << 14];
+            int n = DimmyNative.dimmy_get_config_json(buf, buf.Length);
+            if (n <= 0) return "";
+            var json = System.Text.Encoding.UTF8.GetString(buf, 0, n);
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            return doc.RootElement.TryGetProperty(key, out var el) ? el.GetString() ?? "" : "";
+        }
+        catch { return ""; }
+    }
+
     internal static string ReadLlmApiUrl()
     {
         try

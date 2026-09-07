@@ -206,8 +206,29 @@ public static class MeetingRecapHelpers
     /// type's emphasis hint. EITHER way the 11 sections are unchanged — the
     /// type only nudges which sections fill vs fall to `—`.
     /// </summary>
-    public static string BuildStructuredRecapPrompt(string transcript, string notes = "", string meetingType = "")
+    public static string BuildStructuredRecapPrompt(
+        string transcript, string notes = "", string meetingType = "", string spokenLanguage = "")
     {
+        // Told "answer in the transcript's language", a 4B local model answers
+        // in English on an Italian meeting; told "answer in Italian" it does
+        // not (measured 2026-09-07). So when the spoken language has actually
+        // been established we NAME it, and otherwise we keep the wording that
+        // has always been here rather than naming one we guessed.
+        //
+        // The marker sentence is not optional. Naming the language without it
+        // produced `===DECISIONI===` on the same measurement, and the parser
+        // looks for `===DECISIONS===` - a translated marker silently costs the
+        // user a whole section.
+        var languageBlock =
+            "## Output language\n" +
+            (string.IsNullOrWhiteSpace(spokenLanguage)
+                ? "Auto-detect from the transcript. For mixed languages, pick the dominant one. " +
+                  "Do NOT translate. If the transcript is in Italian, write the recap in Italian.\n"
+                : $"Write your entire answer in {spokenLanguage.Trim()}. That is the language " +
+                  "spoken in the recording; write in it even where the transcript wandered.\n") +
+            "Keep every ===NAME=== marker exactly as written, in English: they are " +
+            "identifiers, not headings, and translating one loses that section.\n\n";
+
         var typeKey = string.IsNullOrWhiteSpace(meetingType) ? "auto" : meetingType.Trim();
         string typeBlock;
         if (typeKey == "auto")
@@ -250,9 +271,7 @@ public static class MeetingRecapHelpers
             "present, the recording is monologue / dictation; when only `[system]` is " +
             "present, the user was a silent listener.\n\n" +
 
-            "## Output language\n" +
-            "Auto-detect from the transcript. For mixed languages, pick the dominant one. " +
-            "Do NOT translate. If the transcript is in Italian, write the recap in Italian.\n\n" +
+            languageBlock +
 
             typeBlock +
 
@@ -654,6 +673,20 @@ public static class MeetingRecapHelpers
     /// risk leaking transcript fragments via 4xx error payloads. The
     /// xUnit test `RecapRcToUserMessage_never_echoes_caller_supplied_body`
     /// pins this invariant.
+    /// <summary>Whether the recap will run through llama.cpp on this machine.
+    /// True when the picked model carries the `local:` prefix, and also when
+    /// nothing is pinned but the configured LLM mode is local — that second
+    /// case is a real user configuration, not a theoretical one.
+    ///
+    /// Pure so it can be tested: the caller reads `llm_mode` from the config
+    /// and hands it in, rather than this file learning about the FFI.</summary>
+    public static bool IsLocalRecapModel(string? modelOverride, string? llmMode)
+    {
+        if (!string.IsNullOrEmpty(modelOverride))
+            return modelOverride.StartsWith("local:", System.StringComparison.Ordinal);
+        return string.Equals(llmMode, "local", System.StringComparison.Ordinal);
+    }
+
     public static string RecapRcToUserMessage(int rc, string modelOverride)
     {
         var modelHint = string.IsNullOrWhiteSpace(modelOverride) ? "auto" : modelOverride;

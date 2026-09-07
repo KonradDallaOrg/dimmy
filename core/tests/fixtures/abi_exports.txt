@@ -39,6 +39,7 @@ dimmy_consent_text
 dimmy_cycle_llm_style
 dimmy_cycle_llm_tone
 dimmy_decode_audio_to_wav
+dimmy_detect_audio_language
 dimmy_download_llm_model
 dimmy_download_model
 dimmy_get_active_mic_device_rate
