@@ -5128,7 +5128,16 @@ public sealed partial class SettingsWindow : Window
 
     private void PopulateVersion()
     {
-        _currentVersion = DimmyNative.ReadBuffer(DimmyNative.dimmy_get_version, 64) ?? "0.0.0";
+        // Prefer what Velopack says this install IS ("0.7.1-rc.4"). The core
+        // only knows CARGO_PKG_VERSION ("0.7.1") — the rc suffix lives in the
+        // tag and the package, nowhere in the binary — so About used to claim
+        // 0.7.1 while the update banner in the same window said v0.7.1-rc.4.
+        // Falls back to the core for dev builds, which have no Velopack
+        // identity at all.
+        var packaged = Services.UpdateService.Instance?.InstalledVersion ?? "";
+        _currentVersion = !string.IsNullOrWhiteSpace(packaged)
+            ? packaged
+            : DimmyNative.ReadBuffer(DimmyNative.dimmy_get_version, 64) ?? "0.0.0";
         VersionText.Text = $"v{_currentVersion}";
         // Append " · STAGING" suffix on staging builds. The sidebar banner
         // already announces the flavor loudly; this just makes sure About

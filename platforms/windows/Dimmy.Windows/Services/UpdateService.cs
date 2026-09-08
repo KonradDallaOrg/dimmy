@@ -71,6 +71,22 @@ public sealed class UpdateService
     public string PendingVersion =>
         _pendingUpdate?.TargetFullRelease?.Version?.ToString() ?? "";
 
+    /// <summary>The version this install actually IS, straight from
+    /// Velopack, e.g. "0.7.1-rc.4". Empty when running unpackaged (a dev
+    /// build has no Velopack identity).
+    ///
+    /// The core's `dimmy_get_version` cannot answer this: it returns
+    /// CARGO_PKG_VERSION, and the rc suffix lives only in the git tag and
+    /// the Velopack package. So About said "0.7.1" on every rc of 0.7.1
+    /// while the update banner right below it correctly said
+    /// "v0.7.1-rc.4" — the same window contradicting itself.
+    ///
+    /// Deliberately NOT baked into the Rust build: that would make the
+    /// prebuilt-DLL cache miss on every tag, and this is a display
+    /// string the host already has.</summary>
+    public string InstalledVersion =>
+        _manager?.CurrentVersion?.ToString() ?? "";
+
     /// <summary>Fires on the UI dispatcher thread when an update is
     /// downloaded and ready to apply. Settings + taskbar overlay
     /// subscribe to refresh their UI; safe to fire multiple times
