@@ -1121,7 +1121,7 @@ dependencies = [
 
 [[package]]
 name = "dimmy"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "aec3",
  "anyhow",
