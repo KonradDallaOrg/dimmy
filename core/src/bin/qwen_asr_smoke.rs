@@ -51,7 +51,7 @@ fn main() {
                     secs / dt,
                     tr.language.as_deref().unwrap_or("?")
                 );
-                println!("    {}\n", first_chars(&tr.text, 160));
+                println!("    {}\n", tr.text);
             }
             Err(e) => {
                 println!("{:<22} FAILED {:?}", short(path), e);
@@ -70,15 +70,6 @@ fn short(path: &str) -> String {
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.to_string())
-}
-
-fn first_chars(s: &str, n: usize) -> String {
-    let out: String = s.chars().take(n).collect();
-    if s.chars().count() > n {
-        format!("{}...", out)
-    } else {
-        out
-    }
 }
 
 /// Decode to the 16 kHz mono the model wants, the same way the product does.
