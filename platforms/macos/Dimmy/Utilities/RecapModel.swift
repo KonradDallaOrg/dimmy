@@ -127,22 +127,21 @@ struct RecapModelOption: Identifiable, Equatable {
                 label: ModelCatalog.tierLabel(pair.model),
                 provider: recapProvider(pair.provider.id))
         }
-        // On-device Gemma recap — runs via llama.cpp Metal, no network, no
-        // key, transcript never leaves the Mac. Not catalog/API models.
-        list += [
-            .init(id: "local:gemma-4-E4B-it-Q4_K_M.gguf",
-                  label: "Local Gemma 4 E4B Q4 (best local, ~6GB VRAM)",
-                  provider: .local),
-            .init(id: "local:gemma-4-E2B-it-Q4_K_M.gguf",
-                  label: "Local Gemma 4 E2B Q4 (fast, 4GB VRAM)",
-                  provider: .local),
-            .init(id: "local:gemma-4-E4B-it-Q8_0.gguf",
-                  label: "Local Gemma 4 E4B Q8 (max quality, 10GB+ VRAM)",
-                  provider: .local),
-            .init(id: "local:gemma-4-12b-it-Q4_K_M.gguf",
-                  label: "Local Gemma 4 12B Q4 (top local quality, 9GB+ VRAM)",
-                  provider: .local),
-        ]
+        // On-device recap - runs via llama.cpp Metal, no network, no key,
+        // transcript never leaves the Mac.
+        //
+        // Read from the SAME core catalogue the LLM page uses
+        // (`dimmy_list_llm_models`) rather than a list written out here. The
+        // hardcoded four Gemma entries this replaces had drifted: Qwen, Phi
+        // and TranslateGemma were downloadable on the LLM page and absent
+        // from the recap picker, so a user could install a model and then not
+        // be able to pick it. Windows has always read the FFI in both places.
+        list += LocalLlmCatalog.models.map { m in
+            RecapModelOption(
+                id: "local:\(m.filename)",
+                label: "Local \(m.name)",
+                provider: .local)
+        }
         return list
     }
 

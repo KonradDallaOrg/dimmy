@@ -223,6 +223,13 @@ jobs:
           # binaries always have it set so license verification is on.
           DIMMY_LICENSE_PUBKEY: ${{ secrets.DIMMY_LICENSE_PUBKEY }}
           DIMMY_LICENSE_SERVER_URL: https://license.dimmy.app
+          # Telegram API credentials, embedded via `option_env!` in
+          # core/src/telegram.rs. The Windows job has always passed these;
+          # macOS never did, so every Mac build reported "Telegram is not
+          # available in this build" and no tester could enter a number.
+          # Same secrets, same names — the omission was the whole bug.
+          DIMMY_TELEGRAM_API_ID: ${{ secrets.DIMMY_TELEGRAM_API_ID }}
+          DIMMY_TELEGRAM_API_HASH: ${{ secrets.DIMMY_TELEGRAM_API_HASH }}
         run: |
           echo "CMake: $(cmake --version | head -1)"
           echo "Xcode CLT: $(xcode-select -p)"

@@ -264,6 +264,11 @@ jobs:
           # would write into the prod `dimmy` config dir (default when
           # DIMMY_CONFIG_NAMESPACE is unset) and mix data with prod.
           DIMMY_CONFIG_NAMESPACE: dimmy-staging
+          # Telegram credentials: the Windows job in this same file has
+          # always passed them and this one never did, so every macOS
+          # build said the integration was unavailable.
+          DIMMY_TELEGRAM_API_ID: ${{ secrets.DIMMY_TELEGRAM_API_ID }}
+          DIMMY_TELEGRAM_API_HASH: ${{ secrets.DIMMY_TELEGRAM_API_HASH }}
         run: |
           echo "CMake: $(cmake --version | head -1)"
           echo "Xcode CLT: $(xcode-select -p)"

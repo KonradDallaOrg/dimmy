@@ -395,14 +395,14 @@ final class SystemAudioProcessTap {
         var newTap = AudioObjectID(kAudioObjectUnknown)
         var err = AudioHardwareCreateProcessTap(description, &newTap)
         guard err == noErr, newTap != AudioObjectID(kAudioObjectUnknown) else {
-            NSLog("[SystemAudio/tap] AudioHardwareCreateProcessTap failed: %d", err)
+            dimmyHostLog("[SystemAudio/tap] AudioHardwareCreateProcessTap failed: \(err)")
             return .failed
         }
         tapID = newTap
         currentTapPidSet = targetPid > 0 ? Set([targetPid]) : Set()
 
         guard let asbd = Self.readTapFormat(tapID) else {
-            NSLog("[SystemAudio/tap] could not read tap stream format")
+            dimmyHostLog("[SystemAudio/tap] could not read tap stream format")
             teardown()
             return .failed
         }
@@ -457,7 +457,7 @@ final class SystemAudioProcessTap {
         err = AudioHardwareCreateAggregateDevice(
             aggregateDescription as CFDictionary, &newAggregate)
         guard err == noErr, newAggregate != AudioObjectID(kAudioObjectUnknown) else {
-            NSLog("[SystemAudio/tap] AudioHardwareCreateAggregateDevice failed: %d", err)
+            dimmyHostLog("[SystemAudio/tap] AudioHardwareCreateAggregateDevice failed: \(err)")
             teardown()
             return .failed
         }
@@ -518,8 +518,7 @@ final class SystemAudioProcessTap {
                 return !wasSet
             }
             if firstFire {
-                NSLog("[SystemAudio/tap] IO proc fired (first frame, %d samples) — capture is live",
-                      Self.firstBufferSampleCount(inInputData))
+                dimmyHostLog("[SystemAudio/tap] IO proc fired (first frame, \(Self.firstBufferSampleCount(inInputData)) samples) - capture is live")
             }
             // The rate the aggregate DECLARED is a starting assumption; what
             // it actually delivers is measured from the timestamps below.
@@ -532,7 +531,7 @@ final class SystemAudioProcessTap {
             Self.forward(inInputData, channels: channels, rate: effectiveRate, to: handler)
         }
         guard err == noErr, let procID = newProcID else {
-            NSLog("[SystemAudio/tap] AudioDeviceCreateIOProcIDWithBlock failed: %d", err)
+            dimmyHostLog("[SystemAudio/tap] AudioDeviceCreateIOProcIDWithBlock failed: \(err)")
             teardown()
             return .failed
         }
@@ -540,13 +539,13 @@ final class SystemAudioProcessTap {
 
         err = AudioDeviceStart(aggregateID, procID)
         guard err == noErr else {
-            NSLog("[SystemAudio/tap] AudioDeviceStart failed: %d", err)
+            dimmyHostLog("[SystemAudio/tap] AudioDeviceStart failed: \(err)")
             teardown()
             return .failed
         }
 
         running = true
-        NSLog("[SystemAudio/tap] started rate=%d ch=%d", rate, channels)
+        dimmyHostLog("[SystemAudio/tap] started rate=\(rate) ch=\(channels)")
         startRescan()
         return .live
     }
@@ -556,7 +555,7 @@ final class SystemAudioProcessTap {
         guard running else { return }
         teardown()
         running = false
-        NSLog("[SystemAudio/tap] stopped")
+        dimmyHostLog("[SystemAudio/tap] stopped")
     }
 
     // MARK: - Rescan (event-driven HAL listeners + safety backstop)
@@ -625,6 +624,27 @@ final class SystemAudioProcessTap {
     /// coreaudiod only makes it worse. A single heartbeat advance resets the
     /// counter, so a later recovery re-arms the watchdog.
     private static let maxWatchdogRebuilds = 8
+
+    /// Shortest gap between two event-driven rebuilds, and how many may run
+    /// back to back before the change listener stands down for a while.
+    ///
+    /// The watchdog has always been capped; the CHANGE path was not, and it
+    /// is the one that fires. Measured on a user's 34-minute meeting
+    /// (2026-09-08): the tap rebuilt 30 times inside six seconds and then
+    /// produced nothing for the remaining 22 minutes, so the recording kept
+    /// the microphone and lost the other side of the call entirely.
+    ///
+    /// A rebuild is teardown + `start()`, which creates a process tap and an
+    /// aggregate device - HAL work that can itself disturb the object list
+    /// the listener watches. Without a floor between attempts the storm can
+    /// feed itself, and thrashing coreaudiod is how a tap ends up dead
+    /// rather than rebuilt.
+    private static let minRebuildInterval: TimeInterval = 2.0
+    private static let maxBurstRebuilds = 5
+    private static let burstCooldown: TimeInterval = 30.0
+    private var lastRebuildAt = Date.distantPast
+    private var burstRebuilds = 0
+    private var burstCooldownUntil = Date.distantPast
 
     /// Re-arm the tap when the Mac wakes from sleep — immediate recovery on
     /// top of the watchdog backstop. macOS tears down and re-publishes HAL
@@ -718,7 +738,7 @@ final class SystemAudioProcessTap {
             guard let self else { return }
             self.ioQueue.async {
                 guard self.running, !self.currentTapPidSet.isEmpty else { return }
-                NSLog("[SystemAudio/tap] system woke — rebuilding system-audio tap")
+                dimmyHostLog("[SystemAudio/tap] system woke - rebuilding system-audio tap")
                 self.watchdogLastAdvance = Date()
                 self.watchdogLastCount = 0
                 self.watchdogRebuilds = 0
@@ -851,13 +871,13 @@ final class SystemAudioProcessTap {
             let pidSetChanged = newPidSet != currentTapPidSet
             guard pidSetChanged || outputChanged else { return }
             if outputChanged {
-                NSLog("[SystemAudio/tap] default output changed (%@ -> %@) — rebuilding tap",
-                      builtOutputUID ?? "<none>", currentOutputUID ?? "<none>")
+                // No device names: this file is what users send us.
+                dimmyHostLog("[SystemAudio/tap] default output device changed - rebuild requested")
             }
             if pidSetChanged {
-                NSLog("[SystemAudio/tap] audio-active PID set changed (was %d, now %d) — rebuilding tap",
-                      currentTapPidSet.count, newPidSet.count)
+                dimmyHostLog("[SystemAudio/tap] audio-active process count changed \(currentTapPidSet.count) -> \(newPidSet.count) - rebuild requested")
             }
+            guard allowRebuildNow() else { return }
             forceRebuild()
         } else {
             // Deferred state: no tap created yet (no audio source at start).
@@ -867,8 +887,7 @@ final class SystemAudioProcessTap {
             // while deferred are no-ops — `start()` reads the live default
             // when it eventually fires.
             guard !activeObjects.isEmpty else { return }
-            NSLog("[SystemAudio/tap] audio now active (%d source(s)) — promoting deferred tap to live",
-                  activeObjects.count)
+            dimmyHostLog("[SystemAudio/tap] audio now active (\(activeObjects.count) source(s)) - promoting deferred tap to live")
             _ = start()
         }
     }
@@ -879,6 +898,34 @@ final class SystemAudioProcessTap {
     /// the latter two fire when the tap went silent with NO observable
     /// device/PID change (a sleep/wake HAL reset re-publishes the same
     /// output-device UID). Runs on ioQueue, like every other rebuild path.
+    /// Whether an event-driven rebuild may run now.
+    ///
+    /// Two limits, both about not making a bad situation worse: a floor
+    /// between consecutive attempts, and a cap on how many may happen in a
+    /// burst before the change path stands down. The watchdog is untouched -
+    /// it has its own cap and is the path that SHOULD keep trying when the
+    /// tap is genuinely dead.
+    private func allowRebuildNow() -> Bool {
+        let now = Date()
+        if now < burstCooldownUntil { return false }
+        if now.timeIntervalSince(lastRebuildAt) < Self.minRebuildInterval {
+            dimmyHostLog("[SystemAudio/tap] rebuild requested again too soon - skipped")
+            return false
+        }
+        if now.timeIntervalSince(lastRebuildAt) > Self.burstCooldown {
+            burstRebuilds = 0   // quiet for a while: the burst is over
+        }
+        burstRebuilds += 1
+        if burstRebuilds > Self.maxBurstRebuilds {
+            burstCooldownUntil = now.addingTimeInterval(Self.burstCooldown)
+            burstRebuilds = 0
+            dimmyHostLog("[SystemAudio/tap] too many rebuilds in a row - standing down for a while (the liveness watchdog still runs)")
+            return false
+        }
+        lastRebuildAt = now
+        return true
+    }
+
     private func forceRebuild() {
         guard running else { return }
         let savedHandler = onSamples
@@ -920,15 +967,13 @@ final class SystemAudioProcessTap {
             // coreaudiod makes it worse. Log once (guarded by ==), then stay
             // quiet until a heartbeat advance resets watchdogRebuilds.
             if watchdogRebuilds == Self.maxWatchdogRebuilds {
-                NSLog("[SystemAudio/tap] watchdog: tap still dead after %d rebuilds — giving up until it recovers (restart Dimmy if system audio stays missing)",
-                      watchdogRebuilds)
+                dimmyHostLog("[SystemAudio/tap] watchdog: tap still dead after \(watchdogRebuilds) rebuilds - giving up until it recovers (restart Dimmy if system audio stays missing)")
                 watchdogRebuilds += 1
             }
             return
         }
         watchdogRebuilds += 1
-        NSLog("[SystemAudio/tap] watchdog: no IO-proc frames for %.1fs while capturing %d process(es) — tap is dead, rebuilding (attempt %d/%d)",
-              stalled, currentTapPidSet.count, watchdogRebuilds, Self.maxWatchdogRebuilds)
+        dimmyHostLog("[SystemAudio/tap] watchdog: no IO-proc frames for \(String(format: "%.1f", stalled))s while capturing \(currentTapPidSet.count) process(es) - tap is dead, rebuilding (attempt \(watchdogRebuilds)/\(Self.maxWatchdogRebuilds)")
         forceRebuild()
         // Give the freshly-rebuilt tap a full grace window before re-judging.
         watchdogLastAdvance = Date()
@@ -1080,10 +1125,10 @@ final class SystemAudioProcessTap {
         // "dispatched" then the app keeps running (and "[Meeting] stopped"
         // appears), the Tahoe-freeze fix is working — even if "completed"
         // never follows (that means the HAL wedged but we no longer block).
-        NSLog("[SystemAudio/tap] teardown: HAL destroy dispatched off-thread (caller unblocked)")
+        dimmyHostLog("[SystemAudio/tap] teardown: HAL destroy dispatched off-thread (caller unblocked)")
         SystemAudioProcessTap.teardownQueue.async {
             SystemAudioProcessTap.destroyHALHandles(procID: procID, aggID: aggID, tID: tID)
-            NSLog("[SystemAudio/tap] teardown: HAL destroy completed off-thread")
+            dimmyHostLog("[SystemAudio/tap] teardown: HAL destroy completed off-thread")
         }
     }
 
