@@ -399,7 +399,15 @@ final class SystemAudioProcessTap {
         let targetPid = Self.pid(forAudioObject: target) ?? -1
         let targetKind = CallDetectionManager.resolveKnownCallApp(targetPid) != nil
             ? "call-app" : "first-active"
-        dimmyHostLog("[SystemAudio/tap] tapping SINGLE \(targetKind) process pid=\(targetPid) (of \(activeObjects.count) active)")
+        // The other pids too, not just the count. Asked on 2026-09-08 which
+        // second app was making noise - possibly Dimmy replaying an old
+        // meeting - and the log could not say. Pids are numbers we already
+        // print for the target; a name would be something else entirely.
+        // If our OWN pid ever appears here, `excludingSelf` is broken.
+        let activePids = activeObjects.compactMap { Self.pid(forAudioObject: $0) }
+        let selfNote = activePids.contains(ProcessInfo.processInfo.processIdentifier)
+            ? " INCLUDING OURSELVES - self-exclusion is not working" : ""
+        dimmyHostLog("[SystemAudio/tap] tapping SINGLE \(targetKind) process pid=\(targetPid); audio-active pids: \(activePids)\(selfNote)")
 
         let description = CATapDescription(monoMixdownOfProcesses: [target])
         description.uuid = UUID()
