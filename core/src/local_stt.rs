@@ -871,6 +871,23 @@ mod whisper_cache {
                 super::GpuBackendStatus::Available { device } => {
                     ctx_params.use_gpu(true);
                     ctx_params.gpu_device(device);
+                    // Flash attention, on Metal only.
+                    //
+                    // It was never set, so it defaulted to false and every
+                    // Mac has been transcribing without it: `flash attn = 0`
+                    // in a user's log, 2026-09-08. On Metal it is mature and
+                    // costs less time and less memory per window, which is
+                    // the whole budget on a machine that is also holding a
+                    // language model.
+                    //
+                    // NOT enabled on Vulkan/CUDA from here: whisper's Vulkan
+                    // path has aborted this process before (hence the
+                    // crash sentinel below), and turning on a newer kernel
+                    // there without measuring it is how that happens again.
+                    // whisper-rs also disables DTW when this is on; we do
+                    // not use DTW (`dtw = 0` in the same log).
+                    #[cfg(target_os = "macos")]
+                    ctx_params.flash_attn(true);
                     using_gpu = true;
                     crate::log(&format!("[LocalSTT] GPU backend: device {}", device));
                 }

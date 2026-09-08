@@ -581,6 +581,7 @@ mod llm_cache {
     struct CachedLlmModel {
         model: LlamaModel,
         model_path: PathBuf,
+        last_used: std::time::Instant,
     }
 
     // LlamaModel is Send+Sync. We protect access with a Mutex.
@@ -656,6 +657,47 @@ mod llm_cache {
             .map(|m| m.len() / (1024 * 1024))
             .unwrap_or(0);
         crate::local_llm::stt_should_yield(file_mb, crate::hardware::detect().vram_mb)
+    }
+
+    /// How long a loaded model may sit unused before it is dropped.
+    ///
+    /// Nothing used to drop it at all: once loaded, a model stayed resident
+    /// until the user picked a different one or quit. After a single recap
+    /// that is 5.9 GB of a 16 GB Mac held for the rest of the day doing
+    /// nothing, which is how a machine ends up in the out-of-memory modal
+    /// long after the work finished (measured 2026-09-08).
+    ///
+    /// Five minutes trades a reload - 9 s on that Mac, 17 s on a 4 GB
+    /// Windows card - against gigabytes returned to the user's machine. A
+    /// second recap inside the window pays nothing, because any use resets
+    /// the clock.
+    const IDLE_UNLOAD: std::time::Duration = std::time::Duration::from_secs(300);
+
+    static SWEEPER: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+
+    /// Drop the cached model once it has been idle for [`IDLE_UNLOAD`].
+    ///
+    /// Started on first use, then runs for the life of the process. It only
+    /// ever takes the CACHE lock, which `generate` holds for the whole of an
+    /// inference - so a sweep can never land in the middle of one, it waits.
+    fn start_idle_sweeper() {
+        SWEEPER.get_or_init(|| {
+            std::thread::spawn(|| loop {
+                std::thread::sleep(std::time::Duration::from_secs(60));
+                let Ok(mut guard) = CACHE.lock() else { continue };
+                let idle = guard
+                    .as_ref()
+                    .map(|c| c.last_used.elapsed())
+                    .unwrap_or_default();
+                if guard.is_some() && idle >= IDLE_UNLOAD {
+                    crate::log(&format!(
+                        "[LocalLLM] unloading the model after {:.0} min idle - it will reload on next use",
+                        idle.as_secs_f32() / 60.0
+                    ));
+                    *guard = None;
+                }
+            });
+        });
     }
 
     /// Load model if needed, run text generation, return result. Lock held during load only.
@@ -776,11 +818,17 @@ mod llm_cache {
             *guard = Some(CachedLlmModel {
                 model,
                 model_path: model_path.to_path_buf(),
+                last_used: std::time::Instant::now(),
             });
             crate::log("[LocalLLM] Model cached successfully");
         } else {
             crate::log("[LocalLLM] Using cached LLM model");
         }
+
+        if let Some(c) = guard.as_mut() {
+            c.last_used = std::time::Instant::now();
+        }
+        start_idle_sweeper();
 
         let cached = guard
             .as_ref()
