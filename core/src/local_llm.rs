@@ -614,6 +614,21 @@ mod llm_cache {
     /// (`n_ubatch`), so nothing is split twice.
     const PROMPT_BATCH: u32 = 512;
 
+    /// Whether GPU memory is small enough that a resident whisper model is
+    /// worth evicting before an LLM is loaded.
+    ///
+    /// The threshold sits above every discrete card this eviction was written
+    /// for (a 4 GB T600) and below the unified memory of the Macs where it is
+    /// pure loss. `hardware::detect` reports total RAM on Apple silicon, so an
+    /// 8 GB Mac still counts as tight - which it is. Unknown counts as tight:
+    /// evicting costs seconds, and NOT evicting cost a killed process once.
+    fn memory_is_tight() -> bool {
+        const ROOMY_MB: u64 = 12_000;
+        crate::hardware::detect()
+            .vram_mb
+            .is_none_or(|mb| mb < ROOMY_MB)
+    }
+
     /// Load model if needed, run text generation, return result. Lock held during load only.
     /// `stream`: emit `llm_stream` events as tokens arrive, so the host can
     /// show the recap being written instead of a still spinner for the 30-90 s
@@ -702,7 +717,16 @@ mod llm_cache {
             // runs. A recap pays nothing (transcription is already done);
             // a dictation rewrite pays those seconds once. Against losing
             // the process, that is not a close call.
-            if using_gpu {
+            //
+            // ...but only where the memory is actually scarce. A Mac reports
+            // its whole unified RAM here, and a 16 GB M1 Pro gives Metal a
+            // ~12.7 GB working set: evicting whisper there throws away a
+            // model that costs seconds to reload, to free room nobody needed.
+            // A user reported exactly that as "it loads one model, unloads it,
+            // and loads the other" (2026-09-08), and the log confirmed the
+            // reload. The retry path below still evicts when the context
+            // genuinely does not fit, which is where that decision belongs.
+            if using_gpu && memory_is_tight() {
                 crate::local_stt::clear_model_cache();
             }
 

@@ -367,11 +367,8 @@ final class SystemAudioProcessTap {
         // so the generic case is unchanged. NOTE: this is NOT the reverted
         // gate-or-break heuristic — there is no broken global-mixdown fallback;
         // worst case we tap `.first` exactly like now.
-        let callObj = activeObjects.first { obj in
-            guard let p = Self.pid(forAudioObject: obj) else { return false }
-            return CallDetectionManager.resolveKnownCallApp(p) != nil
-        }
-        guard let target = callObj ?? activeObjects.first else {
+        let target0 = Self.preferredTarget(among: activeObjects, keeping: currentTapPidSet.first)
+        guard let target = target0 else {
             // No app is currently producing audio. Don't create a dead tap;
             // keep the rescan listeners armed so we self-recover the moment
             // audio appears (.deferred → .live promotion in
@@ -382,7 +379,8 @@ final class SystemAudioProcessTap {
             return .deferred
         }
         let targetPid = Self.pid(forAudioObject: target) ?? -1
-        let targetKind = callObj != nil ? "call-app" : "first-active"
+        let targetKind = CallDetectionManager.resolveKnownCallApp(targetPid) != nil
+            ? "call-app" : "first-active"
         dimmyHostLog("[SystemAudio/tap] tapping SINGLE \(targetKind) process pid=\(targetPid) (of \(activeObjects.count) active)")
 
         let description = CATapDescription(monoMixdownOfProcesses: [target])
@@ -848,6 +846,28 @@ final class SystemAudioProcessTap {
     /// currently has no default output (rare transient state mid-unplug),
     /// suppress to avoid thrashing — the next listener fire will catch
     /// the new default and trigger the rebuild then.
+    /// Which audio-active process we want to tap.
+    ///
+    /// A known call app wins. Failing that we KEEP whatever we are already
+    /// tapping as long as it is still producing audio, and only then fall
+    /// back to whichever comes first. That middle rule is the point: the HAL
+    /// list order is not ours to rely on, and "first" flipping between two
+    /// equally valid processes would rebuild the tap for nothing.
+    static func preferredTarget(
+        among objects: [AudioObjectID], keeping current: pid_t?
+    ) -> AudioObjectID? {
+        if let call = objects.first(where: { obj in
+            guard let p = pid(forAudioObject: obj) else { return false }
+            return CallDetectionManager.resolveKnownCallApp(p) != nil
+        }) {
+            return call
+        }
+        if let current, let same = objects.first(where: { pid(forAudioObject: $0) == current }) {
+            return same
+        }
+        return objects.first
+    }
+
     static func shouldRebuildForOutputChange(
         builtUID: String?, currentUID: String?
     ) -> Bool {
@@ -868,14 +888,31 @@ final class SystemAudioProcessTap {
             let currentOutputUID = Self.defaultOutputDeviceUID()
             let outputChanged = Self.shouldRebuildForOutputChange(
                 builtUID: builtOutputUID, currentUID: currentOutputUID)
-            let pidSetChanged = newPidSet != currentTapPidSet
+            // Compare the process we WOULD tap with the one we ARE tapping,
+            // not the whole audio-active set against our single target.
+            //
+            // We deliberately tap ONE process, so `currentTapPidSet` holds
+            // exactly one pid while `newPidSet` holds every app making noise.
+            // The moment a second app made a sound the two could never be
+            // equal again, so every listener fire and every 30 s backstop
+            // asked for a rebuild, which reselected the same process, wrote
+            // the same one-element set, and left the condition true. Seen in
+            // a user's meeting on 2026-09-08 as "audio-active process count
+            // changed 1 -> 2" repeating for the whole call; on 2026-09-07,
+            // before the rebuild brake existed, the same loop rebuilt the tap
+            // 30 times in six seconds and killed the system audio for the
+            // remaining 22 minutes.
+            let desiredPid = Self.preferredTarget(
+                among: activeObjects, keeping: currentTapPidSet.first
+            ).flatMap { Self.pid(forAudioObject: $0) }
+            let pidSetChanged = desiredPid != currentTapPidSet.first
             guard pidSetChanged || outputChanged else { return }
             if outputChanged {
                 // No device names: this file is what users send us.
                 dimmyHostLog("[SystemAudio/tap] default output device changed - rebuild requested")
             }
             if pidSetChanged {
-                dimmyHostLog("[SystemAudio/tap] audio-active process count changed \(currentTapPidSet.count) -> \(newPidSet.count) - rebuild requested")
+                dimmyHostLog("[SystemAudio/tap] tap target changed (\(newPidSet.count) app(s) making audio) - rebuild requested")
             }
             guard allowRebuildNow() else { return }
             forceRebuild()
