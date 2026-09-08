@@ -628,10 +628,25 @@ jobs:
 
           # Static first: resolve every @rpath dependency against the bundle,
           # which needs no window server and names the missing file exactly.
-          RPATHS=$(otool -l "$EXE" | awk '/LC_RPATH/{f=1} f&&/path /{print $2; f=0}')
-          echo "runpaths: $RPATHS"
+          RPATHS=$(otool -l "$EXE" | awk '/LC_RPATH/{f=1} f&&/ path /{print $2; f=0}')
+          DEPS=$(otool -L "$EXE" | awk 'NR>1 {print $1}' | grep '^@rpath/' || true)
+          echo "runpaths:"; echo "$RPATHS" | sed 's/^/  /'
+          echo "@rpath dependencies:"; echo "$DEPS" | sed 's/^/  /'
+
+          # A check with nothing to check is worse than no check: it prints
+          # reassurance. The bundle links these dylibs by definition, so an
+          # empty list means the parsing broke, not that the app is clean.
+          if [ -z "$DEPS" ]; then
+            echo "::error::no @rpath dependencies found - this check is not looking at what it thinks it is"
+            exit 1
+          fi
+          if [ -z "$RPATHS" ]; then
+            echo "::error::the executable has no LC_RPATH - @rpath cannot resolve at all"
+            exit 1
+          fi
+
           MISSING=0
-          for dep in $(otool -L "$EXE" | awk 'NR>1 {print $1}' | grep '^@rpath/'); do
+          for dep in $DEPS; do
             base="${dep#@rpath/}"
             found=""
             for rp in $RPATHS; do
