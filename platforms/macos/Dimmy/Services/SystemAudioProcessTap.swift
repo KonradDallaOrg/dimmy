@@ -618,6 +618,21 @@ final class SystemAudioProcessTap {
     /// which rebuilds the tap+aggregate against the new default — same
     /// machinery as the PID-set rebuild. See `builtOutputUID` doc above.
     private var defaultOutputListener: AudioObjectPropertyListenerBlock?
+
+    /// Listener on the OUTPUT DEVICE's nominal sample rate.
+    ///
+    /// A Bluetooth headset moving between A2DP (48 kHz) and hands-free
+    /// (16 kHz) does not change which device is default, nor which processes
+    /// are playing, so neither listener above fires - but the aggregate we
+    /// built is anchored to the old rate and starts handing back digital
+    /// silence. That is what took four minutes out of a user's meeting on
+    /// 2026-09-08, nine seconds after `resampler rebuilt: 16000 Hz`.
+    ///
+    /// CoreAudio publishes the change; we simply were not listening. Re-armed
+    /// whenever the default output device itself changes, since the listener
+    /// is attached to the device object rather than to the system.
+    private var deviceRateListener: AudioObjectPropertyListenerBlock?
+    private var deviceRateListenerObject = AudioObjectID(kAudioObjectUnknown)
     private var rescanBackstop: DispatchSourceTimer?
     private let listenerLock = NSLock()
 
@@ -723,6 +738,9 @@ final class SystemAudioProcessTap {
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain)
         let defaultOutBlock: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            // The rate listener lives on the DEVICE, so it has to move
+            // with the default output.
+            self?.armDeviceRateListener()
             self?.rescanAndRebuildIfNeeded()
         }
         let stDef = AudioObjectAddPropertyListenerBlock(
@@ -735,6 +753,8 @@ final class SystemAudioProcessTap {
         } else {
             NSLog("[SystemAudio/tap] AddPropertyListener(DefaultOutputDevice) failed: %d — backstop polling only", stDef)
         }
+
+        armDeviceRateListener()
 
         let backstop = DispatchSource.makeTimerSource(queue: ioQueue)
         backstop.schedule(deadline: .now() + 30.0, repeating: 30.0)
@@ -778,6 +798,57 @@ final class SystemAudioProcessTap {
         }
     }
 
+    /// Watch the current default output device's nominal sample rate.
+    ///
+    /// Attached to the device object, so it has to follow the default output
+    /// around: the default-output listener calls this again after a switch.
+    private func armDeviceRateListener() {
+        let device = Self.defaultOutputDeviceID()
+        listenerLock.lock()
+        let already = deviceRateListener != nil && deviceRateListenerObject == device
+        listenerLock.unlock()
+        if already || device == AudioObjectID(kAudioObjectUnknown) { return }
+        removeDeviceRateListener()
+
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyNominalSampleRate,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            guard let self else { return }
+            dimmyHostLog("[SystemAudio/tap] output device changed its sample rate - rebuilding tap")
+            // Bypasses the burst brake on purpose: this is a real event with
+            // a known consequence, not the process-list chatter the brake
+            // exists to damp.
+            self.forceRebuild()
+        }
+        let st = AudioObjectAddPropertyListenerBlock(device, &addr, ioQueue, block)
+        if st == noErr {
+            listenerLock.lock()
+            deviceRateListener = block
+            deviceRateListenerObject = device
+            listenerLock.unlock()
+            dimmyHostLog("[SystemAudio/tap] event listener armed on the output device's sample rate")
+        } else {
+            dimmyHostLog("[SystemAudio/tap] AddPropertyListener(NominalSampleRate) failed: \(st) - the silence watchdog is the only cover")
+        }
+    }
+
+    private func removeDeviceRateListener() {
+        listenerLock.lock()
+        let old = deviceRateListener
+        let oldObj = deviceRateListenerObject
+        deviceRateListener = nil
+        deviceRateListenerObject = AudioObjectID(kAudioObjectUnknown)
+        listenerLock.unlock()
+        guard let old, oldObj != AudioObjectID(kAudioObjectUnknown) else { return }
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyNominalSampleRate,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        _ = AudioObjectRemovePropertyListenerBlock(oldObj, &addr, ioQueue, old)
+    }
+
     private func stopRescan() {
         listenerLock.lock()
         let oldSys = processListListener
@@ -811,6 +882,7 @@ final class SystemAudioProcessTap {
             _ = AudioObjectRemovePropertyListenerBlock(
                 AudioObjectID(kAudioObjectSystemObject), &defaultOutAddr, ioQueue, block)
         }
+        removeDeviceRateListener()
         watchdogTimer?.cancel()
         watchdogTimer = nil
         if let wakeObserver {
@@ -1463,6 +1535,27 @@ final class SystemAudioProcessTap {
     /// UID of the current default output device — used as the aggregate's
     /// clock anchor. nil if there's no output device (rare; tap-only
     /// aggregate is then attempted).
+    /// The object id of the device the aggregate anchors to.
+    ///
+    /// Same selector as `defaultOutputDeviceUID` so the rate listener sits on
+    /// the device we actually built against, not a different notion of
+    /// "default" - on macOS the system-output and regular-output defaults
+    /// diverge exactly when audio routes change, which is when this matters.
+    private static func defaultOutputDeviceID() -> AudioObjectID {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultSystemOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var deviceID = AudioObjectID(kAudioObjectUnknown)
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &addr,
+            0, nil, &size, &deviceID) == noErr else {
+            return AudioObjectID(kAudioObjectUnknown)
+        }
+        return deviceID
+    }
+
     private static func defaultOutputDeviceUID() -> String? {
         var deviceAddress = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultSystemOutputDevice,
