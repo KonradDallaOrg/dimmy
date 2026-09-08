@@ -207,6 +207,28 @@ pub fn model_exists(filename: &str) -> bool {
 }
 
 /// Full path to an LLM model file inside the LLM model directory.
+/// Should the resident whisper model yield to an LLM of this size?
+///
+/// Pure half of `should_evict_stt`, so the arithmetic can be checked
+/// against the machines it was written for instead of guessed at.
+///
+/// The 1.5x comes from a measurement on 2026-09-08: gemma-4-E4B QAT, a
+/// 4020 MB file, reported 1872 MiB CPU + 4005 MiB Metal buffers. The extra
+/// gigabyte is the KV and compute buffers alongside it (140 + 351 + 577 MiB
+/// on that run). Whisper yields when the total would take more than a third
+/// of the machine; unknown memory yields, because being wrong the other way
+/// killed a process once.
+pub fn stt_should_yield(model_file_mb: u64, total_mb: Option<u64>) -> bool {
+    let Some(total_mb) = total_mb else {
+        return true;
+    };
+    if total_mb == 0 {
+        return true;
+    }
+    let footprint_mb = model_file_mb * 3 / 2 + 1024;
+    footprint_mb * 3 > total_mb
+}
+
 pub fn model_path(filename: &str) -> PathBuf {
     assert!(!filename.is_empty(), "LLM model filename must not be empty");
     llm_model_directory().join(filename)
@@ -614,19 +636,26 @@ mod llm_cache {
     /// (`n_ubatch`), so nothing is split twice.
     const PROMPT_BATCH: u32 = 512;
 
-    /// Whether GPU memory is small enough that a resident whisper model is
-    /// worth evicting before an LLM is loaded.
+    /// Whether to drop the resident whisper model before loading this LLM.
     ///
-    /// The threshold sits above every discrete card this eviction was written
-    /// for (a 4 GB T600) and below the unified memory of the Macs where it is
-    /// pure loss. `hardware::detect` reports total RAM on Apple silicon, so an
-    /// 8 GB Mac still counts as tight - which it is. Unknown counts as tight:
-    /// evicting costs seconds, and NOT evicting cost a killed process once.
-    fn memory_is_tight() -> bool {
-        const ROOMY_MB: u64 = 12_000;
-        crate::hardware::detect()
-            .vram_mb
-            .is_none_or(|mb| mb < ROOMY_MB)
+    /// Not a question about the machine alone: it is about THIS model on
+    /// this machine. A flat memory threshold got it wrong in both
+    /// directions - it evicted needlessly on a roomy Mac loading a small
+    /// model, and (briefly, on 2026-09-08) kept whisper resident on a 16 GB
+    /// Mac while loading a 5.9 GB one, which is the case that actually
+    /// hurts.
+    ///
+    /// Measured that day: gemma-4-E4B QAT reports 1872 MiB CPU + 4005 MiB
+    /// Metal for a 4020 MB file (about 1.5x), plus roughly a gigabyte of KV
+    /// and compute buffers. So the footprint is estimated from the file, and
+    /// whisper yields when that footprint would take more than a third of
+    /// the machine. Unknown memory evicts: it costs seconds, while getting
+    /// it wrong once cost a killed process.
+    fn should_evict_stt(model_path: &std::path::Path) -> bool {
+        let file_mb = std::fs::metadata(model_path)
+            .map(|m| m.len() / (1024 * 1024))
+            .unwrap_or(0);
+        crate::local_llm::stt_should_yield(file_mb, crate::hardware::detect().vram_mb)
     }
 
     /// Load model if needed, run text generation, return result. Lock held during load only.
@@ -726,7 +755,7 @@ mod llm_cache {
             // and loads the other" (2026-09-08), and the log confirmed the
             // reload. The retry path below still evicts when the context
             // genuinely does not fit, which is where that decision belongs.
-            if using_gpu && memory_is_tight() {
+            if using_gpu && should_evict_stt(model_path) {
                 crate::local_stt::clear_model_cache();
             }
 
@@ -1271,6 +1300,33 @@ mod tests {
     #[test]
     fn llm_model_exists_false_for_missing() {
         assert!(!model_exists("nonexistent-model.gguf"));
+    }
+
+    // Whisper eviction: whose memory, and how much
+
+    /// The three machines this rule exists for, with the numbers measured
+    /// on them rather than invented here.
+    #[test]
+    fn whisper_yields_to_a_big_model_and_stays_for_a_small_one() {
+        // 16 GB Mac, gemma-4-E4B QAT (4020 MB file -> ~5.9 GB resident +
+        // ~1 GB of buffers). This is the case that put macOS into its
+        // out-of-memory modal on 2026-09-08.
+        assert!(stt_should_yield(4020, Some(16384)));
+        // Same Mac, Qwen 3 4B (2380 MB). Room for both; reloading whisper
+        // afterwards would be pure waste.
+        assert!(!stt_should_yield(2380, Some(16384)));
+        // 4 GB T600: everything yields, which is why the eviction exists.
+        assert!(stt_should_yield(2380, Some(3939)));
+        assert!(stt_should_yield(1500, Some(3939)));
+    }
+
+    #[test]
+    fn unknown_memory_evicts() {
+        assert!(
+            stt_should_yield(2380, None),
+            "a machine we cannot measure gets the safe answer"
+        );
+        assert!(stt_should_yield(2380, Some(0)));
     }
 
     // ── llama.cpp backend lifetime ──────────────────────────────
