@@ -76,6 +76,7 @@ pub mod parakeet_fluid;
 pub mod preprocess;
 pub mod process_loopback;
 pub mod provider;
+pub mod qwen_asr;
 pub mod silero;
 pub mod telegram;
 pub mod telemetry;

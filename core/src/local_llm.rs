@@ -566,6 +566,22 @@ fn anchor_text(lang: &str) -> String {
 // We cache the LlamaModel globally and reuse it across calls.
 // LlamaContext is created per-call (cheap, ~1ms) because it's !Send+!Sync.
 
+/// The one process-wide llama.cpp backend, shared with every other consumer
+/// of llama.cpp in this process.
+///
+/// `LlamaBackend::init()` refuses with `BackendAlreadyInitialized` while one
+/// is alive, so Qwen3-ASR (`crate::qwen_asr`) must NOT make its own: a local
+/// recap followed by a local transcription would be the failing pair.
+///
+/// Gated on the consumer, not on `local-llm`: with only the LLM feature on
+/// nothing calls it and clippy fails the build on dead code, which is the
+/// exact feature set CI lints with.
+#[cfg(feature = "local-stt-qwen")]
+pub(crate) fn shared_backend(
+) -> Result<&'static llama_cpp_4::llama_backend::LlamaBackend, crate::error::LlmError> {
+    llm_cache::backend()
+}
+
 #[cfg(feature = "local-llm")]
 mod llm_cache {
     use std::path::PathBuf;
