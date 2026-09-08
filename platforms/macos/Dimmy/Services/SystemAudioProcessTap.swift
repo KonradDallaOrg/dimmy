@@ -294,6 +294,24 @@ final class SystemAudioProcessTap {
     private let frameCounter = OSAllocatedUnfairLock<UInt64>(initialState: 0)
     var frameCount: UInt64 { frameCounter.withLock { $0 } }
 
+    /// Frames that actually contained a non-zero sample.
+    ///
+    /// The heartbeat above counts every fire, silent buffers included, on
+    /// purpose: it must tell a quiet tap from a dead one. That choice left a
+    /// blind spot, and a user fell into it on 2026-09-08 - for four minutes
+    /// the tap delivered exactly as many samples as before, at the same rate,
+    /// every one of them zero:
+    ///
+    ///   15:09:42  push=251 in=80320 src=16000 peak=0.6031
+    ///   15:11:10  push=251 in=80320 src=16000 peak=0.0000
+    ///
+    /// The heartbeat advanced throughout, so nothing intervened, and the
+    /// recording kept a four-minute hole where the other side of the call
+    /// should be. We watched that audio ARRIVED, never that it contained
+    /// anything.
+    private let audibleCounter = OSAllocatedUnfairLock<UInt64>(initialState: 0)
+    var audibleFrameCount: UInt64 { audibleCounter.withLock { $0 } }
+
     /// Measures what the tap ACTUALLY delivers, so the rate handed to the
     /// core is observed rather than believed. Reset on every teardown so a
     /// rebuilt tap (default-output change, sleep/wake) re-measures against
@@ -499,6 +517,7 @@ final class SystemAudioProcessTap {
         let channels = channelCount
         let receivedFlag = receivedAudioFlag
         let frames = frameCounter
+        let audible = audibleCounter
         let estimator = rateEstimator
         let ticksPerSecond = Self.hostTicksPerSecond
         var newProcID: AudioDeviceIOProcID?
@@ -508,6 +527,9 @@ final class SystemAudioProcessTap {
             // liveness watchdog can see the IO proc is alive and distinguish a
             // quiet-but-healthy tap from a dead one.
             frames.withLock { $0 &+= 1 }
+            if Self.containsAudio(inInputData) {
+                audible.withLock { $0 &+= 1 }
+            }
             // Latch + detect the first fire so we can log "capture is live"
             // exactly once. Diagnostic only — no recovery logic keys on it.
             let firstFire = receivedFlag.withLock { (state: inout Bool) -> Bool in
@@ -612,6 +634,17 @@ final class SystemAudioProcessTap {
     private var watchdogLastCount: UInt64 = 0
     private var watchdogLastAdvance = Date()
     private var watchdogRebuilds = 0
+
+    /// A tap that fires but delivers nothing has to be caught separately:
+    /// the heartbeat cannot see it. Threshold is generous because a call
+    /// really can go digitally silent - a muted app, a paused stream - and a
+    /// rebuild costs about a second of audio. Against that, the measured
+    /// alternative was four minutes of nothing.
+    private static let muteThreshold: TimeInterval = 25.0
+    private static let maxMuteRebuilds = 3
+    private var muteLastCount: UInt64 = 0
+    private var muteLastAdvance = Date()
+    private var muteRebuilds = 0
     /// Seconds of frozen heartbeat before the tap is declared dead. Long
     /// enough to clear the brief start-up window before the first frame, short
     /// enough to recover within a few seconds of a wake.
@@ -988,6 +1021,8 @@ final class SystemAudioProcessTap {
             watchdogRebuilds = 0
             return
         }
+        checkTapAudible()
+
         let count = frameCount
         if count != watchdogLastCount {
             // IO proc is firing — tap alive (even if the buffers are silent).
@@ -1010,11 +1045,75 @@ final class SystemAudioProcessTap {
             return
         }
         watchdogRebuilds += 1
-        dimmyHostLog("[SystemAudio/tap] watchdog: no IO-proc frames for \(String(format: "%.1f", stalled))s while capturing \(currentTapPidSet.count) process(es) - tap is dead, rebuilding (attempt \(watchdogRebuilds)/\(Self.maxWatchdogRebuilds)")
+        dimmyHostLog("[SystemAudio/tap] watchdog: no IO-proc frames for \(String(format: "%.1f", stalled))s while capturing \(currentTapPidSet.count) process(es) - tap is dead, rebuilding (attempt \(watchdogRebuilds)/\(Self.maxWatchdogRebuilds))")
         forceRebuild()
         // Give the freshly-rebuilt tap a full grace window before re-judging.
         watchdogLastAdvance = Date()
         watchdogLastCount = frameCount
+    }
+
+    /// Whether this buffer carries a single non-zero sample.
+    ///
+    /// Exact zero is the discriminator, not "quiet": a live call carries a
+    /// noise floor even when nobody speaks (0.0002-0.0008 in the logs), while
+    /// a tap that has come unstuck delivers 0.0000 forever. Cheap - it stops
+    /// at the first sample that is not zero, which for real audio is the
+    /// first one.
+    private static func containsAudio(
+        _ inInputData: UnsafePointer<AudioBufferList>
+    ) -> Bool {
+        let abl = UnsafeMutableAudioBufferListPointer(
+            UnsafeMutablePointer(mutating: inInputData))
+        for buffer in abl {
+            guard let data = buffer.mData else { continue }
+            let count = Int(buffer.mDataByteSize) / MemoryLayout<Float>.size
+            let samples = data.bindMemory(to: Float.self, capacity: count)
+            for i in 0..<count where samples[i] != 0 {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Rebuild a tap that is alive but silent.
+    ///
+    /// Measured 2026-09-08: after a headset profile change the tap kept
+    /// delivering full buffers of exact zeros for four minutes, the
+    /// heartbeat advanced the whole time, and the meeting lost the other
+    /// side of the call. The rebuild that eventually fixed it came only when
+    /// an unrelated process-list change happened to trigger one.
+    ///
+    /// Capped like the liveness watchdog: if rebuilding does not bring audio
+    /// back, the app is genuinely producing silence and thrashing coreaudiod
+    /// would make things worse.
+    private func checkTapAudible() {
+        guard running, !currentTapPidSet.isEmpty else {
+            muteLastCount = audibleFrameCount
+            muteLastAdvance = Date()
+            muteRebuilds = 0
+            return
+        }
+        let count = audibleFrameCount
+        if count != muteLastCount {
+            muteLastCount = count
+            muteLastAdvance = Date()
+            muteRebuilds = 0
+            return
+        }
+        let silent = Date().timeIntervalSince(muteLastAdvance)
+        guard silent >= Self.muteThreshold else { return }
+        if muteRebuilds >= Self.maxMuteRebuilds {
+            if muteRebuilds == Self.maxMuteRebuilds {
+                dimmyHostLog("[SystemAudio/tap] still nothing but digital silence after \(muteRebuilds) rebuilds - leaving it alone (the app may simply be muted)")
+                muteRebuilds += 1
+            }
+            return
+        }
+        muteRebuilds += 1
+        dimmyHostLog("[SystemAudio/tap] tap alive but every sample is zero for \(Int(silent))s - rebuilding (attempt \(muteRebuilds)/\(Self.maxMuteRebuilds))")
+        forceRebuild()
+        muteLastAdvance = Date()
+        muteLastCount = audibleFrameCount
     }
 
     /// Sample count in the first buffer of an IO proc's input list.
@@ -1132,6 +1231,10 @@ final class SystemAudioProcessTap {
         // Reset the diagnostic "first fire" latch so a rebuilt instance
         // logs its first frame again.
         receivedAudioFlag.withLock { $0 = false }
+        // Same for the audible counter: a rebuilt tap starts its silence
+        // window fresh, or the old count would look stalled the moment the
+        // new one is running.
+        audibleCounter.withLock { $0 = 0 }
         // Drop the measured rate: the rebuilt aggregate may be anchored to a
         // different device (that IS why most rebuilds happen), so the next
         // instance must measure again rather than inherit the old verdict.
