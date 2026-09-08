@@ -633,6 +633,7 @@ final class SystemAudioProcessTap {
     /// is attached to the device object rather than to the system.
     private var deviceRateListener: AudioObjectPropertyListenerBlock?
     private var deviceRateListenerObject = AudioObjectID(kAudioObjectUnknown)
+    private var lastKnownDeviceRate: Float64 = 0
     private var rescanBackstop: DispatchSourceTimer?
     private let listenerLock = NSLock()
 
@@ -816,10 +817,19 @@ final class SystemAudioProcessTap {
             mElement: kAudioObjectPropertyElementMain)
         let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
             guard let self else { return }
-            dimmyHostLog("[SystemAudio/tap] output device changed its sample rate - rebuilding tap")
-            // Bypasses the burst brake on purpose: this is a real event with
-            // a known consequence, not the process-list chatter the brake
-            // exists to damp.
+            let now = Self.nominalRate(of: device)
+            // The property fires for reasons other than a real change,
+            // including our own teardown/create. Only a DIFFERENT rate
+            // invalidates the aggregate we built.
+            guard now > 0, now != self.lastKnownDeviceRate else { return }
+            let was = self.lastKnownDeviceRate
+            self.lastKnownDeviceRate = now
+            guard was > 0 else { return }   // first reading is not a change
+            dimmyHostLog("[SystemAudio/tap] output device rate moved \(Int(was)) -> \(Int(now)) Hz - rebuild requested")
+            // Through the same brake as every other rebuild. Rebuilds are
+            // not free: three of them inside eighteen seconds is what left
+            // a tap delivering silence on 2026-09-08.
+            guard self.allowRebuildNow() else { return }
             self.forceRebuild()
         }
         let st = AudioObjectAddPropertyListenerBlock(device, &addr, ioQueue, block)
@@ -828,6 +838,7 @@ final class SystemAudioProcessTap {
             deviceRateListener = block
             deviceRateListenerObject = device
             listenerLock.unlock()
+            lastKnownDeviceRate = Self.nominalRate(of: device)
             dimmyHostLog("[SystemAudio/tap] event listener armed on the output device's sample rate")
         } else {
             dimmyHostLog("[SystemAudio/tap] AddPropertyListener(NominalSampleRate) failed: \(st) - the silence watchdog is the only cover")
@@ -1541,6 +1552,20 @@ final class SystemAudioProcessTap {
     /// the device we actually built against, not a different notion of
     /// "default" - on macOS the system-output and regular-output defaults
     /// diverge exactly when audio routes change, which is when this matters.
+    /// The device's nominal sample rate, or 0 when it cannot be read.
+    private static func nominalRate(of device: AudioObjectID) -> Float64 {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyNominalSampleRate,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var rate: Float64 = 0
+        var size = UInt32(MemoryLayout<Float64>.size)
+        guard AudioObjectGetPropertyData(device, &addr, 0, nil, &size, &rate) == noErr else {
+            return 0
+        }
+        return rate
+    }
+
     private static func defaultOutputDeviceID() -> AudioObjectID {
         var addr = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultSystemOutputDevice,
