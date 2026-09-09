@@ -7964,6 +7964,21 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
         .map(|m| m.clone())
         .unwrap_or_else(|_| "local".to_string());
     let is_local = stt_mode == "local";
+    // Gate idle windows the way the LIVE meeting path does
+    // (`meeting.rs`, `ctx.vad_trim`); re-transcribe was the one local path
+    // without it. This is PARITY, not a hallucination fix: measured
+    // 2026-09-09 on the two meetings that hallucinate worst, the gate drops
+    // ZERO of 107 windows, because one transient in 750 frames opens the
+    // whole window and an idle mic track is never actually silent (-62 dBFS
+    // median, not -inf). A window-level energy threshold was measured too and
+    // rejected: removing 32 of 41 bad windows costs 2 of 10 real ones.
+    let vad_gate = matches!(
+        crate::preprocess::preprocess_route(
+            st.preprocessing_enabled.lock().map(|b| *b).unwrap_or(true),
+            &stt_mode,
+        ),
+        crate::preprocess::PreprocessRoute::Full
+    );
     let backend = st
         .local_stt_backend
         .lock()
@@ -8046,8 +8061,22 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
             let mut start = 0usize;
             while start < total {
                 let end = (start + chunk_samples).min(total);
+                let samples = if vad_gate {
+                    crate::preprocess::process_chunk_vad_only(&processed[start..end], rate)
+                } else {
+                    processed[start..end].to_vec()
+                };
+                if samples.is_empty() {
+                    emit_event(
+                        "file_transcribe_progress",
+                        &serde_json::json!({ "percent": (end as f64 / total as f64) * 100.0 })
+                            .to_string(),
+                    );
+                    start = end;
+                    continue;
+                }
                 let window = crate::audio::ProcessedAudio {
-                    samples: processed[start..end].to_vec(),
+                    samples,
                     sample_rate: rate,
                 };
                 let elapsed_ms = (start as f64 / rate as f64 * 1000.0) as u128;
