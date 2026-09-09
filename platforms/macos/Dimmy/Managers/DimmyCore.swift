@@ -888,6 +888,43 @@ final class DimmyCore {
         }
     }
 
+    // MARK: - Qwen3-ASR (third local STT backend)
+
+    /// The catalog, with per-entry download status. One entry is TWO
+    /// files, so `downloaded` means both halves are on disk.
+    func listQwenAsrModels() -> [[String: Any]]? {
+        let bufLen = Self.bufferSize
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
+        defer { buffer.deallocate() }
+        buffer[0] = 0
+
+        let written = dimmy_qwen_asr_models_json(buffer, bufLen)
+        guard written > 0 else { return nil }
+
+        let jsonStr = String(cString: buffer)
+        guard let data = jsonStr.data(using: .utf8),
+              let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+        else { return nil }
+
+        return arr
+    }
+
+    /// True only when BOTH halves of the named variant are on disk.
+    func qwenAsrBundlePresent(_ modelFile: String) -> Bool {
+        dimmy_qwen_asr_bundle_present(modelFile) == 1
+    }
+
+    /// Fetch both halves. BLOCKING -- call from a background thread.
+    /// Progress arrives as "qwen_asr_download_progress" events.
+    @discardableResult
+    func downloadQwenAsr(_ modelFile: String) -> Bool {
+        let result = dimmy_qwen_asr_download(modelFile)
+        if result != 0 {
+            print("[DimmyCore] ERROR: downloadQwenAsr failed with code \(result)")
+        }
+        return result == 0
+    }
+
     // MARK: - Parakeet (alternative local STT backend)
 
     /// 1 = bundle complete on disk, 0 = missing or partial.
@@ -1258,6 +1295,15 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
            let total = payload["total"] as? Int,
            total > 0 {
             appState.parakeetDownloadProgress = Double(downloaded) / Double(total)
+        }
+
+    case "qwen_asr_download_progress":
+        // The numbers cover the PAIR of files, so the bar does not
+        // restart when the projector starts downloading.
+        if let downloaded = payload["downloaded"] as? Int,
+           let total = payload["total"] as? Int,
+           total > 0 {
+            appState.qwenDownloadProgress = Double(downloaded) / Double(total)
         }
 
     case "file_transcribe_progress":

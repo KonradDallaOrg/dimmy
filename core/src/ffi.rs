@@ -97,6 +97,17 @@ static RECORDING_STARTED_AT: Mutex<Option<std::time::Instant>> = Mutex::new(None
 /// `dimmy_meeting_start`, NOT via the dictation hotkey).
 static MEETING: Mutex<Option<crate::meeting::MeetingSession>> = Mutex::new(None);
 
+/// The selected Qwen3-ASR variant, or the catalog default. Four call
+/// sites read it -- dictation batch, dictation chunked, file load and
+/// meeting re-transcribe -- and they must not disagree.
+fn qwen_asr_variant() -> String {
+    state()
+        .qwen_asr_model
+        .lock()
+        .map(|m| m.clone())
+        .unwrap_or_else(|_| crate::qwen_asr::DEFAULT_MODEL.to_string())
+}
+
 fn state() -> &'static AppState {
     GLOBAL_STATE
         .get()
@@ -494,6 +505,7 @@ fn dimmy_init_inner() -> c_int {
         stt_mode: Mutex::new(file_cfg.stt_mode),
         local_model: Mutex::new(file_cfg.local_model),
         local_stt_backend: Mutex::new(file_cfg.local_stt_backend),
+        qwen_asr_model: Mutex::new(file_cfg.qwen_asr_model),
         live_captions_enabled: Mutex::new(file_cfg.live_captions_enabled),
         call_detect_enabled: Mutex::new(file_cfg.call_detect_enabled),
         call_detect_excluded_apps: Mutex::new(file_cfg.call_detect_excluded_apps),
@@ -1032,6 +1044,9 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
         // Per-chunk transcriber for the active local backend.
         let transcribe_fn: Arc<crate::chunked_stt::TranscribeFn> = if local_backend == "parakeet" {
             Arc::new(|pcm: &[f32]| crate::parakeet::transcribe(pcm))
+        } else if local_backend == "qwen" {
+            let variant = qwen_asr_variant();
+            Arc::new(move |pcm: &[f32]| crate::qwen_asr::transcribe(pcm, &variant).map(|t| t.text))
         } else {
             let model_filename = st.local_model.lock().map(|m| m.clone()).unwrap_or_default();
             let model_path = crate::local_stt::model_path(&model_filename);
@@ -1501,6 +1516,13 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
         if local_stt_backend == "parakeet" {
             log("[StopRec] Local STT mode — backend: parakeet (batch)");
             crate::transcribe::transcribe_audio_local_parakeet(&processed)
+        } else if local_stt_backend == "qwen" {
+            let variant = qwen_asr_variant();
+            log(&format!(
+                "[StopRec] Local STT mode — backend: qwen, model: {}",
+                variant
+            ));
+            crate::transcribe::transcribe_audio_local_qwen(&processed, &variant)
         } else {
             log(&format!(
                 "[StopRec] Local STT mode — backend: whisper, model: {}",
@@ -1653,6 +1675,7 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
                     .as_str()
                 {
                     "parakeet" => "parakeet",
+                    "qwen" => "qwen",
                     _ => "whisper",
                 }
             } else {
@@ -2029,6 +2052,7 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         "stt_mode": *st.stt_mode.lock().unwrap_or_else(|e| e.into_inner()),
         "local_model": *st.local_model.lock().unwrap_or_else(|e| e.into_inner()),
         "local_stt_backend": *st.local_stt_backend.lock().unwrap_or_else(|e| e.into_inner()),
+        "qwen_asr_model": *st.qwen_asr_model.lock().unwrap_or_else(|e| e.into_inner()),
         "live_captions_enabled": *st.live_captions_enabled.lock().unwrap_or_else(|e| e.into_inner()),
         "call_detect_enabled": *st.call_detect_enabled.lock().unwrap_or_else(|e| e.into_inner()),
         "call_detect_excluded_apps": st.call_detect_excluded_apps.lock().unwrap_or_else(|e| e.into_inner()).clone(),
@@ -2501,10 +2525,13 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
     if let Some(s) = v["local_stt_backend"].as_str() {
         // Allow-list (audit 2026-07-02) — see stt_mode above.
         let normalized = match s {
-            "whisper" | "parakeet" => s,
+            // A config written by a full build can reach a lean one. Coerce
+            // rather than fail every chunk with "requires the cargo feature".
+            "qwen" if !crate::qwen_asr::engine_available() => "whisper",
+            "whisper" | "parakeet" | "qwen" => s,
             _ => {
                 log(&format!(
-                    "[Config] WARN local_stt_backend '{}' not in {{whisper,parakeet}} — coerced to 'whisper'",
+                    "[Config] WARN local_stt_backend '{}' not in {{whisper,parakeet,qwen}} — coerced to 'whisper'",
                     s
                 ));
                 "whisper"
@@ -2518,6 +2545,25 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
                 ));
             }
             *m = normalized.to_string();
+        }
+    }
+    if let Some(s) = v["qwen_asr_model"].as_str() {
+        // Allow-list against the catalog: an unknown filename would be a
+        // path we then try to load, and the failure would surface per chunk
+        // instead of once, here.
+        if crate::qwen_asr::find(s).is_some() {
+            if let Ok(mut m) = st.qwen_asr_model.lock() {
+                if *m != s {
+                    log(&format!("[QwenASR] Model changed: {} → {}", *m, s));
+                    crate::qwen_asr::clear_model_cache();
+                }
+                *m = s.to_string();
+            }
+        } else if !s.is_empty() {
+            log(&format!(
+                "[Config] WARN unknown qwen_asr_model '{}' — kept",
+                s
+            ));
         }
     }
     if let Some(b) = v["live_captions_enabled"].as_bool() {
@@ -6403,6 +6449,96 @@ pub extern "C" fn dimmy_parakeet_warmup() -> c_int {
     }
 }
 
+// -- Qwen3-ASR ---------------------------------------------------------
+
+/// JSON array of the Qwen3-ASR variants, with per-entry download status.
+/// Same shape as `dimmy_list_local_models` so the pickers can share code,
+/// except `size_mb` covers BOTH halves: the model and its audio projector
+/// are downloaded and used as a pair.
+#[no_mangle]
+pub extern "C" fn dimmy_qwen_asr_models_json(buf: *mut c_char, buf_len: c_int) -> c_int {
+    if !crate::qwen_asr::engine_available() {
+        return write_to_buf("[]", buf, buf_len);
+    }
+    let models: Vec<serde_json::Value> = crate::qwen_asr::AVAILABLE_MODELS
+        .iter()
+        .map(|m| {
+            serde_json::json!({
+                "name": m.name,
+                "filename": m.model_file,
+                "size_mb": m.size_mb,
+                "description": m.description,
+                "downloaded": crate::qwen_asr::bundle_present(m.model_file),
+            })
+        })
+        .collect();
+    let json = serde_json::to_string(&models).unwrap_or_default();
+    write_to_buf(&json, buf, buf_len)
+}
+
+/// 1 when BOTH halves of the named variant are on disk, 0 otherwise.
+///
+/// # Safety
+/// `model_ptr` must be a valid null-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_qwen_asr_bundle_present(model_ptr: *const c_char) -> c_int {
+    if model_ptr.is_null() {
+        return 0;
+    }
+    let Ok(model) = CStr::from_ptr(model_ptr).to_str() else {
+        return 0;
+    };
+    if crate::qwen_asr::bundle_present(model) {
+        1
+    } else {
+        0
+    }
+}
+
+/// Download both halves of the named variant. BLOCKING -- call from a
+/// background thread. Emits `qwen_asr_download_progress` as
+/// `{"filename":"...","downloaded":N,"total":N}`, where the numbers cover
+/// the pair so the bar does not restart halfway. Returns 0, or -1 on error.
+///
+/// # Safety
+/// `model_ptr` must be a valid null-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_qwen_asr_download(model_ptr: *const c_char) -> c_int {
+    if model_ptr.is_null() {
+        return -1;
+    }
+    let Ok(model) = CStr::from_ptr(model_ptr).to_str() else {
+        return -1;
+    };
+    let model = model.to_string();
+    let reported = model.clone();
+    let Ok(rt) = tokio::runtime::Runtime::new() else {
+        return -1;
+    };
+    let result = rt.block_on(crate::qwen_asr::download_bundle(
+        &model,
+        move |downloaded, total| {
+            let payload = format!(
+                r#"{{"filename":"{}","downloaded":{},"total":{}}}"#,
+                reported, downloaded, total
+            );
+            emit_event("qwen_asr_download_progress", &payload);
+        },
+    ));
+    crate::telemetry::track(crate::telemetry::Event::ModelDownloadCompleted {
+        kind: "qwen-asr",
+        success: result.is_ok(),
+    });
+    match result {
+        Ok(()) => 0,
+        Err(e) => {
+            log(&format!("[QwenASR download] {}", e));
+            emit_event("error", r#"{"message":"Qwen3-ASR download failed"}"#);
+            -1
+        }
+    }
+}
+
 /// Transcribe a 16 kHz mono f32 PCM buffer with Parakeet. Writes the
 /// UTF-8 result into `buf` (null-terminated, truncated if buf_len is
 /// too small). Returns the number of bytes written (excluding the
@@ -7622,6 +7758,10 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
         let result: Result<(String, Option<String>), _> = if backend == "parakeet" {
             crate::transcribe::transcribe_audio_local_parakeet_with_word_ts(&chunk)
                 .map(|(t, j)| (t, Some(j)))
+        } else if backend == "qwen" {
+            // No word timestamps: the model returns text, not alignment.
+            crate::transcribe::transcribe_audio_local_qwen(&chunk, &qwen_asr_variant())
+                .map(|t| (t, None))
         } else {
             crate::transcribe::transcribe_audio_local(&chunk, &language, &model, &composed_prompt)
                 .map(|t| (t, None))
@@ -7911,7 +8051,10 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
                     sample_rate: rate,
                 };
                 let elapsed_ms = (start as f64 / rate as f64 * 1000.0) as u128;
-                let text = if backend == "parakeet" {
+                let text = if backend == "qwen" {
+                    crate::transcribe::transcribe_audio_local_qwen(&window, &qwen_asr_variant())
+                        .unwrap_or_default()
+                } else if backend == "parakeet" {
                     crate::transcribe::transcribe_audio_local_parakeet_with_word_ts(&window)
                         .map(|(t, _)| t)
                         .unwrap_or_default()
@@ -10363,6 +10506,7 @@ mod tests {
                 stt_mode: Mutex::new("local".to_string()),
                 local_model: Mutex::new("ggml-base-q8_0.bin".to_string()),
                 local_stt_backend: Mutex::new("whisper".to_string()),
+                qwen_asr_model: Mutex::new(crate::qwen_asr::DEFAULT_MODEL.to_string()),
                 live_captions_enabled: Mutex::new(true),
                 call_detect_enabled: Mutex::new(true),
                 call_detect_excluded_apps: Mutex::new(vec!["discord".to_string()]),
@@ -10679,6 +10823,27 @@ mod tests {
         assert_eq!(
             state().local_stt_backend.lock().unwrap().as_str(),
             "parakeet"
+        );
+
+        // The third local backend, and the variant that goes with it.
+        let json = CString::new(
+            r#"{"local_stt_backend":"qwen","qwen_asr_model":"Qwen3-ASR-0.6B-Q8_0.gguf"}"#,
+        )
+        .unwrap();
+        assert_eq!(unsafe { dimmy_set_config_json(json.as_ptr()) }, 0);
+        assert_eq!(state().local_stt_backend.lock().unwrap().as_str(), "qwen");
+        assert_eq!(
+            state().qwen_asr_model.lock().unwrap().as_str(),
+            "Qwen3-ASR-0.6B-Q8_0.gguf"
+        );
+
+        // An unknown variant is refused and the previous one kept, so a
+        // stale host never points the loader at a path that is not there.
+        let json = CString::new(r#"{"qwen_asr_model":"nope.gguf"}"#).unwrap();
+        assert_eq!(unsafe { dimmy_set_config_json(json.as_ptr()) }, 0);
+        assert_eq!(
+            state().qwen_asr_model.lock().unwrap().as_str(),
+            "Qwen3-ASR-0.6B-Q8_0.gguf"
         );
 
         // Restore the test-state defaults for neighbours.

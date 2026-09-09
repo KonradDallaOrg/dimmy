@@ -326,6 +326,12 @@ struct MacProvidersPage: View {
         if filename == "parakeet:fp32" {
             return DimmyCore.shared.parakeetBundlePresent()
         }
+        // Qwen3-ASR rows are tagged, not bare filenames: they end in .gguf
+        // like the LLM models do, and without the prefix the check below
+        // would ask the LLM catalog about an STT model and always say no.
+        if filename.hasPrefix("qwen:") {
+            return DimmyCore.shared.qwenAsrBundlePresent(String(filename.dropFirst(5)))
+        }
         if filename.hasSuffix(".gguf") {
             return DimmyCore.shared.llmModelExists(filename)
         }

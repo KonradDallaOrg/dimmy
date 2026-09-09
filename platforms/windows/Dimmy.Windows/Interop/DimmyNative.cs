@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Runtime.InteropServices;
 
 namespace Dimmy.Windows.Interop;
@@ -259,6 +259,21 @@ public static class DimmyNative
 
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_parakeet_download_bundle();
+
+    // -- Qwen3-ASR (third local STT backend) ---------------------
+    // One catalog entry is TWO files (model + audio projector), so
+    // presence and download both take the TEXT model filename and
+    // cover the pair.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_qwen_asr_models_json(byte[] buf, int len);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_qwen_asr_bundle_present(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string modelFile);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_qwen_asr_download(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string modelFile);
 
     // ── App context ──────────────────────────────────────────────
     /// Push the foreground-app snapshot so the Rust core can resolve
@@ -574,6 +589,8 @@ public static class DimmyNative
 
     // ── Local STT helpers ────────────────────────────────────────
     public static string? ListLocalModels() => ReadBuffer(dimmy_list_local_models);
+
+    public static string? QwenAsrModelsJson() => ReadBuffer(dimmy_qwen_asr_models_json);
 
     // ── Local LLM helpers ───────────────────────────────────────
     public static string? ListLocalLlmModels() => ReadBuffer(dimmy_list_llm_models);

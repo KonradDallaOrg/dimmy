@@ -577,6 +577,42 @@ pub fn transcribe_audio_local_parakeet_with_word_ts(
     Ok((text, ts_json))
 }
 
+/// Transcribe with Qwen3-ASR, the third local backend.
+///
+/// Same contract as the Parakeet entry above: 16 kHz mono in, text out. The
+/// model's own language verdict comes back with the transcript and is
+/// dropped here -- the callers that want it read it off the meeting path,
+/// where it saves `lang_detect` a whole second whisper pass.
+pub fn transcribe_audio_local_qwen(
+    audio: &crate::audio::ProcessedAudio,
+    model_file: &str,
+) -> Result<String, crate::error::TranscribeError> {
+    assert!(
+        !audio.samples.is_empty(),
+        "transcribe_audio_local_qwen: audio samples must not be empty"
+    );
+    assert!(
+        audio.samples.iter().all(|s| s.is_finite()),
+        "transcribe_audio_local_qwen: all samples must be finite"
+    );
+    assert!(
+        audio.sample_rate > 0,
+        "transcribe_audio_local_qwen: sample_rate must be positive"
+    );
+
+    let samples_16k = stt_input_16k(audio);
+    assert!(
+        !samples_16k.is_empty(),
+        "transcribe_audio_local_qwen: downsampled samples must not be empty"
+    );
+
+    let transcript = crate::qwen_asr::transcribe(&samples_16k, model_file)?;
+    if transcript.text.trim().is_empty() {
+        return Err(crate::error::TranscribeError::Empty);
+    }
+    Ok(transcript.text)
+}
+
 /// Transcribe ProcessedAudio, automatically chunking if it exceeds the provider's
 /// file size limit. Chunk size = 80% of `max_wav_bytes` (safety margin).
 ///

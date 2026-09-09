@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Linq;
 using Dimmy.Windows.Services;
 using Microsoft.UI.Text;
@@ -332,6 +332,11 @@ public sealed partial class SettingsWindow
         try
         {
             if (filename == "parakeet:fp32") return Interop.DimmyNative.dimmy_parakeet_bundle_present() == 1;
+            // Qwen3-ASR rows are tagged, not bare filenames: they end in .gguf
+            // like the LLM models do, and without the prefix the check below
+            // would ask the LLM catalog about an STT model and always say no.
+            if (filename.StartsWith("qwen:", StringComparison.Ordinal))
+                return Interop.DimmyNative.dimmy_qwen_asr_bundle_present(filename.Substring(5)) == 1;
             if (filename.EndsWith(".gguf", StringComparison.OrdinalIgnoreCase))
                 return Interop.DimmyNative.dimmy_llm_model_exists(filename) == 1;
             return Interop.DimmyNative.dimmy_model_exists(filename) == 1;

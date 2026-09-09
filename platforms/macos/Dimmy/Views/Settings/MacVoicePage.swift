@@ -20,6 +20,7 @@ struct MacVoicePage: View {
     /// variants. Previously this Picker hardcoded only 4 entries, so Mac
     /// users never saw the larger/faster models the core already supports.
     @State private var localModels: [[String: Any]] = []
+    @State private var qwenModels: [[String: Any]] = []
 
     /// Text-field state for the "add a word" row in the custom-dictionary
     /// section. Kept inline to avoid a parallel view-model class, the
@@ -32,6 +33,11 @@ struct MacVoicePage: View {
     /// Picker. Mirrors `ParakeetTag` in the Windows OnboardingWindow.xaml.cs
     /// so the two UIs round-trip the same selection through the Rust core.
     private static let parakeetTag = "parakeet:fp32"
+
+    /// Qwen3-ASR rows carry the variant in the tag, because unlike
+    /// Parakeet there is more than one of them. Mirrors QwenTagPrefix in
+    /// SettingsWindow.xaml.cs so both UIs round-trip the same selection.
+    private static let qwenTagPrefix = "qwen:"
 
     /// Picker label for one whisper model dict from `listLocalModels()`:
     /// "Large-v3-Turbo Q8 · 874 MB". The on-disk state is rendered as a
@@ -74,6 +80,22 @@ struct MacVoicePage: View {
     /// flag instead of the listLocalModels output because Parakeet is
     /// not a whisper file — it's the CoreML/Fluid bundle owned by
     /// `parakeet_fluid.rs` and surfaced via `parakeetBundlePresent`.
+    /// One Qwen3-ASR row. Presence is the pair check, not a single
+    /// file, so it comes from `qwenAsrBundlePresent` rather than the
+    /// whisper listing.
+    @ViewBuilder
+    fileprivate static func qwenPickerItem(_ m: [String: Any]) -> some View {
+        let file = m["filename"] as? String ?? ""
+        let label = modelLabel(m)
+        if (m["downloaded"] as? Bool) == true {
+            Label(label, systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+                .tag(qwenTagPrefix + file)
+        } else {
+            Text(label).tag(qwenTagPrefix + file)
+        }
+    }
+
     @ViewBuilder
     fileprivate static func parakeetPickerItem(
         label: String,
@@ -384,6 +406,9 @@ struct MacVoicePage: View {
                                 label: "Parakeet TDT v3 · 466 MB · Apple Neural Engine",
                                 present: appState.parakeetBundlePresent
                             )
+                            ForEach(qwenModels.indices, id: \.self) { i in
+                                Self.qwenPickerItem(qwenModels[i])
+                            }
                         }
                         .labelsHidden()
                         .frame(width: 260)
@@ -391,12 +416,16 @@ struct MacVoicePage: View {
 
                     if downloadInFlight {
                         modelProgressRow(
-                            progress: localBackendIsParakeet
-                                ? appState.parakeetDownloadProgress
-                                : appState.modelDownloadProgress,
-                            label: localBackendIsParakeet
-                                ? "Downloading Parakeet CoreML bundle (about 466 MB)..."
-                                : "Downloading \(appState.localModel)..."
+                            progress: localBackendIsQwen
+                                ? appState.qwenDownloadProgress
+                                : localBackendIsParakeet
+                                    ? appState.parakeetDownloadProgress
+                                    : appState.modelDownloadProgress,
+                            label: localBackendIsQwen
+                                ? "Downloading \(appState.qwenAsrModel) and its projector..."
+                                : localBackendIsParakeet
+                                    ? "Downloading Parakeet CoreML bundle (about 466 MB)..."
+                                    : "Downloading \(appState.localModel)..."
                         )
                     } else if !localModelReady {
                         MacRow(
@@ -479,10 +508,17 @@ struct MacVoicePage: View {
         appState.localSttBackend == "parakeet"
     }
 
+    private var localBackendIsQwen: Bool {
+        appState.localSttBackend == "qwen"
+    }
+
     /// True when the currently-selected local backend has its data on
     /// disk and is ready to transcribe. Whisper: ggml file present.
     /// Parakeet: full about 2.5 GB bundle present.
     private var localModelReady: Bool {
+        if localBackendIsQwen {
+            return appState.qwenBundlePresent
+        }
         if localBackendIsParakeet {
             return appState.parakeetBundlePresent
         }
@@ -497,10 +533,20 @@ struct MacVoicePage: View {
     private var localModelPickerBinding: Binding<String> {
         Binding(
             get: {
-                localBackendIsParakeet ? Self.parakeetTag : appState.localModel
+                if localBackendIsQwen {
+                    return Self.qwenTagPrefix + appState.qwenAsrModel
+                }
+                return localBackendIsParakeet ? Self.parakeetTag : appState.localModel
             },
             set: { newValue in
-                if newValue == Self.parakeetTag {
+                if newValue.hasPrefix(Self.qwenTagPrefix) {
+                    appState.localSttBackend = "qwen"
+                    appState.qwenAsrModel = String(newValue.dropFirst(Self.qwenTagPrefix.count))
+                    // Same convenience as the other two backends: the
+                    // low-latency chunked path is the reason to run a
+                    // local engine at all.
+                    appState.chunkStreamingEnabled = true
+                } else if newValue == Self.parakeetTag {
                     appState.localSttBackend = "parakeet"
                     // Auto-enable chunk streaming on Parakeet pick. Mirror
                     // of SettingsWindow.xaml.cs:LocalModel_SelectionChanged
@@ -522,6 +568,7 @@ struct MacVoicePage: View {
         guard DimmyCore.shared.isInitialized else {
             localModelExists = false
             appState.parakeetBundlePresent = false
+            appState.qwenBundlePresent = false
             return
         }
         // Move the FFI probes off the main thread. Each call is a
@@ -533,13 +580,18 @@ struct MacVoicePage: View {
         // page paint immediately and the model status fills in a
         // few milliseconds later.
         let modelName = appState.localModel
+        let qwenName = appState.qwenAsrModel
         DispatchQueue.global(qos: .userInitiated).async {
             let exists = DimmyCore.shared.modelExists(modelName)
             let parakeet = DimmyCore.shared.parakeetBundlePresent()
             let models = DimmyCore.shared.listLocalModels() ?? []
+            let qwen = DimmyCore.shared.qwenAsrBundlePresent(qwenName)
+            let qwenList = DimmyCore.shared.listQwenAsrModels() ?? []
             DispatchQueue.main.async {
                 self.localModelExists = exists
                 self.appState.parakeetBundlePresent = parakeet
+                self.appState.qwenBundlePresent = qwen
+                if !qwenList.isEmpty { self.qwenModels = qwenList }
                 self.downloadFailed = nil
                 if !models.isEmpty { self.localModels = models }
             }
@@ -550,7 +602,23 @@ struct MacVoicePage: View {
         guard !downloadInFlight, DimmyCore.shared.isInitialized else { return }
         downloadInFlight = true
         downloadFailed = nil
-        if localBackendIsParakeet {
+        if localBackendIsQwen {
+            let target = appState.qwenAsrModel
+            appState.qwenDownloadProgress = 0
+            appState.isDownloadingQwen = true
+            DispatchQueue.global(qos: .userInitiated).async {
+                let ok = DimmyCore.shared.downloadQwenAsr(target)
+                DispatchQueue.main.async {
+                    downloadInFlight = false
+                    appState.isDownloadingQwen = false
+                    if ok {
+                        refreshLocalModelStatus()
+                    } else {
+                        downloadFailed = "Qwen3-ASR download failed. Check your connection and try again."
+                    }
+                }
+            }
+        } else if localBackendIsParakeet {
             appState.parakeetDownloadProgress = 0
             appState.isDownloadingParakeet = true
             DispatchQueue.global(qos: .userInitiated).async {

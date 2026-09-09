@@ -815,6 +815,7 @@ mod llm_cache {
             // genuinely does not fit, which is where that decision belongs.
             if using_gpu && should_evict_stt(model_path) {
                 crate::local_stt::clear_model_cache();
+                crate::qwen_asr::clear_model_cache();
             }
 
             // See note in local_stt.rs: ggml-vulkan / ggml-cuda can abort the
@@ -965,6 +966,7 @@ mod llm_cache {
                     "[LocalLLM] context creation failed ({first}) — evicting the                      whisper model from VRAM and retrying once"
                 ));
                 crate::local_stt::clear_model_cache();
+                crate::qwen_asr::clear_model_cache();
                 // Second try: same cheap context, now with whisper out of the
                 // way. Third: the plain f16 context, in case this backend
                 // simply refuses a quantised cache — that failure looks

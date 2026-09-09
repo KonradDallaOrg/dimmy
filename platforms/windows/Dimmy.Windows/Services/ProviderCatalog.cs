@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -106,6 +106,9 @@ public static class ProviderCatalog
         var list = new List<ProviderModel>();
         list.AddRange(ParseLocalModels(SafeFfi(Interop.DimmyNative.ListLocalModels), stt: true));
         list.Add(P("Parakeet TDT v3 · 2.5 GB"));
+        // Qwen3-ASR variants: same source-of-truth idea, their own FFI because
+        // one entry is a pair of files rather than one.
+        list.AddRange(ParseQwenModels(SafeFfi(Interop.DimmyNative.QwenAsrModelsJson)));
         list.AddRange(ParseLocalModels(SafeFfi(Interop.DimmyNative.ListLocalLlmModels), stt: false));
         return list;
     }
@@ -120,6 +123,24 @@ public static class ProviderCatalog
     {
         try { return call(); }
         catch (DllNotFoundException) { return null; }
+    }
+
+    private static IEnumerable<ProviderModel> ParseQwenModels(string? json)
+    {
+        if (string.IsNullOrEmpty(json)) yield break;
+        System.Text.Json.JsonDocument doc;
+        try { doc = System.Text.Json.JsonDocument.Parse(json); }
+        catch { yield break; }
+        using (doc)
+        {
+            foreach (var m in doc.RootElement.EnumerateArray())
+            {
+                var name = m.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+                var file = m.TryGetProperty("filename", out var f) ? f.GetString() ?? "" : "";
+                if (name.Length == 0 || file.Length == 0) continue;
+                yield return new ProviderModel(name, true, false, false, "qwen:" + file);
+            }
+        }
     }
 
     private static IEnumerable<ProviderModel> ParseLocalModels(string? json, bool stt)

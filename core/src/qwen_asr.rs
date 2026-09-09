@@ -96,11 +96,162 @@ mod tests {
     }
 
     #[test]
+    fn the_default_model_is_in_the_catalog() {
+        assert!(find(DEFAULT_MODEL).is_some());
+    }
+
+    #[test]
+    fn every_entry_names_two_distinct_files_and_a_real_size() {
+        for m in AVAILABLE_MODELS {
+            assert_ne!(m.model_file, m.mmproj_file, "{}", m.name);
+            assert!(m.mmproj_file.starts_with("mmproj-"), "{}", m.name);
+            assert!(m.model_file.ends_with(".gguf"), "{}", m.name);
+            assert!(m.size_mb > 0, "{}", m.name);
+            assert!(!m.repo.is_empty(), "{}", m.name);
+        }
+    }
+
+    #[test]
+    fn model_files_are_unique_across_the_catalog() {
+        // The picker keys on model_file, so a duplicate would make one
+        // entry unselectable.
+        let mut seen: Vec<&str> = AVAILABLE_MODELS.iter().map(|m| m.model_file).collect();
+        let before = seen.len();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen.len(), before);
+    }
+
+    #[test]
+    fn an_unknown_model_is_neither_found_nor_present() {
+        assert!(find("not-a-model.gguf").is_none());
+        assert!(!bundle_present("not-a-model.gguf"));
+    }
+
+    #[test]
     fn an_empty_answer_stays_empty() {
         let (lang, text) = strip_asr_scaffolding("");
         assert_eq!(lang, None);
         assert!(text.is_empty());
     }
+}
+
+// -- Catalog + download ------------------------------------------------
+//
+// Unlike whisper, one Qwen3-ASR entry is TWO files: the text model and the
+// audio projector (`mmproj-`). Either alone is useless -- with the projector
+// missing the model would answer from the prompt alone, which reads as a
+// fluent transcript of audio it never heard. So the pair is the unit of both
+// presence and download, the way the Parakeet bundle is.
+
+/// One selectable Qwen3-ASR variant.
+pub struct QwenAsrModel {
+    pub name: &'static str,
+    pub model_file: &'static str,
+    pub mmproj_file: &'static str,
+    /// Both files together, which is what the user is asked to download.
+    pub size_mb: u32,
+    pub description: &'static str,
+    repo: &'static str,
+}
+
+pub const AVAILABLE_MODELS: &[QwenAsrModel] = &[
+    QwenAsrModel {
+        name: "Qwen3-ASR 0.6B",
+        model_file: "Qwen3-ASR-0.6B-Q8_0.gguf",
+        mmproj_file: "mmproj-Qwen3-ASR-0.6B-Q8_0.gguf",
+        size_mb: 971,
+        description: "Twice as fast, weaker on acronyms",
+        repo: "ggml-org/Qwen3-ASR-0.6B-GGUF",
+    },
+    QwenAsrModel {
+        name: "Qwen3-ASR 1.7B",
+        model_file: "Qwen3-ASR-1.7B-Q8_0.gguf",
+        mmproj_file: "mmproj-Qwen3-ASR-1.7B-Q8_0.gguf",
+        size_mb: 2404,
+        description: "Best accuracy on conversational speech",
+        repo: "ggml-org/Qwen3-ASR-1.7B-GGUF",
+    },
+];
+
+/// Measured better than the 0.6B on every acronym in the reference meeting,
+/// at half the speed and still 5x realtime. See the doc in docs/dev.
+pub const DEFAULT_MODEL: &str = "Qwen3-ASR-1.7B-Q8_0.gguf";
+
+/// Whether the engine is compiled into THIS build.
+///
+/// The catalog is data and is always here, but a build without
+/// `local-stt-qwen` cannot transcribe with it. The FFI listing hides the
+/// variants when this is false, so a lean build never shows a row that
+/// would fail only once the user has downloaded 2.4 GB and pressed record.
+pub const fn engine_available() -> bool {
+    cfg!(feature = "local-stt-qwen")
+}
+
+pub fn find(model_file: &str) -> Option<&'static QwenAsrModel> {
+    AVAILABLE_MODELS.iter().find(|m| m.model_file == model_file)
+}
+
+/// Both halves live beside the whisper models: they are STT weights and the
+/// user thinks of them in one place.
+pub fn file_path(file: &str) -> std::path::PathBuf {
+    crate::local_stt::model_path(file)
+}
+
+/// True only when BOTH halves are on disk.
+pub fn bundle_present(model_file: &str) -> bool {
+    let Some(m) = find(model_file) else {
+        return false;
+    };
+    file_path(m.model_file).is_file() && file_path(m.mmproj_file).is_file()
+}
+
+/// Fetch both halves, resumable and integrity-checked, through the shared
+/// downloader. Progress is reported against the pair, not per file, because
+/// that is the number the user is watching.
+pub async fn download_bundle<F>(
+    model_file: &str,
+    on_progress: F,
+) -> Result<(), crate::error::TranscribeError>
+where
+    F: Fn(u64, u64),
+{
+    use crate::error::TranscribeError;
+    let m = find(model_file).ok_or_else(|| {
+        TranscribeError::LocalModel(format!("unknown Qwen3-ASR model '{}'", model_file))
+    })?;
+
+    let dir = crate::local_stt::model_directory();
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| TranscribeError::LocalModel(format!("create {}: {}", dir.display(), e)))?;
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(600))
+        .build()
+        .map_err(|e| TranscribeError::LocalModel(format!("HTTP client: {}", e)))?;
+
+    let total = u64::from(m.size_mb) * 1024 * 1024;
+    let mut base: u64 = 0;
+    for file in [m.model_file, m.mmproj_file] {
+        let dest = file_path(file);
+        if !dest.is_file() {
+            let url = format!("https://huggingface.co/{}/resolve/main/{}", m.repo, file);
+            crate::log(&format!("[QwenASR] Downloading {} ...", url));
+            crate::download::download_resumable(&client, &url, &dest, &[b"GGUF"], |done, _| {
+                on_progress(base + done, total)
+            })
+            .await
+            .map_err(TranscribeError::LocalModel)?;
+        }
+        base += std::fs::metadata(&dest).map(|md| md.len()).unwrap_or(0);
+        on_progress(base, total);
+    }
+
+    assert!(
+        bundle_present(model_file),
+        "both halves must exist after a successful download"
+    );
+    Ok(())
 }
 
 /// What one call returns: the transcript, plus the language the model itself
@@ -113,7 +264,25 @@ pub struct Transcript {
 }
 
 #[cfg(feature = "local-stt-qwen")]
-pub use engine::QwenAsr;
+pub use engine::{clear_model_cache, transcribe, QwenAsr};
+
+/// No-op when the engine is compiled out, so the VRAM handover in
+/// `local_llm` needs no `cfg` of its own.
+#[cfg(not(feature = "local-stt-qwen"))]
+pub fn clear_model_cache() {}
+
+/// Same shape as the Parakeet stub: the routing layer stays free of `cfg`
+/// and a build without the engine says so once, in words, instead of
+/// failing to compile the call site.
+#[cfg(not(feature = "local-stt-qwen"))]
+pub fn transcribe(
+    _pcm_16k: &[f32],
+    _model_file: &str,
+) -> Result<Transcript, crate::error::TranscribeError> {
+    Err(crate::error::TranscribeError::LocalModel(
+        "Qwen3-ASR requires the local-stt-qwen cargo feature".to_string(),
+    ))
+}
 
 #[cfg(feature = "local-stt-qwen")]
 mod engine {
@@ -290,6 +459,67 @@ mod engine {
                 return Err(TranscribeError::Empty);
             }
             Ok(Transcript { language, text })
+        }
+    }
+
+    // -- Resident model, and the VRAM handover ----------------------
+
+    /// The loaded variant, keyed by which one it is. Held for the life of
+    /// the session: the 4.3 s load is what the warm per-window cost buys.
+    static CACHE: std::sync::Mutex<Option<(String, QwenAsr)>> = std::sync::Mutex::new(None);
+
+    /// Transcribe one window, loading or switching the model if needed.
+    ///
+    /// The handover is the same rule the LLM already applies to whisper: if
+    /// the incoming weights would not comfortably fit alongside what is
+    /// resident, the residents are dropped first. Measured the hard way on a
+    /// 4 GB card the same night this landed -- with 3831 MiB of 4096 already
+    /// taken, nothing was offloaded and every engine crawled at a fifth of
+    /// its speed with no error anywhere.
+    pub fn transcribe(pcm_16k: &[f32], model_file: &str) -> Result<Transcript, TranscribeError> {
+        assert!(!model_file.is_empty(), "qwen-asr: no model selected");
+        let mut guard = CACHE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        let loaded = guard.as_ref().is_some_and(|(f, _)| f == model_file);
+        if !loaded {
+            let m = super::find(model_file).ok_or_else(|| {
+                TranscribeError::LocalModel(format!("unknown Qwen3-ASR model '{}'", model_file))
+            })?;
+            // Drop ours BEFORE asking for more, so switching variants never
+            // holds two sets of weights at once.
+            *guard = None;
+            if crate::local_llm::stt_should_yield(
+                u64::from(m.size_mb),
+                crate::hardware::detect().vram_mb,
+            ) {
+                crate::log("[QwenASR] freeing resident models before load");
+                crate::local_llm::clear_llm_cache();
+                crate::local_stt::clear_model_cache();
+            }
+            crate::log(&format!("[QwenASR] Loading {} ...", m.name));
+            let asr = QwenAsr::load(
+                &super::file_path(m.model_file),
+                &super::file_path(m.mmproj_file),
+            )?;
+            *guard = Some((model_file.to_string(), asr));
+        }
+
+        guard
+            .as_ref()
+            .expect("model just loaded")
+            .1
+            .transcribe(pcm_16k)
+    }
+
+    /// Drop the resident model. Called when something else needs the VRAM.
+    pub fn clear_model_cache() {
+        let mut guard = CACHE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if guard.take().is_some() {
+            crate::log("[QwenASR] model unloaded");
         }
     }
 }

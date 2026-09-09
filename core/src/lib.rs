@@ -749,6 +749,10 @@ pub struct AppConfig {
     /// `"parakeet"` (Parakeet TDT v3 FP32 via the `local-stt-parakeet`
     /// feature). Old configs default to `"whisper"` for compatibility.
     pub local_stt_backend: String,
+    /// Which Qwen3-ASR variant runs when `local_stt_backend == "qwen"`.
+    /// Names the TEXT half; the projector is derived from it, because the
+    /// two are only ever useful as a pair. See `qwen_asr::AVAILABLE_MODELS`.
+    pub qwen_asr_model: String,
     /// When true (and backend = parakeet), show a floating live-caption
     /// window below the pill while chunked transcription is running.
     /// Independent from `chunk_streaming_enabled` — a user can have
@@ -933,6 +937,7 @@ impl Default for AppConfig {
             .to_string(),
             local_model: "ggml-base-q8_0.bin".to_string(),
             local_stt_backend: "whisper".to_string(),
+            qwen_asr_model: crate::qwen_asr::DEFAULT_MODEL.to_string(),
             live_captions_enabled: true,
             call_detect_enabled: true,
             // No default exclusions — the user's "Never" click is
@@ -1049,6 +1054,7 @@ pub fn save_config_file(cfg: &AppConfig) {
             "stt_mode": cfg.stt_mode,
             "local_model": cfg.local_model,
             "local_stt_backend": cfg.local_stt_backend,
+            "qwen_asr_model": cfg.qwen_asr_model,
             "live_captions_enabled": cfg.live_captions_enabled,
             "call_detect_enabled": cfg.call_detect_enabled,
             "call_detect_excluded_apps": cfg.call_detect_excluded_apps,
@@ -1213,6 +1219,10 @@ pub fn load_config_file() -> AppConfig {
                     local_stt_backend: v["local_stt_backend"]
                         .as_str()
                         .unwrap_or(&defaults.local_stt_backend)
+                        .to_string(),
+                    qwen_asr_model: v["qwen_asr_model"]
+                        .as_str()
+                        .unwrap_or(&defaults.qwen_asr_model)
                         .to_string(),
                     live_captions_enabled: v["live_captions_enabled"]
                         .as_bool()
@@ -1651,6 +1661,7 @@ pub struct AppState {
     pub stt_mode: Mutex<String>,
     pub local_model: Mutex<String>,
     pub local_stt_backend: Mutex<String>,
+    pub qwen_asr_model: Mutex<String>,
     pub live_captions_enabled: Mutex<bool>,
     pub call_detect_enabled: Mutex<bool>,
     pub call_detect_excluded_apps: Mutex<Vec<String>>,
@@ -1797,6 +1808,7 @@ impl AppState {
             stt_mode: Mutex::new(file_cfg.stt_mode),
             local_model: Mutex::new(file_cfg.local_model),
             local_stt_backend: Mutex::new(file_cfg.local_stt_backend),
+            qwen_asr_model: Mutex::new(file_cfg.qwen_asr_model),
             live_captions_enabled: Mutex::new(file_cfg.live_captions_enabled),
             call_detect_enabled: Mutex::new(file_cfg.call_detect_enabled),
             call_detect_excluded_apps: Mutex::new(file_cfg.call_detect_excluded_apps),
@@ -1939,6 +1951,11 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
     let ggml_debug_logging = *state.ggml_debug_logging.lock().map_err(|e| e.to_string())?;
     let stt_mode = state.stt_mode.lock().map_err(|e| e.to_string())?.clone();
     let local_model = state.local_model.lock().map_err(|e| e.to_string())?.clone();
+    let qwen_asr_model = state
+        .qwen_asr_model
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
     let local_stt_backend = state
         .local_stt_backend
         .lock()
@@ -2024,6 +2041,7 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         stt_mode,
         local_model,
         local_stt_backend,
+        qwen_asr_model,
         live_captions_enabled,
         call_detect_enabled,
         call_detect_excluded_apps,

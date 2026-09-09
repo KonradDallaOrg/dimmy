@@ -5,42 +5,61 @@
 //! compile and ship, with `local-stt-qwen` on and nothing else changed -- no
 //! version bump, no second engine, no Python.
 //!
-//! The model is loaded ONCE and every file goes through the same instance, so
-//! the printed per-file time is the warm cost, which is the only one that
-//! matters: in the product the model is resident for the whole session.
+//! It goes through the PRODUCT path, not a private load: catalog lookup, the
+//! bundle-presence check, the resident cache and the VRAM handover are the same
+//! ones dictation and the meeting use. The model is loaded once, so every file
+//! after the first reports the warm cost -- the only one that matters when the
+//! model stays resident for a session.
 //!
 //! Usage:
-//!   qwen_asr_smoke <model.gguf> <mmproj.gguf> <audio.wav> [more.wav ...]
+//!   qwen_asr_smoke <model-file-from-catalog> <audio.wav> [more.wav ...]
+//!   qwen_asr_smoke --list
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() < 4 {
-        eprintln!("usage: qwen_asr_smoke <model.gguf> <mmproj.gguf> <audio.wav> [...]");
+
+    if args.len() == 2 && args[1] == "--list" {
+        for m in dimmy_lib::qwen_asr::AVAILABLE_MODELS {
+            println!(
+                "{:<28} {:>5} MB  {:<40} [{}]",
+                m.model_file,
+                m.size_mb,
+                m.description,
+                if dimmy_lib::qwen_asr::bundle_present(m.model_file) {
+                    "on disk"
+                } else {
+                    "not downloaded"
+                }
+            );
+        }
+        return;
+    }
+
+    if args.len() < 3 {
+        eprintln!("usage: qwen_asr_smoke <model-file-from-catalog> <audio.wav> [...]");
+        eprintln!("       qwen_asr_smoke --list");
         std::process::exit(2);
     }
 
-    let t0 = std::time::Instant::now();
-    let asr = match dimmy_lib::qwen_asr::QwenAsr::load(
-        std::path::Path::new(&args[1]),
-        std::path::Path::new(&args[2]),
-    ) {
-        Ok(a) => a,
-        Err(e) => {
-            eprintln!("load failed: {:?}", e);
-            std::process::exit(1);
-        }
-    };
-    println!("model loaded in {:.1}s\n", t0.elapsed().as_secs_f32());
+    let model = args[1].clone();
+    if dimmy_lib::qwen_asr::find(&model).is_none() {
+        eprintln!("'{model}' is not in the catalog - run --list");
+        std::process::exit(2);
+    }
+    if !dimmy_lib::qwen_asr::bundle_present(&model) {
+        eprintln!("'{model}' is not downloaded (both halves are needed)");
+        std::process::exit(1);
+    }
 
     let mut failures = 0;
-    for path in &args[3..] {
+    for path in &args[2..] {
         let Some((pcm, secs)) = read_16k_mono(path) else {
             println!("{:<22} UNREADABLE", short(path));
             failures += 1;
             continue;
         };
         let t = std::time::Instant::now();
-        match asr.transcribe(&pcm) {
+        match dimmy_lib::qwen_asr::transcribe(&pcm, &model) {
             Ok(tr) => {
                 let dt = t.elapsed().as_secs_f32();
                 println!(

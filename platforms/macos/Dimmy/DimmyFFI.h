@@ -112,6 +112,22 @@ int32_t dimmy_download_model(const char * _Nonnull filename);
 /// Returns 1=yes, 0=no.
 int32_t dimmy_model_exists(const char * _Nonnull filename);
 
+// ── Qwen3-ASR (third local STT backend, via llama.cpp mtmd) ─────────
+
+/// JSON array of the Qwen3-ASR variants with per-entry download status.
+/// One entry is TWO files (model + audio projector) and `size_mb` covers
+/// the pair, so `downloaded` means both halves are present.
+int32_t dimmy_qwen_asr_models_json(char * _Nonnull out_buf, int32_t buf_len);
+
+/// 1 = both halves of the named variant are on disk, 0 otherwise. Takes
+/// the TEXT model filename; the projector is derived from it.
+int32_t dimmy_qwen_asr_bundle_present(const char * _Nonnull model_file);
+
+/// Download both halves. BLOCKING — call from a background thread. Emits
+/// "qwen_asr_download_progress" with {filename,downloaded,total}, where the
+/// numbers cover the pair. Returns 0=OK, -1=error.
+int32_t dimmy_qwen_asr_download(const char * _Nonnull model_file);
+
 // ── Parakeet TDT v3 FP32 (alternative local STT backend) ────────────
 
 /// 1 = the Parakeet FP32 bundle (~2.5 GB) is fully on disk, 0 otherwise.
