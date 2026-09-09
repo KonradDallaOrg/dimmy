@@ -623,6 +623,64 @@ fn bucket_elapsed_secs(secs: f64) -> &'static str {
         _ => "ge_600",
     }
 }
+/// `720416` -> `"00:12:00"`. The transcript is read by a person and by the
+/// recap model, and neither counts milliseconds. Elapsed from the start of
+/// the meeting, which is what the number has always been - this only changes
+/// how it is printed.
+///
+/// Nothing parses the value back: every reader (notion.rs, the MCP index,
+/// the recap prompt) strips the two leading `[...]` groups structurally, so
+/// old files carrying the `ms` form keep working unchanged.
+pub fn format_elapsed(ms: u128) -> String {
+    let secs = ms / 1000;
+    format!(
+        "{:02}:{:02}:{:02}",
+        secs / 3600,
+        (secs / 60) % 60,
+        secs % 60
+    )
+}
+
+#[cfg(test)]
+mod elapsed_format {
+    use super::format_elapsed;
+
+    #[test]
+    fn the_number_that_prompted_this() {
+        // 720416 ms is what a user read in a transcript and could not use.
+        assert_eq!(format_elapsed(720_416), "00:12:00");
+    }
+
+    #[test]
+    fn zero_and_the_first_second() {
+        assert_eq!(format_elapsed(0), "00:00:00");
+        assert_eq!(format_elapsed(999), "00:00:00");
+        assert_eq!(format_elapsed(1000), "00:00:01");
+    }
+
+    #[test]
+    fn rolls_over_minutes_and_hours() {
+        assert_eq!(format_elapsed(59_999), "00:00:59");
+        assert_eq!(format_elapsed(60_000), "00:01:00");
+        assert_eq!(format_elapsed(3_599_999), "00:59:59");
+        assert_eq!(format_elapsed(3_600_000), "01:00:00");
+    }
+
+    #[test]
+    fn a_long_meeting_keeps_two_digit_hours() {
+        // 12 h 34 m 56 s. Meetings do not run this long, recordings do.
+        assert_eq!(format_elapsed(45_296_000), "12:34:56");
+    }
+
+    #[test]
+    fn every_output_is_the_same_width() {
+        // The transcript is read as a column; ragged timestamps make it
+        // unreadable, which is what the old {:>6} padding was for.
+        for ms in [0u128, 1_000, 61_000, 3_601_000, 45_296_000] {
+            assert_eq!(format_elapsed(ms).len(), 8, "{ms}");
+        }
+    }
+}
 
 /// Work handed from the capture worker to the transcription thread.
 ///
@@ -803,8 +861,9 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
         let (mic_slice, system_slice, elapsed_ms) = match job {
             SttJob::Paused { elapsed_ms, dur_ms } => {
                 let line = format!(
-                    "[{:>6} ms] [paused] (resumed after {} ms)\n",
-                    elapsed_ms, dur_ms
+                    "[{}] [paused] (resumed after {})\n",
+                    format_elapsed(elapsed_ms),
+                    format_elapsed(dur_ms)
                 );
                 let _ = ctx.transcripts_file.write_all(line.as_bytes());
                 let _ = ctx.transcripts_file.flush();
@@ -845,7 +904,7 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
                 .chunk_count
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
                 + 1;
-            let line = format!("[{:>6} ms] [{}] {}\n", elapsed_ms, speaker, delta);
+            let line = format!("[{}] [{}] {}\n", format_elapsed(elapsed_ms), speaker, delta);
             let _ = ctx.transcripts_file.write_all(line.as_bytes());
             let _ = ctx.transcripts_file.flush();
 
@@ -1683,7 +1742,7 @@ fn worker_loop(
 
     // Build the final transcript: time-ordered labeled stream read
     // back from transcripts.txt (one line per chunk, format
-    // `[ts ms] [speaker] text`). The `[ts ms]` prefix is preserved
+    // `[hh:mm:ss] [speaker] text`). The timestamp prefix is preserved
     // so the LLM recap can use timestamps for diarization context.
     // Falls back to a per-speaker concat if the file read fails.
     let merged_transcript = std::fs::read_to_string(&transcripts_path)

@@ -7894,7 +7894,7 @@ fn group_words_into_turns(words: &[(f64, String)], offset_secs: f64) -> Vec<(u12
 }
 
 /// Re-transcribe a meeting's PER-TRACK audio (`audio_mic` + `audio_system`),
-/// rebuilding `transcripts.txt` in the SAME `[<ms> ms] [band] text` format the
+/// rebuilding `transcripts.txt` in the SAME `[hh:mm:ss] [band] text` format the
 /// live worker writes. The old "Regenerate transcript" path transcribed each
 /// track as one blob, which collapsed the meeting into a single `[mic]` +
 /// `[system]` block with no speaker turns and no timestamps. This restores both.
@@ -8150,7 +8150,12 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
     lines.sort_by_key(|(ms, _, _)| *ms);
     let mut out = String::new();
     for (ms, band, text) in &lines {
-        out.push_str(&format!("[{:>6} ms] [{}] {}\n", ms, band, text));
+        out.push_str(&format!(
+            "[{}] [{}] {}\n",
+            crate::meeting::format_elapsed(*ms),
+            band,
+            text
+        ));
     }
     if out.trim().is_empty() {
         log("[Retranscribe] produced empty transcript");
