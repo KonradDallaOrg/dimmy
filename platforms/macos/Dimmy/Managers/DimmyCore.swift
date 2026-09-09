@@ -1243,6 +1243,23 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
         if appState.meetingActive != active { appState.meetingActive = active }
         if appState.meetingIsPaused != paused { appState.meetingIsPaused = paused }
 
+    case "stt_backend_fallback":
+        // The picked local engine has no model on disk and the core used
+        // whisper. Saying so beats handing back a transcript from an
+        // engine the user did not choose.
+        if let requested = payload["requested"] as? String {
+            let name: String
+            switch requested {
+            case "parakeet": name = "Parakeet"
+            case "qwen": name = "Qwen3-ASR"
+            default: name = requested
+            }
+            DictToastWindow.show(
+                kind: .workflowHint,
+                title: "Used Whisper instead",
+                body: "\(name) is selected but not downloaded. Download it in Settings, Voice to use it.")
+        }
+
     case "telegram_state":
         // Single source of truth for the login state machine + pending
         // badge. Drives the Settings card + the connect sheet.

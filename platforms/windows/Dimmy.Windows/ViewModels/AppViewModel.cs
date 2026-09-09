@@ -242,6 +242,11 @@ public partial class AppViewModel : ObservableObject
     /// pill-only and do NOT fire this. Fired on the UI thread.
     public event Action<string, string, string, string>? CoreFailure;
 
+    /// <summary>The core could not run the local engine the user picked
+    /// because its model is not on disk, and used whisper instead.
+    /// (requested, used).</summary>
+    public event Action<string, string>? SttBackendFallback;
+
     public void UpdateChunkProgress(int current, int total)
     {
         ChunkCurrent = current;
@@ -571,6 +576,13 @@ public partial class AppViewModel : ObservableObject
                         var cat = payload.TryGetProperty("category", out var cEl)
                             ? (cEl.GetString() ?? "") : "";
                         CoreFailure?.Invoke(srcEl.GetString() ?? "", prov, cat, msg);
+                    }
+                    break;
+                case "stt_backend_fallback":
+                    {
+                        var req = payload.TryGetProperty("requested", out var rq) ? (rq.GetString() ?? "") : "";
+                        var used = payload.TryGetProperty("used", out var us) ? (us.GetString() ?? "") : "";
+                        SttBackendFallback?.Invoke(req, used);
                     }
                     break;
                 case "telegram_state":

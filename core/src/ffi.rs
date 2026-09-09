@@ -97,6 +97,36 @@ static RECORDING_STARTED_AT: Mutex<Option<std::time::Instant>> = Mutex::new(None
 /// `dimmy_meeting_start`, NOT via the dictation hotkey).
 static MEETING: Mutex<Option<crate::meeting::MeetingSession>> = Mutex::new(None);
 
+/// The local backend that can actually run, given what is on disk.
+///
+/// Wraps the pure decision in `transcribe::resolve_local_backend` with the
+/// disk checks, and tells the host when the answer is not what the user
+/// picked so it can say so rather than quietly using a different engine.
+fn effective_local_backend(selected: &str) -> &'static str {
+    let whisper_model = state()
+        .local_model
+        .lock()
+        .map(|m| m.clone())
+        .unwrap_or_default();
+    let choice = crate::transcribe::resolve_local_backend(
+        selected,
+        crate::parakeet::active_bundle_present(),
+        crate::qwen_asr::bundle_present(&qwen_asr_variant()),
+        !whisper_model.is_empty() && crate::local_stt::model_exists(&whisper_model),
+    );
+    if choice.fell_back {
+        log(&format!(
+            "[LocalSTT] '{}' has no model on disk — using whisper instead",
+            selected
+        ));
+        emit_event(
+            "stt_backend_fallback",
+            &serde_json::json!({ "requested": selected, "used": choice.backend }).to_string(),
+        );
+    }
+    choice.backend
+}
+
 /// The selected Qwen3-ASR variant, or the catalog default. Four call
 /// sites read it -- dictation batch, dictation chunked, file load and
 /// meeting re-transcribe -- and they must not disagree.
@@ -1012,6 +1042,7 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
         .lock()
         .map(|b| b.clone())
         .unwrap_or_default();
+    let local_backend = effective_local_backend(&local_backend).to_string();
     let local_typing = streaming_on && !streaming_active && is_local;
     let chunked_captions = !streaming_active && !local_typing && is_local && chunked_on;
     if let Ok(mut e) = DICTATION_ENGINE.lock() {
@@ -1379,6 +1410,7 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
         .lock()
         .map(|m| m.clone())
         .unwrap_or_else(|_| "whisper".to_string());
+    let local_stt_backend = effective_local_backend(&local_stt_backend).to_string();
     let api_url = st.api_url.lock().map(|u| u.clone()).unwrap_or_default();
     let api_model = st.api_model.lock().map(|m| m.clone()).unwrap_or_default();
     // API key is only required for cloud mode. A streaming session carries
@@ -7730,6 +7762,7 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
         .lock()
         .map(|b| b.clone())
         .unwrap_or_else(|_| "whisper".to_string());
+    let backend = effective_local_backend(&backend).to_string();
     // Empty language = auto-detect (whisper `set_detect_language` / cloud
     // provider auto). Do NOT force "en" — it garbles non-English files when
     // the user picks "Auto-detect" in the language combo.
@@ -7996,6 +8029,7 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
         .lock()
         .map(|b| b.clone())
         .unwrap_or_else(|_| "whisper".to_string());
+    let backend = effective_local_backend(&backend).to_string();
     // Empty language = auto-detect; do not force "en" (see dimmy_transcribe_file).
     // Meeting bands are long enough that per-chunk whisper auto-detect is reliable.
     let language = st.language.lock().map(|l| l.clone()).unwrap_or_default();
