@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Text.Json;
@@ -415,6 +415,12 @@ public partial class AppViewModel : ObservableObject
                         payload.GetProperty("downloaded").GetInt64(),
                         payload.GetProperty("total").GetInt64());
                     break;
+                // Qwen3-ASR carries the same {filename,downloaded,total} payload
+                // and is an STT model like the others, so it shares the branch.
+                // Without a case here the download runs to completion with the
+                // status stuck on "Starting download..." -- the host event
+                // whitelist makes a new engine INERT until it is added.
+                case "qwen_asr_download_progress":
                 case "model_download_progress":
                     {
                         var fn = payload.GetProperty("filename").GetString() ?? "";
