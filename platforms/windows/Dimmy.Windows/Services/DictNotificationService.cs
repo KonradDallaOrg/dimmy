@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using Microsoft.UI.Dispatching;
 
 namespace Dimmy.Windows.Services;
@@ -57,6 +57,37 @@ public static class DictNotificationService
     /// <summary>Soft nudge at the 5 min mark of a single dictation: a
     /// marathon dictation buffers unbounded audio (no draining worker),
     /// so steer the user toward Meeting mode before it grows large.</summary>
+    /// <summary>The picked local engine has no model on disk, so the
+    /// core used whisper. Without saying so the user gets a transcript
+    /// from an engine they did not choose, or -- before the fallback
+    /// existed -- 67 silent failures across 4 users (Sentry, 2026-09).</summary>
+    public static void ShowSttBackendFallback(string requested, string used)
+    {
+        var name = requested switch
+        {
+            "parakeet" => "Parakeet",
+            "qwen" => "Qwen3-ASR",
+            _ => requested,
+        };
+        Show("Used Whisper instead",
+             $"{name} is selected but not downloaded, so this was transcribed with Whisper. Download it in Settings, Voice to use it.");
+    }
+
+    /// <summary>Local models fell back to the CPU after an aborted GPU
+    /// init. Worth a toast because the cost is 10-30x and the only other
+    /// sign is a log line: measured 2026-09-05, whisper 2s -> 8s and a
+    /// recap 40s -> 230s, and again on 2026-09-09 a whole evening of
+    /// benchmarking ran on a machine that had silently stopped using its
+    /// GPU. Without this the slowdown just reads as "the app got
+    /// worse".</summary>
+    public static void ShowGpuFallbackToCpu(bool sticky)
+    {
+        Show("Running on the CPU",
+             sticky
+                 ? "Local transcription aborted twice while starting the GPU, so it now runs on the CPU (much slower). Updating your graphics driver makes it try again."
+                 : "The last run stopped while starting the GPU, so this session uses the CPU (much slower). Restart Dimmy to try the GPU again.");
+    }
+
     public static void ShowLongDictationWarning()
     {
         Show("Long dictation",

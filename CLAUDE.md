@@ -128,10 +128,16 @@ is the safety net; the rule is the actual fix.
 
 ### Windows local DLL build — feature flag set is FROZEN
 
-**`cargo build --release --lib --features local-stt-vulkan,local-stt-parakeet,local-llm-vulkan,denoise-gtcrn`** is the canonical local Windows build for `dimmy_lib.dll`. Dropping any of these features = silently breaks production code paths:
+**`cargo build --release --lib --features local-stt-vulkan,local-stt-parakeet,local-llm-vulkan,denoise-gtcrn,local-stt-qwen`** is the canonical local Windows build for `dimmy_lib.dll`. Dropping any of these features = silently breaks production code paths:
 - `local-stt-vulkan` → whisper.cpp Vulkan STT (used by dictation when `stt_mode=local && local_stt_backend=whisper`, by meeting STT chunks, by file-load).
 - `local-stt-parakeet` → Parakeet TDT v3 STT (used by dictation chunked-stt worker when `local_stt_backend=parakeet`, default for many users; ALSO referenced by meeting follow-ups in v2).
 - `local-llm-vulkan` → llama.cpp Vulkan LLM (used for local recap, local rewrite, future meeting-recap-local path).
+- `local-stt-qwen` → Qwen3-ASR via llama.cpp's multimodal path. It also turns on
+  `llama-cpp-4/mtmd`, which produces **`mtmd.dll`** — a shared library the
+  installer must carry (both csproj copy targets and the CI DLL checks list it).
+  Statically linked mtmd leaves `hash_sha256_hex` unresolved, which is why the
+  feature pulls `dynamic-link` in itself. Measured better than whisper on hard
+  conversational Italian; see `docs/dev/qwen3-asr-2026-09-09.md`.
 - `denoise-gtcrn` → GTCRN noise suppression on the 16 kHz STT input. **Compiled in, but OFF at runtime since 2026-08-31** (`DIMMY_GTCRN=1` opts in). It was default-on from 2026-08-10 until an A/B over 70 real dictations (`core/src/bin/denoise_ab.rs`) showed it changed nothing on 38 of them and cost the other 32 a third of their punctuation, half their capitalisation and the occasional word — while removing none of the "Grazie" hallucinations it was partly there for. Keep the feature compiled: the switch, the streaming path and the meeting/system-audio case all need it, and the measurement covered only mic dictation. See `gtcrn::denoise_enabled` for the numbers.
 
 **NEVER** rebuild with a subset just because the diff "doesn't touch parakeet" or "the recap is cloud-only". The user's *runtime config* decides which path runs — drop the feature and the path becomes a silent trap (`local model: parakeet inference requires the local-stt-parakeet cargo feature` looped on every chunk while telemetry says `transcription.failed`). Burned 2026-05-07 twice (meeting empty transcript, then dictation empty transcript). The feature set was frozen after the second incident.

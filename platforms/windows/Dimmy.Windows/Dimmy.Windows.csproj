@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
@@ -98,6 +98,7 @@
     <ItemGroup>
       <LlamaSharedLib Include="$(MSBuildThisFileDirectory)..\..\..\core\target\release\ggml*.dll" />
       <LlamaSharedLib Include="$(MSBuildThisFileDirectory)..\..\..\core\target\release\llama*.dll" />
+      <LlamaSharedLib Include="$(MSBuildThisFileDirectory)..\..\..\core\target\release\mtmd*.dll" />
     </ItemGroup>
     <Copy SourceFiles="@(LlamaSharedLib)" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" Condition="'@(LlamaSharedLib)' != ''" />
     <Warning Text="No ggml*/llama*.dll found next to dimmy_lib.dll. A local-llm build needs them at runtime (llama-cpp-4 dynamic-link) — the app will fail to start. Build the Rust lib with the frozen feature set first." Condition="'@(LlamaSharedLib)' == '' And Exists('$(DimmyDllSource)')" />
@@ -161,6 +162,10 @@
     <ItemGroup>
       <LlamaDll Include="$(MSBuildThisFileDirectory)..\..\..\core\target\release\ggml*.dll" />
       <LlamaDll Include="$(MSBuildThisFileDirectory)..\..\..\core\target\release\llama*.dll" />
+      <!-- mtmd.dll is llama.cpp's multimodal path, built by local-stt-qwen.
+           It matches NEITHER glob above, so without this line Qwen3-ASR
+           would ship a picker entry and a missing DLL. -->
+      <LlamaDll Include="$(MSBuildThisFileDirectory)..\..\..\core\target\release\mtmd*.dll" />
     </ItemGroup>
     <Copy SourceFiles="@(LlamaDll)" DestinationFolder="$(OutputPath)" Condition="'@(LlamaDll)' != ''" SkipUnchangedFiles="true" />
   </Target>

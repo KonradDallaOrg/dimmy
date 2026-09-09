@@ -70,7 +70,6 @@ name = "chunked_smoke"
 path = "src/bin/chunked_smoke.rs"
 required-features = ["local-stt-parakeet"]
 
-
 # Mac-only counterpart to parakeet_smoke that exercises the
 # FluidInference / Apple Neural Engine path. Same shape: one WAV in,
 # one transcript out, plus timings. Gated on the matching cargo
@@ -79,6 +78,22 @@ required-features = ["local-stt-parakeet"]
 name = "parakeet_fluid_smoke"
 path = "src/bin/parakeet_fluid_smoke.rs"
 required-features = ["local-stt-parakeet-fluid"]
+
+# Qwen3-ASR through llama.cpp's mtmd path. Same shape again: WAV in,
+# transcript out, plus the warm per-window timing that is the only
+# speed number worth quoting for a resident model.
+# Does a longer transcription window buy anything? Runs one file at several
+# window sizes through one engine and prints cost AND text, so the trade is
+# read rather than guessed. Needs every local engine to be selectable.
+[[bin]]
+name = "window_ab"
+path = "src/bin/window_ab.rs"
+required-features = ["local-stt-parakeet", "local-stt", "local-stt-qwen"]
+
+[[bin]]
+name = "qwen_asr_smoke"
+path = "src/bin/qwen_asr_smoke.rs"
+required-features = ["local-stt-qwen"]
 
 # Offline noise-suppression compare tool. Reads a mono WAV file
 # (any sample rate — resamples to 48 kHz if needed), runs it through
@@ -136,6 +151,21 @@ denoise-gtcrn = ["dep:ort", "dep:realfft"]
 # and stays out of the build until `dep:deep_filter` is restored.
 local-dfn = ["dep:deep_filter", "dep:ndarray", "dep:anyhow"]
 local-llm = ["dep:llama-cpp-4"]
+# Qwen3-ASR local STT, through llama.cpp's multimodal path (mtmd).
+# The vendored llama.cpp ALREADY implements it - `tools/mtmd/models/qwen3a.cpp`,
+# the projector the mmproj asks for (`clip.audio.projector_type = qwen3a`), with
+# the text half declaring `general.architecture = qwen3vl`. No version bump is
+# involved. But `mtmd` is an OPTIONAL feature of llama-cpp-4 and we build the
+# crate with `default-features = false`, so today it is compiled OUT: the
+# shipped install carries llama.dll and ggml*.dll and no mtmd.dll. This feature
+# is what turns it on, and it costs one more shared library to package.
+# `dynamic-link` is NOT optional here. Statically linked, mtmd-helper.cpp
+# references `hash_sha256_hex` and llama-cpp-sys-4 does not put its
+# definition in the rlib, so any binary that links the lib dies with
+# LNK2019 -- `cargo test --lib` first, since clippy never links. Built as a
+# shared library the symbol resolves inside mtmd.dll. Every shipping build
+# already uses dynamic-link anyway, for the ggml-collision reason below.
+local-stt-qwen = ["local-llm", "llama-cpp-4/mtmd", "llama-cpp-4/dynamic-link"]
 local-llm-metal = ["local-llm", "llama-cpp-4/metal", "llama-cpp-4/dynamic-link"]
 local-llm-cuda = ["local-llm", "llama-cpp-4/cuda"]
 # dynamic-link: build llama.cpp + ggml as SHARED libs (ggml.dll/llama.dll) so

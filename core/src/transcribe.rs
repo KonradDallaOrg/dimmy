@@ -577,6 +577,133 @@ pub fn transcribe_audio_local_parakeet_with_word_ts(
     Ok((text, ts_json))
 }
 
+/// Which local engine can actually run right now.
+///
+/// The picker sets `local_stt_backend` the moment you choose an entry, and
+/// nothing blocks choosing one whose model is not on disk: the download is a
+/// separate button you may never press, or that may fail. From then on every
+/// single transcription failed with a developer-facing string -- 67 times
+/// across 4 users in Sentry, still arriving, and one of them simply could not
+/// transcribe at all.
+///
+/// Failing is the wrong answer to "transcribe this": the user asked for words,
+/// not for a particular engine. Fall back to whisper when the chosen engine has
+/// nothing to run, and let the caller say so. Falling back to a whisper that is
+/// ALSO missing would just move the error, so that case keeps the original
+/// choice and the original error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LocalBackendChoice {
+    /// `"whisper"`, `"parakeet"` or `"qwen"`.
+    pub backend: &'static str,
+    /// True when this is not what the user picked.
+    pub fell_back: bool,
+}
+
+pub fn resolve_local_backend(
+    selected: &str,
+    parakeet_ready: bool,
+    qwen_ready: bool,
+    whisper_ready: bool,
+) -> LocalBackendChoice {
+    let ready = match selected {
+        "parakeet" => parakeet_ready,
+        "qwen" => qwen_ready,
+        _ => whisper_ready,
+    };
+    let canonical = match selected {
+        "parakeet" => "parakeet",
+        "qwen" => "qwen",
+        _ => "whisper",
+    };
+    if ready || !whisper_ready {
+        return LocalBackendChoice {
+            backend: canonical,
+            fell_back: false,
+        };
+    }
+    LocalBackendChoice {
+        backend: "whisper",
+        fell_back: true,
+    }
+}
+
+#[cfg(test)]
+mod backend_resolution {
+    use super::resolve_local_backend as r;
+
+    #[test]
+    fn a_ready_engine_is_used_as_chosen() {
+        assert_eq!(r("parakeet", true, false, true).backend, "parakeet");
+        assert_eq!(r("qwen", false, true, true).backend, "qwen");
+        assert_eq!(r("whisper", false, false, true).backend, "whisper");
+        assert!(!r("parakeet", true, false, true).fell_back);
+    }
+
+    #[test]
+    fn a_missing_engine_falls_back_to_whisper() {
+        // This is the Sentry case: parakeet selected, never downloaded.
+        let c = r("parakeet", false, false, true);
+        assert_eq!(c.backend, "whisper");
+        assert!(c.fell_back);
+        let c = r("qwen", false, false, true);
+        assert_eq!(c.backend, "whisper");
+        assert!(c.fell_back);
+    }
+
+    #[test]
+    fn nothing_on_disk_keeps_the_choice_and_its_error() {
+        // Falling back to a whisper that is also missing would only move
+        // the failure, and hide which engine the user actually picked.
+        let c = r("parakeet", false, false, false);
+        assert_eq!(c.backend, "parakeet");
+        assert!(!c.fell_back);
+    }
+
+    #[test]
+    fn an_unknown_value_is_treated_as_whisper() {
+        // `dimmy_set_config_json` allow-lists the field, but a config written
+        // by a newer build can still reach an older one.
+        assert_eq!(r("parakeet-v9", false, false, true).backend, "whisper");
+        assert!(!r("", false, false, true).fell_back);
+    }
+}
+
+/// Transcribe with Qwen3-ASR, the third local backend.
+///
+/// Same contract as the Parakeet entry above: 16 kHz mono in, text out. The
+/// model's own language verdict comes back with the transcript and is
+/// dropped here -- the callers that want it read it off the meeting path,
+/// where it saves `lang_detect` a whole second whisper pass.
+pub fn transcribe_audio_local_qwen(
+    audio: &crate::audio::ProcessedAudio,
+    model_file: &str,
+) -> Result<String, crate::error::TranscribeError> {
+    assert!(
+        !audio.samples.is_empty(),
+        "transcribe_audio_local_qwen: audio samples must not be empty"
+    );
+    assert!(
+        audio.samples.iter().all(|s| s.is_finite()),
+        "transcribe_audio_local_qwen: all samples must be finite"
+    );
+    assert!(
+        audio.sample_rate > 0,
+        "transcribe_audio_local_qwen: sample_rate must be positive"
+    );
+
+    let samples_16k = stt_input_16k(audio);
+    assert!(
+        !samples_16k.is_empty(),
+        "transcribe_audio_local_qwen: downsampled samples must not be empty"
+    );
+
+    let transcript = crate::qwen_asr::transcribe(&samples_16k, model_file)?;
+    if transcript.text.trim().is_empty() {
+        return Err(crate::error::TranscribeError::Empty);
+    }
+    Ok(transcript.text)
+}
+
 /// Transcribe ProcessedAudio, automatically chunking if it exceeds the provider's
 /// file size limit. Chunk size = 80% of `max_wav_bytes` (safety margin).
 ///

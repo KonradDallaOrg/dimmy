@@ -97,6 +97,41 @@ pub struct KnownBadRecord {
     pub fingerprint: String,
 }
 
+/// Which program armed the sentinel, e.g. `dimmy.windows.exe`.
+///
+/// The sentinel is ONE file in a config dir that more than one program
+/// uses: the app, but also every `src/bin/*` measurement tool, which needs
+/// the real model directory to measure anything. They stomp on each other.
+/// Observed 2026-09-09: a benchmark binary was killed mid-load, and the
+/// running app read the leftover marker as its OWN crash and dropped to CPU
+/// for the rest of the session — 10-30x slower, with one log line as the
+/// only sign. It then re-armed on the next tool, and the user spent an
+/// evening measuring a machine that was silently not using its GPU.
+///
+/// A crash of the app must still be caught by the next app. Recording the
+/// executable does that and no more: a marker left by another program is
+/// somebody else's problem, not evidence that OUR GPU path aborts.
+fn current_owner() -> String {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase()))
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Split a sentinel line into `(owner, rest)`.
+///
+/// Format is `<timestamp>\t<owner>\t<context>`. A line without tabs came
+/// from a build that predates the owner field; it is reported as owned by
+/// nobody, so it is cleared rather than blamed on whoever reads it first.
+fn parse_marker(raw: &str) -> (Option<&str>, &str) {
+    let raw = raw.trim();
+    let mut parts = raw.splitn(3, '\t');
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(_ts), Some(owner), Some(context)) => (Some(owner), context),
+        _ => (None, raw),
+    }
+}
+
 /// Called before attempting GPU-backed model init. Writes a sentinel file.
 /// Failures are swallowed — the sentinel is best-effort, not load-bearing.
 pub fn mark_begin(context: &str) {
@@ -111,7 +146,7 @@ pub fn mark_begin(context: &str) {
         let _ = std::fs::create_dir_all(parent);
     }
     let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
-    let _ = std::fs::write(&path, format!("{}: {}\n", ts, context));
+    let _ = std::fs::write(&path, format!("{}\t{}\t{}\n", ts, current_owner(), context));
 }
 
 /// Called after the GPU init call returns (success or Rust-level error).
@@ -128,17 +163,44 @@ pub fn mark_end() {
     clear_strike();
 }
 
-/// Returns true if a previous process aborted during GPU init.
+/// Returns true if a previous run OF THIS PROGRAM aborted during GPU init.
 /// Callers should force the CPU backend for the current session.
+///
+/// A marker left by a different executable — a benchmark, a smoke test —
+/// is not evidence about our GPU path. See [`current_owner`].
 pub fn previous_crash_detected() -> bool {
-    marker_path().map(|p| p.exists()).unwrap_or(false)
+    let Some(raw) = crash_context_raw() else {
+        return false;
+    };
+    matches!(parse_marker(&raw).0, Some(owner) if owner == current_owner())
+}
+
+/// True when a marker exists but belongs to a different program. Callers
+/// clear it: leaving it would have the next run of THAT program blame a
+/// crash it never had.
+pub fn foreign_marker_present() -> bool {
+    let Some(raw) = crash_context_raw() else {
+        return false;
+    };
+    match parse_marker(&raw).0 {
+        Some(owner) => owner != current_owner(),
+        None => true,
+    }
+}
+
+fn crash_context_raw() -> Option<String> {
+    marker_path().and_then(|p| std::fs::read_to_string(p).ok())
 }
 
 /// Read the context string from the sentinel (for logging). Best-effort.
 pub fn crash_context() -> Option<String> {
-    marker_path()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .map(|s| s.trim().to_string())
+    crash_context_raw().map(|raw| {
+        let (owner, context) = parse_marker(&raw);
+        match owner {
+            Some(o) => format!("{o}: {context}"),
+            None => context.to_string(),
+        }
+    })
 }
 
 /// Explicitly clear the sentinel — called once at startup after we've read it,
@@ -197,6 +259,43 @@ pub fn clear_known_bad() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_marker_from_another_program_is_not_our_crash() {
+        // The 2026-09-09 case: a benchmark binary was killed mid-load and
+        // the running app read the leftover as its own abort.
+        let raw = "2026-09-09 22:36:37\tbench_local.exe\twhisper_load: model.bin";
+        let (owner, ctx) = parse_marker(raw);
+        assert_eq!(owner, Some("bench_local.exe"));
+        assert_eq!(ctx, "whisper_load: model.bin");
+        assert_ne!(owner.unwrap(), current_owner());
+    }
+
+    #[test]
+    fn our_own_marker_still_counts() {
+        let raw = format!(
+            "2026-09-09 22:36:37\t{}\twhisper_load: m.bin",
+            current_owner()
+        );
+        assert_eq!(parse_marker(&raw).0, Some(current_owner().as_str()));
+    }
+
+    #[test]
+    fn a_pre_owner_marker_belongs_to_nobody() {
+        // Written by a build older than the owner field. Blaming it on
+        // whoever reads it first is exactly the bug being fixed.
+        let (owner, ctx) = parse_marker("2026-09-05 10:00:00: whisper_load: m.bin");
+        assert_eq!(owner, None);
+        assert!(ctx.contains("whisper_load"));
+    }
+
+    #[test]
+    fn the_owner_is_a_bare_lowercase_filename() {
+        let o = current_owner();
+        assert!(!o.is_empty());
+        assert_eq!(o, o.to_lowercase());
+        assert!(!o.contains('/') && !o.contains('\\'), "{o}");
+    }
+
     use super::*;
     use std::sync::Mutex;
 

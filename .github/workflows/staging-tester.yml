@@ -186,7 +186,7 @@ jobs:
         run: |
           cargo clean --release 2>/dev/null
           cargo build --lib --release --target aarch64-apple-darwin \
-            --features local-stt-metal,local-llm-metal,local-stt-parakeet-coreml,local-stt-parakeet-fluid,local-dfn,license-client,telegram
+            --features local-stt-metal,local-llm-metal,local-stt-parakeet-coreml,local-stt-parakeet-fluid,local-dfn,license-client,telegram,local-stt-qwen
 
       - name: Verify static library
         run: |
@@ -606,7 +606,7 @@ jobs:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           DIMMY_TELEGRAM_API_ID: ${{ secrets.DIMMY_TELEGRAM_API_ID }}
           DIMMY_TELEGRAM_API_HASH: ${{ secrets.DIMMY_TELEGRAM_API_HASH }}
-          FEAT: "local-stt-vulkan,local-stt-parakeet,local-llm-vulkan,local-dfn,denoise-gtcrn,license-client,telegram"
+          FEAT: "local-stt-vulkan,local-stt-parakeet,local-llm-vulkan,local-dfn,denoise-gtcrn,license-client,telegram,local-stt-qwen"
         run: |
           res="$(scripts/dev/dll-cache.sh restore win-x64 "$FEAT" "D:/t/release/dimmy_lib.dll" || echo MISS)"
           echo "restore: $res"
@@ -682,7 +682,7 @@ jobs:
           # staging testers always exercise the production-default
           # backend.
           cargo clean --release
-          cargo build --lib --release --features local-stt-vulkan,local-stt-parakeet,local-llm-vulkan,local-dfn,denoise-gtcrn,license-client,telegram
+          cargo build --lib --release --features local-stt-vulkan,local-stt-parakeet,local-llm-vulkan,local-dfn,denoise-gtcrn,license-client,telegram,local-stt-qwen
 
       # Added 2026-07-05: the REM comment above always claimed this gate
       # existed, but only release.yml and staging-auto-update.yml had it;
@@ -732,7 +732,7 @@ jobs:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           DIMMY_TELEGRAM_API_ID: ${{ secrets.DIMMY_TELEGRAM_API_ID }}
           DIMMY_TELEGRAM_API_HASH: ${{ secrets.DIMMY_TELEGRAM_API_HASH }}
-          FEAT: "local-stt-vulkan,local-stt-parakeet,local-llm-vulkan,local-dfn,denoise-gtcrn,license-client,telegram"
+          FEAT: "local-stt-vulkan,local-stt-parakeet,local-llm-vulkan,local-dfn,denoise-gtcrn,license-client,telegram,local-stt-qwen"
         run: scripts/dev/dll-cache.sh store win-x64 "$FEAT" "D:/t/release/dimmy_lib.dll" || true
 
       - name: Fetch onnxruntime win-x64 DLL (Parakeet ort path)
@@ -798,7 +798,7 @@ jobs:
           # to discover.
           Copy-Item "D:\t\release\ggml*.dll" "$pubDir/"
           Copy-Item "D:\t\release\llama*.dll" "$pubDir/"
-          foreach ($need in @("ggml.dll","ggml-base.dll","ggml-cpu.dll","ggml-vulkan.dll","llama.dll")) {
+          foreach ($need in @("ggml.dll","ggml-base.dll","ggml-cpu.dll","ggml-vulkan.dll","llama.dll","mtmd.dll")) {
             if (-not (Test-Path "$pubDir/$need")) {
               throw "$need missing from publish dir -- dimmy_lib.dll links it dynamically, so the app would fail to start"
             }

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
@@ -2744,6 +2744,9 @@ public sealed partial class SettingsWindow : Window
     /// Sentinel ComboBox tag identifying the Parakeet entry. Not a real
     /// whisper-model filename — distinguished from `*.bin` by prefix.
     private const string ParakeetTag = "parakeet:fp32";
+    // Qwen3-ASR rows carry the variant in the tag, because unlike Parakeet
+    // there is more than one of them.
+    private const string QwenTagPrefix = "qwen:";
 
     /// <summary>One local-model picker row. Downloaded entries get a green
     /// check (mirror of the Mac Voice/Output pickers + the Providers On-device
@@ -2865,7 +2868,9 @@ public sealed partial class SettingsWindow : Window
                 var label = downloaded ? $"{name}: {desc}" : $"{name}: {desc} ({sizeMb}MB)";
                 LocalModelComboBox.Items.Add(MakeLocalModelItem(label, filename, downloaded, sizeMb));
 
-                if (ViewModel.LocalSttBackend != "parakeet" && filename == ViewModel.LocalModel)
+                if (ViewModel.LocalSttBackend != "parakeet"
+                    && ViewModel.LocalSttBackend != "qwen"
+                    && filename == ViewModel.LocalModel)
                     selectedIdx = idx;
                 idx++;
             }
@@ -2882,6 +2887,33 @@ public sealed partial class SettingsWindow : Window
             LocalModelComboBox.Items.Add(MakeLocalModelItem(parakeetLabel, ParakeetTag, parakeetDownloaded, 2500));
             if (ViewModel.LocalSttBackend == "parakeet")
                 selectedIdx = idx;
+            idx++;
+
+            // Qwen3-ASR: one row per variant. Each is a PAIR of files on
+            // disk, so "downloaded" here means both halves are present.
+            try
+            {
+                var qjson = DimmyNative.QwenAsrModelsJson();
+                if (!string.IsNullOrEmpty(qjson))
+                {
+                    using var qdoc = JsonDocument.Parse(qjson);
+                    foreach (var q in qdoc.RootElement.EnumerateArray())
+                    {
+                        var qname = q.GetProperty("name").GetString() ?? "";
+                        var qfile = q.GetProperty("filename").GetString() ?? "";
+                        var qsize = q.GetProperty("size_mb").GetInt32();
+                        var qdesc = q.GetProperty("description").GetString() ?? "";
+                        var qhave = q.GetProperty("downloaded").GetBoolean();
+                        var qlabel = qhave ? $"{qname}: {qdesc}" : $"{qname}: {qdesc} ({qsize}MB)";
+                        LocalModelComboBox.Items.Add(
+                            MakeLocalModelItem(qlabel, QwenTagPrefix + qfile, qhave, qsize));
+                        if (ViewModel.LocalSttBackend == "qwen" && qfile == ViewModel.QwenAsrModel)
+                            selectedIdx = idx;
+                        idx++;
+                    }
+                }
+            }
+            catch (Exception qex) { App.Log($"PopulateLocalModels qwen EXC: {qex.Message}", "Settings"); }
 
             if (LocalModelComboBox.Items.Count > 0)
             {
@@ -2905,7 +2937,16 @@ public sealed partial class SettingsWindow : Window
         if (!_loaded) return;
         if (LocalModelComboBox.SelectedItem is ComboBoxItem item && item.Tag is string tag)
         {
-            if (tag == ParakeetTag)
+            if (tag.StartsWith(QwenTagPrefix, StringComparison.Ordinal))
+            {
+                ViewModel.LocalSttBackend = "qwen";
+                ViewModel.QwenAsrModel = tag.Substring(QwenTagPrefix.Length);
+                // Same convenience as the other two backends: the low-latency
+                // chunked path is the reason to run a local engine at all.
+                ViewModel.ChunkStreamingEnabled = true;
+                App.Log($"-> set LocalSttBackend=qwen, QwenAsrModel={ViewModel.QwenAsrModel}", "Settings");
+            }
+            else if (tag == ParakeetTag)
             {
                 ViewModel.LocalSttBackend = "parakeet";
                 // Auto-enable chunk streaming on the backend switch — the
@@ -3073,11 +3114,14 @@ public sealed partial class SettingsWindow : Window
     private void CheckModelStatus()
     {
         bool isParakeet = ViewModel.LocalSttBackend == "parakeet";
+        bool isQwen = ViewModel.LocalSttBackend == "qwen";
         try
         {
-            int exists = isParakeet
-                ? DimmyNative.dimmy_parakeet_bundle_present()
-                : DimmyNative.dimmy_model_exists(ViewModel.LocalModel);
+            int exists = isQwen
+                ? DimmyNative.dimmy_qwen_asr_bundle_present(ViewModel.QwenAsrModel)
+                : isParakeet
+                    ? DimmyNative.dimmy_parakeet_bundle_present()
+                    : DimmyNative.dimmy_model_exists(ViewModel.LocalModel);
             if (exists == 1)
             {
                 LocalModelStatus.Text = "Ready";
@@ -3086,7 +3130,12 @@ public sealed partial class SettingsWindow : Window
             else
             {
                 string sizeInfo;
-                if (isParakeet)
+                if (isQwen)
+                {
+                    var q = _localModels.Find(m => m.Filename == QwenTagPrefix + ViewModel.QwenAsrModel);
+                    sizeInfo = q != null ? $" ({q.SizeMb}MB)" : "";
+                }
+                else if (isParakeet)
                 {
                     sizeInfo = " (2.5GB)";
                 }
@@ -3111,6 +3160,7 @@ public sealed partial class SettingsWindow : Window
     private async void DownloadModel_Click(object sender, RoutedEventArgs e)
     {
         bool isParakeet = ViewModel.LocalSttBackend == "parakeet";
+        bool isQwen = ViewModel.LocalSttBackend == "qwen";
         DownloadModelBtn.IsEnabled = false;
         DownloadModelBtn.Content = "Downloading...";
         DownloadProgress.IsIndeterminate = true;
@@ -3120,9 +3170,11 @@ public sealed partial class SettingsWindow : Window
 
         try
         {
-            int result = await Task.Run(() => isParakeet
-                ? DimmyNative.dimmy_parakeet_download_bundle()
-                : DimmyNative.dimmy_download_model(ViewModel.LocalModel));
+            int result = await Task.Run(() => isQwen
+                ? DimmyNative.dimmy_qwen_asr_download(ViewModel.QwenAsrModel)
+                : isParakeet
+                    ? DimmyNative.dimmy_parakeet_download_bundle()
+                    : DimmyNative.dimmy_download_model(ViewModel.LocalModel));
             if (result == 0)
             {
                 LocalModelStatus.Text = "Ready";

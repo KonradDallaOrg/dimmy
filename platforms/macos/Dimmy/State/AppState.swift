@@ -940,6 +940,14 @@ final class AppState: ObservableObject {
     @Published var isDownloadingParakeet: Bool = false
     @Published var parakeetBundlePresent: Bool = false
 
+    /// Which Qwen3-ASR variant runs when `localSttBackend == "qwen"`.
+    /// Names the TEXT half; the projector is derived from it in the core,
+    /// because the two are only ever useful as a pair.
+    @Published var qwenAsrModel: String = "Qwen3-ASR-1.7B-Q8_0.gguf"
+    @Published var qwenBundlePresent: Bool = false
+    @Published var qwenDownloadProgress: Double = 0.0
+    @Published var isDownloadingQwen: Bool = false
+
     /// Show the floating subtitle window during recording when the
     /// chunked engine is firing. Independent of `chunkStreamingEnabled`
     /// — power users can keep the chunked transcriber on (better tail
@@ -1480,6 +1488,7 @@ final class AppState: ObservableObject {
         if let v = config["stt_mode"] as? String { sttMode = v }
         if let v = config["local_model"] as? String { localModel = v }
         if let v = config["local_stt_backend"] as? String { localSttBackend = v }
+        if let v = config["qwen_asr_model"] as? String { qwenAsrModel = v }
         if let v = config["live_captions_enabled"] as? Bool { liveCaptionsEnabled = v }
         if let v = config["filler_removal_enabled"] as? Bool { fillerRemovalEnabled = v }
         if let v = config["call_detect_enabled"] as? Bool { callDetectEnabled = v }
@@ -1925,6 +1934,7 @@ final class AppState: ObservableObject {
             "stt_mode": sttMode,
             "local_model": localModel,
             "local_stt_backend": localSttBackend,
+            "qwen_asr_model": qwenAsrModel,
             "live_captions_enabled": liveCaptionsEnabled,
             "filler_removal_enabled": fillerRemovalEnabled,
             "call_detect_enabled": callDetectEnabled,

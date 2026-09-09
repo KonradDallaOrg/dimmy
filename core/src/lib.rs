@@ -76,6 +76,7 @@ pub mod parakeet_fluid;
 pub mod preprocess;
 pub mod process_loopback;
 pub mod provider;
+pub mod qwen_asr;
 pub mod silero;
 pub mod telegram;
 pub mod telemetry;
@@ -633,6 +634,77 @@ pub fn truncate_utf8(s: &str, max: usize) -> &str {
     &s[..end]
 }
 
+/// Seconds of audio per meeting transcription window.
+///
+/// Measured 2026-09-09 over 120 s of a real Italian meeting, the same audio
+/// through all three local engines at 3 s / 15 s / 30 s. Thirty wins on BOTH
+/// axes, which is why this moved:
+///
+/// | engine           |  3 s   | 30 s   |
+/// |------------------|--------|--------|
+/// | Parakeet (CPU)   | 19.9 s |  6.5 s |
+/// | whisper turbo Q8 | 72.9 s | 17.3 s |
+/// | Qwen3-ASR 1.7B   | 40.9 s | 21.8 s |
+///
+/// Short windows are not cheaper, they are 2-4x DEARER: every call pays a
+/// fixed cost, and whisper additionally pads any input to a full 30 s encoder
+/// frame, so a 15 s window buys half of what it is charged for. They are also
+/// worse: cut mid-sentence the model reconstructs the rest, and Parakeet
+/// turned `consumatore` into `consumamento` and `counterfeit` into
+/// `cantersi`. At 30 s all three recover every technical term in the passage.
+///
+/// The cost is latency: a transcript line every 30 s instead of every 15.
+pub const DEFAULT_MEETING_CHUNK_SECS: f32 = 30.0;
+
+/// What the default used to be, kept only so a stored value can be recognised
+/// as never-chosen. The field has no UI on any platform, so a stored 15 is the
+/// old default the core wrote out, not a user's decision.
+const LEGACY_MEETING_CHUNK_SECS: f32 = 15.0;
+
+/// Read the stored window size, migrating the old default forward.
+///
+/// Without this the new default reaches nobody: the core serialises the field
+/// into every `config.json`, so every existing install would keep 15 for ever.
+/// Someone who hand-edited the file to exactly 15.0 loses that and can set
+/// 15.1 -- worth it to move everyone else.
+pub fn migrate_meeting_chunk_secs(stored: f32) -> f32 {
+    if (stored - LEGACY_MEETING_CHUNK_SECS).abs() < f32::EPSILON {
+        DEFAULT_MEETING_CHUNK_SECS
+    } else {
+        stored
+    }
+}
+
+#[cfg(test)]
+mod meeting_window_migration {
+    use super::*;
+
+    #[test]
+    fn the_old_default_moves_forward() {
+        // Nobody could have chosen 15: the field has no UI. Leaving it would
+        // mean the measurement that justified 30 reached zero existing users.
+        assert_eq!(migrate_meeting_chunk_secs(15.0), 30.0);
+    }
+
+    #[test]
+    fn a_deliberate_value_is_kept() {
+        for v in [10.0_f32, 20.0, 25.0, 45.0, 60.0] {
+            assert_eq!(migrate_meeting_chunk_secs(v), v, "{v}");
+        }
+    }
+
+    #[test]
+    fn the_new_default_is_not_migrated_again() {
+        // Idempotent: a config already carrying 30 must survive a reload.
+        assert_eq!(migrate_meeting_chunk_secs(30.0), 30.0);
+    }
+
+    #[test]
+    fn a_fresh_config_starts_at_thirty() {
+        assert_eq!(AppConfig::default().meeting_chunk_secs, 30.0);
+    }
+}
+
 /// Non-sensitive config persisted to disk.
 pub struct AppConfig {
     pub api_url: String,
@@ -748,6 +820,10 @@ pub struct AppConfig {
     /// `"parakeet"` (Parakeet TDT v3 FP32 via the `local-stt-parakeet`
     /// feature). Old configs default to `"whisper"` for compatibility.
     pub local_stt_backend: String,
+    /// Which Qwen3-ASR variant runs when `local_stt_backend == "qwen"`.
+    /// Names the TEXT half; the projector is derived from it, because the
+    /// two are only ever useful as a pair. See `qwen_asr::AVAILABLE_MODELS`.
+    pub qwen_asr_model: String,
     /// When true (and backend = parakeet), show a floating live-caption
     /// window below the pill while chunked transcription is running.
     /// Independent from `chunk_streaming_enabled` — a user can have
@@ -827,6 +903,8 @@ pub struct AppConfig {
     /// transcript. Range 5.0-60.0, default 15.0. Cloud providers
     /// accept up to ~25 MB so 60 s @ 16k mono int16 (~1.9 MB) is
     /// well within limits.
+    /// Seconds of audio per transcription window in a meeting.
+    /// See [`DEFAULT_MEETING_CHUNK_SECS`] for why it is 30.
     pub meeting_chunk_secs: f32,
     /// User-chosen destination directory for meeting recordings. Empty =
     /// default `<config_dir>/meetings`. When set + writable, all meeting
@@ -932,6 +1010,7 @@ impl Default for AppConfig {
             .to_string(),
             local_model: "ggml-base-q8_0.bin".to_string(),
             local_stt_backend: "whisper".to_string(),
+            qwen_asr_model: crate::qwen_asr::DEFAULT_MODEL.to_string(),
             live_captions_enabled: true,
             call_detect_enabled: true,
             // No default exclusions — the user's "Never" click is
@@ -970,7 +1049,7 @@ impl Default for AppConfig {
             // user-boosted setups; at gain=1.0 it's effectively
             // identity for in-range samples.
             loopback_gain: 1.0,
-            meeting_chunk_secs: 15.0,
+            meeting_chunk_secs: DEFAULT_MEETING_CHUNK_SECS,
             meeting_storage_path: String::new(),
             notion_target_id: String::new(),
             notion_target_kind: String::new(),
@@ -1048,6 +1127,7 @@ pub fn save_config_file(cfg: &AppConfig) {
             "stt_mode": cfg.stt_mode,
             "local_model": cfg.local_model,
             "local_stt_backend": cfg.local_stt_backend,
+            "qwen_asr_model": cfg.qwen_asr_model,
             "live_captions_enabled": cfg.live_captions_enabled,
             "call_detect_enabled": cfg.call_detect_enabled,
             "call_detect_excluded_apps": cfg.call_detect_excluded_apps,
@@ -1213,6 +1293,10 @@ pub fn load_config_file() -> AppConfig {
                         .as_str()
                         .unwrap_or(&defaults.local_stt_backend)
                         .to_string(),
+                    qwen_asr_model: v["qwen_asr_model"]
+                        .as_str()
+                        .unwrap_or(&defaults.qwen_asr_model)
+                        .to_string(),
                     live_captions_enabled: v["live_captions_enabled"]
                         .as_bool()
                         .unwrap_or(defaults.live_captions_enabled),
@@ -1280,10 +1364,12 @@ pub fn load_config_file() -> AppConfig {
                         .as_f64()
                         .unwrap_or(defaults.loopback_gain as f64)
                         as f32,
-                    meeting_chunk_secs: v["meeting_chunk_secs"]
-                        .as_f64()
-                        .unwrap_or(defaults.meeting_chunk_secs as f64)
-                        as f32,
+                    meeting_chunk_secs: migrate_meeting_chunk_secs(
+                        v["meeting_chunk_secs"]
+                            .as_f64()
+                            .unwrap_or(defaults.meeting_chunk_secs as f64)
+                            as f32,
+                    ),
                     meeting_storage_path: v["meeting_storage_path"]
                         .as_str()
                         .unwrap_or(&defaults.meeting_storage_path)
@@ -1650,6 +1736,7 @@ pub struct AppState {
     pub stt_mode: Mutex<String>,
     pub local_model: Mutex<String>,
     pub local_stt_backend: Mutex<String>,
+    pub qwen_asr_model: Mutex<String>,
     pub live_captions_enabled: Mutex<bool>,
     pub call_detect_enabled: Mutex<bool>,
     pub call_detect_excluded_apps: Mutex<Vec<String>>,
@@ -1796,6 +1883,7 @@ impl AppState {
             stt_mode: Mutex::new(file_cfg.stt_mode),
             local_model: Mutex::new(file_cfg.local_model),
             local_stt_backend: Mutex::new(file_cfg.local_stt_backend),
+            qwen_asr_model: Mutex::new(file_cfg.qwen_asr_model),
             live_captions_enabled: Mutex::new(file_cfg.live_captions_enabled),
             call_detect_enabled: Mutex::new(file_cfg.call_detect_enabled),
             call_detect_excluded_apps: Mutex::new(file_cfg.call_detect_excluded_apps),
@@ -1938,6 +2026,11 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
     let ggml_debug_logging = *state.ggml_debug_logging.lock().map_err(|e| e.to_string())?;
     let stt_mode = state.stt_mode.lock().map_err(|e| e.to_string())?.clone();
     let local_model = state.local_model.lock().map_err(|e| e.to_string())?.clone();
+    let qwen_asr_model = state
+        .qwen_asr_model
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
     let local_stt_backend = state
         .local_stt_backend
         .lock()
@@ -2023,6 +2116,7 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         stt_mode,
         local_model,
         local_stt_backend,
+        qwen_asr_model,
         live_captions_enabled,
         call_detect_enabled,
         call_detect_excluded_apps,

@@ -238,7 +238,7 @@ jobs:
           # FluidInference's CoreML bundle. Target-scoped to macOS
           # arm64 so the feature has no effect on Win/Linux jobs.
           cargo build --lib --release --target aarch64-apple-darwin \
-            --features local-stt-metal,local-llm-metal,local-stt-parakeet-coreml,local-stt-parakeet-fluid,local-dfn,license-client
+            --features local-stt-metal,local-llm-metal,local-stt-parakeet-coreml,local-stt-parakeet-fluid,local-dfn,license-client,telegram,local-stt-qwen
 
       - name: Verify static library
         run: |
@@ -1160,7 +1160,7 @@ jobs:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           DIMMY_TELEGRAM_API_ID: ${{ secrets.DIMMY_TELEGRAM_API_ID }}
           DIMMY_TELEGRAM_API_HASH: ${{ secrets.DIMMY_TELEGRAM_API_HASH }}
-          FEAT: "local-stt-vulkan,local-llm-vulkan,local-stt-parakeet,denoise-gtcrn,license-client,telegram"
+          FEAT: "local-stt-vulkan,local-llm-vulkan,local-stt-parakeet,denoise-gtcrn,license-client,telegram,local-stt-qwen"
         run: |
           res="$(scripts/dev/dll-cache.sh restore win-x64 "$FEAT" "D:/t/release/dimmy_lib.dll" || echo MISS)"
           echo "restore: $res"
@@ -1221,7 +1221,7 @@ jobs:
           REM     when the core is unchanged (DLL-reuse via dll-cache.sh),
           REM     so `cargo clean` only runs on a real rebuild.
           cargo clean --release
-          cargo build --lib --release --features local-stt-vulkan,local-llm-vulkan,local-stt-parakeet,denoise-gtcrn,license-client,telegram
+          cargo build --lib --release --features local-stt-vulkan,local-llm-vulkan,local-stt-parakeet,denoise-gtcrn,license-client,telegram,local-stt-qwen
           if errorlevel 1 exit /b 1
           REM ── PRESERVE the production DLL before the whisper gate ──
           REM The gate below runs `cargo test --features ...,test-ffi` in THIS
@@ -1343,7 +1343,7 @@ jobs:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           DIMMY_TELEGRAM_API_ID: ${{ secrets.DIMMY_TELEGRAM_API_ID }}
           DIMMY_TELEGRAM_API_HASH: ${{ secrets.DIMMY_TELEGRAM_API_HASH }}
-          FEAT: "local-stt-vulkan,local-llm-vulkan,local-stt-parakeet,denoise-gtcrn,license-client,telegram"
+          FEAT: "local-stt-vulkan,local-llm-vulkan,local-stt-parakeet,denoise-gtcrn,license-client,telegram,local-stt-qwen"
         run: scripts/dev/dll-cache.sh store win-x64 "$FEAT" "D:/t/release/dimmy_lib.dll" || true
 
       - name: Gate — reject AVX-512 in dimmy_lib.dll
@@ -1520,7 +1520,7 @@ jobs:
           # to discover.
           Copy-Item "D:\t\release\ggml*.dll" "$pubDir/"
           Copy-Item "D:\t\release\llama*.dll" "$pubDir/"
-          foreach ($need in @("ggml.dll","ggml-base.dll","ggml-cpu.dll","ggml-vulkan.dll","llama.dll")) {
+          foreach ($need in @("ggml.dll","ggml-base.dll","ggml-cpu.dll","ggml-vulkan.dll","llama.dll","mtmd.dll")) {
             if (-not (Test-Path "$pubDir/$need")) {
               throw "$need missing from publish dir -- dimmy_lib.dll links it dynamically, so the app would fail to start"
             }

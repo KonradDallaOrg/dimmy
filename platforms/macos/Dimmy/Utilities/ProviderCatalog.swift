@@ -85,8 +85,22 @@ enum ProviderCatalog {
         var list: [ProviderModel] = []
         list.append(contentsOf: parseLocal(DimmyCore.shared.listLocalModels(), stt: true))
         list.append(P("Parakeet TDT v3, 2.5 GB"))
+        // Qwen3-ASR variants: same source-of-truth idea, their own FFI
+        // because one entry is a pair of files rather than one.
+        list.append(contentsOf: parseQwen(DimmyCore.shared.listQwenAsrModels()))
         list.append(contentsOf: parseLocal(DimmyCore.shared.listLLMModels(), stt: false))
         return list
+    }
+
+    private static func parseQwen(_ rows: [[String: Any]]?) -> [ProviderModel] {
+        guard let rows else { return [] }
+        return rows.compactMap { m in
+            guard let name = m["name"] as? String, !name.isEmpty,
+                  let file = m["filename"] as? String, !file.isEmpty else { return nil }
+            return ProviderModel(
+                name: name, stt: true, llm: false, recap: false,
+                localFilename: "qwen:" + file)
+        }
     }
 
     private static func parseLocal(_ rows: [[String: Any]]?, stt: Bool) -> [ProviderModel] {

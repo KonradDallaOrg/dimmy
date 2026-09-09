@@ -115,6 +115,9 @@ dimmy_parakeet_warmup
 dimmy_probe_primary_sample_rate
 dimmy_process_with_llm
 dimmy_push_loopback_audio
+dimmy_qwen_asr_bundle_present
+dimmy_qwen_asr_download
+dimmy_qwen_asr_models_json
 dimmy_save_llm_provider_key
 dimmy_set_app_context
 dimmy_set_config_json

@@ -208,6 +208,22 @@ pub(crate) enum GpuBackendStatus {
     Unavailable,
 }
 
+/// Tell the host we are running on the CPU, and why.
+///
+/// The fallback used to be visible only in the log. Its cost is 10-30x: on
+/// this machine whisper went 2s -> 8s and a recap 40s -> 230s (2026-09-05),
+/// and again on 2026-09-09 a whole evening of measurements was taken on a
+/// machine that had silently stopped using its GPU. A slowdown that large
+/// with no explanation reads as "the app got worse", and the user has no way
+/// to know there is a one-click recovery.
+#[cfg(any(feature = "local-stt", feature = "local-llm"))]
+fn announce_cpu_fallback(sticky: bool) {
+    crate::ffi::emit_event(
+        "gpu_fallback_cpu",
+        &serde_json::json!({ "sticky": sticky }).to_string(),
+    );
+}
+
 /// Probe the GPU backend once per process (cached). See module notes above.
 #[cfg(any(feature = "local-stt", feature = "local-llm"))]
 pub(crate) fn gpu_backend_status() -> GpuBackendStatus {
@@ -267,6 +283,17 @@ fn compute_gpu_backend_status() -> GpuBackendStatus {
     // discoverable but its driver stack is broken (seen on dual-boot Windows
     // installs where ICD registration is partial). Blocking at the loader
     // layer makes ggml-vulkan see zero ICDs and skip all device init.
+    // A marker from a DIFFERENT program (a benchmark, a smoke test) says
+    // nothing about our GPU path. Clear it so its own next run is not
+    // blamed for a crash it never had, and carry on.
+    if crate::gpu_health::foreign_marker_present() {
+        crate::log(&format!(
+            "[GPU] Ignoring GPU-init marker left by another program ({}).",
+            crate::gpu_health::crash_context().unwrap_or_default()
+        ));
+        crate::gpu_health::clear();
+    }
+
     if crate::gpu_health::previous_crash_detected() {
         let ctx = crate::gpu_health::crash_context().unwrap_or_else(|| "unknown".to_string());
         let fingerprint = crate::gpu_diag::compute_driver_fingerprint();
@@ -290,6 +317,7 @@ fn compute_gpu_backend_status() -> GpuBackendStatus {
             crate::gpu_diag::disable_vulkan_loader(
                 "sentinel: aborted during GPU init (first strike)",
             );
+            announce_cpu_fallback(false);
             return GpuBackendStatus::Unavailable;
         }
         crate::log(&format!(
@@ -300,6 +328,7 @@ fn compute_gpu_backend_status() -> GpuBackendStatus {
         ));
         crate::gpu_health::mark_known_bad(&ctx, &fingerprint);
         crate::gpu_diag::disable_vulkan_loader("sentinel: two consecutive aborts during GPU init");
+        announce_cpu_fallback(true);
         return GpuBackendStatus::Unavailable;
     }
 

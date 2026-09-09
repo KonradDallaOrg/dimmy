@@ -130,6 +130,22 @@ public partial class App : Application
     /// <summary>Structured core failure (error event with `source`). STT
     /// failures get a toast naming provider + reason + next step; other
     /// sources may be added later. Runs on the UI thread.</summary>
+    /// <summary>The core fell back to whisper because the picked engine
+    /// has no model on disk. Runs on the UI thread.</summary>
+    /// <summary>Local models are on the CPU after an aborted GPU init.
+    /// Runs on the UI thread.</summary>
+    private void OnGpuFallbackToCpu(bool sticky)
+    {
+        try { Services.DictNotificationService.ShowGpuFallbackToCpu(sticky); }
+        catch (Exception ex) { PttLog($"OnGpuFallbackToCpu exc: {ex.Message}"); }
+    }
+
+    private void OnSttBackendFallback(string requested, string used)
+    {
+        try { Services.DictNotificationService.ShowSttBackendFallback(requested, used); }
+        catch (Exception ex) { PttLog($"OnSttBackendFallback exc: {ex.Message}"); }
+    }
+
     private void OnCoreFailure(string source, string provider, string category, string message)
     {
         try
@@ -589,6 +605,8 @@ public partial class App : Application
             // Error flash alone proved invisible (2026-07-04: four Groq
             // HTTP 403 in a row, retried blind, cause found only in logs).
             _appViewModel.CoreFailure += OnCoreFailure;
+            _appViewModel.SttBackendFallback += OnSttBackendFallback;
+            _appViewModel.GpuFallbackToCpu += OnGpuFallbackToCpu;
 
             // 2f. Transcription falling behind during a meeting. Subscribed
             // HERE, not in MeetingWindow: the meeting lifecycle is decoupled

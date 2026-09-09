@@ -147,6 +147,7 @@ jobs:
             'ggml-base.dll',
             'ggml-cpu.dll',
             'ggml-vulkan.dll',
+            'mtmd.dll',
             'llama.dll',
             'coreclr.dll',
             'hostfxr.dll',

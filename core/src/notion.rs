@@ -515,7 +515,7 @@ pub fn meeting_dir_to_title(meeting_dir: &std::path::Path, transcript: &str) -> 
 }
 
 fn transcript_first_words(transcript: &str, n: usize) -> String {
-    // The transcript file lines look like `[12345 ms] [mic] hello world`.
+    // The transcript file lines look like `[00:00:12] [mic] hello world` (older files carry `[12345 ms]`; both are stripped the same way).
     // Strip the metadata prefix, then take first N tokens of actual content.
     let mut words = Vec::new();
     for line in transcript.lines() {

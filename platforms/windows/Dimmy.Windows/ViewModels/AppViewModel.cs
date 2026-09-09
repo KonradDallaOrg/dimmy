@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Text.Json;
@@ -242,6 +242,16 @@ public partial class AppViewModel : ObservableObject
     /// pill-only and do NOT fire this. Fired on the UI thread.
     public event Action<string, string, string, string>? CoreFailure;
 
+    /// <summary>The core could not run the local engine the user picked
+    /// because its model is not on disk, and used whisper instead.
+    /// (requested, used).</summary>
+    public event Action<string, string>? SttBackendFallback;
+
+    /// <summary>The core is running local models on the CPU because a
+    /// previous run aborted during GPU init. True = sticky (survives
+    /// restarts until drivers change).</summary>
+    public event Action<bool>? GpuFallbackToCpu;
+
     public void UpdateChunkProgress(int current, int total)
     {
         ChunkCurrent = current;
@@ -415,6 +425,12 @@ public partial class AppViewModel : ObservableObject
                         payload.GetProperty("downloaded").GetInt64(),
                         payload.GetProperty("total").GetInt64());
                     break;
+                // Qwen3-ASR carries the same {filename,downloaded,total} payload
+                // and is an STT model like the others, so it shares the branch.
+                // Without a case here the download runs to completion with the
+                // status stuck on "Starting download..." -- the host event
+                // whitelist makes a new engine INERT until it is added.
+                case "qwen_asr_download_progress":
                 case "model_download_progress":
                     {
                         var fn = payload.GetProperty("filename").GetString() ?? "";
@@ -565,6 +581,17 @@ public partial class AppViewModel : ObservableObject
                         var cat = payload.TryGetProperty("category", out var cEl)
                             ? (cEl.GetString() ?? "") : "";
                         CoreFailure?.Invoke(srcEl.GetString() ?? "", prov, cat, msg);
+                    }
+                    break;
+                case "gpu_fallback_cpu":
+                    GpuFallbackToCpu?.Invoke(
+                        payload.TryGetProperty("sticky", out var stk) && stk.GetBoolean());
+                    break;
+                case "stt_backend_fallback":
+                    {
+                        var req = payload.TryGetProperty("requested", out var rq) ? (rq.GetString() ?? "") : "";
+                        var used = payload.TryGetProperty("used", out var us) ? (us.GetString() ?? "") : "";
+                        SttBackendFallback?.Invoke(req, used);
                     }
                     break;
                 case "telegram_state":
