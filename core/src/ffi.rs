@@ -7500,6 +7500,11 @@ pub unsafe extern "C" fn dimmy_compute_audio_peaks(
     dst[bytes.len()] = 0;
     bytes.len() as c_int
 }
+/// How much of the file-load progress bar the preprocessing pass owns.
+/// It is a single pass over every sample and on a long file it is tens of
+/// seconds, so it needs to be visible; the transcription that follows is
+/// much longer, so it does not need much.
+const PREPROCESS_PROGRESS_SHARE: f64 = 10.0;
 
 /// Synchronously transcribe an audio file using the active local STT
 /// backend (whisper.cpp or Parakeet, per `local_stt_backend`). Cloud
@@ -7586,8 +7591,30 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
     // AUDIO-001). On a 95-min meeting WAV this destroyed 97 % of the
     // audio, leaving only the first ~150 s transcribable. File-load
     // audio is already at a recorded level — only de-rumble is needed.
-    let raw_samples_for_history = mono.clone();
-    let processed_samples = crate::preprocess::process_buffer_for_file_load(&mono, sample_rate);
+    // Only the LENGTH of the decoded audio is ever needed below (three
+    // duration computations), and cloning the buffer to get it cost a full
+    // 325 MB on a 28-minute file. Keep the number, not the samples.
+    let raw_sample_count = mono.len();
+    // The preprocess is the whole wait before the first chunk. Give it the
+    // first tenth of the progress bar so the UI moves during it; the chunk
+    // loop below owns the rest and never has to go backwards.
+    let processed_samples = crate::preprocess::process_buffer_for_file_load_with_progress(
+        &mono,
+        sample_rate,
+        |done, total| {
+            let pct = if total > 0 {
+                (done as f64 / total as f64) * PREPROCESS_PROGRESS_SHARE
+            } else {
+                0.0
+            };
+            emit_event(
+                "file_transcribe_progress",
+                &serde_json::json!({ "percent": pct }).to_string(),
+            );
+        },
+    );
+    // Decoded audio is dead from here on and it is 325 MB of it.
+    drop(mono);
     let processed = crate::audio::ProcessedAudio {
         samples: processed_samples,
         sample_rate,
@@ -7604,7 +7631,7 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
         .lock()
         .map(|m| m.clone())
         .unwrap_or_else(|_| "local".to_string());
-    let total_secs_pre = raw_samples_for_history.len() as f64 / sample_rate as f64;
+    let total_secs_pre = raw_sample_count as f64 / sample_rate as f64;
 
     // ── Cloud branch: hand off to transcribe_chunked ──────────────
     // Cloud STT routing reuses the same chunking machinery the live
@@ -7721,7 +7748,7 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
     let composed_prompt = crate::compose_stt_prompt(&prompt_base, &user_dict_snapshot);
     // Emit a starting event so the UI can flip its progress bar
     // from indeterminate to 0 % the moment we begin work.
-    let total_secs = raw_samples_for_history.len() as f64 / sample_rate as f64;
+    let total_secs = raw_sample_count as f64 / sample_rate as f64;
     emit_event(
         "file_transcribe_progress",
         &serde_json::json!({
@@ -7838,7 +7865,7 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
     if !text.trim().is_empty() {
         if let Ok(guard) = st.history_store.lock() {
             if let Some(ref store) = *guard {
-                let duration = raw_samples_for_history.len() as f64 / sample_rate as f64;
+                let duration = raw_sample_count as f64 / sample_rate as f64;
                 let saved_id = store.save(&text, &language, duration).ok();
                 // Attach word timestamps when the parakeet path produced
                 // them. Whisper backend leaves word_ts_acc empty → no-op.
@@ -8073,8 +8100,11 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
                 }
                 emit_event(
                     "file_transcribe_progress",
-                    &serde_json::json!({ "percent": (end as f64 / total as f64) * 100.0 })
-                        .to_string(),
+                    &serde_json::json!({
+                        "percent": PREPROCESS_PROGRESS_SHARE
+                            + (end as f64 / total as f64) * (100.0 - PREPROCESS_PROGRESS_SHARE)
+                    })
+                    .to_string(),
                 );
                 start = end;
             }

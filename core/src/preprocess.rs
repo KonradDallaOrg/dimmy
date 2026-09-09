@@ -528,6 +528,21 @@ fn limit_peak(samples: &mut [f32]) {
 /// envelope. VAD is also disabled because the chunker downstream
 /// (`split_at_silence`) already handles silence boundaries.
 pub fn process_buffer_for_file_load(samples: &[f32], sample_rate: u32) -> Vec<f32> {
+    process_buffer_for_file_load_with_progress(samples, sample_rate, |_, _| {})
+}
+
+/// Same, reporting progress as `(samples_done, samples_total)`.
+///
+/// A 28-minute file is 81 million samples and this pass is the only thing
+/// standing between the decode and the first transcribed chunk. It took 97 s
+/// on a machine under memory pressure (measured 2026-09-09) with nothing on
+/// screen, which reads as a hang and gets the load cancelled and retried --
+/// which is exactly what a user did, three times.
+pub fn process_buffer_for_file_load_with_progress<F: FnMut(usize, usize)>(
+    samples: &[f32],
+    sample_rate: u32,
+    mut on_progress: F,
+) -> Vec<f32> {
     assert!(
         sample_rate > 0,
         "process_buffer_for_file_load: sample_rate must be > 0, got {}",
@@ -542,20 +557,23 @@ pub fn process_buffer_for_file_load(samples: &[f32], sample_rate: u32) -> Vec<f3
     // to [-1, 1] before filtering so the highpass biquad never sees
     // extreme magnitudes that could push it into a numerically unstable
     // regime over a long stream.
-    let sanitized: Vec<f32> = samples
-        .iter()
-        .map(|&s| {
-            if s.is_finite() {
-                s.clamp(-1.0, 1.0)
-            } else {
-                0.0
-            }
-        })
-        .collect();
+    // Sanitising into its own Vec first cost a second full copy of the
+    // audio: 325 MB for a 28-minute file, on top of the decoded input and
+    // the output. Three live buffers plus the caller's own copy peaked at
+    // ~1.3 GB and pushed a 15.7 GB machine with 0.8 GB free into paging,
+    // which is where the 97 s went. Clamp and filter in ONE pass instead.
+    let sanitize = |s: f32| {
+        if s.is_finite() {
+            s.clamp(-1.0, 1.0)
+        } else {
+            0.0
+        }
+    };
 
     // 80 Hz Butterworth highpass — same coefficients as the live path.
     if sample_rate < 1000 {
-        return sanitized;
+        on_progress(samples.len(), samples.len());
+        return samples.iter().copied().map(sanitize).collect();
     }
     let coeffs = match Coefficients::<f32>::from_params(
         FilterType::HighPass,
@@ -564,21 +582,30 @@ pub fn process_buffer_for_file_load(samples: &[f32], sample_rate: u32) -> Vec<f3
         Q_BUTTERWORTH_F32,
     ) {
         Ok(c) => c,
-        Err(_) => return sanitized,
+        Err(_) => {
+            on_progress(samples.len(), samples.len());
+            return samples.iter().copied().map(sanitize).collect();
+        }
     };
     let mut hp = DirectForm2Transposed::<f32>::new(coeffs);
 
-    let mut out: Vec<f32> = sanitized
-        .into_iter()
-        .map(|s| {
-            let v = hp.run(s);
-            if v.is_finite() {
-                v.clamp(-1.0, 1.0)
-            } else {
-                0.0
-            }
-        })
-        .collect();
+    let total = samples.len();
+    let mut out: Vec<f32> = Vec::with_capacity(total);
+    // Report about every 2%: often enough that the bar visibly moves on a
+    // half-minute pass, rare enough that the FFI marshalling is noise.
+    let step = (total / 50).max(1);
+    for (i, &raw) in samples.iter().enumerate() {
+        let v = hp.run(sanitize(raw));
+        out.push(if v.is_finite() {
+            v.clamp(-1.0, 1.0)
+        } else {
+            0.0
+        });
+        if i % step == 0 {
+            on_progress(i, total);
+        }
+    }
+    on_progress(total, total);
 
     // Post-condition: same length, all finite, in range.
     assert_eq!(
@@ -588,8 +615,8 @@ pub fn process_buffer_for_file_load(samples: &[f32], sample_rate: u32) -> Vec<f3
     );
     debug_assert!(out.iter().all(|s| s.is_finite()));
     debug_assert!(out.iter().all(|&s| (-1.0..=1.0).contains(&s)));
-    // Touch via mut to avoid "useless mut" lint when assertions are off.
-    out.shrink_to_fit();
+    // No shrink_to_fit: with_capacity already sized it exactly, and on a
+    // 325 MB buffer the reallocation it may perform is a third full copy.
     out
 }
 
@@ -1900,6 +1927,49 @@ mod tests {
 
         // No NaN/Inf anywhere.
         assert!(out.iter().all(|s| s.is_finite()));
+    }
+
+    #[test]
+    fn progress_variant_matches_the_plain_one() {
+        // The plain entry point delegates, so a difference here would mean
+        // the file-load path and the meeting re-transcribe path had started
+        // filtering audio differently.
+        let sr = 48_000;
+        let input: Vec<f32> = (0..5000).map(|i| (i as f32 * 0.01).sin() * 0.4).collect();
+        let plain = process_buffer_for_file_load(&input, sr);
+        let with_p = process_buffer_for_file_load_with_progress(&input, sr, |_, _| {});
+        assert_eq!(plain, with_p);
+    }
+
+    #[test]
+    fn progress_is_monotonic_and_ends_complete() {
+        // The bar must not go backwards, and it must reach the end: the
+        // caller maps this onto the first tenth of the file-load progress
+        // and the chunk loop takes over from there.
+        let sr = 48_000;
+        let input = vec![0.2f32; 20_000];
+        let seen = std::cell::RefCell::new(Vec::new());
+        let out = process_buffer_for_file_load_with_progress(&input, sr, |d, t| {
+            seen.borrow_mut().push((d, t));
+        });
+        let seen = seen.into_inner();
+        assert!(!seen.is_empty(), "no progress reported");
+        assert!(seen.windows(2).all(|w| w[0].0 <= w[1].0), "went backwards");
+        assert!(seen.iter().all(|&(d, t)| d <= t && t == input.len()));
+        assert_eq!(*seen.last().unwrap(), (input.len(), input.len()));
+        assert_eq!(out.len(), input.len());
+    }
+
+    #[test]
+    fn a_short_circuited_rate_still_reports_completion() {
+        // Below 1 kHz there is no filter to run, but a caller driving a
+        // progress bar still needs to be told the pass is over.
+        let seen = std::cell::RefCell::new(Vec::new());
+        let out = process_buffer_for_file_load_with_progress(&[0.5f32; 64], 500, |d, t| {
+            seen.borrow_mut().push((d, t));
+        });
+        assert_eq!(out.len(), 64);
+        assert_eq!(*seen.into_inner().last().unwrap(), (64, 64));
     }
 
     #[test]
