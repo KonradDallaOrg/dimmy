@@ -247,6 +247,11 @@ public partial class AppViewModel : ObservableObject
     /// (requested, used).</summary>
     public event Action<string, string>? SttBackendFallback;
 
+    /// <summary>The core is running local models on the CPU because a
+    /// previous run aborted during GPU init. True = sticky (survives
+    /// restarts until drivers change).</summary>
+    public event Action<bool>? GpuFallbackToCpu;
+
     public void UpdateChunkProgress(int current, int total)
     {
         ChunkCurrent = current;
@@ -577,6 +582,10 @@ public partial class AppViewModel : ObservableObject
                             ? (cEl.GetString() ?? "") : "";
                         CoreFailure?.Invoke(srcEl.GetString() ?? "", prov, cat, msg);
                     }
+                    break;
+                case "gpu_fallback_cpu":
+                    GpuFallbackToCpu?.Invoke(
+                        payload.TryGetProperty("sticky", out var stk) && stk.GetBoolean());
                     break;
                 case "stt_backend_fallback":
                     {

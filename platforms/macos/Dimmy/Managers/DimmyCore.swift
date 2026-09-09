@@ -1243,6 +1243,16 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
         if appState.meetingActive != active { appState.meetingActive = active }
         if appState.meetingIsPaused != paused { appState.meetingIsPaused = paused }
 
+    case "gpu_fallback_cpu":
+        // 10-30x slower, and the only other sign is a log line.
+        let sticky = (payload["sticky"] as? Bool) ?? false
+        DictToastWindow.show(
+            kind: .workflowHint,
+            title: "Running on the CPU",
+            body: sticky
+                ? "Local transcription aborted twice while starting the GPU, so it now runs on the CPU. Updating your graphics driver makes it try again."
+                : "The last run stopped while starting the GPU, so this session uses the CPU. Restart Dimmy to try the GPU again.")
+
     case "stt_backend_fallback":
         // The picked local engine has no model on disk and the core used
         // whisper. Saying so beats handing back a transcript from an
