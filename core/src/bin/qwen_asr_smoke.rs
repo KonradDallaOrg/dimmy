@@ -35,38 +35,6 @@ fn main() {
         return;
     }
 
-    // What would actually REACH the model. The live meeting path gates every
-    // window through the VAD; re-transcribe did not, and an idle mic track came
-    // back as invented filler. This counts, per window, what the gate keeps.
-    if args.len() >= 4 && args[1] == "--gate" {
-        let secs: f32 = args[2].parse().expect("window seconds");
-        for path in &args[3..] {
-            let Some((pcm, total)) = read_16k_mono(path) else {
-                println!("{:<22} UNREADABLE", short(path));
-                continue;
-            };
-            let win = (secs * 16_000.0) as usize;
-            let (mut kept, mut dropped) = (0usize, 0usize);
-            for w in pcm.chunks(win) {
-                if dimmy_lib::preprocess::process_chunk_vad_only(w, 16_000).is_empty() {
-                    dropped += 1;
-                } else {
-                    kept += 1;
-                }
-            }
-            println!(
-                "{:<22} {:>5.0}s  finestre da {:.0}s: {} al modello, {} scartate ({}%)",
-                short(path),
-                total,
-                secs,
-                kept,
-                dropped,
-                dropped * 100 / (kept + dropped).max(1)
-            );
-        }
-        return;
-    }
-
     if args.len() < 3 {
         eprintln!("usage: qwen_asr_smoke <model-file-from-catalog> <audio.wav> [...]");
         eprintln!("       qwen_asr_smoke --list");
