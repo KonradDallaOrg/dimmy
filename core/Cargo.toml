@@ -82,6 +82,14 @@ required-features = ["local-stt-parakeet-fluid"]
 # Qwen3-ASR through llama.cpp's mtmd path. Same shape again: WAV in,
 # transcript out, plus the warm per-window timing that is the only
 # speed number worth quoting for a resident model.
+# Does a longer transcription window buy anything? Runs one file at several
+# window sizes through one engine and prints cost AND text, so the trade is
+# read rather than guessed. Needs every local engine to be selectable.
+[[bin]]
+name = "window_ab"
+path = "src/bin/window_ab.rs"
+required-features = ["local-stt-parakeet", "local-stt", "local-stt-qwen"]
+
 [[bin]]
 name = "qwen_asr_smoke"
 path = "src/bin/qwen_asr_smoke.rs"
