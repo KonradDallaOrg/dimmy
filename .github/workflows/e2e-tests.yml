@@ -119,6 +119,16 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
+      # Same long-path problem the other two Windows jobs already guard
+      # against. This job is PR-only, so it had never run since the
+      # llama.cpp bump and never got the fix: on staging it is skipped, and
+      # the first pull request after the bump is what found it.
+      - name: Long paths for the llama.cpp submodule (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          git config --global core.longpaths true
+          "CARGO_NET_GIT_FETCH_WITH_CLI=true" | Add-Content -Encoding utf8 $env:GITHUB_ENV
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
