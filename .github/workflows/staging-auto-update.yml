@@ -277,7 +277,7 @@ jobs:
           # FluidInference's CoreML bundle. Target-scoped to macOS
           # arm64 so the feature has no effect on Win/Linux jobs.
           cargo build --lib --release --target aarch64-apple-darwin \
-            --features local-stt-metal,local-llm-metal,local-stt-parakeet-coreml,local-stt-parakeet-fluid,local-dfn,license-client
+            --features local-stt-metal,local-llm-metal,local-stt-parakeet-coreml,local-stt-parakeet-fluid,local-dfn,license-client,telegram,local-stt-qwen
 
       - name: Verify static library
         run: |
@@ -690,7 +690,7 @@ jobs:
           REM     gate fail, test-install red, user-reported Win crash),
           REM     FIRST diagnostic = re-add `cargo clean --release` and
           REM     re-run. Then investigate why the cache went stale.
-          cargo build --lib --release --features local-stt-vulkan,local-llm-vulkan,local-stt-parakeet,denoise-gtcrn,license-client,telegram
+          cargo build --lib --release --features local-stt-vulkan,local-llm-vulkan,local-stt-parakeet,denoise-gtcrn,license-client,telegram,local-stt-qwen
 
       - name: Gate — verify dimmy_lib.dll linker version
         shell: pwsh
@@ -809,7 +809,7 @@ jobs:
           # to discover.
           Copy-Item "D:\t\release\ggml*.dll" "$pubDir/"
           Copy-Item "D:\t\release\llama*.dll" "$pubDir/"
-          foreach ($need in @("ggml.dll","ggml-base.dll","ggml-cpu.dll","ggml-vulkan.dll","llama.dll")) {
+          foreach ($need in @("ggml.dll","ggml-base.dll","ggml-cpu.dll","ggml-vulkan.dll","llama.dll","mtmd.dll")) {
             if (-not (Test-Path "$pubDir/$need")) {
               throw "$need missing from publish dir -- dimmy_lib.dll links it dynamically, so the app would fail to start"
             }
