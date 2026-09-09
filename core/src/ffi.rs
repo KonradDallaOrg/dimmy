@@ -10900,7 +10900,18 @@ mod tests {
         )
         .unwrap();
         assert_eq!(unsafe { dimmy_set_config_json(json.as_ptr()) }, 0);
-        assert_eq!(state().local_stt_backend.lock().unwrap().as_str(), "qwen");
+        // A build without the engine coerces the backend to whisper on the
+        // way in, so a config written by a full build cannot leave a lean one
+        // failing every chunk. CI lints and tests WITHOUT `local-stt-qwen`,
+        // which is exactly the case this arm covers.
+        assert_eq!(
+            state().local_stt_backend.lock().unwrap().as_str(),
+            if crate::qwen_asr::engine_available() {
+                "qwen"
+            } else {
+                "whisper"
+            }
+        );
         assert_eq!(
             state().qwen_asr_model.lock().unwrap().as_str(),
             "Qwen3-ASR-0.6B-Q8_0.gguf"
