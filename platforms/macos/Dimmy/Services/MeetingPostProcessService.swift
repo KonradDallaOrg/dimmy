@@ -271,6 +271,26 @@ enum MeetingPostProcessService {
     /// Win parity: UiPreferences.RecapExportFolder.
     static let recapExportFolderKey = "recapExportFolder"
 
+    /// Can we actually write recaps into this folder? Creates it if missing,
+    /// then writes and removes a probe file — the only way to learn the answer
+    /// on a sandboxed Mac, where a path can exist and still be denied.
+    ///
+    /// Lives here because this type owns `recapExportFolderKey`: Settings and
+    /// the Meeting wizard both let the user pick the folder, and a second copy
+    /// of this check would let the two disagree about which folders are usable.
+    static func isExportFolderWritable(_ dir: String) -> Bool {
+        let fm = FileManager.default
+        do {
+            try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+            let probe = (dir as NSString).appendingPathComponent(".dimmy_write_probe")
+            try "".write(toFile: probe, atomically: true, encoding: .utf8)
+            try? fm.removeItem(atPath: probe)
+            return true
+        } catch {
+            return false
+        }
+    }
+
     /// Turn a meeting title into a safe markdown filename STEM (no extension).
     /// Replaces filesystem-illegal chars (`\ / : * ? " < > |`) and control
     /// chars with a space, collapses whitespace runs, trims trailing

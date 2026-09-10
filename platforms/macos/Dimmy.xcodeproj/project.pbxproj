@@ -20,6 +20,10 @@
 		AA00CA10 /* ModelCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00CA10 /* ModelCatalog.swift */; };
 		AA00DD01 /* LocalLlmCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00DD01 /* LocalLlmCatalog.swift */; };
 		AA000504 /* MeetingWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000504 /* MeetingWindowController.swift */; };
+		AA00E001 /* WizardWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00E001 /* WizardWindowController.swift */; };
+		AA00E002 /* MacWizardCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00E002 /* MacWizardCard.swift */; };
+		AA00E003 /* CommandWizardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00E003 /* CommandWizardView.swift */; };
+		AA00E004 /* MeetingWizardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00E004 /* MeetingWizardView.swift */; };
 		AA000505 /* MeetingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000505 /* MeetingView.swift */; };
 		AA000506 /* FileLoadCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000506 /* FileLoadCard.swift */; };
 		AA000507 /* AudioWaveformView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000507 /* AudioWaveformView.swift */; };
@@ -150,6 +154,10 @@
 		AB00CA10 /* ModelCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelCatalog.swift; sourceTree = "<group>"; };
 		AB00DD01 /* LocalLlmCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalLlmCatalog.swift; sourceTree = "<group>"; };
 		AB000504 /* MeetingWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingWindowController.swift; sourceTree = "<group>"; };
+		AB00E001 /* WizardWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WizardWindowController.swift; sourceTree = "<group>"; };
+		AB00E002 /* MacWizardCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacWizardCard.swift; sourceTree = "<group>"; };
+		AB00E003 /* CommandWizardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandWizardView.swift; sourceTree = "<group>"; };
+		AB00E004 /* MeetingWizardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingWizardView.swift; sourceTree = "<group>"; };
 		AB000505 /* MeetingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingView.swift; sourceTree = "<group>"; };
 		AB000506 /* FileLoadCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileLoadCard.swift; sourceTree = "<group>"; };
 		AB000507 /* AudioWaveformView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioWaveformView.swift; sourceTree = "<group>"; };
@@ -407,6 +415,15 @@
 			path = State;
 			sourceTree = "<group>";
 		};
+		AD00E001 /* Wizards */ = {
+			isa = PBXGroup;
+			children = (
+				AB00E003 /* CommandWizardView.swift */,
+				AB00E004 /* MeetingWizardView.swift */,
+			);
+			path = Wizards;
+			sourceTree = "<group>";
+		};
 		AD000004 /* Controllers */ = {
 			isa = PBXGroup;
 			children = (
@@ -416,6 +433,7 @@
 				AB000400 /* CaptionWindowController.swift */,
 				AB000504 /* MeetingWindowController.swift */,
 				AB001102 /* CallNudgeWindowController.swift */,
+				AB00E001 /* WizardWindowController.swift */,
 			);
 			path = Controllers;
 			sourceTree = "<group>";
@@ -449,6 +467,7 @@
 				AD000007 /* Onboarding */,
 				AD000008 /* Settings */,
 				AD000051 /* Meeting */,
+				AD00E001 /* Wizards */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -493,6 +512,7 @@
 				AB000206 /* MacShortcutPage.swift */,
 				AB000207 /* MacPrivacyPage.swift */,
 				AB000208 /* MacAboutPage.swift */,
+				AB00E002 /* MacWizardCard.swift */,
 				AB000209 /* MacAdvancedPage.swift */,
 				AB000210 /* MacRulesPage.swift */,
 				AB000211 /* MacPermissionsPage.swift */,
@@ -831,6 +851,10 @@ echo \"[gtcrn] bundled $(basename \"$GTCRN_SRC\") into Resources\"
 				AA00CA10 /* ModelCatalog.swift in Sources */,
 				AA00DD01 /* LocalLlmCatalog.swift in Sources */,
 				AA000504 /* MeetingWindowController.swift in Sources */,
+				AA00E001 /* WizardWindowController.swift in Sources */,
+				AA00E002 /* MacWizardCard.swift in Sources */,
+				AA00E003 /* CommandWizardView.swift in Sources */,
+				AA00E004 /* MeetingWizardView.swift in Sources */,
 				AA000505 /* MeetingView.swift in Sources */,
 				AA000506 /* FileLoadCard.swift in Sources */,
 				AA000507 /* AudioWaveformView.swift in Sources */,

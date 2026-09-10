@@ -210,6 +210,34 @@ struct TryItStepView: View {
                 .multilineTextAlignment(.center)
                 .lineSpacing(4)
 
+            // Two doors out of the wizard, for the two features whose setup
+            // is more than a checkbox. Offered, not imposed: "Start Using
+            // Dimmy" finishes exactly as it did before and nobody is walked
+            // through something they did not ask for. Mirror of the same two
+            // cards on the Windows success page.
+            Text("Want to set up more?")
+                .font(.system(size: 13))
+                .foregroundColor(.secondary)
+            HStack(alignment: .top, spacing: 10) {
+                MacWizardCard(
+                    icon: "waveform",
+                    iconBackground: Color(red: 0.94, green: 0.36, blue: 0.24),
+                    title: "Meetings",
+                    description: "Record and get a recap"
+                ) {
+                    handOff(.meeting)
+                }
+                MacWizardCard(
+                    icon: "text.cursor",
+                    iconBackground: Color(red: 0.55, green: 0.35, blue: 0.95),
+                    title: "Command mode",
+                    description: "Change selected text by voice"
+                ) {
+                    handOff(.command)
+                }
+            }
+            .frame(maxWidth: 420)
+
             Button(action: {
                 appState.showPillIntro = true
                 onComplete()
@@ -223,4 +251,13 @@ struct TryItStepView: View {
         }
     }
 
+    /// Open a focused wizard from the last onboarding page, and finish
+    /// onboarding on the way out. Leaving this window open behind a second
+    /// wizard would keep the trial hotkey armed and leave the user with two
+    /// wizards stacked; the setup it did is already saved.
+    private func handOff(_ kind: WizardWindowController.Kind) {
+        appState.showPillIntro = true
+        onComplete()
+        WizardWindowController.shared.show(kind, appState: appState)
+    }
 }

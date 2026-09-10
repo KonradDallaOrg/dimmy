@@ -36,27 +36,43 @@ struct MacAboutPage: View {
 
     // MARK: Setup
 
-    // Mirror of the Windows About "Run setup again" card. Reopening the
-    // wizard is idempotent: its onAppear re-detects an already-saved key
-    // and already-downloaded models, so nothing is re-downloaded and no
-    // key is asked for twice. We flip `isOnboardingComplete` to false so
-    // the finish step can flip it back to true and trigger the window
-    // close, same handshake the Diagnostics "Reset onboarding" uses.
+    // Mirror of the Windows About setup cards. Reopening any of these is
+    // idempotent: they re-detect an already-saved key, already-downloaded
+    // models and an already-bound shortcut, so nothing is re-downloaded and
+    // no key is asked for twice.
+    //
+    // The first card flips `isOnboardingComplete` to false so the finish step
+    // can flip it back to true and trigger the window close, the same
+    // handshake the Diagnostics "Reset onboarding" uses. The two wizards need
+    // no such dance: they are standalone windows that close themselves.
     private var setupGroup: some View {
         Group {
             MacGroupLabel(text: "Setup")
-            MacTile {
-                MacRow(
-                    "Run setup again",
-                    description: "Pick your model, key, and shortcut. Saved keys and downloaded models are kept.",
+            HStack(alignment: .top, spacing: 12) {
+                MacWizardCard(
                     icon: "sparkles",
                     iconBackground: Color(red: 0.04, green: 0.52, blue: 1.00),
-                    showsDivider: false
+                    title: "Run setup again",
+                    description: "Model, key and dictation shortcut. Saved keys and models are kept."
                 ) {
-                    Button("Open setup") {
-                        appState.isOnboardingComplete = false
-                        AppDelegate.shared?.reopenOnboarding()
-                    }
+                    appState.isOnboardingComplete = false
+                    AppDelegate.shared?.reopenOnboarding()
+                }
+                MacWizardCard(
+                    icon: "text.cursor",
+                    iconBackground: Color(red: 0.55, green: 0.35, blue: 0.95),
+                    title: "Set up Command mode",
+                    description: "Rewrite the selected text by voice. Shortcut, model, and a try-it."
+                ) {
+                    WizardWindowController.shared.show(.command, appState: appState)
+                }
+                MacWizardCard(
+                    icon: "waveform",
+                    iconBackground: Color(red: 0.94, green: 0.36, blue: 0.24),
+                    title: "Set up Meeting mode",
+                    description: "Record a meeting and get a recap. Shortcut, recap model, and the destination."
+                ) {
+                    WizardWindowController.shared.show(.meeting, appState: appState)
                 }
             }
         }

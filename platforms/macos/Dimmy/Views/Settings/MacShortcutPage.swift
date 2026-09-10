@@ -375,7 +375,10 @@ private struct DictHotkeyRecorderSheet: View {
 /// detection goes through the Rust `dimmy_hotkey_combos_conflict` FFI —
 /// shared subset-rule with Win so e.g. a `cmd+space` command hotkey is
 /// rejected when the dictation shortcut is `cmd+space+x`.
-private struct CommandHotkeyRecorderSheet: View {
+/// Reachable from the setup wizards too: they present this rather than
+/// adding a fifth and sixth copy of the NSEvent monitor dance, and the
+/// conflict checks against the other hotkeys already live here.
+struct CommandHotkeyRecorderSheet: View {
     @ObservedObject var appState: AppState
     @Binding var isPresented: Bool
     @State private var keyDownMonitor: Any?
@@ -580,7 +583,10 @@ private struct CommandHotkeyRecorderSheet: View {
 /// `CommandHotkeyRecorderSheet`; the only difference is the persistence target
 /// (`appState.meetingHotkey`) and that the conflict check runs against the
 /// dictation chord, the dictionary hotkey AND the command hotkey (3-way).
-private struct MeetingHotkeyRecorderSheet: View {
+/// Reachable from the setup wizards too: they present this rather than
+/// adding a fifth and sixth copy of the NSEvent monitor dance, and the
+/// conflict checks against the other hotkeys already live here.
+struct MeetingHotkeyRecorderSheet: View {
     @ObservedObject var appState: AppState
     @Binding var isPresented: Bool
     @State private var keyDownMonitor: Any?
