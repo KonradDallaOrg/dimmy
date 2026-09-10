@@ -182,7 +182,7 @@ struct MeetingWizardView: View {
         VStack(alignment: .leading, spacing: 14) {
             MacTile {
                 MacRow("Notion",
-                       description: DimmyCore.shared.notionHasToken
+                       description: appState.hasNotionToken
                            ? "Connected. Recaps can be pushed to a page or database."
                            : "Not connected. Uses your own Notion integration token.",
                        icon: "doc.text",
@@ -199,12 +199,16 @@ struct MeetingWizardView: View {
                         get: { appState.notionAutoSend },
                         set: { newValue in
                             appState.notionAutoSend = newValue
-                            // Config is written by the core only, never by the
-                            // host directly.
-                            _ = DimmyCore.shared.setConfig(appState.toRustConfig())
+                            // Single-writer rule: the host asks the core to
+                            // save, it never writes config.json itself.
+                            // `notion_auto_send` is one of the fields
+                            // toRustConfig always emits (see its docstring:
+                            // only the notion TARGET ids are gated).
+                            DimmyCore.shared.setConfig(appState.toRustConfig())
                         }))
                         .labelsHidden()
-                        .disabled(!DimmyCore.shared.notionHasToken)
+                        .toggleStyle(.switch)
+                        .disabled(!appState.hasNotionToken)
                 }
             }
             MacTile {
