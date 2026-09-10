@@ -252,6 +252,13 @@ public partial class AppViewModel : ObservableObject
     /// restarts until drivers change).</summary>
     public event Action<bool>? GpuFallbackToCpu;
 
+    /// <summary>True while a recap/LLM answer is streaming in. A window
+    /// opened AFTER the stream started has no way to know otherwise: the
+    /// deltas it missed are already folded into
+    /// <see cref="LlmStreamText"/>, but nothing said a stream was live.
+    /// Set on the `start` phase, cleared on `end`.</summary>
+    [ObservableProperty] private bool _llmStreamActive;
+
     public void UpdateChunkProgress(int current, int total)
     {
         ChunkCurrent = current;
@@ -461,7 +468,11 @@ public partial class AppViewModel : ObservableObject
                         var chunk = payload.TryGetProperty("delta", out var ld)
                             ? (ld.GetString() ?? "")
                             : "";
-                        if (phase == "start") { LlmStreamText = ""; LlmThinkingText = ""; }
+                        if (phase == "start")
+                        {
+                            LlmStreamText = ""; LlmThinkingText = "";
+                            LlmStreamActive = true;
+                        }
                         else if (phase == "delta") LlmStreamText += chunk;
                         else if (phase == "thinking")
                         {
@@ -471,6 +482,11 @@ public partial class AppViewModel : ObservableObject
                             var t = LlmThinkingText + chunk;
                             LlmThinkingText = t.Length > 4000 ? t[^4000..] : t;
                         }
+                        // The `end` phase was ignored until now. A window
+                        // opening later must be able to tell a live stream
+                        // from a finished one, or it would attach to a
+                        // recap that ended minutes ago.
+                        else if (phase == "end") LlmStreamActive = false;
                     }
                     break;
                 case "stt_chunk":

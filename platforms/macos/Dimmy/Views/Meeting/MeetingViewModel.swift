@@ -335,6 +335,16 @@ final class MeetingViewModel: ObservableObject {
     /// to history-load + Idle when nothing is in flight.
     func onWindowShown() {
         loadHistory()
+        // A recap can be streaming with no meeting recording at all: the
+        // dashboard runs one on a file-derived meeting. SwiftUI already
+        // observes llmStreamText, so nothing needs subscribing here -- but
+        // the pane that renders it only exists in the Processing phase, so
+        // a window opening in Idle showed nothing while the model wrote.
+        if AppState.shared.llmStreamActive, phase != .recording {
+            phase = .processing
+            processingStep = .generatingRecap
+            statusLabel = "Generating recap..."
+        }
         if DimmyCore.shared.meetingIsActive {
             attachToInflightMeeting()
         } else if phase == .idle {

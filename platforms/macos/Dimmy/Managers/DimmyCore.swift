@@ -1378,6 +1378,11 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
             appState.meetingFinishingTranscription = false
             appState.llmStreamText = ""
             appState.llmThinkingText = ""
+            // A meeting window opened LATER needs to know a stream is
+            // live: the deltas it missed are already in llmStreamText,
+            // but nothing said whether the recap is still running or
+            // finished minutes ago.
+            appState.llmStreamActive = true
         } else if phase == "delta" {
             appState.llmStreamText += delta
         } else if phase == "thinking" {
@@ -1387,6 +1392,11 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
             let combined = appState.llmThinkingText + delta
             appState.llmThinkingText = combined.count > 4000
                 ? String(combined.suffix(4000)) : combined
+        } else if phase == "end" {
+            // The end phase was ignored until now. Without it a window
+            // opening later cannot tell a live stream from one that
+            // finished, and would attach to a recap long over.
+            appState.llmStreamActive = false
         }
 
     case "stt_chunk":

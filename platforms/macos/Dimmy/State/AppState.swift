@@ -987,6 +987,11 @@ final class AppState: ObservableObject {
     /// recap content. An opus recap runs past a minute before its first
     /// answer token, and this is what fills that silence.
     @Published var llmThinkingText: String = ""
+    /// True while a recap/LLM answer is streaming. A meeting window opened
+    /// AFTER the stream started has no other way to know: the deltas it
+    /// missed are already folded into `llmStreamText`, but nothing said
+    /// whether the stream is still live.
+    @Published var llmStreamActive: Bool = false
 
     // MARK: - Call detection
 

@@ -254,6 +254,12 @@ public sealed partial class MeetingWindow : Window
                 StartAmplitudePoll();
                 App.Log("ctor: re-attached to active meeting", "Meeting");
             }
+
+            // Outside the branch on purpose: a recap can be streaming with
+            // NO meeting recording — the dashboard runs one on a
+            // file-derived meeting. That is the case the user hit, and
+            // attaching only on re-attach would have missed it entirely.
+            AttachToLiveRecap();
         }
         catch (Exception ex) { App.Log($"resync exc: {ex.Message}", "Meeting"); }
     }
@@ -1718,6 +1724,29 @@ public sealed partial class MeetingWindow : Window
     /// Subscribes for the duration of one recap and unsubscribes in
     /// EndLiveRecap — a leaked handler here would keep appending a later
     /// command-mode stream into a stale meeting window.
+    /// Attach to a recap that is ALREADY streaming, started somewhere
+    /// else — the dashboard's "run recap" on a file-derived meeting, for
+    /// instance. `BeginLiveRecap` cannot be reused as-is: it clears
+    /// LlmStreamText, which would throw away everything written before
+    /// this window opened. The host accumulates that text either way, so
+    /// seeding from it shows the recap from its FIRST word rather than
+    /// from wherever the user happened to open the window.
+    private void AttachToLiveRecap()
+    {
+        var vm = App.Instance?.AppViewModel;
+        if (vm == null || LiveRecapCard == null || !vm.LlmStreamActive) return;
+        LiveRecapCard.Visibility = Visibility.Visible;
+        if (LiveRecapText != null)
+        {
+            var sofar = vm.LlmStreamText;
+            if (string.IsNullOrEmpty(sofar)) sofar = vm.LlmThinkingText;
+            LiveRecapText.Text = sofar;
+        }
+        vm.PropertyChanged -= OnLlmStreamChanged;
+        vm.PropertyChanged += OnLlmStreamChanged;
+        App.Log("attached to an already-running recap stream", "Meeting");
+    }
+
     private void BeginLiveRecap()
     {
         var vm = App.Instance?.AppViewModel;
