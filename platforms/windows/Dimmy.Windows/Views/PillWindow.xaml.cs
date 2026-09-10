@@ -942,16 +942,25 @@ public sealed partial class PillWindow : Window
         // colours jump the moment the speed changes.
         _rainbowAngleDeg = (_rainbowAngleDeg + _rainbowSpeedDeg * dt) % 360.0;
 
-        // Slide the tile ALONG a fixed diagonal axis. The previous version
-        // rotated the axis instead, and a rotating linear gradient does not
-        // travel: at 0 degrees it runs left-to-right, at 180 the very same
-        // axis runs right-to-left, so the colours swept one way, stalled and
-        // reversed — read as "one fast lap, then a pause". Scrolling a
-        // repeating tile moves every colour at one constant rate, which is the
-        // motion actually wanted; speed then means exactly what it says.
-        var phase = _rainbowAngleDeg / 360.0;
-        _rainbowBrush.StartPoint = new global::Windows.Foundation.Point(-phase, -phase);
-        _rainbowBrush.EndPoint = new global::Windows.Foundation.Point(1.0 - phase, 1.0 - phase);
+        // Rotate the gradient axis about the centre. Two things make this turn
+        // evenly where the original stuttered:
+        //
+        // The axis length is now CONSTANT. It used to be
+        // 0.5 / max(|cos|, |sin|), which stretches the gradient to the bounding
+        // box corner — so the tile was 41% longer on the diagonal than on the
+        // axes and the bands visibly sped up and slowed down four times per
+        // revolution. That pulsing, not the rotation rate, is what read as
+        // "one fast lap, then a pause".
+        //
+        // And the brush repeats (see BuildRainbowBrush), so a short constant
+        // axis tiles the whole pill at every orientation instead of running out
+        // of colours the moment the axis no longer spans the shape.
+        const double axisHalfLength = 0.35;
+        var angleRad = _rainbowAngleDeg * Math.PI / 180.0;
+        var dx = Math.Cos(angleRad) * axisHalfLength;
+        var dy = Math.Sin(angleRad) * axisHalfLength;
+        _rainbowBrush.StartPoint = new global::Windows.Foundation.Point(0.5 - dx, 0.5 - dy);
+        _rainbowBrush.EndPoint = new global::Windows.Foundation.Point(0.5 + dx, 0.5 + dy);
     }
 
     private static global::Windows.UI.Color ParseColor(string hex)
