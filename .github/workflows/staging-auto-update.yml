@@ -809,6 +809,11 @@ jobs:
           # to discover.
           Copy-Item "D:\t\release\ggml*.dll" "$pubDir/"
           Copy-Item "D:\t\release\llama*.dll" "$pubDir/"
+          # mtmd.dll is llama.cpp's multimodal library, built by the
+          # local-stt-qwen feature. It matches NEITHER glob above, and the
+          # assert below caught it missing before it could ship -- the check
+          # list had been updated without the copy.
+          Copy-Item "D:\t\release\mtmd*.dll" "$pubDir/"
           foreach ($need in @("ggml.dll","ggml-base.dll","ggml-cpu.dll","ggml-vulkan.dll","llama.dll","mtmd.dll")) {
             if (-not (Test-Path "$pubDir/$need")) {
               throw "$need missing from publish dir -- dimmy_lib.dll links it dynamically, so the app would fail to start"
