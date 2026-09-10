@@ -857,26 +857,28 @@ public sealed partial class PillWindow : Window
     // full colour cycle per 360, kept in degrees so the numbers stay
     // comparable with what they replaced.
     private const double RainbowIdleDegPerSec = 30.0;
-    private const double RainbowMinSpeakingDegPerSec = 70.0;
     private const double RainbowFastDegPerSec = 300.0;
     // Absolute thresholds on the RAW amplitude. 0.02 is the same "signal
     // present" floor the call detector uses; speech peaks well past 0.12.
     private const double RainbowVoiceFloor = 0.02;
     private const double RainbowVoiceCeil = 0.12;
 
-    // Speech is not continuous: stops, plosives and the gaps between words
-    // drop the 12 Hz peak below the floor several times in a single sentence.
-    // Winding down on each of those would make the ring stutter start-stop on
-    // every syllable — the exact judder this is meant to remove. So a voice
-    // keeps the ring alive for this long after the last sample above the
-    // floor, and only a real pause is allowed to stop it.
-    private static readonly TimeSpan RainbowVoiceHold = TimeSpan.FromMilliseconds(450);
-    private DateTime _rainbowLastVoiceUtc = DateTime.MinValue;
-    // Asymmetric easing: spin up promptly so the ring answers the voice,
-    // coast down gently so the stop reads as coming to rest rather than
-    // someone hitting the brake.
-    private const double RainbowSpinUpTau = 0.12;
-    private const double RainbowSpinDownTau = 0.45;
+    // dimmy_get_amplitude is a PEAK over ~50 ms, and across a spoken sentence
+    // it swings hard from one phoneme to the next: a full vowel spikes, the
+    // consonant after it collapses. Driving the speed from that instantaneous
+    // value made the ring sprint a whole lap on a loud syllable and fall back
+    // on the next — the "one 360 then it slows" that this replaces.
+    //
+    // So the speed follows an ENVELOPE of the voice instead: fast attack so it
+    // answers immediately, slow release so continuous speech holds it up and
+    // only a real pause lets it fall. Same fast-attack/slow-release principle
+    // as the pill's own display AGC and as dagc.
+    private double _rainbowVoiceEnv;
+    private const double RainbowEnvAttackTau = 0.05;
+    private const double RainbowEnvReleaseTau = 0.70;
+    // The envelope does the smoothing now, so this only has to take the edge
+    // off the remaining steps.
+    private const double RainbowSpeedTau = 0.12;
 
     /// <summary>Spin the gradient. Driven by CompositionTarget.Rendering, which
     /// fires once per COMPOSED frame — so the rotation advances on the same
@@ -887,7 +889,7 @@ public sealed partial class PillWindow : Window
     {
         _rainbowAngleDeg = 0;
         _rainbowSpeedDeg = RainbowIdleDegPerSec;
-        _rainbowLastVoiceUtc = DateTime.MinValue;
+        _rainbowVoiceEnv = 0.0;
         _rainbowLastTick = DateTime.UtcNow;
         if (!_rainbowRenderHooked)
         {
@@ -911,33 +913,24 @@ public sealed partial class PillWindow : Window
         var dt = Math.Clamp((now - _rainbowLastTick).TotalSeconds, 0.0, 0.1);
         _rainbowLastTick = now;
 
-        if (_rawAmplitude >= RainbowVoiceFloor) _rainbowLastVoiceUtc = now;
-        var speaking = now - _rainbowLastVoiceUtc <= RainbowVoiceHold;
+        var envTau = _rawAmplitude > _rainbowVoiceEnv
+            ? RainbowEnvAttackTau
+            : RainbowEnvReleaseTau;
+        _rainbowVoiceEnv += (_rawAmplitude - _rainbowVoiceEnv) * (1.0 - Math.Exp(-dt / envTau));
 
-        double target;
-        if (speaking)
-        {
-            // Same perceptual curve the bars use (sqrt), so the ring speeds up
-            // when the bars grow rather than waiting for a shout. A linear ramp
-            // spent most of real speech in its bottom third and read as
-            // unresponsive. Inside the hold the amplitude may be momentarily
-            // below the floor, which floors `voice` at 0 — that is what
-            // RainbowMinSpeakingDegPerSec is for: a gap between words coasts,
-            // it does not brake.
-            var voice = Math.Sqrt(Math.Clamp(
-                (_rawAmplitude - RainbowVoiceFloor) / (RainbowVoiceCeil - RainbowVoiceFloor), 0.0, 1.0));
-            target = RainbowMinSpeakingDegPerSec
-                     + (RainbowFastDegPerSec - RainbowMinSpeakingDegPerSec) * voice;
-        }
-        else
-        {
-            target = RainbowIdleDegPerSec; // silence: a slow, steady drift
-        }
+        // Same perceptual curve the bars use (sqrt), so the ring speeds up when
+        // the bars grow rather than waiting for a shout: a linear ramp spent
+        // most of real speech in its bottom third and read as unresponsive.
+        var voice = Math.Sqrt(Math.Clamp(
+            (_rainbowVoiceEnv - RainbowVoiceFloor) / (RainbowVoiceCeil - RainbowVoiceFloor), 0.0, 1.0));
+        // One continuous law from silence to a shout — no speaking/not-speaking
+        // branch. The envelope's slow release is what carries the ring across
+        // the gaps between words, so there is nothing left for a hold to do.
+        var target = RainbowIdleDegPerSec + (RainbowFastDegPerSec - RainbowIdleDegPerSec) * voice;
 
         // Time-based easing, not per-tick: the frame rate is the display's, so
         // a per-tick factor would ease twice as fast at 60 Hz as at 30.
-        var tau = target > _rainbowSpeedDeg ? RainbowSpinUpTau : RainbowSpinDownTau;
-        _rainbowSpeedDeg += (target - _rainbowSpeedDeg) * (1.0 - Math.Exp(-dt / tau));
+        _rainbowSpeedDeg += (target - _rainbowSpeedDeg) * (1.0 - Math.Exp(-dt / RainbowSpeedTau));
         // Accumulate the phase. Deriving it from elapsed*speed would make the
         // colours jump the moment the speed changes.
         _rainbowAngleDeg = (_rainbowAngleDeg + _rainbowSpeedDeg * dt) % 360.0;
