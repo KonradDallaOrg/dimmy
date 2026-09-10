@@ -1710,6 +1710,27 @@
                 </ComboBox>
               </controls:SettingCard>
 
+              <TextBlock Text="GUIDED SETUP"
+                         FontSize="12" FontWeight="SemiBold"
+                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                         CharacterSpacing="40" Margin="2,20,0,8" />
+              <!-- Three guided setups, above Resources: these are the "I want to
+                   use this feature" doors, and a door belongs before a link to
+                   the source. A row of cards rather than three more rows because
+                   they read as doors. The Mac About page uses tiles for the same
+                   job, in the same position. -->
+              <StackPanel Orientation="Horizontal" Spacing="10">
+                <controls:WizardCard Glyph="&#xE8AB;" Title="First run"
+                                     Description="Model, key and dictation shortcut"
+                                     Click="RestartOnboarding_Click" />
+                <controls:WizardCard Glyph="&#xE8BD;" Title="Meetings"
+                                     Description="Shortcut, recap model, where it lands"
+                                     Click="OpenMeetingWizard_Click" />
+                <controls:WizardCard Glyph="&#xE90F;" Title="Command mode"
+                                     Description="Transform selected text by voice"
+                                     Click="OpenCommandWizard_Click" />
+              </StackPanel>
+
               <TextBlock Text="RESOURCES"
                          FontSize="12" FontWeight="SemiBold"
                          Foreground="{ThemeResource TextFillColorSecondaryBrush}"
@@ -1727,21 +1748,6 @@
                 <HyperlinkButton Content="GitHub"
                                  NavigateUri="https://github.com/KonradDallaOrg/dimmy" />
               </controls:SettingCard>
-                            <!-- Three guided setups. A row of cards rather than three more rows:
-                   these are the "I want to use this feature" doors, and they read as
-                   doors. The Mac About page already uses tiles for the same job. -->
-              <TextBlock Text="Guided setup" FontWeight="SemiBold" Margin="0,4,0,6" />
-              <StackPanel Orientation="Horizontal" Spacing="10">
-                <controls:WizardCard Glyph="&#xE8AB;" Title="First run"
-                                     Description="Model, key and dictation shortcut"
-                                     Click="RestartOnboarding_Click" />
-                <controls:WizardCard Glyph="&#xE8BD;" Title="Meetings"
-                                     Description="Shortcut, recap model, where it lands"
-                                     Click="OpenMeetingWizard_Click" />
-                <controls:WizardCard Glyph="&#xE90F;" Title="Command mode"
-                                     Description="Transform selected text by voice"
-                                     Click="OpenCommandWizard_Click" />
-              </StackPanel>
 
             </StackPanel>
 
