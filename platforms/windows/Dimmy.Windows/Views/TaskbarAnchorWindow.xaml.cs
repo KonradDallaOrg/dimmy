@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Runtime.InteropServices;
 using Dimmy.Windows.Helpers;
@@ -32,12 +32,27 @@ public sealed partial class TaskbarAnchorWindow : Window
     /// can't accidentally hook the wrong one.</summary>
     public event Action? TaskbarClicked;
 
+    /// <summary>A button in the taskbar thumbnail toolbar was clicked, by id.
+    /// The anchor owns the taskbar entry, so Explorer posts WM_COMMAND here and
+    /// nowhere else — TaskbarService can register the buttons but cannot hear
+    /// them.</summary>
+    public event Action<int>? ThumbButtonClicked;
+
+    /// <summary>Explorer created (or recreated, after a restart) our taskbar
+    /// button. ThumbBarAddButtons is only legal from this point, and only
+    /// ONCE per button set, so registration hangs off this.</summary>
+    public event Action? TaskbarButtonCreated;
+
     public IntPtr Hwnd { get; }
 
     // Window subclass — must be retained as a field to prevent GC of the delegate.
     private readonly WndProcDelegate? _wndProcDelegate;
 
     private const uint WM_SYSCOMMAND = 0x0112;
+    private const uint WM_COMMAND = 0x0111;
+    // Explorer sends this in the HIWORD of WM_COMMAND wParam for a thumb button.
+    private const int THBN_CLICKED = 0x1800;
+    private uint _taskbarButtonCreatedMsg;
     private const int SC_RESTORE = 0xF120;
 
     [DllImport("user32.dll")]
@@ -59,6 +74,9 @@ public sealed partial class TaskbarAnchorWindow : Window
 
     [DllImport("comctl32.dll")]
     private static extern IntPtr DefSubclassProc(IntPtr hWnd, uint uMsg, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint RegisterWindowMessage(string lpString);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
@@ -95,6 +113,9 @@ public sealed partial class TaskbarAnchorWindow : Window
 
         TrySetWindowIcon();
 
+        // Must be registered BEFORE the subclass can receive it.
+        _taskbarButtonCreatedMsg = RegisterWindowMessage("TaskbarButtonCreated");
+
         _wndProcDelegate = AnchorWndProc;
         SetWindowSubclass(Hwnd, _wndProcDelegate, 1, 0);
 
@@ -117,6 +138,30 @@ public sealed partial class TaskbarAnchorWindow : Window
 
     private IntPtr AnchorWndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
+        // Fires on first creation AND after an Explorer restart, which is why
+        // the buttons are registered here rather than once at startup.
+        if (msg != 0 && msg == _taskbarButtonCreatedMsg)
+        {
+            try { TaskbarButtonCreated?.Invoke(); }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"[TaskbarAnchor] TaskbarButtonCreated handler threw: {ex.Message}");
+            }
+        }
+
+        if (msg == WM_COMMAND && (wParam.ToInt64() >> 16 & 0xFFFF) == THBN_CLICKED)
+        {
+            int id = (int)(wParam.ToInt64() & 0xFFFF);
+            try { ThumbButtonClicked?.Invoke(id); }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"[TaskbarAnchor] ThumbButtonClicked handler threw: {ex.Message}");
+            }
+            return IntPtr.Zero;
+        }
+
         // When the user clicks our taskbar button, Windows sends
         // WM_SYSCOMMAND/SC_RESTORE to un-minimize us. We intercept
         // that, fire TaskbarClicked, and return 0 to suppress the

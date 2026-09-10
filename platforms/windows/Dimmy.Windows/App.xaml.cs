@@ -1386,6 +1386,20 @@ public partial class App : Application
             // Reflect any state we already have (Idle on first launch).
             _taskbarService.UpdateState(_appViewModel.CurrentState);
 
+            // Hovering the taskbar icon shows an EMPTY thumbnail: the anchor is
+            // invisible on purpose, so DWM has nothing to draw. A one-button
+            // thumb toolbar turns that dead popup into a shortcut to Settings.
+            _taskbarAnchor.TaskbarButtonCreated += () =>
+                _taskbarService?.EnsureThumbButtons();
+            _taskbarAnchor.ThumbButtonClicked += id =>
+            {
+                if (id == TaskbarService.ThumbButtonSettingsId) OpenSettingsWindow();
+            };
+            // Explorer may already have created the button before we subscribed
+            // (the anchor is activated a few lines up), in which case the message
+            // is never coming.
+            _taskbarService.EnsureThumbButtons();
+
             _appViewModel.PropertyChanged += OnAppViewModelPropertyChangedForTaskbar;
         }
         catch (Exception ex)

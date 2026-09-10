@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -63,6 +63,38 @@ public sealed class TaskbarService : IDisposable
         [PreserveSig] int SetThumbnailClip(IntPtr hwnd, IntPtr prcClip);
     }
 
+    // ── Thumbnail toolbar ─────────────────────────────────────────────
+    // The anchor window is invisible by design, so its taskbar thumbnail is
+    // blank — there is nothing for DWM to draw. A thumb-toolbar button gives
+    // that hover popup a reason to exist: one click straight into Settings,
+    // without restoring a window the user never wanted on screen.
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct THUMBBUTTON
+    {
+        public uint dwMask;
+        public uint iId;
+        public uint iBitmap;
+        public IntPtr hIcon;
+        // Fixed 260 WCHARs by contract; ByValTStr marshals it in place.
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+        public string szTip;
+        public uint dwFlags;
+    }
+
+    private const uint THB_ICON = 0x2;
+    private const uint THB_TOOLTIP = 0x4;
+    private const uint THB_FLAGS = 0x8;
+    private const uint THBF_ENABLED = 0x0;
+    // Close the thumbnail popup on click — the user asked for Settings, not
+    // for a popup left hanging over the taskbar.
+    private const uint THBF_DISMISSONCLICK = 0x2;
+
+    /// <summary>Id of the Settings button, echoed back in WM_COMMAND.</summary>
+    public const int ThumbButtonSettingsId = 1;
+
+    private bool _thumbButtonsAdded;
+
     [Flags]
     private enum TBPF : uint
     {
@@ -118,6 +150,60 @@ public sealed class TaskbarService : IDisposable
         }
 
         EnsureStateIcons();
+    }
+
+    /// <summary>Register the thumbnail toolbar. Only legal once Explorer has
+    /// created the taskbar button (TaskbarButtonCreated), and only ONCE per
+    /// window — a second AddButtons is refused, so an Explorer restart has to
+    /// go through Update instead.</summary>
+    public void EnsureThumbButtons()
+    {
+        if (_taskbar is null || _hwnd == IntPtr.Zero) return;
+
+        var btn = new THUMBBUTTON
+        {
+            dwMask = THB_ICON | THB_TOOLTIP | THB_FLAGS,
+            iId = ThumbButtonSettingsId,
+            iBitmap = 0,
+            hIcon = LoadSettingsThumbIcon(),
+            szTip = "Settings",
+            dwFlags = THBF_ENABLED | THBF_DISMISSONCLICK,
+        };
+
+        IntPtr block = Marshal.AllocHGlobal(Marshal.SizeOf<THUMBBUTTON>());
+        try
+        {
+            Marshal.StructureToPtr(btn, block, false);
+            int hr = _thumbButtonsAdded
+                ? _taskbar.ThumbBarUpdateButtons(_hwnd, 1, block)
+                : _taskbar.ThumbBarAddButtons(_hwnd, 1, block);
+            if (hr >= 0) _thumbButtonsAdded = true;
+            else System.Diagnostics.Debug.WriteLine($"[TaskbarService] ThumbBar hr=0x{hr:X}");
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[TaskbarService] EnsureThumbButtons: {ex.Message}");
+        }
+        finally
+        {
+            Marshal.DestroyStructure<THUMBBUTTON>(block);
+            Marshal.FreeHGlobal(block);
+        }
+    }
+
+    /// <summary>Icon for the thumb button. Reuses the app icon rather than
+    /// shipping a gear asset: the tooltip already says Settings, and the icon
+    /// set is FROZEN (see CLAUDE.md) so this is not the place to add to it.</summary>
+    private IntPtr LoadSettingsThumbIcon()
+    {
+        try
+        {
+            var path = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "dimmy.ico");
+            if (!System.IO.File.Exists(path)) return IntPtr.Zero;
+            // 16x16: the thumb toolbar is a small-icon strip.
+            return LoadImage(IntPtr.Zero, path, IMAGE_ICON, 16, 16, LR_LOADFROMFILE);
+        }
+        catch { return IntPtr.Zero; }
     }
 
     /// <summary>Apply overlay icon + progress bar matching the given state.</summary>
