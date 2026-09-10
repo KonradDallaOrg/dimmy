@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -77,6 +77,14 @@ public sealed partial class OnboardingWindow : Window
 
         var appWindow = WindowHelper.GetAppWindow(this);
         WindowHelper.ResizeLogical(this, 680, 600);
+
+        // Follow the user's theme, falling back to the system one when they
+        // never chose - which is what ThemeHelper resolves. Every other
+        // visible window already did this; onboarding never has, so a user on
+        // Light with a Dark Windows met Dimmy in the wrong colours on the
+        // very first screen. Found 2026-09-10 on exactly that combination.
+        if (Content is FrameworkElement themeRoot)
+            themeRoot.RequestedTheme = Helpers.ThemeHelper.ResolvedElementTheme();
         if (appWindow?.Presenter is Microsoft.UI.Windowing.OverlappedPresenter presenter)
         {
             presenter.IsResizable = true;
