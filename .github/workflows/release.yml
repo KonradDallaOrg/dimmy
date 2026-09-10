@@ -260,20 +260,20 @@ jobs:
           # the Xcode project searches target/aarch64-apple-darwin/release/.
           # Bring them over rather than assume; harmless when already right.
           TGT="core/target/aarch64-apple-darwin/release"
-          for src in core/target/release/libllama*.dylib core/target/release/libggml*.dylib; do
+          for src in core/target/release/libllama*.dylib core/target/release/libggml*.dylib core/target/release/libmtmd*.dylib; do
             [ -e "$src" ] || continue
             cp -RLf "$src" "$TGT/" 2>/dev/null || true
           done
 
           missing=""
-          for lib in libllama libllama-common libggml libggml-base libggml-cpu libggml-metal; do
+          for lib in libllama libllama-common libggml libggml-base libggml-cpu libggml-metal libmtmd; do
             path="$TGT/$lib.dylib"
             [ -e "$path" ] || missing="$missing $lib(absent)"
             [ -e "$path" ] && [ ! -r "$path" ] && missing="$missing $lib(dangling)"
           done
           if [ -n "$missing" ]; then
             echo "=== where ARE they? ==="
-            find core/target -name 'libllama*.dylib' -o -name 'libggml*.dylib' 2>/dev/null | head -20
+            find core/target \( -name 'libllama*.dylib' -o -name 'libggml*.dylib' -o -name 'libmtmd*.dylib' \) 2>/dev/null | head -20
           fi
           if [ -n "$missing" ]; then
             echo "::error::llama/ggml dylibs unusable:$missing — the rust-cache is stale for this llama.cpp revision; bump the shared-key"
