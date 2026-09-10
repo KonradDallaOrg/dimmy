@@ -16,6 +16,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let appState = AppState.shared
     private var cancellables = Set<AnyCancellable>()
     private var coreInitialized = false
+    /// A `dimmy://activate?code=…` that arrived before the core was up.
+    /// Clicking the magic link with Dimmy CLOSED launches the app and
+    /// delivers the URL immediately, while initializeCoreAsync is still on a
+    /// background queue — so the redeem hit an uninitialised core and failed
+    /// with nothing but a log line. Windows already stashed this case
+    /// (App.xaml.cs `_pendingActivationPayload`); the Mac did not.
+    private var pendingActivationCode: String?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         hkLog("[AppDelegate] applicationDidFinishLaunching ENTER")
@@ -320,6 +327,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 hkLog("[AppDelegate] core ready — starting HotkeyManager")
                 HotkeyManager.shared.start(appState: self.appState)
 
+                // A magic link that arrived before this point.
+                if let code = self.pendingActivationCode {
+                    self.pendingActivationCode = nil
+                    hkLog("[AppDelegate] redeeming activation code held from launch")
+                    self.redeemActivation(code: code)
+                }
+
                 // Honour DIMMY_SCREENSHOT_ALL=1, drives the in-process
                 // Settings shooter once core init + main loop are up.
                 // No-op when the env var is unset.
@@ -483,37 +497,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             let token = comps.queryItems?.first { $0.name == "token" }?.value
             if let code = code, !code.isEmpty {
                 hkLog("[AppDelegate] activation code received (len=\(code.count))")
-                let label = Host.current().localizedName ?? "Mac"
-                Task.detached { [weak self] in
-                    let result = await DimmyCore.shared.licenseRedeem(code: code, deviceLabel: label)
-                    if result.ok {
-                        hkLog("[AppDelegate] licensed activated via dimmy:// scheme")
-                    } else {
-                        hkLog("[AppDelegate] license activation failed: \(result.error ?? "unknown")")
-                    }
-                    await MainActor.run {
-                        if result.ok {
-                            // Post the change notification AFTER opening the
-                            // License tab so the freshly-mounted page is
-                            // already subscribed. Posting before the tab
-                            // switch raced with view materialisation and
-                            // left the License page showing stale state.
-                            // Bring Settings to the front so the user sees
-                            // the confirmation. NSApp.activate is reliable
-                            // here because we're responding to a user-
-                            // initiated open-URL event.
-                            self?.openSettingsToLicense()
-                        } else {
-                            // On failure the License page may already be
-                            // visible — let it refresh to surface the error.
-                            NotificationCenter.default.post(name: .dimmyLicenseChanged, object: nil)
-                        }
-                    }
+                // Redeeming against a core that has not run dimmy_init() yet
+                // cannot work, and this is the normal path when the link
+                // launches the app. Hold it; initializeCoreAsync redeems it.
+                guard DimmyCore.shared.isInitialized else {
+                    hkLog("[AppDelegate] core not ready — holding activation code")
+                    pendingActivationCode = code
+                    continue
                 }
+                redeemActivation(code: code)
             } else if token != nil {
                 hkLog("[AppDelegate] activation token (paste fallback) received — not yet wired")
             } else {
                 hkLog("[AppDelegate] activate URL missing both code and token")
+            }
+        }
+    }
+
+    /// Redeem an activation code and surface the outcome. Split out of the
+    /// URL handler so the deferred path takes exactly the same route.
+    private func redeemActivation(code: String) {
+        let label = Host.current().localizedName ?? "Mac"
+        Task.detached { [weak self] in
+            let result = await DimmyCore.shared.licenseRedeem(code: code, deviceLabel: label)
+            if result.ok {
+                hkLog("[AppDelegate] licensed activated via dimmy:// scheme")
+            } else {
+                hkLog("[AppDelegate] license activation failed: \(result.error ?? "unknown")")
+            }
+            await MainActor.run {
+                if result.ok {
+                    // Open the License tab BEFORE posting the change, so the
+                    // freshly-mounted page is already subscribed. Posting first
+                    // raced with view materialisation and left License stale.
+                    // Settings comes to the front so activation has a visible
+                    // end-state.
+                    self?.openSettingsToLicense()
+                } else {
+                    // On failure the License page may already be visible — let
+                    // it refresh so the error surfaces.
+                    NotificationCenter.default.post(name: .dimmyLicenseChanged, object: nil)
+                }
             }
         }
     }
