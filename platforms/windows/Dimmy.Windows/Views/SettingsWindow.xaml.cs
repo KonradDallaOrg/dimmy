@@ -5402,6 +5402,21 @@ public sealed partial class SettingsWindow : Window
         catch { }
     }
 
+    /// <summary>Focused setup for Meeting mode. A separate window, not a
+    /// branch of the onboarding wizard: the Mac pins that wizard's step
+    /// count in a launch assertion.</summary>
+    private void OpenMeetingWizard_Click(object sender, RoutedEventArgs e)
+    {
+        try { new MeetingWizardWindow().Activate(); }
+        catch (Exception ex) { App.Log($"OpenMeetingWizard exc: {ex.Message}", "Settings"); }
+    }
+
+    private void OpenCommandWizard_Click(object sender, RoutedEventArgs e)
+    {
+        try { new CommandWizardWindow().Activate(); }
+        catch (Exception ex) { App.Log($"OpenCommandWizard exc: {ex.Message}", "Settings"); }
+    }
+
     private void RestartOnboarding_Click(object sender, RoutedEventArgs e)
     {
         // Hand off to the App: it owns the OnboardingWindow lifecycle and

@@ -819,6 +819,26 @@ public sealed partial class OnboardingWindow : Window
     private void TrialBack_Click(object sender, RoutedEventArgs e)
         => ViewModel.IsTrialSuccess = false;
 
+    /// <summary>Open a focused wizard from the last onboarding page, and
+    /// finish onboarding on the way out. Leaving this window open behind a
+    /// second wizard would keep the trial hotkey armed and leave the user
+    /// with two wizards stacked; the setup it did is already saved.</summary>
+    private void OpenMeetingWizard_Click(object sender, RoutedEventArgs e)
+        => HandOffToWizard(() => new MeetingWizardWindow());
+
+    private void OpenCommandWizard_Click(object sender, RoutedEventArgs e)
+        => HandOffToWizard(() => new CommandWizardWindow());
+
+    private void HandOffToWizard(Func<Window> make)
+    {
+        try
+        {
+            FinishOnboarding_Click(this, new RoutedEventArgs());
+            make().Activate();
+        }
+        catch (Exception ex) { App.Log($"HandOffToWizard exc: {ex.Message}", "Onboarding"); }
+    }
+
     private void FinishOnboarding_Click(object sender, RoutedEventArgs e)
     {
         try

@@ -519,6 +519,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     /// Bring the Settings window to the front (creating it if needed) and
+    /// land on a specific page. Mirror of `OpenSettingsWindowAt` on Windows,
+    /// added for the setup wizards: a bare `openSettings()` looks broken when
+    /// the window is ALREADY open behind the wizard, because it only raises it
+    /// there and the user sees nothing happen.
+    ///
+    /// The delay is the same trick as `openSettingsToLicense` below: the
+    /// container subscribes to the notification when it appears, so posting in
+    /// the same turn as a first-time open would race the mount.
+    ///
+    /// Only `MacSettingsContainerView` observes the notification, so on the
+    /// legacy container (`useTahoeSettings` off, not the default) this lands on
+    /// Settings without switching page. That degrades to `openSettings()`,
+    /// which is the correct floor.
+    func openSettings(at tab: MacSettingsTab) {
+        NSApp.activate(ignoringOtherApps: true)
+        openSettings()
+        settingsWindow?.makeKeyAndOrderFront(nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            NotificationCenter.default.post(
+                name: .dimmyNavigateSettingsTab,
+                object: nil,
+                userInfo: ["tab": tab.rawValue]
+            )
+        }
+    }
+
+    /// Bring the Settings window to the front (creating it if needed) and
     /// scroll to the License page. Called from the dimmy:// dispatch so
     /// successful activation has a visible end-state. The container view
     /// observes `dimmyOpenLicenseTab` to handle the cross-component nav.

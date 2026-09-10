@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Window
     x:Class="Dimmy.Windows.Views.SettingsWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -1727,13 +1727,21 @@
                 <HyperlinkButton Content="GitHub"
                                  NavigateUri="https://github.com/KonradDallaOrg/dimmy" />
               </controls:SettingCard>
-              <controls:SettingCard Glyph="&#xE8AB;"
-                                    Label="Run setup again"
-                                    InfoTip="Reopen the welcome guide to pick your model, key, and shortcut. Models you already downloaded and keys you already saved are kept, nothing is re-downloaded.">
-                <Button x:Name="RestartOnboardingBtn"
-                        Content="Open setup"
-                        Click="RestartOnboarding_Click" />
-              </controls:SettingCard>
+                            <!-- Three guided setups. A row of cards rather than three more rows:
+                   these are the "I want to use this feature" doors, and they read as
+                   doors. The Mac About page already uses tiles for the same job. -->
+              <TextBlock Text="Guided setup" FontWeight="SemiBold" Margin="0,4,0,6" />
+              <StackPanel Orientation="Horizontal" Spacing="10">
+                <controls:WizardCard Glyph="&#xE8AB;" Title="First run"
+                                     Description="Model, key and dictation shortcut"
+                                     Click="RestartOnboarding_Click" />
+                <controls:WizardCard Glyph="&#xE8BD;" Title="Meetings"
+                                     Description="Shortcut, recap model, where it lands"
+                                     Click="OpenMeetingWizard_Click" />
+                <controls:WizardCard Glyph="&#xE90F;" Title="Command mode"
+                                     Description="Transform selected text by voice"
+                                     Click="OpenCommandWizard_Click" />
+              </StackPanel>
 
             </StackPanel>
 

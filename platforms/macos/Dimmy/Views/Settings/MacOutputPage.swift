@@ -249,16 +249,7 @@ struct MacOutputPage: View {
     }
 
     private func isDirectoryWritable(_ dir: String) -> Bool {
-        let fm = FileManager.default
-        do {
-            try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
-            let probe = (dir as NSString).appendingPathComponent(".dimmy_write_probe")
-            try "".write(toFile: probe, atomically: true, encoding: .utf8)
-            try? fm.removeItem(atPath: probe)
-            return true
-        } catch {
-            return false
-        }
+        MeetingPostProcessService.isExportFolderWritable(dir)
     }
 
     /// Recap effective provider tag, derived purely from the chosen

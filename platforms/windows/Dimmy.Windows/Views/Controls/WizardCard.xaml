@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="Dimmy.Windows.Views.Controls.WizardCard"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- A button, not a Border with a tap handler: keyboard focus, Enter and
+         Space, the hover and pressed visuals and the accessibility name all
+         come for free, and a card the user cannot reach with Tab is a card
+         some users cannot reach at all. -->
+    <Button x:Name="Root" Click="Root_Click"
+            Padding="16" MinWidth="150" MinHeight="120"
+            HorizontalContentAlignment="Stretch"
+            VerticalContentAlignment="Top">
+        <StackPanel Spacing="10" HorizontalAlignment="Center">
+            <FontIcon x:Name="Icon" FontSize="26"
+                      Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                      HorizontalAlignment="Center" />
+            <TextBlock x:Name="TitleText" FontWeight="SemiBold" FontSize="14"
+                       TextAlignment="Center" TextWrapping="Wrap" />
+            <TextBlock x:Name="DescriptionText" Opacity="0.7" FontSize="12"
+                       TextAlignment="Center" TextWrapping="Wrap" />
+        </StackPanel>
+    </Button>
+</UserControl>
