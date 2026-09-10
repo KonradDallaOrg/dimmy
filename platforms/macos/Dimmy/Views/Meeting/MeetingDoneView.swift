@@ -327,8 +327,7 @@ struct MeetingDoneView: View {
             return
         }
         transcriptTurns = raw
-            .split(separator: "
-", omittingEmptySubsequences: false)
+            .split(separator: "\n", omittingEmptySubsequences: false)
             .enumerated()
             .map { index, line in
                 let text = String(line)
