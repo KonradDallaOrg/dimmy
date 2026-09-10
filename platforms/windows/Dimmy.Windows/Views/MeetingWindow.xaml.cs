@@ -52,6 +52,8 @@ public sealed partial class MeetingWindow : Window
     private Microsoft.UI.Xaml.Media.TranslateTransform? _ampScrollTransform;
     private readonly List<Microsoft.UI.Xaml.Shapes.Rectangle> _ampBarsMic = new();
     private readonly List<Microsoft.UI.Xaml.Shapes.Rectangle> _ampBarsSys = new();
+    private SolidColorBrush? _liveBrushMic;
+    private SolidColorBrush? _liveBrushSys;
     private DateTime _ampLastSampleUtc;
     private bool _ampRenderHooked;
     // Second history for the loopback (system) stream so the live
@@ -1052,12 +1054,16 @@ public sealed partial class MeetingWindow : Window
 
         EnsureAmpScrollLayer(w, h);
 
-        // Two stacked bands so mic and system are clearly readable
-        // at a glance. Mic on top half (system accent — tracks the
-        // user's Windows accent colour), system on bottom half
-        // (LimeGreen — kept as a contrast track since accent might
-        // itself be blue/teal). Each band centered on its own midline
-        // so bars grow up + down equally within their half.
+        // Two stacked bands so mic and system are clearly readable at a
+        // glance, each centred on its own midline so bars grow up and down
+        // equally within their half.
+        //
+        // Colours are the brand gradient endpoints, the same two the finished
+        // recording is drawn with: mic green, system violet. They used to be
+        // the Windows accent and LimeGreen — an accent that changes per machine
+        // (so the pairing was never designed, only whatever the user had) next
+        // to a raw system colour. Live and done are the same waveform of the
+        // same meeting; there was no reason for two palettes.
         double pitch = AMP_BAR_PX + AMP_GAP_PX;
         double bandHeight = h / 2.0;
         double midTop = bandHeight / 2.0;
@@ -1066,11 +1072,14 @@ public sealed partial class MeetingWindow : Window
         // Light2 on dark — matches what AccentFillColorDefaultBrush
         // does in XAML ThemeResource lookups but respects the window's
         // RequestedTheme override, which Application.Resources doesn't).
-        var brushMic = Helpers.ThemeHelper.ResolvedAccentBrush();
-        var brushSys = new SolidColorBrush(Microsoft.UI.Colors.LimeGreen);
+        // Cached, not per-tick: LayoutBand skips the Fill assignment when the
+        // brush is the same reference, and a fresh brush every sample defeated
+        // that on every bar.
+        _liveBrushMic ??= new SolidColorBrush(WaveGreen);
+        _liveBrushSys ??= new SolidColorBrush(WaveViolet);
 
-        LayoutBand(_ampBarsMic, _ampHistory.ToArray(), brushMic, midTop, bandHeight - 4, w, pitch);
-        LayoutBand(_ampBarsSys, _ampHistorySystem.ToArray(), brushSys, midBottom, bandHeight - 4, w, pitch);
+        LayoutBand(_ampBarsMic, _ampHistory.ToArray(), _liveBrushMic, midTop, bandHeight - 4, w, pitch);
+        LayoutBand(_ampBarsSys, _ampHistorySystem.ToArray(), _liveBrushSys, midBottom, bandHeight - 4, w, pitch);
     }
 
     /// <summary>The layer every bar lives on. It exists so the scroll is ONE
@@ -1108,8 +1117,11 @@ public sealed partial class MeetingWindow : Window
             var r = new Microsoft.UI.Xaml.Shapes.Rectangle
             {
                 Width = AMP_BAR_PX,
-                RadiusX = 1,
-                RadiusY = 1,
+                // Fully rounded, like the finished recording draws them: at
+                // this width a radius of 1 reads as a square corner with a
+                // nick out of it rather than as a soft bar.
+                RadiusX = AMP_BAR_PX / 2,
+                RadiusY = AMP_BAR_PX / 2,
             };
             pool.Add(r);
             _ampScrollLayer!.Children.Add(r);
@@ -1126,7 +1138,7 @@ public sealed partial class MeetingWindow : Window
             // transform walks it in. Without it the bar would appear already
             // in place and the whole strip would jump.
             double x = w + pitch - (n - i) * pitch;
-            double height = Math.Max(2, samples[i] * maxHeight);
+            double height = Math.Max(AMP_BAR_PX, samples[i] * maxHeight);
             var rect = pool[i];
             if (!ReferenceEquals(rect.Fill, brush)) rect.Fill = brush;
             rect.Height = height;
