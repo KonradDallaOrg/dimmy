@@ -1387,20 +1387,6 @@ public partial class App : Application
             // Reflect any state we already have (Idle on first launch).
             _taskbarService.UpdateState(_appViewModel.CurrentState);
 
-            // Hovering the taskbar icon shows an EMPTY thumbnail: the anchor is
-            // invisible on purpose, so DWM has nothing to draw. A one-button
-            // thumb toolbar turns that dead popup into a shortcut to Settings.
-            _taskbarAnchor.TaskbarButtonCreated += () =>
-                _taskbarService?.EnsureThumbButtons();
-            _taskbarAnchor.ThumbButtonClicked += id =>
-            {
-                if (id == TaskbarService.ThumbButtonSettingsId) OpenSettingsWindow();
-            };
-            // Explorer may already have created the button before we subscribed
-            // (the anchor is activated a few lines up), in which case the message
-            // is never coming.
-            _taskbarService.EnsureThumbButtons();
-
             _appViewModel.PropertyChanged += OnAppViewModelPropertyChangedForTaskbar;
         }
         catch (Exception ex)
@@ -1432,9 +1418,22 @@ public partial class App : Application
 
     private void OnTaskbarAnchorClicked()
     {
-        // The taskbar button was clicked — toggle pill visibility, just
-        // like the tray icon does on left-click.
-        _dispatcherQueue?.TryEnqueue(TogglePill);
+        // Clicking our taskbar entry — the button OR the hover preview —
+        // opens Settings.
+        //
+        // It has to be both, because Windows does not say which: the button
+        // and the thumbnail arrive as the same WM_SYSCOMMAND/SC_RESTORE
+        // activation request, with no flag between them. A thumb-toolbar
+        // button was tried first precisely to give the preview something
+        // clickable, and removed: an unlabelled icon under a blank preview
+        // explained nothing, and the obvious click still did nothing.
+        //
+        // Settings rather than the old pill toggle because the preview is
+        // blank by construction — the anchor is a 1x1 window kept minimised
+        // so the taskbar entry exists without ever showing — so there is no
+        // window to restore and nothing the click could otherwise mean. The
+        // tray icon still toggles the pill on left-click.
+        _dispatcherQueue?.TryEnqueue(OpenSettingsWindow);
     }
 
     /// <summary>Persist the UI-only Windows preferences (pill
