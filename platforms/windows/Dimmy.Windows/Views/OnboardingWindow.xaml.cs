@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -77,6 +77,14 @@ public sealed partial class OnboardingWindow : Window
 
         var appWindow = WindowHelper.GetAppWindow(this);
         WindowHelper.ResizeLogical(this, 680, 600);
+
+        // Follow the user's theme, falling back to the system one when they
+        // never chose - which is exactly what ThemeHelper resolves. Every
+        // other visible window already did this; onboarding never has, so a
+        // user on light with a dark Windows met Dimmy in the wrong colours
+        // on the very first screen.
+        if (Content is FrameworkElement themeRoot)
+            themeRoot.RequestedTheme = Helpers.ThemeHelper.ResolvedElementTheme();
         if (appWindow?.Presenter is Microsoft.UI.Windowing.OverlappedPresenter presenter)
         {
             presenter.IsResizable = true;
@@ -810,6 +818,26 @@ public sealed partial class OnboardingWindow : Window
     /// so the user can dictate again before finishing.
     private void TrialBack_Click(object sender, RoutedEventArgs e)
         => ViewModel.IsTrialSuccess = false;
+
+    /// <summary>Open a focused wizard from the last onboarding page, and
+    /// finish onboarding on the way out. Leaving this window open behind a
+    /// second wizard would keep the trial hotkey armed and leave the user
+    /// with two wizards stacked; the setup it did is already saved.</summary>
+    private void OpenMeetingWizard_Click(object sender, RoutedEventArgs e)
+        => HandOffToWizard(() => new MeetingWizardWindow());
+
+    private void OpenCommandWizard_Click(object sender, RoutedEventArgs e)
+        => HandOffToWizard(() => new CommandWizardWindow());
+
+    private void HandOffToWizard(Func<Window> make)
+    {
+        try
+        {
+            FinishOnboarding_Click(this, new RoutedEventArgs());
+            make().Activate();
+        }
+        catch (Exception ex) { App.Log($"HandOffToWizard exc: {ex.Message}", "Onboarding"); }
+    }
 
     private void FinishOnboarding_Click(object sender, RoutedEventArgs e)
     {

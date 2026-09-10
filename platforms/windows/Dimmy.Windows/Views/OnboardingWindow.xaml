@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Window
     x:Class="Dimmy.Windows.Views.OnboardingWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -277,6 +277,21 @@
                         <TextBlock Text=" anywhere to dictate." FontSize="13"
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                     </StackPanel>
+                </StackPanel>
+                <!-- Two doors out of the wizard, for the two features whose setup is
+                     more than a checkbox. Offered, not imposed: "Start Using Dimmy"
+                     finishes exactly as it did before and nobody is walked through
+                     something they did not ask for. -->
+                <TextBlock Text="Want to set up more?" FontSize="13" Margin="0,10,0,0"
+                           HorizontalAlignment="Center"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <StackPanel Orientation="Horizontal" Spacing="10" HorizontalAlignment="Center">
+                  <controls:WizardCard Glyph="&#xE8BD;" Title="Meetings"
+                                       Description="Record and get a recap"
+                                       Click="OpenMeetingWizard_Click" />
+                  <controls:WizardCard Glyph="&#xE90F;" Title="Command mode"
+                                       Description="Change selected text by voice"
+                                       Click="OpenCommandWizard_Click" />
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" Spacing="12" HorizontalAlignment="Center" Margin="0,8,0,0">
                     <Button Content="Back" Click="TrialBack_Click" Width="90" />

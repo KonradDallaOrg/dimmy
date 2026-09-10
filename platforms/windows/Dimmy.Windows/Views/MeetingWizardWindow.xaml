@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="Dimmy.Windows.Views.MeetingWizardWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:Dimmy.Windows.Views.Controls"
+    Title="Dimmy — Meeting mode">
+
+    <Grid Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
+          Padding="40" RowSpacing="18">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0" Spacing="4">
+            <TextBlock x:Name="StepLabel" Opacity="0.6" FontSize="12" />
+            <TextBlock x:Name="TitleLabel" FontSize="24" FontWeight="SemiBold" />
+            <TextBlock x:Name="SubtitleLabel" Opacity="0.75" TextWrapping="Wrap" />
+        </StackPanel>
+
+        <!-- ── Step 0: shortcut ─────────────────────────────────────── -->
+        <StackPanel x:Name="Step0" Grid.Row="1" Spacing="14">
+            <controls:ShortcutRecorder x:Name="Recorder" RequireKey="True"
+                                       HorizontalAlignment="Left" />
+            <InfoBar x:Name="ShortcutWarn" IsOpen="False" IsClosable="False"
+                     Severity="Warning" />
+            <TextBlock Opacity="0.6" FontSize="12" TextWrapping="Wrap"
+                       Text="Press it once to start a meeting, again to stop. A meeting cannot be push-to-talk." />
+        </StackPanel>
+
+        <!-- ── Step 1: recap model ──────────────────────────────────── -->
+        <StackPanel x:Name="Step1" Grid.Row="1" Spacing="14" Visibility="Collapsed">
+            <TextBlock x:Name="ModelSummary" TextWrapping="Wrap" />
+            <StackPanel Orientation="Horizontal" Spacing="10">
+                <Button x:Name="TestModelBtn" Content="Test the recap model"
+                        Click="TestModel_Click" Style="{StaticResource AccentButtonStyle}" />
+                <ProgressRing x:Name="TestRing" IsActive="False" Width="20" Height="20" />
+            </StackPanel>
+            <InfoBar x:Name="TestResult" IsOpen="False" IsClosable="False" />
+            <HyperlinkButton Content="Change the recap model in Settings"
+                             Click="OpenSettings_Click" />
+        </StackPanel>
+
+        <!-- ── Step 2: where the recap goes ─────────────────────────── -->
+        <StackPanel x:Name="Step2" Grid.Row="1" Spacing="16" Visibility="Collapsed">
+            <StackPanel Spacing="6">
+                <TextBlock FontWeight="SemiBold" Text="Notion" />
+                <TextBlock x:Name="NotionState" Opacity="0.7" FontSize="12" TextWrapping="Wrap" />
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                    <Button x:Name="NotionBtn" Content="Set up Notion" Click="Notion_Click" />
+                    <CheckBox x:Name="NotionAuto" Content="Send every recap automatically"
+                              Checked="NotionAuto_Changed" Unchecked="NotionAuto_Changed" />
+                </StackPanel>
+            </StackPanel>
+            <StackPanel Spacing="6">
+                <TextBlock FontWeight="SemiBold" Text="A folder on this PC" />
+                <TextBlock Opacity="0.7" FontSize="12" TextWrapping="Wrap"
+                           Text="Writes recap.md next to your notes. Point it at a synced folder (Obsidian, OneDrive, Drive) and the recap lands there by itself." />
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                    <Button x:Name="FolderBtn" Content="Choose a folder" Click="Folder_Click" />
+                    <TextBlock x:Name="FolderState" Opacity="0.7" FontSize="12"
+                               VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+            </StackPanel>
+        </StackPanel>
+
+        <!-- ── Step 3: record a real one ────────────────────────────── -->
+        <StackPanel x:Name="Step3" Grid.Row="1" Spacing="12" Visibility="Collapsed">
+            <InfoBar x:Name="TryStatus" IsOpen="True" IsClosable="False"
+                     Severity="Informational" />
+            <TextBlock Opacity="0.6" FontSize="12" TextWrapping="Wrap"
+                       Text="The first time you start a meeting Dimmy shows a consent notice and announces that the meeting is being recorded. That is deliberate, and it will appear now." />
+            <ScrollViewer Height="150" x:Name="LiveScroll" Visibility="Collapsed">
+                <TextBlock x:Name="LiveText" TextWrapping="Wrap" FontFamily="Consolas"
+                           FontSize="12" IsTextSelectionEnabled="True" />
+            </ScrollViewer>
+        </StackPanel>
+
+        <Grid Grid.Row="2">
+            <Button x:Name="BackBtn" Content="Back" Click="Back_Click"
+                    HorizontalAlignment="Left" Visibility="Collapsed" />
+            <StackPanel Orientation="Horizontal" Spacing="10" HorizontalAlignment="Right">
+                <Button x:Name="SkipBtn" Content="Skip" Click="Skip_Click" Visibility="Collapsed" />
+                <Button x:Name="NextBtn" Content="Continue" Click="Next_Click"
+                        Style="{StaticResource AccentButtonStyle}" />
+            </StackPanel>
+        </Grid>
+    </Grid>
+</Window>

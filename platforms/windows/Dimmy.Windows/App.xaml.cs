@@ -2230,6 +2230,15 @@ public partial class App : Application
 
     public void OpenSettingsWindow() => OpenSettings();
 
+    /// <summary>UI preferences, for the focused wizards that bind the
+    /// command and meeting shortcuts. Read-only on purpose: callers
+    /// mutate and Save() the instance, they do not replace it.</summary>
+    public UiPreferences UiPrefs => _uiPrefs;
+
+    /// <summary>The live hotkey service, so a wizard's trial step can
+    /// listen for the REAL hook edges instead of simulating them.</summary>
+    public HotkeyService? HotkeyServiceInstance => _hotkeyService;
+
     /// Open the dedicated MeetingWindow (or activate it if already
     /// open). Triggered from the jump-list "Meetings" entry and from
     // ── Call auto-detect wiring ──────────────────────────────────────
