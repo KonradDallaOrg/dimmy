@@ -928,6 +928,10 @@ final class AppState: ObservableObject {
     @Published var sttMode: String = "local"  // "local" or "cloud" — macOS defaults to local (no API key prompt during onboarding)
     @Published var localModel: String = "ggml-base-q8_0.bin"
     @Published var modelDownloadProgress: Double = 0.0
+    /// Which file `modelDownloadProgress` belongs to. The core reports it on
+    /// every progress event and Windows has always used it; the Mac dropped it,
+    /// so a bar could show one download under another model's name.
+    @Published var modelDownloadFilename: String = ""
     @Published var isDownloadingModel: Bool = false
     @Published var fillerRemovalEnabled: Bool = true
 
@@ -1014,6 +1018,8 @@ final class AppState: ObservableObject {
     @Published var llmMode: String = "cloud"  // "local" or "cloud"
     @Published var localLlmModel: String = "gemma-4-E2B-it-Q4_K_M.gguf"
     @Published var llmModelDownloadProgress: Double = 0.0
+    /// Which file `llmModelDownloadProgress` belongs to. See above.
+    @Published var llmModelDownloadFilename: String = ""
     @Published var isDownloadingLlmModel: Bool = false
 
     // MARK: - STT Config (synced with Rust via FFI)
