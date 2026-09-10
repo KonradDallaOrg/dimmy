@@ -35,6 +35,29 @@ struct MeetingDoneView: View {
     @FocusState private var notesFocused: Bool
     @FocusState private var titleFocused: Bool
 
+    /// Last seek the user asked for. Carries a tick so seeking twice to the
+    /// SAME second still registers as a change — onChange compares values, and
+    /// a bare TimeInterval would silently swallow the second request.
+    private struct SeekRequest: Equatable {
+        let tick: Int
+        let time: TimeInterval
+    }
+    @State private var seekRequest: SeekRequest?
+    @State private var seekTick: Int = 0
+
+    /// The transcript split into speaker turns. Parsed once per transcript
+    /// rather than per body evaluation, which SwiftUI does often and which on a
+    /// long meeting is thousands of lines.
+    @State private var transcriptTurns: [TranscriptTurn] = []
+
+    struct TranscriptTurn: Identifiable {
+        let id: Int
+        let text: String
+        /// Elapsed seconds from the line's timestamp, nil when it has none —
+        /// those lines are shown but cannot be jumped to.
+        let seconds: TimeInterval?
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
@@ -46,7 +69,13 @@ struct MeetingDoneView: View {
         }
         .padding(.vertical, 8)
         .padding(.horizontal, 4)
+        // Keep the turn list in step with whatever transcript is loaded:
+        // opening another meeting, or regenerating this one, replaces it.
+        .onChange(of: vm.doneRawTranscript) { _, _ in
+            rebuildTranscriptTurns()
+        }
         .onAppear {
+            rebuildTranscriptTurns()
             // Surface the Claude Desktop deeplink button only when the
             // MCP extension is installed. Status query is a single FFI
             // call (cheap, no event-callback wiring needed).
@@ -288,21 +317,97 @@ struct MeetingDoneView: View {
         }
     }
 
-    private var transcriptContent: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                Text(vm.doneRawTranscript.isEmpty
-                     ? "No transcript on disk yet. Re-run transcription with the (Re)generate transcript button."
-                     : vm.doneRawTranscript)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(vm.doneRawTranscript.isEmpty
-                                      ? Color.macTextSecondary
-                                      : Color.primary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
+    /// Rebuild the turn list. Driven from the view rather than the model
+    /// because it is a presentation concern: the model keeps the transcript as
+    /// the one string every other consumer (copy, export, MCP) wants.
+    private func rebuildTranscriptTurns() {
+        let raw = vm.doneRawTranscript
+        guard !raw.isEmpty else {
+            transcriptTurns = []
+            return
+        }
+        transcriptTurns = raw
+            .split(separator: "
+", omittingEmptySubsequences: false)
+            .enumerated()
+            .map { index, line in
+                let text = String(line)
+                return TranscriptTurn(id: index,
+                                      text: text,
+                                      seconds: Self.elapsedSeconds(from: text))
             }
-            .padding(14)
-            .background(cardBackground)
+    }
+
+    /// Elapsed seconds from a leading `[…]` stamp. Handles both shapes the
+    /// writer has used: `[00:12:00]` / `[12:00]` today, `[  1234 ms]` before
+    /// 2026-09-10 — meetings recorded then are still on disk and still open
+    /// here. nil for a line with no stamp, which simply cannot be jumped to.
+    static func elapsedSeconds(from line: String) -> TimeInterval? {
+        guard line.hasPrefix("["), let close = line.firstIndex(of: "]") else { return nil }
+        let inside = line[line.index(after: line.startIndex)..<close]
+            .trimmingCharacters(in: .whitespaces)
+        if inside.hasSuffix("ms") {
+            let digits = inside.dropLast(2).trimmingCharacters(in: .whitespaces)
+            guard let ms = Double(digits) else { return nil }
+            return ms / 1000.0
+        }
+        let parts = inside.split(separator: ":")
+        guard parts.count == 2 || parts.count == 3 else { return nil }
+        var total: TimeInterval = 0
+        for part in parts {
+            guard let value = Double(part), value >= 0 else { return nil }
+            total = total * 60 + value
+        }
+        return total
+    }
+
+    /// Bring the turn being spoken at `time` to the top. Silent no-op when no
+    /// line carries a timestamp — some imported transcripts do not, and there
+    /// is then nothing to align to.
+    private func scrollTranscript(to time: TimeInterval, using proxy: ScrollViewProxy) {
+        var hit: TranscriptTurn?
+        for turn in transcriptTurns {
+            guard let seconds = turn.seconds else { continue }
+            if seconds > time { break }
+            hit = turn
+        }
+        guard let target = hit else { return }
+        withAnimation(.easeInOut(duration: 0.22)) {
+            proxy.scrollTo(target.id, anchor: .top)
+        }
+    }
+
+    private var transcriptContent: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    if transcriptTurns.isEmpty {
+                        Text("No transcript on disk yet. Re-run transcription with the (Re)generate transcript button.")
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(Color.macTextSecondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        // One view per turn, so a seek has something to scroll
+                        // TO. The cost is that a drag-selection now covers one
+                        // turn rather than the whole transcript; the toolbar
+                        // Copy button still takes the lot.
+                        ForEach(transcriptTurns) { turn in
+                            Text(turn.text)
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundStyle(Color.primary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                                .id(turn.id)
+                        }
+                    }
+                }
+                .padding(14)
+                .background(cardBackground)
+            }
+            .onChange(of: seekRequest) { _, request in
+                guard let request else { return }
+                scrollTranscript(to: request.time, using: proxy)
+            }
         }
     }
 
@@ -556,7 +661,11 @@ struct MeetingDoneView: View {
         AudioPlaybackBar(
             url: url,
             micURL: vm.doneAudioMicURL,
-            systemURL: vm.doneAudioSystemURL
+            systemURL: vm.doneAudioSystemURL,
+            onSeek: { t in
+                seekTick += 1
+                seekRequest = SeekRequest(tick: seekTick, time: t)
+            }
         )
             .frame(height: 64)
             .padding(.horizontal, 16)
