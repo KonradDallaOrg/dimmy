@@ -1371,6 +1371,11 @@ public partial class App : Application
         {
             _taskbarAnchor = new TaskbarAnchorWindow();
             _taskbarAnchor.TaskbarClicked += OnTaskbarAnchorClicked;
+            // X on the hover preview = "get this off my taskbar". Routed through
+            // the preference so it persists and can be undone in Settings; the
+            // window itself must survive (see TaskbarAnchorWindow.WM_CLOSE).
+            _taskbarAnchor.CloseRequested += () =>
+                _dispatcherQueue?.TryEnqueue(() => _appViewModel.ShowTaskbarIcon = false);
             // Stamp our AUMI on the anchor window's property store so
             // Windows 11 binds the jump list to this taskbar entry.
             // The process-wide AUMI alone (set in OnLaunched) is
