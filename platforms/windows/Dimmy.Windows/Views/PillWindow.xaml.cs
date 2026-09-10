@@ -836,9 +836,15 @@ public sealed partial class PillWindow : Window
     {
         _rainbowBrush = new LinearGradientBrush
         {
-            // The band scrolls ALONG the axis instead of the axis rotating,
-            // so the tile has to repeat: with Pad the colours would run out
-            // and smear at the ends after one cycle.
+            // ABSOLUTE, not the default RelativeToBoundingBox. Relative
+            // coordinates are normalised per side, so on a 200x40 capsule they
+            // are anisotropic by 5:1: a direction 45 degrees in relative space
+            // is nowhere near 45 degrees on screen, and a constant angular rate
+            // sweeps the band fast through some orientations and slow through
+            // others. In pixels the rotation is the rotation.
+            MappingMode = Microsoft.UI.Xaml.Media.BrushMappingMode.Absolute,
+            // Safety net at the ends of the axis; the closing stop below keeps
+            // the repeat seam invisible if it is ever reached.
             SpreadMethod = Microsoft.UI.Xaml.Media.GradientSpreadMethod.Repeat,
         };
         foreach (var (offset, hex) in RainbowStops)
@@ -935,19 +941,34 @@ public sealed partial class PillWindow : Window
         // colours jump the moment the speed changes.
         _rainbowAngleDeg = (_rainbowAngleDeg + _rainbowSpeedDeg * dt) % 360.0;
 
-        // Rotate the gradient axis about the centre.
+        // Rotate the gradient axis about the centre, in pixels.
+        var w = ColorBorder.ActualWidth;
+        var h = ColorBorder.ActualHeight;
+        if (w <= 0 || h <= 0) return; // not laid out yet
+
+        // CONSTANT length, and long enough to cover the pill at every angle —
+        // the diagonal. This is the whole fix for the pulsing.
+        //
+        // The colour at a point on the border comes from its projection on the
+        // axis divided by the axis LENGTH. The old length was
+        // 0.5 / max(|cos|, |sin|), which reaches the bounding-box edge and so
+        // swings 41% over a revolution — meaning the colours advanced at an
+        // uneven rate four times a lap even when the angular rate was perfectly
+        // constant. That is why the pulsing survived every change to the speed
+        // control, and why it was there in silence too.
+        //
+        // A constant length was tried once before at 0.35 of the box and looked
+        // wrong for a different reason: too SHORT, so the repeating brush showed
+        // one and a half rainbows in narrow slices. The diagonal is the shortest
+        // length that is never too short.
+        var half = Math.Sqrt(w * w + h * h) / 2.0;
         var angleRad = _rainbowAngleDeg * Math.PI / 180.0;
-        var cos = Math.Cos(angleRad);
-        var sin = Math.Sin(angleRad);
-        // Reach exactly the bounding-box edge along the current direction, so
-        // ONE rainbow spans the pill at every angle. A constant length was tried
-        // and looked wrong: with a repeating brush it showed one and a half
-        // rainbows, i.e. narrower slices in repeated colours.
-        var half = 0.5 / Math.Max(Math.Abs(cos), Math.Abs(sin));
-        var dx = cos * half;
-        var dy = sin * half;
-        _rainbowBrush.StartPoint = new global::Windows.Foundation.Point(0.5 - dx, 0.5 - dy);
-        _rainbowBrush.EndPoint = new global::Windows.Foundation.Point(0.5 + dx, 0.5 + dy);
+        var dx = Math.Cos(angleRad) * half;
+        var dy = Math.Sin(angleRad) * half;
+        var cx = w / 2.0;
+        var cy = h / 2.0;
+        _rainbowBrush.StartPoint = new global::Windows.Foundation.Point(cx - dx, cy - dy);
+        _rainbowBrush.EndPoint = new global::Windows.Foundation.Point(cx + dx, cy + dy);
     }
 
     private static global::Windows.UI.Color ParseColor(string hex)
