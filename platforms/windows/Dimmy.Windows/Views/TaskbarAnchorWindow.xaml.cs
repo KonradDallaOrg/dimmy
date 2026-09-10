@@ -142,6 +142,7 @@ public sealed partial class TaskbarAnchorWindow : Window
         // the buttons are registered here rather than once at startup.
         if (msg != 0 && msg == _taskbarButtonCreatedMsg)
         {
+            Dimmy.Windows.App.Log("TaskbarButtonCreated received", "Taskbar");
             try { TaskbarButtonCreated?.Invoke(); }
             catch (Exception ex)
             {

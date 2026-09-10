@@ -158,7 +158,13 @@ public sealed class TaskbarService : IDisposable
     /// go through Update instead.</summary>
     public void EnsureThumbButtons()
     {
-        if (_taskbar is null || _hwnd == IntPtr.Zero) return;
+        if (_taskbar is null || _hwnd == IntPtr.Zero)
+        {
+            Dimmy.Windows.App.Log(
+                $"thumbbar skipped: taskbar={(_taskbar is null ? "null" : "ok")} hwnd={(_hwnd == IntPtr.Zero ? "0" : "ok")}",
+                "Taskbar");
+            return;
+        }
 
         var btn = new THUMBBUTTON
         {
@@ -177,8 +183,12 @@ public sealed class TaskbarService : IDisposable
             int hr = _thumbButtonsAdded
                 ? _taskbar.ThumbBarUpdateButtons(_hwnd, 1, block)
                 : _taskbar.ThumbBarAddButtons(_hwnd, 1, block);
+            var verb = _thumbButtonsAdded ? "update" : "add";
             if (hr >= 0) _thumbButtonsAdded = true;
-            else System.Diagnostics.Debug.WriteLine($"[TaskbarService] ThumbBar hr=0x{hr:X}");
+            // Anonymous and pertinent: an HRESULT and a verb, no user data.
+            // Debug.WriteLine was invisible in a shipped build, which is why
+            // this went unverified the first time.
+            Dimmy.Windows.App.Log($"thumbbar {verb} hr=0x{hr:X8} icon={(btn.hIcon != IntPtr.Zero ? "ok" : "null")}", "Taskbar");
         }
         catch (Exception ex)
         {

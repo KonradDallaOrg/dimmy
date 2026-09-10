@@ -1366,6 +1366,7 @@ public partial class App : Application
     /// </summary>
     private void InitTaskbarAnchor()
     {
+        App.Log("InitTaskbarAnchor enter", "Taskbar");
         try
         {
             _taskbarAnchor = new TaskbarAnchorWindow();
@@ -1406,7 +1407,7 @@ public partial class App : Application
         {
             // Taskbar polish — never let a failure here take down the
             // app. Tray + pill keep working without it.
-            System.Diagnostics.Debug.WriteLine($"[App] InitTaskbarAnchor failed: {ex.Message}");
+            App.Log($"InitTaskbarAnchor failed: {ex.GetType().Name}: {ex.Message}", "Taskbar");
         }
     }
 

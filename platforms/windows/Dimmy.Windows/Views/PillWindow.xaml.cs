@@ -829,20 +829,36 @@ public sealed partial class PillWindow : Window
     [
         (0.000, "#FF4D4D"), (0.125, "#FF6633"), (0.250, "#FFB84D"),
         (0.375, "#49F249"), (0.500, "#66E0FF"), (0.625, "#4D7AFF"),
-        (0.750, "#9966FF"), (0.875, "#E066FF"), (1.000, "#FF4D8C"),
+        (0.750, "#9966FF"), (0.875, "#E066FF"), (0.940, "#FF4D8C"),
     ];
 
     private void BuildRainbowBrush()
     {
-        _rainbowBrush = new LinearGradientBrush();
+        _rainbowBrush = new LinearGradientBrush
+        {
+            // The band scrolls ALONG the axis instead of the axis rotating,
+            // so the tile has to repeat: with Pad the colours would run out
+            // and smear at the ends after one cycle.
+            SpreadMethod = Microsoft.UI.Xaml.Media.GradientSpreadMethod.Repeat,
+        };
         foreach (var (offset, hex) in RainbowStops)
             _rainbowBrush.GradientStops.Add(new GradientStop { Offset = offset, Color = ParseColor(hex) });
+        // Close the loop. The first and last rainbow colours are near but not
+        // equal, and Repeat butts one tile against the next — without this the
+        // seam is a visible hard edge travelling round the pill once a cycle.
+        _rainbowBrush.GradientStops.Add(new GradientStop
+        {
+            Offset = 1.0,
+            Color = ParseColor(RainbowStops[0].Hex),
+        });
     }
 
-    // The ring turns WHILE there is a voice and comes to rest in silence.
-    // Speed scales with how loud that voice is, between these two.
-    private const double RainbowMinSpeakingDegPerSec = 55.0;
-    private const double RainbowFastDegPerSec = 260.0;
+    // The band always drifts, and speeds up with the voice. "DegPerSec" is a
+    // full colour cycle per 360, kept in degrees so the numbers stay
+    // comparable with what they replaced.
+    private const double RainbowIdleDegPerSec = 30.0;
+    private const double RainbowMinSpeakingDegPerSec = 70.0;
+    private const double RainbowFastDegPerSec = 300.0;
     // Absolute thresholds on the RAW amplitude. 0.02 is the same "signal
     // present" floor the call detector uses; speech peaks well past 0.12.
     private const double RainbowVoiceFloor = 0.02;
@@ -870,7 +886,7 @@ public sealed partial class PillWindow : Window
     private void StartRainbowAnimation()
     {
         _rainbowAngleDeg = 0;
-        _rainbowSpeedDeg = 0.0;
+        _rainbowSpeedDeg = RainbowIdleDegPerSec;
         _rainbowLastVoiceUtc = DateTime.MinValue;
         _rainbowLastTick = DateTime.UtcNow;
         if (!_rainbowRenderHooked)
@@ -915,28 +931,27 @@ public sealed partial class PillWindow : Window
         }
         else
         {
-            target = 0.0; // silence: come to rest
+            target = RainbowIdleDegPerSec; // silence: a slow, steady drift
         }
 
         // Time-based easing, not per-tick: the frame rate is the display's, so
         // a per-tick factor would ease twice as fast at 60 Hz as at 30.
         var tau = target > _rainbowSpeedDeg ? RainbowSpinUpTau : RainbowSpinDownTau;
         _rainbowSpeedDeg += (target - _rainbowSpeedDeg) * (1.0 - Math.Exp(-dt / tau));
-        // Kill the exponential tail: without this the ring creeps forever at a
-        // fraction of a degree per second and never actually rests.
-        if (!speaking && _rainbowSpeedDeg < 1.5) _rainbowSpeedDeg = 0.0;
-        if (_rainbowSpeedDeg <= 0.0) return; // at rest — nothing to repaint
-
-        // Accumulate the phase. Deriving the angle from elapsed*speed would
-        // make it jump the moment the speed changes.
+        // Accumulate the phase. Deriving it from elapsed*speed would make the
+        // colours jump the moment the speed changes.
         _rainbowAngleDeg = (_rainbowAngleDeg + _rainbowSpeedDeg * dt) % 360.0;
 
-        var angleRad = _rainbowAngleDeg * Math.PI / 180.0;
-        var cos = Math.Cos(angleRad);
-        var sin = Math.Sin(angleRad);
-        var scale = 0.5 / Math.Max(Math.Abs(cos), Math.Abs(sin));
-        _rainbowBrush.StartPoint = new global::Windows.Foundation.Point(0.5 - cos * scale, 0.5 - sin * scale);
-        _rainbowBrush.EndPoint = new global::Windows.Foundation.Point(0.5 + cos * scale, 0.5 + sin * scale);
+        // Slide the tile ALONG a fixed diagonal axis. The previous version
+        // rotated the axis instead, and a rotating linear gradient does not
+        // travel: at 0 degrees it runs left-to-right, at 180 the very same
+        // axis runs right-to-left, so the colours swept one way, stalled and
+        // reversed — read as "one fast lap, then a pause". Scrolling a
+        // repeating tile moves every colour at one constant rate, which is the
+        // motion actually wanted; speed then means exactly what it says.
+        var phase = _rainbowAngleDeg / 360.0;
+        _rainbowBrush.StartPoint = new global::Windows.Foundation.Point(-phase, -phase);
+        _rainbowBrush.EndPoint = new global::Windows.Foundation.Point(1.0 - phase, 1.0 - phase);
     }
 
     private static global::Windows.UI.Color ParseColor(string hex)
