@@ -726,6 +726,8 @@ public sealed partial class MeetingWindow : Window
             {
                 // Detach the position-changed listener so we don't get
                 // late callbacks after the window/state has moved on.
+                try { mp.PlaybackSession.SeekCompleted -= OnDoneSeekCompleted; }
+                catch { }
                 try { mp.PlaybackSession.PositionChanged -= OnDonePlaybackPositionChanged; }
                 catch { }
                 if (mp.PlaybackSession.PlaybackState
@@ -1214,6 +1216,11 @@ public sealed partial class MeetingWindow : Window
             {
                 mp.PlaybackSession.PositionChanged -= OnDonePlaybackPositionChanged;
                 mp.PlaybackSession.PositionChanged += OnDonePlaybackPositionChanged;
+                // The transport bar seeks without going through any of our
+                // code, so hooking only the waveform click missed it. This is
+                // the session telling us a seek happened, whoever asked for it.
+                mp.PlaybackSession.SeekCompleted -= OnDoneSeekCompleted;
+                mp.PlaybackSession.SeekCompleted += OnDoneSeekCompleted;
             }
 
             // Fixed bucket count (NOT width-derived): the peaks are decoded
@@ -1307,6 +1314,20 @@ public sealed partial class MeetingWindow : Window
             outp[i] = mx;
         }
         return outp;
+    }
+
+    /// <summary>A seek finished — from the transport bar, the keyboard, or our
+    /// own waveform click. One entry point for all of them, so the transcript
+    /// follows a drag of the progress bar as well.</summary>
+    private void OnDoneSeekCompleted(
+        global::Windows.Media.Playback.MediaPlaybackSession session, object args)
+    {
+        try
+        {
+            var pos = session.Position;
+            DispatcherQueue.TryEnqueue(() => ScrollTranscriptTo(pos));
+        }
+        catch { }
     }
 
     private void OnDonePlaybackPositionChanged(
@@ -1538,9 +1559,9 @@ public sealed partial class MeetingWindow : Window
             var target = TimeSpan.FromSeconds(total.TotalSeconds * frac);
             session.Position = target;
             UpdateDonePlayhead(frac);
-            // Only on an explicit seek. Following playback continuously would
-            // yank the page out from under anyone reading it.
-            ScrollTranscriptTo(target);
+            // The transcript follows via SeekCompleted, which this Position
+            // assignment raises — same path as the transport bar, so there is
+            // one place where a seek scrolls the transcript and not two.
         }
         catch { }
     }
