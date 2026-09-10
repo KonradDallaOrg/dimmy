@@ -35,7 +35,7 @@ public sealed partial class PillWindow : Window
     private DateTime _recordingStartTime;
     private DispatcherTimer? _completingTimer;
     private DispatcherTimer? _errorTimer;
-    private DispatcherTimer? _rainbowTimer;
+    private bool _rainbowRenderHooked;
     private LinearGradientBrush? _rainbowBrush;
     private DateTime _rainbowLastTick;
     private double _rainbowAngleDeg;
@@ -672,7 +672,7 @@ public sealed partial class PillWindow : Window
                 RefreshStyleDot();
                 RootGrid.Opacity = 1.0;
                 SetPillBodyColor(IsGlass ? BgGlassIdle : BgDark);
-                _rainbowTimer?.Stop();
+                StopRainbowAnimation();
                 AnimateToCircle(global::Windows.UI.Color.FromArgb(0, 0, 0, 0), newPanel, oldPanel);
                 UpdateGlow((_vm.CommandMode || _vm.CommandOneShot) ? CommandAmber : ParseColor(_vm.LlmStyleColor), subtle: true);
                 break;
@@ -694,7 +694,7 @@ public sealed partial class PillWindow : Window
                 }
                 else
                 {
-                    _rainbowTimer?.Stop();
+                    StopRainbowAnimation();
                     AnimateToCapsule(GetBorderColorForRecording(), newPanel, oldPanel);
                 }
                 UpdateGlow(GetBorderColorForRecording());
@@ -705,7 +705,7 @@ public sealed partial class PillWindow : Window
                 RootGrid.Opacity = 1.0;
                 Waveform.IsActive = false;
                 ChunkText.Text = _vm.ChunkTotal > 1 ? $"{_vm.ChunkCurrent}/{_vm.ChunkTotal}" : "";
-                _rainbowTimer?.Stop();
+                StopRainbowAnimation();
                 AnimateToCapsule(ColorTranscribing, newPanel, oldPanel);
                 UpdateGlow(ColorTranscribing);
                 break;
@@ -713,7 +713,7 @@ public sealed partial class PillWindow : Window
             case AppState.Processing:
                 SetPillBodyColor(IsGlass ? BgGlassActive : BgDark);
                 RootGrid.Opacity = 1.0;
-                _rainbowTimer?.Stop();
+                StopRainbowAnimation();
                 AnimateToCapsule(ParseColor(_vm.LlmStyleColor), newPanel, oldPanel);
                 UpdateGlow(ParseColor(_vm.LlmStyleColor));
                 break;
@@ -721,7 +721,7 @@ public sealed partial class PillWindow : Window
             case AppState.Completing:
                 SetPillBodyColor(IsGlass ? BgGlassActive : BgDark);
                 RootGrid.Opacity = 1.0;
-                _rainbowTimer?.Stop();
+                StopRainbowAnimation();
                 var completingColor = _vm.LlmStyle != "off"
                     ? ParseColor(_vm.LlmStyleColor)
                     : ColorCompleting;
@@ -741,7 +741,7 @@ public sealed partial class PillWindow : Window
                 ErrorText.Text = _vm.ErrorMessage;
                 SetPillBodyColor(IsGlass ? BgGlassActive : BgDark);
                 RootGrid.Opacity = 1.0;
-                _rainbowTimer?.Stop();
+                StopRainbowAnimation();
                 AnimateToCapsule(ColorError, newPanel, oldPanel);
                 UpdateGlow(ColorError);
                 // 5 s, not 3: the error tag is the only pill surface that
@@ -848,42 +848,61 @@ public sealed partial class PillWindow : Window
     private const double RainbowVoiceFloor = 0.02;
     private const double RainbowVoiceCeil = 0.12;
 
+    /// <summary>Spin the gradient. Driven by CompositionTarget.Rendering, which
+    /// fires once per COMPOSED frame — so the rotation advances on the same
+    /// clock the screen refreshes on, at whatever rate the display actually
+    /// runs. The old 30 Hz DispatcherTimer beat against a 60+ Hz compositor and
+    /// that is what read as juddery: the speed was right, the cadence was not.</summary>
     private void StartRainbowAnimation()
     {
         _rainbowAngleDeg = 0;
         _rainbowSpeedDeg = RainbowSlowDegPerSec;
         _rainbowLastTick = DateTime.UtcNow;
-        if (_rainbowTimer is null)
+        if (!_rainbowRenderHooked)
         {
-            _rainbowTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1000.0 / 30) };
-            _rainbowTimer.Tick += (_, _) =>
-            {
-                if (_rainbowBrush is null) return;
-                var now = DateTime.UtcNow;
-                // Clamped: a stalled UI thread must not teleport the gradient.
-                var dt = Math.Clamp((now - _rainbowLastTick).TotalSeconds, 0.0, 0.1);
-                _rainbowLastTick = now;
-
-                var voice = Math.Clamp(
-                    (_rawAmplitude - RainbowVoiceFloor) / (RainbowVoiceCeil - RainbowVoiceFloor), 0.0, 1.0);
-                var target = RainbowSlowDegPerSec + (RainbowFastDegPerSec - RainbowSlowDegPerSec) * voice;
-                // Ease toward the target (~200 ms) so the speed glides instead of
-                // snapping on every 12 Hz amplitude sample.
-                _rainbowSpeedDeg += (target - _rainbowSpeedDeg) * 0.15;
-
-                // Accumulate the phase. Deriving the angle from elapsed*speed
-                // would make it jump the moment the speed changes.
-                _rainbowAngleDeg = (_rainbowAngleDeg + _rainbowSpeedDeg * dt) % 360.0;
-
-                var angleRad = _rainbowAngleDeg * Math.PI / 180.0;
-                var cos = Math.Cos(angleRad);
-                var sin = Math.Sin(angleRad);
-                var scale = 0.5 / Math.Max(Math.Abs(cos), Math.Abs(sin));
-                _rainbowBrush.StartPoint = new global::Windows.Foundation.Point(0.5 - cos * scale, 0.5 - sin * scale);
-                _rainbowBrush.EndPoint = new global::Windows.Foundation.Point(0.5 + cos * scale, 0.5 + sin * scale);
-            };
+            _rainbowRenderHooked = true;
+            Microsoft.UI.Xaml.Media.CompositionTarget.Rendering += OnRainbowFrame;
         }
-        _rainbowTimer.Start();
+    }
+
+    private void StopRainbowAnimation()
+    {
+        if (!_rainbowRenderHooked) return;
+        _rainbowRenderHooked = false;
+        Microsoft.UI.Xaml.Media.CompositionTarget.Rendering -= OnRainbowFrame;
+    }
+
+    private void OnRainbowFrame(object? sender, object e)
+    {
+        if (_rainbowBrush is null) return;
+        var now = DateTime.UtcNow;
+        // Clamped: a stalled UI thread must not teleport the gradient.
+        var dt = Math.Clamp((now - _rainbowLastTick).TotalSeconds, 0.0, 0.1);
+        _rainbowLastTick = now;
+
+        // Same perceptual curve the bars use (sqrt), so the ring speeds up when
+        // the bars grow rather than waiting for a shout. A linear ramp spent
+        // most of real speech in its bottom third and read as unresponsive.
+        var voice = Math.Clamp(
+            (_rawAmplitude - RainbowVoiceFloor) / (RainbowVoiceCeil - RainbowVoiceFloor), 0.0, 1.0);
+        voice = Math.Sqrt(voice);
+        var target = RainbowSlowDegPerSec + (RainbowFastDegPerSec - RainbowSlowDegPerSec) * voice;
+        // Ease toward the target (~200 ms) so the speed glides instead of
+        // snapping on every 12 Hz amplitude sample. Time-based, not per-tick:
+        // the frame rate is the display's, not a fixed 30, and a per-tick
+        // factor would ease twice as fast at 60 Hz as at 30.
+        _rainbowSpeedDeg += (target - _rainbowSpeedDeg) * (1.0 - Math.Exp(-dt / 0.2));
+
+        // Accumulate the phase. Deriving the angle from elapsed*speed would
+        // make it jump the moment the speed changes.
+        _rainbowAngleDeg = (_rainbowAngleDeg + _rainbowSpeedDeg * dt) % 360.0;
+
+        var angleRad = _rainbowAngleDeg * Math.PI / 180.0;
+        var cos = Math.Cos(angleRad);
+        var sin = Math.Sin(angleRad);
+        var scale = 0.5 / Math.Max(Math.Abs(cos), Math.Abs(sin));
+        _rainbowBrush.StartPoint = new global::Windows.Foundation.Point(0.5 - cos * scale, 0.5 - sin * scale);
+        _rainbowBrush.EndPoint = new global::Windows.Foundation.Point(0.5 + cos * scale, 0.5 + sin * scale);
     }
 
     private static global::Windows.UI.Color ParseColor(string hex)
