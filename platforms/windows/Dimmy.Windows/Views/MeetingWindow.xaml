@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Window
     x:Class="Dimmy.Windows.Views.MeetingWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -437,15 +437,23 @@
           </StackPanel>
 
           <!-- DONE: meeting detail (also reused when sidebar selects a past meeting) -->
-          <ScrollViewer x:Name="DonePanel" Visibility="Collapsed"
-                        VerticalScrollBarVisibility="Auto"
-                        HorizontalScrollBarVisibility="Disabled"
-                        Padding="0,0,4,0">
-            <!-- Right padding 14 leaves breathing room between card
-                 borders and the vertical scrollbar; otherwise on
-                 full-screen the rightmost borders hug the scrollbar
-                 and look "snagged" on the window edge. -->
-            <StackPanel Spacing="14" Padding="0,0,14,20">
+          <!-- Done view. A fixed head over a scrolling body, NOT one big
+               ScrollViewer: the whole thing used to scroll together, so reading
+               down the transcript carried the waveform and the player off the
+               top of the window. It also made scrolling the transcript TO a
+               position meaningless, which is what the seek sync needs. -->
+          <Grid x:Name="DonePanel" Visibility="Collapsed" Padding="0,0,4,0">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <!-- Pinned: title, waveform + player, and the tab bar — so the tab
+                 you are on stays visible and switchable from anywhere in a long
+                 transcript. Right padding 14 keeps card borders off the
+                 scrollbar; without it the rightmost borders hug it full-screen
+                 and look snagged on the window edge. -->
+            <StackPanel Grid.Row="0" Spacing="14" Padding="0,0,14,0">
 
               <!-- Title + meta line, no card, sits on the page surface.
                    Title is click-to-edit: tapping it swaps the TextBlock
@@ -497,6 +505,7 @@
                   <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                   </Grid.RowDefinitions>
                   <Border Grid.Row="0" Height="74">
                     <Canvas x:Name="DoneWaveformCanvas"
@@ -504,13 +513,27 @@
                             SizeChanged="DoneWaveformCanvas_SizeChanged"
                             PointerPressed="DoneWaveform_PointerPressed"/>
                   </Border>
+                  <!-- Position / duration, the way a player shows it. Clicking
+                       the waveform seeks, and until now nothing said WHERE it
+                       had seeked to. Tabular figures so the digits do not
+                       shuffle sideways as the seconds tick. -->
+                  <Grid Grid.Row="1" Margin="0,-4,0,0">
+                    <TextBlock x:Name="DonePosText" Text="00:00"
+                               FontSize="12" FontFamily="Consolas"
+                               HorizontalAlignment="Left"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    <TextBlock x:Name="DoneDurText" Text=""
+                               FontSize="12" FontFamily="Consolas"
+                               HorizontalAlignment="Right"
+                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                  </Grid>
                   <!-- Transport controls. The default MediaTransportControls
                        chrome is ~64-72px tall; capping at 56 cropped the
                        play/scrub row. RequestedTheme inherits from the
                        card / window so icons stay readable on Dark mode
                        (no hard Light theme — the card itself follows
                        the system now). -->
-                  <MediaPlayerElement x:Name="DoneAudioPlayer" Grid.Row="1"
+                  <MediaPlayerElement x:Name="DoneAudioPlayer" Grid.Row="2"
                                       AreTransportControlsEnabled="True"
                                       AutoPlay="False"
                                       MinHeight="64">
@@ -629,6 +652,13 @@
                   </Button>
                 </StackPanel>
               </Grid>
+            </StackPanel>
+
+            <ScrollViewer Grid.Row="1" x:Name="DoneBodyScroll"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled"
+                          Margin="0,14,0,0">
+              <StackPanel Spacing="14" Padding="0,0,14,20">
 
               <!-- Regenerate progress. Determinate bar for transcript
                    (driven by the file_transcribe_progress event the core
@@ -917,8 +947,9 @@
                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                            Text="Saved alongside the meeting in notes.md."/>
               </StackPanel>
-            </StackPanel>
-          </ScrollViewer>
+              </StackPanel>
+            </ScrollViewer>
+          </Grid>
         </Grid>
       </Grid>
     </Grid>

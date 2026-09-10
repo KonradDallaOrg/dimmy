@@ -527,7 +527,7 @@ public sealed partial class MeetingWindow : Window
             DoneTitle.Text = ResolveDoneTitle(dir);
             DoneMeta.Text = $"{FormatDuration(dur)} · {chunks} chunks · {DateTime.Now:yyyy-MM-dd HH:mm}"
                 + (string.IsNullOrWhiteSpace(stopError) ? "" : " · ⚠ audio incomplete");
-            Helpers.TranscriptRenderer.Render(RawTranscriptText,
+            _doneTurnAnchors = Helpers.TranscriptRenderer.Render(RawTranscriptText,
                 string.IsNullOrEmpty(transcript)
                     ? "(no transcript: VAD may have removed all audio)"
                     : HumanizeTranscript(transcript));
@@ -1269,6 +1269,10 @@ public sealed partial class MeetingWindow : Window
     private Microsoft.UI.Xaml.Controls.Canvas? _wavePlayedLayer;
     private Microsoft.UI.Xaml.Shapes.Ellipse? _doneKnob;
     private double _doneFrac;
+    // Speaker turns of the transcript currently shown, with their elapsed
+    // time. Empty when the transcript has no per-turn timestamps at all (some
+    // imported sources), which is exactly when seek-to-transcript is skipped.
+    private List<Helpers.TranscriptRenderer.TurnAnchor> _doneTurnAnchors = new();
 
     // Brand gradient endpoints (logo): green #2ECE8E → violet #6E7DF7.
     private static readonly global::Windows.UI.Color WaveGreen =
@@ -1326,6 +1330,7 @@ public sealed partial class MeetingWindow : Window
         if (w <= 0 || h <= 0) return;
         _doneFrac = Math.Max(0, Math.Min(1, frac));
         double playX = w * _doneFrac;
+        UpdateDoneTimeReadout();
 
         // Reveal the full-colour "played" layer up to the playhead by
         // resizing its clip. Cheap — no bar rebuild.
@@ -1483,6 +1488,41 @@ public sealed partial class MeetingWindow : Window
         _waveResizeTimer.Start();
     }
 
+    /// <summary>Position / duration under the waveform. Driven from
+    /// UpdateDonePlayhead, so it follows both playback and a click-seek.</summary>
+    private void UpdateDoneTimeReadout()
+    {
+        try
+        {
+            var session = DoneAudioPlayer?.MediaPlayer?.PlaybackSession;
+            var total = session?.NaturalDuration ?? TimeSpan.Zero;
+            if (total.TotalSeconds <= 0)
+            {
+                if (DonePosText != null) DonePosText.Text = "00:00";
+                if (DoneDurText != null) DoneDurText.Text = "";
+                return;
+            }
+            // Derived from the playhead fraction, not from session.Position:
+            // a click-seek repaints the playhead before the media session has
+            // moved, and reading Position there showed the OLD time for a
+            // moment — the one thing this readout exists to answer.
+            var pos = TimeSpan.FromSeconds(total.TotalSeconds * _doneFrac);
+            if (DonePosText != null) DonePosText.Text = FormatClock(pos, total);
+            if (DoneDurText != null) DoneDurText.Text = FormatClock(total, total);
+        }
+        catch { }
+    }
+
+    /// <summary>mm:ss, widening to h:mm:ss only when the MEETING is that long,
+    /// so the two readouts always have the same shape as each other.</summary>
+    private static string FormatClock(TimeSpan t, TimeSpan total)
+    {
+        if (t < TimeSpan.Zero) t = TimeSpan.Zero;
+        return total.TotalHours >= 1
+            ? $"{(int)t.TotalHours}:{t.Minutes:00}:{t.Seconds:00}"
+            : $"{(int)t.TotalMinutes:00}:{t.Seconds:00}";
+    }
+
     private void DoneWaveform_PointerPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
     {
         try
@@ -1495,10 +1535,54 @@ public sealed partial class MeetingWindow : Window
             if (session == null) return;
             var total = session.NaturalDuration;
             if (total.TotalSeconds <= 0) return;
-            session.Position = TimeSpan.FromSeconds(total.TotalSeconds * frac);
+            var target = TimeSpan.FromSeconds(total.TotalSeconds * frac);
+            session.Position = target;
             UpdateDonePlayhead(frac);
+            // Only on an explicit seek. Following playback continuously would
+            // yank the page out from under anyone reading it.
+            ScrollTranscriptTo(target);
         }
         catch { }
+    }
+
+    /// <summary>Bring the speaker turn covering <paramref name="position"/> to
+    /// the top of the transcript pane. No-op unless the Transcript tab is the
+    /// visible one and the transcript actually carries per-turn timestamps —
+    /// scrolling a recap to an audio position would mean nothing.</summary>
+    private void ScrollTranscriptTo(TimeSpan position)
+    {
+        try
+        {
+            if (_doneTurnAnchors.Count == 0) return;
+            if (TranscriptTabPanel == null || DoneBodyScroll == null) return;
+            if (TranscriptTabPanel.Visibility != Visibility.Visible) return;
+
+            // Last turn that had already started: that is the one being spoken
+            // at this position.
+            var secs = position.TotalSeconds;
+            Helpers.TranscriptRenderer.TurnAnchor? hit = null;
+            foreach (var a in _doneTurnAnchors)
+            {
+                if (a.Seconds > secs) break;
+                hit = a;
+            }
+            hit ??= _doneTurnAnchors[0];
+
+            // Where that paragraph sits inside the scrolling content. A
+            // RichTextBlock has no per-block layout API, so the position comes
+            // from a TextPointer at the block start; the transform then maps it
+            // out of the RichTextBlock and into the ScrollViewer content.
+            var rect = hit.Block.ContentStart.GetCharacterRect(
+                Microsoft.UI.Xaml.Documents.LogicalDirection.Forward);
+            if (DoneBodyScroll.Content is not UIElement content) return;
+            var offset = RawTranscriptText.TransformToVisual(content)
+                .TransformPoint(new global::Windows.Foundation.Point(0, rect.Top));
+            DoneBodyScroll.ChangeView(null, Math.Max(0, offset.Y - 12), null);
+        }
+        catch (Exception ex)
+        {
+            App.Log($"ScrollTranscriptTo: {ex.GetType().Name}", "Meeting");
+        }
     }
 
     // ── Processing steps ──────────────────────────────────────────
@@ -2407,7 +2491,7 @@ public sealed partial class MeetingWindow : Window
             var txt = Path.Combine(row.Dir, "transcripts.txt");
             if (File.Exists(txt))
             {
-                Helpers.TranscriptRenderer.Render(
+                _doneTurnAnchors = Helpers.TranscriptRenderer.Render(
                     RawTranscriptText,
                     HumanizeTranscript(await File.ReadAllTextAsync(txt)));
             }
@@ -2881,7 +2965,7 @@ public sealed partial class MeetingWindow : Window
 
             var txtPath = Path.Combine(dir, "transcripts.txt");
             await File.WriteAllTextAsync(txtPath, merged);
-            Helpers.TranscriptRenderer.Render(RawTranscriptText, HumanizeTranscript(merged));
+            _doneTurnAnchors = Helpers.TranscriptRenderer.Render(RawTranscriptText, HumanizeTranscript(merged));
             ShowToast("Transcript regenerated.");
         }
         catch (Exception ex)
