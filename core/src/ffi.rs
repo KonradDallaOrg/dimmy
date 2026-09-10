@@ -4272,6 +4272,31 @@ pub extern "C" fn dimmy_meeting_is_active() -> c_int {
     MEETING.lock().map(|g| g.is_some() as c_int).unwrap_or(0)
 }
 
+/// Directory of the LIVE meeting, or empty when none is recording.
+///
+/// The host needs this to REJOIN a recording in progress. Its live
+/// transcript is built from `meeting_chunk` events, so a window opened
+/// after the meeting started has nothing: it used to clear the pane and
+/// show a placeholder while the text so far sat in `transcripts.txt` on
+/// disk, flushed line by line. Knowing the directory lets it read that
+/// back immediately instead of waiting for the next chunk -- up to 30 s
+/// now that the window is 30 s.
+///
+/// Writes a UTF-8 path into `out_buf`, returns the byte count, 0 when no
+/// meeting is live, -1 on a bad buffer.
+#[no_mangle]
+pub extern "C" fn dimmy_meeting_active_dir(out_buf: *mut c_char, buf_len: c_int) -> c_int {
+    let dir = MEETING
+        .lock()
+        .map(|g| {
+            g.as_ref()
+                .map(|m| m.dir().to_string_lossy().to_string())
+                .unwrap_or_default()
+        })
+        .unwrap_or_default();
+    write_to_buf(&dir, out_buf, buf_len)
+}
+
 /// Internal (Rust-side) meeting-active probe. Same source of truth as
 /// `dimmy_meeting_is_active`, exposed for core modules (e.g. the audio
 /// worker's long-dictation guardrail) that must NOT trip on a meeting —

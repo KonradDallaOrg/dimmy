@@ -363,8 +363,29 @@ final class MeetingViewModel: ObservableObject {
         // the pollTimer clock has been ticking since `start()` and
         // re-deriving from the dir's `creationDate` introduces drift
         // (FS mtime granularity, copy-on-write timestamps).
+        // Ask the core which meeting is live. The mtime guess below is
+        // the fallback for an older core only: the comment above already
+        // called it risky, and it is - writing anything inside a past
+        // meeting makes that one look freshest.
+        if activeMeetingDir.isEmpty, let dir = DimmyCore.shared.meetingActiveDir() {
+            activeMeetingDir = dir
+        }
         if activeMeetingDir.isEmpty, let dir = freshestMeetingDir() {
             activeMeetingDir = dir.path
+        }
+
+        // Everything transcribed before this window opened is already on
+        // disk: the core writes transcripts.txt line by line and flushes
+        // each one. Without this the pane starts blank and stays that way
+        // until the next chunk, which at a 30 s window is half a minute of
+        // looking like the meeting lost the conversation.
+        if transcript.isEmpty, !activeMeetingDir.isEmpty {
+            let f = URL(fileURLWithPath: activeMeetingDir)
+                .appendingPathComponent("transcripts.txt")
+            if let onDisk = try? String(contentsOf: f, encoding: .utf8),
+               !onDisk.isEmpty {
+                transcript = onDisk
+            }
         }
         if startedAt == nil {
             if !activeMeetingDir.isEmpty {

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
@@ -243,7 +243,13 @@ public sealed partial class MeetingWindow : Window
                 _recordingActive = true;
                 AppContextName.Text = "Microphone";
                 SetState(MeetingState.Recording);
-                TranscriptText.Text = "🎙️ Re-attached to ongoing recording…";
+                // Everything transcribed before this window opened is already
+                // on disk: the core writes transcripts.txt line by line and
+                // flushes each one. Clearing the pane and showing a
+                // placeholder threw that away, so closing and reopening a
+                // meeting looked like it had lost the conversation — and at a
+                // 30 s window the next chunk can be half a minute away.
+                BackfillLiveTranscript();
                 StartPolling();
                 StartAmplitudePoll();
                 App.Log("ctor: re-attached to active meeting", "Meeting");
@@ -819,6 +825,40 @@ public sealed partial class MeetingWindow : Window
     {
         var elapsed = DateTime.UtcNow - _startedAt;
         RecTimer.Text = $"{(int)elapsed.TotalHours:D2}:{elapsed.Minutes:D2}:{elapsed.Seconds:D2}";
+    }
+
+    // Seed the live pane from the active meeting's transcripts.txt so a
+    // window opened mid-recording shows the conversation so far. Falls
+    // back to the old placeholder when there is nothing to read yet: a
+    // meeting under 30 s old has no line written, which is not an error.
+    private void BackfillLiveTranscript()
+    {
+        try
+        {
+            var dir = DimmyNative.MeetingActiveDir();
+            if (!string.IsNullOrWhiteSpace(dir))
+            {
+                _activeMeetingDir = dir;
+                var f = System.IO.Path.Combine(dir, "transcripts.txt");
+                if (System.IO.File.Exists(f))
+                {
+                    // Same builder the chunk handler appends to, so the next
+                    // live line continues this text instead of replacing it.
+                    _liveTranscriptBuilder.Append(System.IO.File.ReadAllText(f));
+                }
+            }
+        }
+        catch (Exception ex) { App.Log($"backfill exc: {ex.Message}", "Meeting"); }
+
+        if (_liveTranscriptBuilder.Length > 0)
+        {
+            TranscriptText.Text = HumanizeTranscript(_liveTranscriptBuilder.ToString());
+            TranscriptScroll?.ChangeView(null, double.MaxValue, null, true);
+        }
+        else
+        {
+            TranscriptText.Text = "🎙️ Re-attached to ongoing recording…";
+        }
     }
 
     /// Subscribed in OnLoaded / unsubscribed in OnClosed. Replaces

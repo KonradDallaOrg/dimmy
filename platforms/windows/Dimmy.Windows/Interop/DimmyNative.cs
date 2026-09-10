@@ -378,6 +378,14 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_meeting_is_active();
 
+    /// <summary>Directory of the LIVE meeting, empty when none is
+    /// recording. Lets a window opened mid-recording read the transcript
+    /// so far off disk instead of starting blank.</summary>
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_meeting_active_dir(byte[] buf, int len);
+
+    public static string? MeetingActiveDir() => ReadBuffer(dimmy_meeting_active_dir);
+
     /// Pause / resume the in-flight meeting. cpal streams keep running
     /// in the background, but the meeting worker stops writing the WAV
     /// files / emitting STT chunks. On resume the worker advances past

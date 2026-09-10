@@ -112,6 +112,12 @@ int32_t dimmy_download_model(const char * _Nonnull filename);
 /// Returns 1=yes, 0=no.
 int32_t dimmy_model_exists(const char * _Nonnull filename);
 
+/// Directory of the LIVE meeting, empty when none is recording. Lets a
+/// window opened mid-recording read the transcript written so far off
+/// disk instead of starting blank. Returns bytes written, 0 when no
+/// meeting is live.
+int32_t dimmy_meeting_active_dir(char * _Nonnull out_buf, int32_t buf_len);
+
 // ── Qwen3-ASR (third local STT backend, via llama.cpp mtmd) ─────────
 
 /// JSON array of the Qwen3-ASR variants with per-entry download status.

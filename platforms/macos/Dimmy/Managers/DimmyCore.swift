@@ -888,6 +888,22 @@ final class DimmyCore {
         }
     }
 
+    /// Directory of the meeting currently recording, or nil.
+    ///
+    /// Authoritative, unlike picking the newest directory by mtime: any
+    /// file written inside a PAST meeting (a transcript load, a notes
+    /// save) makes that one look freshest and masks the live one.
+    func meetingActiveDir() -> String? {
+        let bufLen = Self.bufferSize
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
+        defer { buffer.deallocate() }
+        buffer[0] = 0
+        let written = dimmy_meeting_active_dir(buffer, bufLen)
+        guard written > 0 else { return nil }
+        let s = String(cString: buffer)
+        return s.isEmpty ? nil : s
+    }
+
     // MARK: - Qwen3-ASR (third local STT backend)
 
     /// The catalog, with per-entry download status. One entry is TWO
