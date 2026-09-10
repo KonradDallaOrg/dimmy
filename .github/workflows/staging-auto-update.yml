@@ -348,7 +348,7 @@ jobs:
           RELEASE_DIR="core/target/aarch64-apple-darwin/release"
 
           # Copy dylibs dereferencing symlinks so every file is a real binary
-          for name in libllama libggml libggml-base libggml-cpu libggml-metal; do
+          for name in libllama libggml libggml-base libggml-cpu libggml-metal libmtmd; do
             for dylib in "$RELEASE_DIR"/${name}*.dylib; do
               [ -e "$dylib" ] || continue
               DEST="$FRAMEWORKS_DIR/$(basename "$dylib")"

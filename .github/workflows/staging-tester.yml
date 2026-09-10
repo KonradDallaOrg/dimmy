@@ -294,7 +294,7 @@ jobs:
           FRAMEWORKS_DIR="$APP_PATH/Contents/Frameworks"
           mkdir -p "$FRAMEWORKS_DIR"
           RELEASE_DIR="core/target/aarch64-apple-darwin/release"
-          for name in libllama libggml libggml-base libggml-cpu libggml-metal; do
+          for name in libllama libggml libggml-base libggml-cpu libggml-metal libmtmd; do
             for dylib in "$RELEASE_DIR"/${name}*.dylib; do
               [ -e "$dylib" ] || continue
               DEST="$FRAMEWORKS_DIR/$(basename "$dylib")"
