@@ -255,7 +255,13 @@ public sealed partial class MeetingWindow : Window
         {
             if (DimmyNative.dimmy_meeting_is_active() == 1)
             {
-                _startedAt = DateTime.UtcNow;       // best-effort; Rust holds the truth
+                // NOT DateTime.UtcNow: this window is re-attaching to a meeting
+                // that started earlier, and starting the clock now made it read
+                // 00:00:11 beside a transcript line stamped 00:01:31. The
+                // meeting directory is created when the meeting starts, and
+                // meta.json only lands at stop, so its creation time is the one
+                // start instant available while recording.
+                _startedAt = MeetingStartedAtUtc() ?? DateTime.UtcNow;
                 _liveTranscriptBuilder.Clear();
                 _ampHistory.Clear();
                 _ampHistorySystem.Clear();
@@ -854,10 +860,49 @@ public sealed partial class MeetingWindow : Window
         RecTimer.Text = $"{(int)elapsed.TotalHours:D2}:{elapsed.Minutes:D2}:{elapsed.Seconds:D2}";
     }
 
+    /// <summary>Read a file the Rust core may still hold OPEN FOR WRITING.
+    ///
+    /// transcripts.txt stays open for the whole meeting, and File.ReadAllText
+    /// asks for a share mode Windows refuses against that writer:
+    ///   "The process cannot access the file ... because it is being used by
+    ///   another process."
+    /// The read simply threw, which is why re-opening a meeting window showed
+    /// none of the conversation so far. FileShare.ReadWrite says we tolerate
+    /// the writer; Delete keeps us from blocking a rotate. Unix has no such
+    /// restriction, so this never showed up on the Mac.</summary>
+    private static string ReadWhileWritten(string path)
+    {
+        using var fs = new System.IO.FileStream(
+            path, System.IO.FileMode.Open, System.IO.FileAccess.Read,
+            System.IO.FileShare.ReadWrite | System.IO.FileShare.Delete);
+        using var sr = new System.IO.StreamReader(fs);
+        return sr.ReadToEnd();
+    }
+
     // Seed the live pane from the active meeting's transcripts.txt so a
     // window opened mid-recording shows the conversation so far. Falls
     // back to the old placeholder when there is nothing to read yet: a
     // meeting under 30 s old has no line written, which is not an error.
+    /// <summary>When the in-flight meeting started, from its directory's
+    /// creation time. null when there is no active meeting or the stamp looks
+    /// wrong — the caller then falls back to now, which is what it used to do
+    /// unconditionally.</summary>
+    private static DateTime? MeetingStartedAtUtc()
+    {
+        try
+        {
+            var dir = DimmyNative.MeetingActiveDir();
+            if (string.IsNullOrWhiteSpace(dir) || !System.IO.Directory.Exists(dir)) return null;
+            var created = System.IO.Directory.GetCreationTimeUtc(dir);
+            var now = DateTime.UtcNow;
+            // In the future, or absurdly old, means the filesystem gave us
+            // nothing usable; take now rather than a wrong clock.
+            if (created > now || now - created > TimeSpan.FromHours(24)) return null;
+            return created;
+        }
+        catch { return null; }
+    }
+
     private void BackfillLiveTranscript()
     {
         try
@@ -871,7 +916,7 @@ public sealed partial class MeetingWindow : Window
                 {
                     // Same builder the chunk handler appends to, so the next
                     // live line continues this text instead of replacing it.
-                    _liveTranscriptBuilder.Append(System.IO.File.ReadAllText(f));
+                    _liveTranscriptBuilder.Append(ReadWhileWritten(f));
                 }
             }
         }
@@ -2514,7 +2559,7 @@ public sealed partial class MeetingWindow : Window
             {
                 _doneTurnAnchors = Helpers.TranscriptRenderer.Render(
                     RawTranscriptText,
-                    HumanizeTranscript(await File.ReadAllTextAsync(txt)));
+                    HumanizeTranscript(ReadWhileWritten(txt)));
             }
             await LoadDoneAudioAsync(row.Dir);
             await LoadNotesAsync(row.Dir);
