@@ -12,6 +12,13 @@ struct MacVoicePage: View {
 
     @State private var localModelExists: Bool = false
     @State private var downloadInFlight: Bool = false
+    // What the running download is, captured when it STARTS. Reading the
+    // picker live meant switching models mid-download renamed the bar without
+    // changing what it measured.
+    @State private var downloadingTarget: String = ""
+    @State private var downloadingLabel: String = ""
+    @State private var downloadingIsQwen: Bool = false
+    @State private var downloadingIsParakeet: Bool = false
     @State private var downloadFailed: String? = nil
 
     /// Whisper model catalog, loaded from the Rust core's single source
@@ -415,17 +422,14 @@ struct MacVoicePage: View {
                     }
 
                     if downloadInFlight {
+                        // Both the number and the name come from the download
+                        // that is actually running, captured when it started.
+                        // They used to be read live from the picker, so
+                        // switching models mid-download left the bar showing
+                        // one file under the other one's name.
                         modelProgressRow(
-                            progress: localBackendIsQwen
-                                ? appState.qwenDownloadProgress
-                                : localBackendIsParakeet
-                                    ? appState.parakeetDownloadProgress
-                                    : appState.modelDownloadProgress,
-                            label: localBackendIsQwen
-                                ? "Downloading \(appState.qwenAsrModel) and its projector..."
-                                : localBackendIsParakeet
-                                    ? "Downloading Parakeet CoreML bundle (about 466 MB)..."
-                                    : "Downloading \(appState.localModel)..."
+                            progress: downloadingProgress,
+                            label: "Downloading \(downloadingLabel)..."
                         )
                     } else if !localModelReady {
                         MacRow(
@@ -602,8 +606,12 @@ struct MacVoicePage: View {
         guard !downloadInFlight, DimmyCore.shared.isInitialized else { return }
         downloadInFlight = true
         downloadFailed = nil
+        downloadingIsQwen = localBackendIsQwen
+        downloadingIsParakeet = localBackendIsParakeet
         if localBackendIsQwen {
             let target = appState.qwenAsrModel
+            downloadingTarget = target
+            downloadingLabel = "\(target) and its projector"
             appState.qwenDownloadProgress = 0
             appState.isDownloadingQwen = true
             DispatchQueue.global(qos: .userInitiated).async {
@@ -619,6 +627,8 @@ struct MacVoicePage: View {
                 }
             }
         } else if localBackendIsParakeet {
+            downloadingTarget = "parakeet"
+            downloadingLabel = "Parakeet CoreML bundle (about 466 MB)"
             appState.parakeetDownloadProgress = 0
             appState.isDownloadingParakeet = true
             DispatchQueue.global(qos: .userInitiated).async {
@@ -635,7 +645,10 @@ struct MacVoicePage: View {
             }
         } else {
             let target = appState.localModel
+            downloadingTarget = target
+            downloadingLabel = target
             appState.modelDownloadProgress = 0
+            appState.modelDownloadFilename = ""
             DispatchQueue.global(qos: .userInitiated).async {
                 let ok = DimmyCore.shared.downloadModel(target)
                 DispatchQueue.main.async {
@@ -651,6 +664,17 @@ struct MacVoicePage: View {
     }
 
     @ViewBuilder
+    /// Progress of the download in flight. Whisper models are matched by
+    /// filename, because the core reports one bar per file and a stale event
+    /// from a previous model would otherwise drive this one. Parakeet and Qwen
+    /// have a single bundle each, so their own flags are unambiguous.
+    private var downloadingProgress: Double {
+        if downloadingIsQwen { return appState.qwenDownloadProgress }
+        if downloadingIsParakeet { return appState.parakeetDownloadProgress }
+        guard appState.modelDownloadFilename == downloadingTarget else { return 0 }
+        return appState.modelDownloadProgress
+    }
+
     private func modelProgressRow(progress: Double, label: String) -> some View {
         MacRow(label, showsDivider: false) {
             HStack(spacing: 8) {

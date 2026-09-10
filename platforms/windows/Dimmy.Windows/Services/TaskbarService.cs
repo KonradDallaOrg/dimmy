@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -55,6 +55,8 @@ public sealed class TaskbarService : IDisposable
         [PreserveSig] int UnregisterTab(IntPtr hwndTab);
         [PreserveSig] int SetTabOrder(IntPtr hwndTab, IntPtr hwndInsertBefore);
         [PreserveSig] int SetTabActive(IntPtr hwndTab, IntPtr hwndMDI, uint dwReserved);
+        // Declared to keep the vtable order correct — unused: a thumb-toolbar
+        // button was tried and removed, see OnTaskbarAnchorClicked.
         [PreserveSig] int ThumbBarAddButtons(IntPtr hwnd, uint cButtons, IntPtr pButton);
         [PreserveSig] int ThumbBarUpdateButtons(IntPtr hwnd, uint cButtons, IntPtr pButton);
         [PreserveSig] int ThumbBarSetImageList(IntPtr hwnd, IntPtr himl);

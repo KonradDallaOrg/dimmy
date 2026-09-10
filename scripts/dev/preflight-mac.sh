@@ -44,7 +44,21 @@ echo
 # Feature flag set must match release.yml's Mac build job — see
 # .github/workflows/release.yml line ~189. If you change it here, change
 # it there (and update CLAUDE.md if the meaning of any feature shifts).
-MAC_FEATURES="local-stt-metal,local-llm-metal,local-stt-parakeet-coreml,local-stt-parakeet-fluid,local-dfn"
+# MUST match the feature list in release.yml's build-macos job, verbatim.
+# This script is the canonical pre-push gate for the Mac path, and a gate that
+# builds a DIFFERENT binary from the one that ships is not a gate:
+#
+#   - local-stt-qwen pulls llama.cpp's mtmd, which is what has to be linked and
+#     bundled as libmtmd. Its absence here is why the missing-libmtmd link error
+#     reached v0.7.1-rc.8 AND rc.9 — the preflight could not have caught it,
+#     because it never compiled the feature that needs it.
+#   - telegram bakes the API credentials via option_env!. Without it a locally
+#     built app reports "no Telegram in this build" and the whole integration
+#     cannot be tested on the machine it is being developed on.
+#   - license-client ships too. With no DIMMY_LICENSE_PUBKEY in the environment
+#     check_status() returns Unrestricted anyway (core/src/license.rs), so a dev
+#     build stays permissive — the feature only changes what a RELEASE does.
+MAC_FEATURES="local-stt-metal,local-llm-metal,local-stt-parakeet-coreml,local-stt-parakeet-fluid,local-dfn,license-client,telegram,local-stt-qwen"
 CI_FEATURES="local-stt,local-llm"
 
 step() { echo; echo "── $* ──"; }

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Runtime.InteropServices;
 using Dimmy.Windows.Helpers;
@@ -32,12 +32,19 @@ public sealed partial class TaskbarAnchorWindow : Window
     /// can't accidentally hook the wrong one.</summary>
     public event Action? TaskbarClicked;
 
+    /// <summary>The X on the taskbar hover preview was clicked. Raised
+    /// INSTEAD of closing: destroying this window would take the taskbar entry
+    /// with it permanently.</summary>
+    public event Action? CloseRequested;
+
+
     public IntPtr Hwnd { get; }
 
     // Window subclass — must be retained as a field to prevent GC of the delegate.
     private readonly WndProcDelegate? _wndProcDelegate;
 
     private const uint WM_SYSCOMMAND = 0x0112;
+    private const uint WM_CLOSE = 0x0010;
     private const int SC_RESTORE = 0xF120;
 
     [DllImport("user32.dll")]
@@ -59,6 +66,7 @@ public sealed partial class TaskbarAnchorWindow : Window
 
     [DllImport("comctl32.dll")]
     private static extern IntPtr DefSubclassProc(IntPtr hWnd, uint uMsg, IntPtr wParam, IntPtr lParam);
+
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
@@ -117,6 +125,28 @@ public sealed partial class TaskbarAnchorWindow : Window
 
     private IntPtr AnchorWndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
+        // The hover preview carries a close button, and it sends a real
+        // WM_CLOSE. Letting it through DESTROYS this window — and since the
+        // anchor is what owns the taskbar entry, the icon then cannot be
+        // brought back: ApplyTaskbarAnchorVisibility calls ShowWindow on a dead
+        // HWND and silently does nothing, while the field is non-null so
+        // nothing re-creates it either. Reported 2026-09-10 as "I closed the
+        // preview and now I cannot get the icon back".
+        //
+        // Suppress the destroy and report it as intent instead: clicking X on a
+        // taskbar preview means "get this off my taskbar", which is exactly the
+        // ShowTaskbarIcon preference — and that is reversible from Settings.
+        if (msg == WM_CLOSE)
+        {
+            try { CloseRequested?.Invoke(); }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"[TaskbarAnchor] CloseRequested handler threw: {ex.Message}");
+            }
+            return IntPtr.Zero;
+        }
+
         // When the user clicks our taskbar button, Windows sends
         // WM_SYSCOMMAND/SC_RESTORE to un-minimize us. We intercept
         // that, fire TaskbarClicked, and return 0 to suppress the

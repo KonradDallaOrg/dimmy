@@ -35,7 +35,7 @@ public sealed partial class PillWindow : Window
     private DateTime _recordingStartTime;
     private DispatcherTimer? _completingTimer;
     private DispatcherTimer? _errorTimer;
-    private DispatcherTimer? _rainbowTimer;
+    private bool _rainbowRenderHooked;
     private LinearGradientBrush? _rainbowBrush;
     private DateTime _rainbowLastTick;
     private double _rainbowAngleDeg;
@@ -672,7 +672,7 @@ public sealed partial class PillWindow : Window
                 RefreshStyleDot();
                 RootGrid.Opacity = 1.0;
                 SetPillBodyColor(IsGlass ? BgGlassIdle : BgDark);
-                _rainbowTimer?.Stop();
+                StopRainbowAnimation();
                 AnimateToCircle(global::Windows.UI.Color.FromArgb(0, 0, 0, 0), newPanel, oldPanel);
                 UpdateGlow((_vm.CommandMode || _vm.CommandOneShot) ? CommandAmber : ParseColor(_vm.LlmStyleColor), subtle: true);
                 break;
@@ -694,7 +694,7 @@ public sealed partial class PillWindow : Window
                 }
                 else
                 {
-                    _rainbowTimer?.Stop();
+                    StopRainbowAnimation();
                     AnimateToCapsule(GetBorderColorForRecording(), newPanel, oldPanel);
                 }
                 UpdateGlow(GetBorderColorForRecording());
@@ -705,7 +705,7 @@ public sealed partial class PillWindow : Window
                 RootGrid.Opacity = 1.0;
                 Waveform.IsActive = false;
                 ChunkText.Text = _vm.ChunkTotal > 1 ? $"{_vm.ChunkCurrent}/{_vm.ChunkTotal}" : "";
-                _rainbowTimer?.Stop();
+                StopRainbowAnimation();
                 AnimateToCapsule(ColorTranscribing, newPanel, oldPanel);
                 UpdateGlow(ColorTranscribing);
                 break;
@@ -713,7 +713,7 @@ public sealed partial class PillWindow : Window
             case AppState.Processing:
                 SetPillBodyColor(IsGlass ? BgGlassActive : BgDark);
                 RootGrid.Opacity = 1.0;
-                _rainbowTimer?.Stop();
+                StopRainbowAnimation();
                 AnimateToCapsule(ParseColor(_vm.LlmStyleColor), newPanel, oldPanel);
                 UpdateGlow(ParseColor(_vm.LlmStyleColor));
                 break;
@@ -721,7 +721,7 @@ public sealed partial class PillWindow : Window
             case AppState.Completing:
                 SetPillBodyColor(IsGlass ? BgGlassActive : BgDark);
                 RootGrid.Opacity = 1.0;
-                _rainbowTimer?.Stop();
+                StopRainbowAnimation();
                 var completingColor = _vm.LlmStyle != "off"
                     ? ParseColor(_vm.LlmStyleColor)
                     : ColorCompleting;
@@ -741,7 +741,7 @@ public sealed partial class PillWindow : Window
                 ErrorText.Text = _vm.ErrorMessage;
                 SetPillBodyColor(IsGlass ? BgGlassActive : BgDark);
                 RootGrid.Opacity = 1.0;
-                _rainbowTimer?.Stop();
+                StopRainbowAnimation();
                 AnimateToCapsule(ColorError, newPanel, oldPanel);
                 UpdateGlow(ColorError);
                 // 5 s, not 3: the error tag is the only pill surface that
@@ -829,61 +829,146 @@ public sealed partial class PillWindow : Window
     [
         (0.000, "#FF4D4D"), (0.125, "#FF6633"), (0.250, "#FFB84D"),
         (0.375, "#49F249"), (0.500, "#66E0FF"), (0.625, "#4D7AFF"),
-        (0.750, "#9966FF"), (0.875, "#E066FF"), (1.000, "#FF4D8C"),
+        (0.750, "#9966FF"), (0.875, "#E066FF"), (0.940, "#FF4D8C"),
     ];
 
     private void BuildRainbowBrush()
     {
-        _rainbowBrush = new LinearGradientBrush();
+        _rainbowBrush = new LinearGradientBrush
+        {
+            // ABSOLUTE, not the default RelativeToBoundingBox. Relative
+            // coordinates are normalised per side, so on a 200x40 capsule they
+            // are anisotropic by 5:1: a direction 45 degrees in relative space
+            // is nowhere near 45 degrees on screen, and a constant angular rate
+            // sweeps the band fast through some orientations and slow through
+            // others. In pixels the rotation is the rotation.
+            MappingMode = Microsoft.UI.Xaml.Media.BrushMappingMode.Absolute,
+            // Safety net at the ends of the axis; the closing stop below keeps
+            // the repeat seam invisible if it is ever reached.
+            SpreadMethod = Microsoft.UI.Xaml.Media.GradientSpreadMethod.Repeat,
+        };
         foreach (var (offset, hex) in RainbowStops)
             _rainbowBrush.GradientStops.Add(new GradientStop { Offset = offset, Color = ParseColor(hex) });
+        // Close the loop. The first and last rainbow colours are near but not
+        // equal, and Repeat butts one tile against the next — without this the
+        // seam is a visible hard edge travelling round the pill once a cycle.
+        _rainbowBrush.GradientStops.Add(new GradientStop
+        {
+            Offset = 1.0,
+            Color = ParseColor(RainbowStops[0].Hex),
+        });
     }
 
-    // Rotation speed follows the voice: the gradient idles during a pause and
-    // spins up while the user speaks.
-    private const double RainbowSlowDegPerSec = 40.0;
-    private const double RainbowFastDegPerSec = 220.0;
+    // The band always drifts, and speeds up with the voice. "DegPerSec" is a
+    // full colour cycle per 360, kept in degrees so the numbers stay
+    // comparable with what they replaced.
+    private const double RainbowIdleDegPerSec = 30.0;
+    private const double RainbowFastDegPerSec = 300.0;
     // Absolute thresholds on the RAW amplitude. 0.02 is the same "signal
     // present" floor the call detector uses; speech peaks well past 0.12.
     private const double RainbowVoiceFloor = 0.02;
     private const double RainbowVoiceCeil = 0.12;
 
+    // dimmy_get_amplitude is a PEAK over ~50 ms, and across a spoken sentence
+    // it swings hard from one phoneme to the next: a full vowel spikes, the
+    // consonant after it collapses. Driving the speed from that instantaneous
+    // value made the ring sprint a whole lap on a loud syllable and fall back
+    // on the next — the "one 360 then it slows" that this replaces.
+    //
+    // So the speed follows an ENVELOPE of the voice instead: fast attack so it
+    // answers immediately, slow release so continuous speech holds it up and
+    // only a real pause lets it fall. Same fast-attack/slow-release principle
+    // as the pill's own display AGC and as dagc.
+    private double _rainbowVoiceEnv;
+    private const double RainbowEnvAttackTau = 0.05;
+    private const double RainbowEnvReleaseTau = 0.70;
+    // The envelope does the smoothing now, so this only has to take the edge
+    // off the remaining steps.
+    private const double RainbowSpeedTau = 0.12;
+
+    /// <summary>Spin the gradient. Driven by CompositionTarget.Rendering, which
+    /// fires once per COMPOSED frame — so the rotation advances on the same
+    /// clock the screen refreshes on, at whatever rate the display actually
+    /// runs. The old 30 Hz DispatcherTimer beat against a 60+ Hz compositor and
+    /// that is what read as juddery: the speed was right, the cadence was not.</summary>
     private void StartRainbowAnimation()
     {
         _rainbowAngleDeg = 0;
-        _rainbowSpeedDeg = RainbowSlowDegPerSec;
+        _rainbowSpeedDeg = RainbowIdleDegPerSec;
+        _rainbowVoiceEnv = 0.0;
         _rainbowLastTick = DateTime.UtcNow;
-        if (_rainbowTimer is null)
+        if (!_rainbowRenderHooked)
         {
-            _rainbowTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1000.0 / 30) };
-            _rainbowTimer.Tick += (_, _) =>
-            {
-                if (_rainbowBrush is null) return;
-                var now = DateTime.UtcNow;
-                // Clamped: a stalled UI thread must not teleport the gradient.
-                var dt = Math.Clamp((now - _rainbowLastTick).TotalSeconds, 0.0, 0.1);
-                _rainbowLastTick = now;
-
-                var voice = Math.Clamp(
-                    (_rawAmplitude - RainbowVoiceFloor) / (RainbowVoiceCeil - RainbowVoiceFloor), 0.0, 1.0);
-                var target = RainbowSlowDegPerSec + (RainbowFastDegPerSec - RainbowSlowDegPerSec) * voice;
-                // Ease toward the target (~200 ms) so the speed glides instead of
-                // snapping on every 12 Hz amplitude sample.
-                _rainbowSpeedDeg += (target - _rainbowSpeedDeg) * 0.15;
-
-                // Accumulate the phase. Deriving the angle from elapsed*speed
-                // would make it jump the moment the speed changes.
-                _rainbowAngleDeg = (_rainbowAngleDeg + _rainbowSpeedDeg * dt) % 360.0;
-
-                var angleRad = _rainbowAngleDeg * Math.PI / 180.0;
-                var cos = Math.Cos(angleRad);
-                var sin = Math.Sin(angleRad);
-                var scale = 0.5 / Math.Max(Math.Abs(cos), Math.Abs(sin));
-                _rainbowBrush.StartPoint = new global::Windows.Foundation.Point(0.5 - cos * scale, 0.5 - sin * scale);
-                _rainbowBrush.EndPoint = new global::Windows.Foundation.Point(0.5 + cos * scale, 0.5 + sin * scale);
-            };
+            _rainbowRenderHooked = true;
+            Microsoft.UI.Xaml.Media.CompositionTarget.Rendering += OnRainbowFrame;
         }
-        _rainbowTimer.Start();
+    }
+
+    private void StopRainbowAnimation()
+    {
+        if (!_rainbowRenderHooked) return;
+        _rainbowRenderHooked = false;
+        Microsoft.UI.Xaml.Media.CompositionTarget.Rendering -= OnRainbowFrame;
+    }
+
+    private void OnRainbowFrame(object? sender, object e)
+    {
+        if (_rainbowBrush is null) return;
+        var now = DateTime.UtcNow;
+        // Clamped: a stalled UI thread must not teleport the gradient.
+        var dt = Math.Clamp((now - _rainbowLastTick).TotalSeconds, 0.0, 0.1);
+        _rainbowLastTick = now;
+
+        var envTau = _rawAmplitude > _rainbowVoiceEnv
+            ? RainbowEnvAttackTau
+            : RainbowEnvReleaseTau;
+        _rainbowVoiceEnv += (_rawAmplitude - _rainbowVoiceEnv) * (1.0 - Math.Exp(-dt / envTau));
+
+        // Same perceptual curve the bars use (sqrt), so the ring speeds up when
+        // the bars grow rather than waiting for a shout: a linear ramp spent
+        // most of real speech in its bottom third and read as unresponsive.
+        var voice = Math.Sqrt(Math.Clamp(
+            (_rainbowVoiceEnv - RainbowVoiceFloor) / (RainbowVoiceCeil - RainbowVoiceFloor), 0.0, 1.0));
+        // One continuous law from silence to a shout — no speaking/not-speaking
+        // branch. The envelope's slow release is what carries the ring across
+        // the gaps between words, so there is nothing left for a hold to do.
+        var target = RainbowIdleDegPerSec + (RainbowFastDegPerSec - RainbowIdleDegPerSec) * voice;
+
+        // Time-based easing, not per-tick: the frame rate is the display's, so
+        // a per-tick factor would ease twice as fast at 60 Hz as at 30.
+        _rainbowSpeedDeg += (target - _rainbowSpeedDeg) * (1.0 - Math.Exp(-dt / RainbowSpeedTau));
+        // Accumulate the phase. Deriving it from elapsed*speed would make the
+        // colours jump the moment the speed changes.
+        _rainbowAngleDeg = (_rainbowAngleDeg + _rainbowSpeedDeg * dt) % 360.0;
+
+        // Rotate the gradient axis about the centre, in pixels.
+        var w = ColorBorder.ActualWidth;
+        var h = ColorBorder.ActualHeight;
+        if (w <= 0 || h <= 0) return; // not laid out yet
+
+        // CONSTANT length, and long enough to cover the pill at every angle —
+        // the diagonal. This is the whole fix for the pulsing.
+        //
+        // The colour at a point on the border comes from its projection on the
+        // axis divided by the axis LENGTH. The old length was
+        // 0.5 / max(|cos|, |sin|), which reaches the bounding-box edge and so
+        // swings 41% over a revolution — meaning the colours advanced at an
+        // uneven rate four times a lap even when the angular rate was perfectly
+        // constant. That is why the pulsing survived every change to the speed
+        // control, and why it was there in silence too.
+        //
+        // A constant length was tried once before at 0.35 of the box and looked
+        // wrong for a different reason: too SHORT, so the repeating brush showed
+        // one and a half rainbows in narrow slices. The diagonal is the shortest
+        // length that is never too short.
+        var half = Math.Sqrt(w * w + h * h) / 2.0;
+        var angleRad = _rainbowAngleDeg * Math.PI / 180.0;
+        var dx = Math.Cos(angleRad) * half;
+        var dy = Math.Sin(angleRad) * half;
+        var cx = w / 2.0;
+        var cy = h / 2.0;
+        _rainbowBrush.StartPoint = new global::Windows.Foundation.Point(cx - dx, cy - dy);
+        _rainbowBrush.EndPoint = new global::Windows.Foundation.Point(cx + dx, cy + dy);
     }
 
     private static global::Windows.UI.Color ParseColor(string hex)

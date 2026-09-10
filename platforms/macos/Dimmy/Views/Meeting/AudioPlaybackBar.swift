@@ -21,6 +21,11 @@ struct AudioPlaybackBar: View {
     let url: URL
     let micURL: URL?
     let systemURL: URL?
+    /// Called when the user seeks, with the new position. The waveform IS the
+    /// scrubber here, so this is the only way to seek and therefore the only
+    /// hook a listener needs — unlike Windows, where a separate transport bar
+    /// moves the session without going through the view at all.
+    let onSeek: ((TimeInterval) -> Void)?
     @StateObject private var model = AudioPlaybackModel()
 
     // Decode a generous bucket count; the strips resample this down to the
@@ -28,10 +33,14 @@ struct AudioPlaybackBar: View {
     // card). Mirrors Win's 400-bucket decode.
     private let waveformBucketCount: Int = 400
 
-    init(url: URL, micURL: URL? = nil, systemURL: URL? = nil) {
+    init(url: URL,
+         micURL: URL? = nil,
+         systemURL: URL? = nil,
+         onSeek: ((TimeInterval) -> Void)? = nil) {
         self.url = url
         self.micURL = micURL
         self.systemURL = systemURL
+        self.onSeek = onSeek
     }
 
     private var dualBand: Bool {
@@ -44,7 +53,9 @@ struct AudioPlaybackBar: View {
 
     private func handleSeek(_ fraction: CGFloat) {
         guard model.duration > 0 else { return }
-        model.seek(to: model.duration * Double(fraction))
+        let t = model.duration * Double(fraction)
+        model.seek(to: t)
+        onSeek?(t)
     }
 
     var body: some View {

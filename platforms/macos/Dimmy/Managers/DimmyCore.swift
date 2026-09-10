@@ -1324,6 +1324,9 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
            let total = payload["total"] as? Int,
            total > 0 {
             appState.modelDownloadProgress = Double(downloaded) / Double(total)
+            // Carry WHICH file this is. Without it a view can only show the
+            // last number that arrived, whatever model it belonged to.
+            appState.modelDownloadFilename = payload["filename"] as? String ?? ""
         }
 
     case "llm_model_download_progress":
@@ -1331,6 +1334,7 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
            let total = payload["total"] as? Int,
            total > 0 {
             appState.llmModelDownloadProgress = Double(downloaded) / Double(total)
+            appState.llmModelDownloadFilename = payload["filename"] as? String ?? ""
         }
 
     case "parakeet_bundle_download_progress":

@@ -1,4 +1,5 @@
-using System;
+﻿using System;
+using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -21,12 +22,45 @@ public static class TranscriptRenderer
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     // Per-turn line format written by core/src/meeting.rs:
-    //   `[  1234 ms] [mic] hello world`
-    // One line per chunk; the [ms] is the elapsed timestamp from the
-    // meeting start, [mic|system] is the speaker track, then the text.
+    //   `[00:12:00] [mic] hello world`   (current)
+    //   `[  1234 ms] [mic] hello world`  (before 2026-09-10)
+    // One line per chunk; the timestamp is elapsed from the meeting start,
+    // [mic|system] is the speaker track, then the text.
+    //
+    // BOTH shapes have to match. The writer switched to hh:mm:ss when the raw
+    // millisecond count proved unreadable, and this regex was not updated with
+    // it — so every transcript written since then failed the turn path and fell
+    // through to plain body text: no speaker badge, no coloured timestamp, no
+    // divider on a change of speaker. Old transcripts on disk still carry the
+    // ms form, so this keeps reading them too.
     private static readonly Regex TurnRe =
-        new(@"^\s*\[(?<ts>\s*\d+\s*ms\s*)\]\s+\[(?<spk>mic|system)\]\s+(?<body>.*)$",
+        new(@"^\s*\[(?<ts>\s*(?:\d+\s*ms|\d{1,2}:\d{2}(?::\d{2})?)\s*)\]\s+\[(?<spk>mic|system)\]\s+(?<body>.*)$",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    /// <summary>Where a speaker turn sits, for callers that need to scroll the
+    /// transcript to a playback position. Seconds is elapsed from the meeting
+    /// start; Block is the paragraph rendered for that turn, whose on-screen
+    /// position only the caller can resolve.</summary>
+    public sealed record TurnAnchor(double Seconds, Block Block);
+
+    /// <summary>Elapsed seconds from a `ts` group, in either shape. Negative
+    /// when it is neither, so callers can drop the anchor.</summary>
+    public static double ParseElapsedSeconds(string ts)
+    {
+        ts = (ts ?? "").Trim();
+        if (ts.Length == 0) return -1;
+        var ms = Regex.Match(ts, @"^(\d+)\s*ms$", RegexOptions.IgnoreCase);
+        if (ms.Success && long.TryParse(ms.Groups[1].Value, out var msv)) return msv / 1000.0;
+        var parts = ts.Split(':');
+        if (parts.Length is < 2 or > 3) return -1;
+        double total = 0;
+        foreach (var part in parts)
+        {
+            if (!int.TryParse(part, out var v) || v < 0) return -1;
+            total = total * 60 + v;
+        }
+        return total;
+    }
 
     // Inline timestamp markers: [0:01], [00:01], [1:23:45], [125 ms], [125ms].
     // Used inside a paragraph where text + timestamps are interleaved.
@@ -34,9 +68,13 @@ public static class TranscriptRenderer
         new(@"\[(?:\d{1,2}:\d{2}(?::\d{2})?|\d+\s*ms)\]",
             RegexOptions.Compiled);
 
-    public static void Render(RichTextBlock target, string transcript)
+    /// <summary>Render the transcript. The return value lists the speaker
+    /// turns with their elapsed time, in document order, for callers that want
+    /// to scroll to a playback position; it is safe to ignore.</summary>
+    public static List<TurnAnchor> Render(RichTextBlock target, string transcript)
     {
         target.Blocks.Clear();
+        var anchors = new List<TurnAnchor>();
         if (string.IsNullOrWhiteSpace(transcript))
         {
             var empty = new Paragraph();
@@ -47,7 +85,7 @@ public static class TranscriptRenderer
                 FontStyle = global::Windows.UI.Text.FontStyle.Italic,
             });
             target.Blocks.Add(empty);
-            return;
+            return anchors;
         }
 
         // We process line-by-line so [mic] / [system] markers can each
@@ -85,10 +123,11 @@ public static class TranscriptRenderer
                 var spk = turn.Groups["spk"].Value.Trim().ToLowerInvariant();
                 if (lastTrack != null && lastTrack != spk)
                     target.Blocks.Add(BuildSpeakerSeparator());
-                target.Blocks.Add(BuildSpeakerTurn(
-                    turn.Groups["ts"].Value.Trim(),
-                    spk,
-                    turn.Groups["body"].Value));
+                var tsText = turn.Groups["ts"].Value.Trim();
+                var turnBlock = BuildSpeakerTurn(tsText, spk, turn.Groups["body"].Value);
+                target.Blocks.Add(turnBlock);
+                var secs = ParseElapsedSeconds(tsText);
+                if (secs >= 0) anchors.Add(new TurnAnchor(secs, turnBlock));
                 lastWasSection = true;
                 lastTrack = spk;
                 continue;
@@ -128,6 +167,7 @@ public static class TranscriptRenderer
         }
 
         if (current != null) target.Blocks.Add(current);
+        return anchors;
     }
 
     /// Mic = mint, system = violet. Two shades per track: a LIGHT one for

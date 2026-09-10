@@ -42,12 +42,31 @@ public sealed partial class MeetingWindow : Window
     private bool _recordingActive;
 
     private readonly Queue<float> _ampHistory = new();
+
+    // The live waveform used to rebuild its whole visual tree on every
+    // sample: Children.Clear() then up to 2x240 fresh Rectangles, 12 times a
+    // second. That is ~5.7k throwaway UIElements per second, and it made the
+    // bars visibly stutter. The rectangles are now pooled and only their
+    // height moves; the scroll itself is a transform driven per frame.
+    private Microsoft.UI.Xaml.Controls.Canvas? _ampScrollLayer;
+    private Microsoft.UI.Xaml.Media.TranslateTransform? _ampScrollTransform;
+    private readonly List<Microsoft.UI.Xaml.Shapes.Rectangle> _ampBarsMic = new();
+    private readonly List<Microsoft.UI.Xaml.Shapes.Rectangle> _ampBarsSys = new();
+    private SolidColorBrush? _liveBrushMic;
+    private SolidColorBrush? _liveBrushSys;
+    private DateTime _ampLastSampleUtc;
+    private bool _ampRenderHooked;
     // Second history for the loopback (system) stream so the live
     // waveform can draw mic and system as two distinct bands.
     private readonly Queue<float> _ampHistorySystem = new();
     // Dynamic bar count — keeps each bar at a fixed pixel width so the
     // waveform doesn't stretch when the window is resized to fullscreen.
     // Recomputed in LiveWaveformCanvas_SizeChanged.
+    // One bar per sample, so this is also how much audio a bar represents.
+    // 12 Hz is the documented cadence for VU sampling (see the polling-rule
+    // exception in CLAUDE.md); the SCROLL is interpolated between samples so
+    // the eye never sees the 83 ms step.
+    private const double AMP_SAMPLE_MS = 83.0;
     private const double AMP_BAR_PX = 4.0;
     private const double AMP_GAP_PX = 2.0;
     private const int AMP_MIN_HISTORY = 20;
@@ -508,7 +527,7 @@ public sealed partial class MeetingWindow : Window
             DoneTitle.Text = ResolveDoneTitle(dir);
             DoneMeta.Text = $"{FormatDuration(dur)} · {chunks} chunks · {DateTime.Now:yyyy-MM-dd HH:mm}"
                 + (string.IsNullOrWhiteSpace(stopError) ? "" : " · ⚠ audio incomplete");
-            Helpers.TranscriptRenderer.Render(RawTranscriptText,
+            _doneTurnAnchors = Helpers.TranscriptRenderer.Render(RawTranscriptText,
                 string.IsNullOrEmpty(transcript)
                     ? "(no transcript: VAD may have removed all audio)"
                     : HumanizeTranscript(transcript));
@@ -707,6 +726,8 @@ public sealed partial class MeetingWindow : Window
             {
                 // Detach the position-changed listener so we don't get
                 // late callbacks after the window/state has moved on.
+                try { mp.PlaybackSession.SeekCompleted -= OnDoneSeekCompleted; }
+                catch { }
                 try { mp.PlaybackSession.PositionChanged -= OnDonePlaybackPositionChanged; }
                 catch { }
                 if (mp.PlaybackSession.PlaybackState
@@ -944,10 +965,35 @@ public sealed partial class MeetingWindow : Window
     {
         var dq = DispatcherQueue.GetForCurrentThread();
         _ampTimer = dq.CreateTimer();
-        _ampTimer.Interval = TimeSpan.FromMilliseconds(83);
+        _ampTimer.Interval = TimeSpan.FromMilliseconds(AMP_SAMPLE_MS);
         _ampTimer.IsRepeating = true;
         _ampTimer.Tick += OnAmpTick;
         _ampTimer.Start();
+        _ampLastSampleUtc = DateTime.UtcNow;
+        HookAmpRendering(true);
+    }
+
+    /// <summary>Per-frame scroll. CompositionTarget.Rendering fires once per
+    /// composed frame, so the offset lands on the same clock the screen does;
+    /// a DispatcherTimer would coalesce and beat against it.</summary>
+    private void HookAmpRendering(bool on)
+    {
+        if (on == _ampRenderHooked) return;
+        _ampRenderHooked = on;
+        if (on) Microsoft.UI.Xaml.Media.CompositionTarget.Rendering += OnAmpRendering;
+        else Microsoft.UI.Xaml.Media.CompositionTarget.Rendering -= OnAmpRendering;
+    }
+
+    private void OnAmpRendering(object? sender, object e)
+    {
+        if (_ampScrollTransform == null) return;
+        // How far into the current sample are we? The bars are laid out with
+        // the newest one PAST the right edge, then the whole layer glides one
+        // pitch left over the sample interval, so a bar enters continuously
+        // instead of popping into place.
+        var elapsed = (DateTime.UtcNow - _ampLastSampleUtc).TotalMilliseconds;
+        var frac = Math.Clamp(elapsed / AMP_SAMPLE_MS, 0.0, 1.0);
+        _ampScrollTransform.X = -(AMP_BAR_PX + AMP_GAP_PX) * frac;
     }
 
     private void StopAmplitudePoll()
@@ -956,6 +1002,7 @@ public sealed partial class MeetingWindow : Window
         _ampTimer.Stop();
         _ampTimer.Tick -= OnAmpTick;
         _ampTimer = null;
+        HookAmpRendering(false);
     }
 
     private void OnAmpTick(DispatcherQueueTimer sender, object args)
@@ -978,6 +1025,7 @@ public sealed partial class MeetingWindow : Window
             while (_ampHistorySystem.Count >= _ampHistorySize) _ampHistorySystem.Dequeue();
             _ampHistorySystem.Enqueue(ampSys);
 
+            _ampLastSampleUtc = DateTime.UtcNow;
             DrawLiveWaveform();
         }
         catch { }
@@ -1002,17 +1050,22 @@ public sealed partial class MeetingWindow : Window
     private void DrawLiveWaveform()
     {
         if (LiveWaveformCanvas == null) return;
-        LiveWaveformCanvas.Children.Clear();
         double w = LiveWaveformCanvas.ActualWidth;
         double h = LiveWaveformCanvas.ActualHeight;
         if (w <= 0 || h <= 0) return;
 
-        // Two stacked bands so mic and system are clearly readable
-        // at a glance. Mic on top half (system accent — tracks the
-        // user's Windows accent colour), system on bottom half
-        // (LimeGreen — kept as a contrast track since accent might
-        // itself be blue/teal). Each band centered on its own midline
-        // so bars grow up + down equally within their half.
+        EnsureAmpScrollLayer(w, h);
+
+        // Two stacked bands so mic and system are clearly readable at a
+        // glance, each centred on its own midline so bars grow up and down
+        // equally within their half.
+        //
+        // Colours are the brand gradient endpoints, the same two the finished
+        // recording is drawn with: mic green, system violet. They used to be
+        // the Windows accent and LimeGreen — an accent that changes per machine
+        // (so the pairing was never designed, only whatever the user had) next
+        // to a raw system colour. Live and done are the same waveform of the
+        // same meeting; there was no reason for two palettes.
         double pitch = AMP_BAR_PX + AMP_GAP_PX;
         double bandHeight = h / 2.0;
         double midTop = bandHeight / 2.0;
@@ -1021,35 +1074,81 @@ public sealed partial class MeetingWindow : Window
         // Light2 on dark — matches what AccentFillColorDefaultBrush
         // does in XAML ThemeResource lookups but respects the window's
         // RequestedTheme override, which Application.Resources doesn't).
-        var brushMic = Helpers.ThemeHelper.ResolvedAccentBrush();
-        var brushSys = new SolidColorBrush(Microsoft.UI.Colors.LimeGreen);
+        // Cached, not per-tick: LayoutBand skips the Fill assignment when the
+        // brush is the same reference, and a fresh brush every sample defeated
+        // that on every bar.
+        _liveBrushMic ??= new SolidColorBrush(WaveGreen);
+        _liveBrushSys ??= new SolidColorBrush(WaveViolet);
 
-        DrawBand(_ampHistory.ToArray(), brushMic, midTop, bandHeight - 4, w, pitch);
-        DrawBand(_ampHistorySystem.ToArray(), brushSys, midBottom, bandHeight - 4, w, pitch);
+        LayoutBand(_ampBarsMic, _ampHistory.ToArray(), _liveBrushMic, midTop, bandHeight - 4, w, pitch);
+        LayoutBand(_ampBarsSys, _ampHistorySystem.ToArray(), _liveBrushSys, midBottom, bandHeight - 4, w, pitch);
     }
 
-    private void DrawBand(float[] samples, SolidColorBrush brush, double mid, double maxHeight, double w, double pitch)
+    /// <summary>The layer every bar lives on. It exists so the scroll is ONE
+    /// transform instead of N repositioned rectangles, and it is clipped so the
+    /// bar that is still sliding in stays hidden until it belongs on screen.</summary>
+    private void EnsureAmpScrollLayer(double w, double h)
     {
-        if (samples.Length == 0) return;
-        int n = samples.Length;
-        for (int i = 0; i < n; i++)
+        if (_ampScrollLayer == null)
         {
-            double x = w - (n - i) * pitch;
-            if (x + AMP_BAR_PX < 0) continue;
-            double height = Math.Max(2, samples[i] * maxHeight);
-            var rect = new Microsoft.UI.Xaml.Shapes.Rectangle
+            _ampScrollTransform = new Microsoft.UI.Xaml.Media.TranslateTransform();
+            _ampScrollLayer = new Microsoft.UI.Xaml.Controls.Canvas
+            {
+                RenderTransform = _ampScrollTransform,
+            };
+            LiveWaveformCanvas.Children.Add(_ampScrollLayer);
+        }
+        // The layer is one pitch wider than the canvas: that is where the
+        // incoming bar waits. Clipping the CANVAS (not the layer) keeps it out
+        // of sight without moving with it.
+        LiveWaveformCanvas.Clip = new Microsoft.UI.Xaml.Media.RectangleGeometry
+        {
+            Rect = new global::Windows.Foundation.Rect(0, 0, w, h),
+        };
+    }
+
+    /// <summary>Update one band in place. Rectangles are created only when the
+    /// bar COUNT changes (resize); a normal sample just moves heights, which is
+    /// what makes this cheap enough to leave running for a whole meeting.</summary>
+    private void LayoutBand(List<Microsoft.UI.Xaml.Shapes.Rectangle> pool, float[] samples,
+                            SolidColorBrush brush, double mid, double maxHeight, double w, double pitch)
+    {
+        int n = samples.Length;
+        while (pool.Count < n)
+        {
+            var r = new Microsoft.UI.Xaml.Shapes.Rectangle
             {
                 Width = AMP_BAR_PX,
-                Height = height,
-                Fill = brush,
-                RadiusX = 1,
-                RadiusY = 1,
+                // Fully rounded, like the finished recording draws them: at
+                // this width a radius of 1 reads as a square corner with a
+                // nick out of it rather than as a soft bar.
+                RadiusX = AMP_BAR_PX / 2,
+                RadiusY = AMP_BAR_PX / 2,
             };
+            pool.Add(r);
+            _ampScrollLayer!.Children.Add(r);
+        }
+        for (int i = pool.Count - 1; i >= n; i--)
+        {
+            _ampScrollLayer!.Children.Remove(pool[i]);
+            pool.RemoveAt(i);
+        }
+
+        for (int i = 0; i < n; i++)
+        {
+            // +pitch: the newest bar sits just off the right edge and the layer
+            // transform walks it in. Without it the bar would appear already
+            // in place and the whole strip would jump.
+            double x = w + pitch - (n - i) * pitch;
+            double height = Math.Max(AMP_BAR_PX, samples[i] * maxHeight);
+            var rect = pool[i];
+            if (!ReferenceEquals(rect.Fill, brush)) rect.Fill = brush;
+            rect.Height = height;
             Microsoft.UI.Xaml.Controls.Canvas.SetLeft(rect, x);
             Microsoft.UI.Xaml.Controls.Canvas.SetTop(rect, mid - height / 2.0);
-            LiveWaveformCanvas.Children.Add(rect);
         }
     }
+
 
     // ── Done-state audio waveform card ────────────────────────────
 
@@ -1117,6 +1216,11 @@ public sealed partial class MeetingWindow : Window
             {
                 mp.PlaybackSession.PositionChanged -= OnDonePlaybackPositionChanged;
                 mp.PlaybackSession.PositionChanged += OnDonePlaybackPositionChanged;
+                // The transport bar seeks without going through any of our
+                // code, so hooking only the waveform click missed it. This is
+                // the session telling us a seek happened, whoever asked for it.
+                mp.PlaybackSession.SeekCompleted -= OnDoneSeekCompleted;
+                mp.PlaybackSession.SeekCompleted += OnDoneSeekCompleted;
             }
 
             // Fixed bucket count (NOT width-derived): the peaks are decoded
@@ -1172,6 +1276,10 @@ public sealed partial class MeetingWindow : Window
     private Microsoft.UI.Xaml.Controls.Canvas? _wavePlayedLayer;
     private Microsoft.UI.Xaml.Shapes.Ellipse? _doneKnob;
     private double _doneFrac;
+    // Speaker turns of the transcript currently shown, with their elapsed
+    // time. Empty when the transcript has no per-turn timestamps at all (some
+    // imported sources), which is exactly when seek-to-transcript is skipped.
+    private List<Helpers.TranscriptRenderer.TurnAnchor> _doneTurnAnchors = new();
 
     // Brand gradient endpoints (logo): green #2ECE8E → violet #6E7DF7.
     private static readonly global::Windows.UI.Color WaveGreen =
@@ -1208,6 +1316,20 @@ public sealed partial class MeetingWindow : Window
         return outp;
     }
 
+    /// <summary>A seek finished — from the transport bar, the keyboard, or our
+    /// own waveform click. One entry point for all of them, so the transcript
+    /// follows a drag of the progress bar as well.</summary>
+    private void OnDoneSeekCompleted(
+        global::Windows.Media.Playback.MediaPlaybackSession session, object args)
+    {
+        try
+        {
+            var pos = session.Position;
+            DispatcherQueue.TryEnqueue(() => ScrollTranscriptTo(pos));
+        }
+        catch { }
+    }
+
     private void OnDonePlaybackPositionChanged(
         global::Windows.Media.Playback.MediaPlaybackSession session, object args)
     {
@@ -1229,6 +1351,7 @@ public sealed partial class MeetingWindow : Window
         if (w <= 0 || h <= 0) return;
         _doneFrac = Math.Max(0, Math.Min(1, frac));
         double playX = w * _doneFrac;
+        UpdateDoneTimeReadout();
 
         // Reveal the full-colour "played" layer up to the playhead by
         // resizing its clip. Cheap — no bar rebuild.
@@ -1386,6 +1509,41 @@ public sealed partial class MeetingWindow : Window
         _waveResizeTimer.Start();
     }
 
+    /// <summary>Position / duration under the waveform. Driven from
+    /// UpdateDonePlayhead, so it follows both playback and a click-seek.</summary>
+    private void UpdateDoneTimeReadout()
+    {
+        try
+        {
+            var session = DoneAudioPlayer?.MediaPlayer?.PlaybackSession;
+            var total = session?.NaturalDuration ?? TimeSpan.Zero;
+            if (total.TotalSeconds <= 0)
+            {
+                if (DonePosText != null) DonePosText.Text = "00:00";
+                if (DoneDurText != null) DoneDurText.Text = "";
+                return;
+            }
+            // Derived from the playhead fraction, not from session.Position:
+            // a click-seek repaints the playhead before the media session has
+            // moved, and reading Position there showed the OLD time for a
+            // moment — the one thing this readout exists to answer.
+            var pos = TimeSpan.FromSeconds(total.TotalSeconds * _doneFrac);
+            if (DonePosText != null) DonePosText.Text = FormatClock(pos, total);
+            if (DoneDurText != null) DoneDurText.Text = FormatClock(total, total);
+        }
+        catch { }
+    }
+
+    /// <summary>mm:ss, widening to h:mm:ss only when the MEETING is that long,
+    /// so the two readouts always have the same shape as each other.</summary>
+    private static string FormatClock(TimeSpan t, TimeSpan total)
+    {
+        if (t < TimeSpan.Zero) t = TimeSpan.Zero;
+        return total.TotalHours >= 1
+            ? $"{(int)t.TotalHours}:{t.Minutes:00}:{t.Seconds:00}"
+            : $"{(int)t.TotalMinutes:00}:{t.Seconds:00}";
+    }
+
     private void DoneWaveform_PointerPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
     {
         try
@@ -1398,10 +1556,54 @@ public sealed partial class MeetingWindow : Window
             if (session == null) return;
             var total = session.NaturalDuration;
             if (total.TotalSeconds <= 0) return;
-            session.Position = TimeSpan.FromSeconds(total.TotalSeconds * frac);
+            var target = TimeSpan.FromSeconds(total.TotalSeconds * frac);
+            session.Position = target;
             UpdateDonePlayhead(frac);
+            // The transcript follows via SeekCompleted, which this Position
+            // assignment raises — same path as the transport bar, so there is
+            // one place where a seek scrolls the transcript and not two.
         }
         catch { }
+    }
+
+    /// <summary>Bring the speaker turn covering <paramref name="position"/> to
+    /// the top of the transcript pane. No-op unless the Transcript tab is the
+    /// visible one and the transcript actually carries per-turn timestamps —
+    /// scrolling a recap to an audio position would mean nothing.</summary>
+    private void ScrollTranscriptTo(TimeSpan position)
+    {
+        try
+        {
+            if (_doneTurnAnchors.Count == 0) return;
+            if (TranscriptTabPanel == null || DoneBodyScroll == null) return;
+            if (TranscriptTabPanel.Visibility != Visibility.Visible) return;
+
+            // Last turn that had already started: that is the one being spoken
+            // at this position.
+            var secs = position.TotalSeconds;
+            Helpers.TranscriptRenderer.TurnAnchor? hit = null;
+            foreach (var a in _doneTurnAnchors)
+            {
+                if (a.Seconds > secs) break;
+                hit = a;
+            }
+            hit ??= _doneTurnAnchors[0];
+
+            // Where that paragraph sits inside the scrolling content. A
+            // RichTextBlock has no per-block layout API, so the position comes
+            // from a TextPointer at the block start; the transform then maps it
+            // out of the RichTextBlock and into the ScrollViewer content.
+            var rect = hit.Block.ContentStart.GetCharacterRect(
+                Microsoft.UI.Xaml.Documents.LogicalDirection.Forward);
+            if (DoneBodyScroll.Content is not UIElement content) return;
+            var offset = RawTranscriptText.TransformToVisual(content)
+                .TransformPoint(new global::Windows.Foundation.Point(0, rect.Top));
+            DoneBodyScroll.ChangeView(null, Math.Max(0, offset.Y - 12), null);
+        }
+        catch (Exception ex)
+        {
+            App.Log($"ScrollTranscriptTo: {ex.GetType().Name}", "Meeting");
+        }
     }
 
     // ── Processing steps ──────────────────────────────────────────
@@ -2310,7 +2512,7 @@ public sealed partial class MeetingWindow : Window
             var txt = Path.Combine(row.Dir, "transcripts.txt");
             if (File.Exists(txt))
             {
-                Helpers.TranscriptRenderer.Render(
+                _doneTurnAnchors = Helpers.TranscriptRenderer.Render(
                     RawTranscriptText,
                     HumanizeTranscript(await File.ReadAllTextAsync(txt)));
             }
@@ -2784,7 +2986,7 @@ public sealed partial class MeetingWindow : Window
 
             var txtPath = Path.Combine(dir, "transcripts.txt");
             await File.WriteAllTextAsync(txtPath, merged);
-            Helpers.TranscriptRenderer.Render(RawTranscriptText, HumanizeTranscript(merged));
+            _doneTurnAnchors = Helpers.TranscriptRenderer.Render(RawTranscriptText, HumanizeTranscript(merged));
             ShowToast("Transcript regenerated.");
         }
         catch (Exception ex)
