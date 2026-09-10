@@ -7002,11 +7002,32 @@ pub unsafe extern "C" fn dimmy_clear_app_context() {
     }
 }
 
+/// Decode any audio file we might have on disk to (mono f32, rate).
+///
+/// WAV goes through hound and everything else through Symphonia,
+/// because Symphonia is compiled WITHOUT the wav/pcm features (see
+/// core/Cargo.toml) and answers `unsupported codec` for a plain WAV.
+/// Anything reading a meeting's audio must come through here: a
+/// recorded meeting keeps ogg tracks, but one imported from a file
+/// stores `audio.wav`, so a Symphonia-only caller works on some
+/// meetings and silently fails on the others. That is what happened to
+/// language detection — measured 2026-09-10, `[LangDetect] cannot
+/// decode audio: unsupported codec` on every file-derived meeting, and
+/// the recap then fell back to the generic "follow the transcript's
+/// language" wording that a 4B model ignores. Half-English recaps.
+pub(crate) fn decode_audio_any(path: &str) -> Result<(Vec<f32>, u32), String> {
+    if path.to_ascii_lowercase().ends_with(".wav") {
+        decode_wav_via_hound(path)
+    } else {
+        decode_via_symphonia(path)
+    }
+}
+
 /// Decode a WAV file via `hound` to (mono f32, sample_rate). Kept on
 /// hound (not Symphonia) because the file-load tests + every recorded-
 /// from-Dimmy artefact are WAV — no need to pay Symphonia's per-call
 /// cost on the most common path.
-fn decode_wav_via_hound(path: &str) -> Result<(Vec<f32>, u32), String> {
+pub(crate) fn decode_wav_via_hound(path: &str) -> Result<(Vec<f32>, u32), String> {
     let mut reader = hound::WavReader::open(path).map_err(|e| format!("open: {e}"))?;
     let spec = reader.spec();
     if spec.sample_rate == 0 || spec.channels == 0 {

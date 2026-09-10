@@ -160,7 +160,7 @@ pub fn detect_from_audio_file(path: &Path) -> Option<String> {
         return None;
     };
 
-    let (mono, rate) = match crate::ffi::decode_via_symphonia(&path.to_string_lossy()) {
+    let (mono, rate) = match crate::ffi::decode_audio_any(&path.to_string_lossy()) {
         Ok(v) => v,
         Err(e) => {
             crate::log(&format!("[LangDetect] cannot decode audio: {e}"));

@@ -1174,8 +1174,10 @@ mod llm_cache {
             crate::truncate_utf8(&output, 200)
         ));
 
-        // Post-process: strip ALL remaining special tags from output
-        let cleaned = super::strip_special_tags(&output);
+        // Post-process: strip ALL remaining special tags from output,
+        // then cut any copy of our own prompt the model echoed after
+        // finishing its answer. See strip_leaked_prompt.
+        let cleaned = super::strip_leaked_prompt(&super::strip_special_tags(&output));
 
         crate::log(&format!(
             "[LocalLLM] Cleaned output ({} chars): {:?}",
@@ -1293,6 +1295,91 @@ pub fn process_text_local(
     Err(LlmError::LocalModel(
         "local LLM not available: compile with `local-llm` feature".to_string(),
     ))
+}
+
+/// Cut a leaked copy of our own prompt off the end of a recap.
+///
+/// A small local model that finishes the requested sections does not
+/// always stop: it carries on and reproduces the instructions it was
+/// given. Seen 2026-09-09 in a real recap, which ended with the whole
+/// `## Hard rules` block and the `═══` banner pasted under the user's
+/// content. The cloud path never needed this because a frontier model
+/// stops; the local path had no equivalent guard at all.
+///
+/// Deliberately anchored on the exact markers the recap prompt uses
+/// rather than on anything that looks instruction-like: cutting a
+/// transcript's own words would lose the user's content, which is worse
+/// than leaving scaffolding in. Everything from the marker to the end
+/// goes, because the echo runs to the end of the generation.
+pub fn strip_leaked_prompt(text: &str) -> String {
+    // Markers, in the order they appear in the prompt. Matched only at
+    // the start of a line so a mention inside prose cannot trigger a cut.
+    const MARKERS: [&str; 3] = ["## Hard rules", "═══", "## Transcript"];
+    let mut cut = text.len();
+    for (idx, line) in text
+        .char_indices()
+        .filter(|(i, _)| *i == 0 || text[..*i].ends_with('\n'))
+    {
+        let _ = line;
+        let rest = &text[idx..];
+        if MARKERS.iter().any(|m| rest.starts_with(m)) {
+            cut = cut.min(idx);
+        }
+    }
+    text[..cut].trim_end().to_string()
+}
+
+#[cfg(test)]
+mod leaked_prompt {
+    use super::strip_leaked_prompt;
+
+    #[test]
+    fn cuts_the_hard_rules_block_a_real_recap_ended_with() {
+        // Verbatim shape of the recap seen on 2026-09-09.
+        let out = strip_leaked_prompt(concat!(
+            "## Next steps\n1. Share the deck.\n",
+            "## Hard rules\n- The very first line MUST be a title\n",
+            "- Be SHARP and CONCISE.\n"
+        ));
+        assert!(out.ends_with("Share the deck."), "{out:?}");
+        assert!(!out.contains("Hard rules"));
+    }
+
+    #[test]
+    fn cuts_the_banner_and_an_echoed_transcript() {
+        let b = strip_leaked_prompt("# Titolo\nTesto.\n═══\nFINAL REMINDER\n");
+        assert_eq!(b, "# Titolo\nTesto.");
+        // The worst leak: the whole transcript pasted back under the recap.
+        let t = strip_leaked_prompt("# Titolo\nTesto.\n## Transcript\n[00:00:00] [mic] ciao\n");
+        assert_eq!(t, "# Titolo\nTesto.");
+    }
+
+    #[test]
+    fn a_clean_recap_is_returned_unchanged() {
+        // The common case by far: nothing leaked, nothing may be lost.
+        let c = "# Titolo breve\n\n## Contesto\nDue righe.\n\n## Next steps\n1. Fare.";
+        assert_eq!(strip_leaked_prompt(c), c);
+    }
+
+    #[test]
+    fn a_marker_inside_prose_does_not_truncate_the_users_text() {
+        // Only line starts count. Cutting a transcript's own words would
+        // lose content, which is worse than leaving scaffolding in.
+        let t = "# Titolo\nAbbiamo discusso le ## Hard rules del contratto.";
+        assert_eq!(strip_leaked_prompt(t), t);
+    }
+
+    #[test]
+    fn the_earliest_marker_wins() {
+        let t = "# T\nBuono.\n## Transcript\nx\n## Hard rules\ny";
+        assert_eq!(strip_leaked_prompt(t), "# T\nBuono.");
+    }
+
+    #[test]
+    fn empty_and_marker_only_do_not_panic() {
+        assert_eq!(strip_leaked_prompt(""), "");
+        assert_eq!(strip_leaked_prompt("## Hard rules\nx"), "");
+    }
 }
 
 /// Run a free-form prompt through the local LLM. Used by the recap path
