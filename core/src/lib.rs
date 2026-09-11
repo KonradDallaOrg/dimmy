@@ -14,6 +14,11 @@ pub mod chunked_stt;
 pub mod claude_code;
 pub mod claude_desktop;
 pub mod codex;
+/// Notion REST API client — sends meeting recap markdown to a user-
+/// picked Notion page or database. Internal integration tokens, no
+/// OAuth. Uses Notion's server-side markdown API (2026-02-26+) so we
+/// don't ship a markdown→block-tree converter. See `notion.rs`.
+pub mod confluence;
 pub mod consent;
 pub mod deepgram_stream;
 pub mod dfn;
@@ -52,10 +57,6 @@ pub mod local_stt;
 /// Swift host through dimmy_process_with_llm to keep async runtime
 /// concerns out of the meeting worker.
 pub mod meeting;
-/// Notion REST API client — sends meeting recap markdown to a user-
-/// picked Notion page or database. Internal integration tokens, no
-/// OAuth. Uses Notion's server-side markdown API (2026-02-26+) so we
-/// don't ship a markdown→block-tree converter. See `notion.rs`.
 pub mod notion;
 /// Realtime streaming dictation over OpenAI's Realtime WebSocket
 /// (`gpt-live-transcribe`). Sibling of `deepgram_stream`, same
@@ -930,6 +931,24 @@ pub struct AppConfig {
     /// MeetingWindow Done view. Default false (opt-in by explicit
     /// click — same caution we apply to all data-egress features).
     pub notion_auto_send: bool,
+    /// Confluence site host, e.g. `acme.atlassian.net`. Stored normalised
+    /// (see `confluence::normalize_site`) so the UI can echo it back.
+    pub confluence_site: String,
+    /// Atlassian account email — the username half of the Basic credential.
+    /// Not a secret: the API token is, and that lives in the keystore.
+    pub confluence_email: String,
+    /// Numeric id of the destination space. Numeric, not the key, because
+    /// that is what `POST /wiki/api/v2/pages` wants.
+    pub confluence_space_id: String,
+    /// Space key (`~account` for a personal space) — display only, so
+    /// Settings can say where recaps land without another API call.
+    pub confluence_space_key: String,
+    pub confluence_space_name: String,
+    /// Optional parent page id; empty means the space root.
+    pub confluence_parent_id: String,
+    /// Same opt-in caution as `notion_auto_send`: off by default, because
+    /// this one publishes to a CORPORATE wiki where colleagues will see it.
+    pub confluence_auto_send: bool,
     /// What to capture: "mic" (default), "system" (loopback — what's
     /// playing through the speakers), or "mix" (both summed in time).
     /// System / Mix are Windows-only for now; on Mac/Linux they fall
@@ -1055,6 +1074,13 @@ impl Default for AppConfig {
             notion_target_kind: String::new(),
             notion_target_title: String::new(),
             notion_auto_send: false,
+            confluence_site: String::new(),
+            confluence_email: String::new(),
+            confluence_space_id: String::new(),
+            confluence_space_key: String::new(),
+            confluence_space_name: String::new(),
+            confluence_parent_id: String::new(),
+            confluence_auto_send: false,
             audio_source: default_audio_source(),
             window_anchor_right: None,
             window_anchor_bottom: None,
@@ -1153,6 +1179,13 @@ pub fn save_config_file(cfg: &AppConfig) {
             "notion_target_kind": cfg.notion_target_kind,
             "notion_target_title": cfg.notion_target_title,
             "notion_auto_send": cfg.notion_auto_send,
+            "confluence_site": cfg.confluence_site,
+            "confluence_email": cfg.confluence_email,
+            "confluence_space_id": cfg.confluence_space_id,
+            "confluence_space_key": cfg.confluence_space_key,
+            "confluence_space_name": cfg.confluence_space_name,
+            "confluence_parent_id": cfg.confluence_parent_id,
+            "confluence_auto_send": cfg.confluence_auto_send,
             "audio_source": cfg.audio_source,
             "stats_total_words": cfg.stats_total_words,
             "stats_total_speaking_secs": cfg.stats_total_speaking_secs,
@@ -1374,6 +1407,33 @@ pub fn load_config_file() -> AppConfig {
                         .as_str()
                         .unwrap_or(&defaults.meeting_storage_path)
                         .to_string(),
+                    confluence_site: v["confluence_site"]
+                        .as_str()
+                        .unwrap_or(&defaults.confluence_site)
+                        .to_string(),
+                    confluence_email: v["confluence_email"]
+                        .as_str()
+                        .unwrap_or(&defaults.confluence_email)
+                        .to_string(),
+                    confluence_space_id: v["confluence_space_id"]
+                        .as_str()
+                        .unwrap_or(&defaults.confluence_space_id)
+                        .to_string(),
+                    confluence_space_key: v["confluence_space_key"]
+                        .as_str()
+                        .unwrap_or(&defaults.confluence_space_key)
+                        .to_string(),
+                    confluence_space_name: v["confluence_space_name"]
+                        .as_str()
+                        .unwrap_or(&defaults.confluence_space_name)
+                        .to_string(),
+                    confluence_parent_id: v["confluence_parent_id"]
+                        .as_str()
+                        .unwrap_or(&defaults.confluence_parent_id)
+                        .to_string(),
+                    confluence_auto_send: v["confluence_auto_send"]
+                        .as_bool()
+                        .unwrap_or(defaults.confluence_auto_send),
                     notion_target_id: v["notion_target_id"]
                         .as_str()
                         .unwrap_or(&defaults.notion_target_id)
@@ -1767,6 +1827,14 @@ pub struct AppState {
     pub notion_target_kind: Mutex<String>,
     pub notion_target_title: Mutex<String>,
     pub notion_auto_send: Mutex<bool>,
+    /// Confluence integration — see [`AppConfig::confluence_site`].
+    pub confluence_site: Mutex<String>,
+    pub confluence_email: Mutex<String>,
+    pub confluence_space_id: Mutex<String>,
+    pub confluence_space_key: Mutex<String>,
+    pub confluence_space_name: Mutex<String>,
+    pub confluence_parent_id: Mutex<String>,
+    pub confluence_auto_send: Mutex<bool>,
     /// Audio source: "mic" | "system" | "mix". Read by dimmy_start_recording
     /// + meeting start to pick which AudioCommand::Start variant to send.
     pub audio_source: Mutex<String>,
@@ -1911,6 +1979,13 @@ impl AppState {
             notion_target_kind: Mutex::new(file_cfg.notion_target_kind.clone()),
             notion_target_title: Mutex::new(file_cfg.notion_target_title.clone()),
             notion_auto_send: Mutex::new(file_cfg.notion_auto_send),
+            confluence_site: Mutex::new(file_cfg.confluence_site),
+            confluence_email: Mutex::new(file_cfg.confluence_email),
+            confluence_space_id: Mutex::new(file_cfg.confluence_space_id),
+            confluence_space_key: Mutex::new(file_cfg.confluence_space_key),
+            confluence_space_name: Mutex::new(file_cfg.confluence_space_name),
+            confluence_parent_id: Mutex::new(file_cfg.confluence_parent_id),
+            confluence_auto_send: Mutex::new(file_cfg.confluence_auto_send),
             audio_source: Mutex::new(file_cfg.audio_source.clone()),
             key_store,
             audio_debug_session_dir: Mutex::new(None),
@@ -2174,6 +2249,40 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
             .map_err(|e| e.to_string())?
             .clone(),
         notion_auto_send: *state.notion_auto_send.lock().map_err(|e| e.to_string())?,
+        confluence_site: state
+            .confluence_site
+            .lock()
+            .map_err(|e| e.to_string())?
+            .clone(),
+        confluence_email: state
+            .confluence_email
+            .lock()
+            .map_err(|e| e.to_string())?
+            .clone(),
+        confluence_space_id: state
+            .confluence_space_id
+            .lock()
+            .map_err(|e| e.to_string())?
+            .clone(),
+        confluence_space_key: state
+            .confluence_space_key
+            .lock()
+            .map_err(|e| e.to_string())?
+            .clone(),
+        confluence_space_name: state
+            .confluence_space_name
+            .lock()
+            .map_err(|e| e.to_string())?
+            .clone(),
+        confluence_parent_id: state
+            .confluence_parent_id
+            .lock()
+            .map_err(|e| e.to_string())?
+            .clone(),
+        confluence_auto_send: *state
+            .confluence_auto_send
+            .lock()
+            .map_err(|e| e.to_string())?,
         audio_source: state
             .audio_source
             .lock()
