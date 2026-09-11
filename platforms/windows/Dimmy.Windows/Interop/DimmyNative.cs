@@ -443,6 +443,47 @@ public static class DimmyNative
         [MarshalAs(UnmanagedType.LPUTF8Str)] string provider,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string key);
 
+    // ── Confluence integration ──────────────────────────────────────
+    /// Save the Atlassian API token to the AES-256 keystore. Empty clears it.
+    /// Site + email are NOT secrets and travel in config JSON instead.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_confluence_set_token(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string token);
+
+    /// Returns 1 if a Confluence API token is stored, 0 otherwise.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_confluence_has_token();
+
+    /// Check credentials against the live API. Site/email/token are passed in
+    /// rather than read from config because the wizard tests BEFORE it saves:
+    /// persisting first would leave a broken setup behind on failure. An empty
+    /// token means "use the stored one" (Settings re-testing an existing link).
+    /// Writes `{"ok":true,"site":"...","account":"..."}` or
+    /// `{"ok":false,"error":"..."}`.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_confluence_test_connection(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string site,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string email,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string token,
+        byte[] outBuf, int bufLen);
+
+    /// List writable spaces, personal first. Empty site/email fall back to the
+    /// saved config. Writes `{"ok":true,"spaces":[{id,key,name,kind}]}`.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_confluence_spaces(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string site,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string email,
+        byte[] outBuf, int bufLen);
+
+    /// Send a meeting recap.md as a new Confluence page. Converts markdown to
+    /// wiki markup (Confluence has no markdown ingestion) and prepends the
+    /// visible AI-generated notice. Writes `{"ok":true,"id":"...","url":"..."}`
+    /// or `{"ok":false,"error":"..."}`.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_confluence_send_recap(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string meetingDir,
+        byte[] outBuf, int bufLen);
+
     // ── Notion integration ──────────────────────────────────────────
     /// Save the user's Notion integration token to the AES-256 keystore.
     /// Empty string clears it. Returns 0 on success, -1 on failure.

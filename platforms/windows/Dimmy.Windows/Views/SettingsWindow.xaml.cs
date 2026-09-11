@@ -230,6 +230,7 @@ public sealed partial class SettingsWindow : Window
         // shows the XAML default ("Not connected" / Connect button)
         // even when a token was already saved.
         NotionRefreshSummary();
+        ConfluenceRefreshSummary();
         RefreshMcpCard();
 
         // Custom-dict ListView source-of-truth lives in the Rust

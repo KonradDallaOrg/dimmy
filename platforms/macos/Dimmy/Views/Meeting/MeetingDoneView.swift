@@ -194,6 +194,20 @@ struct MeetingDoneView: View {
                 } label: {
                     notionToolbarIcon
                 }
+                // Confluence sits next to Notion because it is the same
+                // action with a different destination. The real Atlassian
+                // mark, shipped as a TEMPLATE asset so it takes the
+                // foreground colour and needs no dark-mode inversion the
+                // way the older notion one does.
+                ToolbarIconButton(help: "Send recap to Confluence") {
+                    Task { await sendToConfluence() }
+                } label: {
+                    Image("confluence")
+                        .renderingMode(.template)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 16, height: 16)
+                }
                 if claudeMcpInstalled {
                     recapWithClaudeButton
                 }
@@ -576,6 +590,74 @@ struct MeetingDoneView: View {
         copiedFlash = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
             copiedFlash = false
+        }
+    }
+
+    /// Publish the current meeting's recap as a new Confluence page.
+    ///
+    /// Same shape as `sendToNotion`, alert included, because the two are one
+    /// action with two destinations and should not feel different.
+    ///
+    /// The core runs the recap through `recap_for_sharing` first, so the page
+    /// carries the visible AI-generated notice. That matters MORE on a
+    /// company wiki than on a personal Notion: its readers were not in the
+    /// room.
+    @MainActor
+    private func sendToConfluence() async {
+        guard let dir = vm.selectedDir ?? activeDirFromAudio, !dir.isEmpty else { return }
+        if !DimmyCore.shared.confluenceHasToken {
+            await showDestinationAlert(
+                title: "Confluence not connected",
+                message: "Connect Confluence in Settings, Integrations first: site, "
+                    + "email and an API token, then pick the space recaps should land in.",
+                isError: true, pageURL: nil, openLabel: nil)
+            return
+        }
+        let json = await Task.detached {
+            DimmyCore.shared.confluenceSendRecap(meetingDir: dir)
+        }.value
+        guard let json,
+              let data = json.data(using: .utf8),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            await showDestinationAlert(
+                title: "Couldn't send to Confluence",
+                message: "Invalid response from the integration.",
+                isError: true, pageURL: nil, openLabel: nil)
+            return
+        }
+        if (dict["ok"] as? Bool) == true {
+            await showDestinationAlert(
+                title: "Sent to Confluence",
+                message: "The recap is now a page in your Confluence space.",
+                isError: false,
+                pageURL: dict["url"] as? String,
+                openLabel: "Open in Confluence")
+        } else {
+            await showDestinationAlert(
+                title: "Couldn't send to Confluence",
+                message: (dict["error"] as? String) ?? "Unknown error",
+                isError: true, pageURL: nil, openLabel: nil)
+        }
+    }
+
+    /// Destination-agnostic result alert. `showNotionAlert` hardcodes its own
+    /// button title, so a second destination either duplicates it or
+    /// generalises it; this is the generalised one. Notion keeps its own only
+    /// because that copy is already in users' hands.
+    @MainActor
+    private func showDestinationAlert(title: String, message: String, isError: Bool,
+                                      pageURL: String?, openLabel: String?) async {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = isError ? .warning : .informational
+        let canOpen = !isError && !(pageURL ?? "").isEmpty && !(openLabel ?? "").isEmpty
+        if canOpen { alert.addButton(withTitle: openLabel!) }
+        alert.addButton(withTitle: "Close")
+        let response = alert.runModal()
+        if canOpen, response == .alertFirstButtonReturn,
+           let urlStr = pageURL, let url = URL(string: urlStr) {
+            NSWorkspace.shared.open(url)
         }
     }
 

@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Application
     x:Class="Dimmy.Windows.App"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -25,6 +25,8 @@
                 <ResourceDictionary x:Key="Light">
                     <SvgImageSource x:Key="NotionMarkSource"
                                     UriSource="ms-appx:///Assets/notion-mark.svg" />
+                    <SvgImageSource x:Key="ConfluenceMarkSource"
+                                    UriSource="ms-appx:///Assets/confluence-mark.svg" />
                     <SvgImageSource x:Key="AnthropicMarkSource"
                                     UriSource="ms-appx:///Assets/Providers/anthropic.svg" />
                     <SvgImageSource x:Key="OpenAIMarkSource"
@@ -33,6 +35,8 @@
                 <ResourceDictionary x:Key="Dark">
                     <SvgImageSource x:Key="NotionMarkSource"
                                     UriSource="ms-appx:///Assets/notion-mark-dark.svg" />
+                    <SvgImageSource x:Key="ConfluenceMarkSource"
+                                    UriSource="ms-appx:///Assets/confluence-mark-dark.svg" />
                     <SvgImageSource x:Key="AnthropicMarkSource"
                                     UriSource="ms-appx:///Assets/Providers/anthropic-dark.svg" />
                     <SvgImageSource x:Key="OpenAIMarkSource"

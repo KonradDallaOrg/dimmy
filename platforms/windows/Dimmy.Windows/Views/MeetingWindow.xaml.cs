@@ -2908,6 +2908,113 @@ public sealed partial class MeetingWindow : Window
         }
     }
 
+    /// <summary>Publish this meeting's recap as a new Confluence page.
+    ///
+    /// Same shape as SendToNotion_Click, including the generic result
+    /// dialog, because the two are the same action with a different
+    /// destination and should not behave differently.
+    ///
+    /// The recap passes through recap_for_sharing in the core, so the page
+    /// carries a VISIBLE note saying it was generated with AI. That matters
+    /// more on a corporate wiki than on a personal Notion: the readers were
+    /// not in the room.</summary>
+    private async void SendToConfluence_Click(object sender, RoutedEventArgs e)
+    {
+        var dir = _viewingMeetingDir ?? _activeMeetingDir;
+        if (string.IsNullOrEmpty(dir))
+        {
+            App.Log("SendToConfluence: no meeting dir", "Confluence");
+            return;
+        }
+        if (DimmyNative.dimmy_confluence_has_token() != 1)
+        {
+            await ShowResultDialogAsync(
+                "Confluence not connected",
+                "Connect Confluence in Settings, Integrations first: site, email and an API token, "
+                + "then pick the space recaps should land in.",
+                pageUrl: null, openLabel: null);
+            return;
+        }
+        if (sender is Microsoft.UI.Xaml.Controls.Button btn) { btn.IsEnabled = false; }
+        try
+        {
+            App.Log($"SendToConfluence: dir={dir}", "Confluence");
+            var (ok, url, error) = await System.Threading.Tasks.Task.Run(() =>
+            {
+                var buf = new byte[1 << 16];
+                int n = DimmyNative.dimmy_confluence_send_recap(dir, buf, buf.Length);
+                if (n <= 0) return (false, "", "Could not reach the core.");
+                var json = System.Text.Encoding.UTF8.GetString(buf, 0, n);
+                try
+                {
+                    using var doc = System.Text.Json.JsonDocument.Parse(json);
+                    var root = doc.RootElement;
+                    bool k = root.TryGetProperty("ok", out var okEl) && okEl.GetBoolean();
+                    string u = root.TryGetProperty("url", out var uEl) ? uEl.GetString() ?? "" : "";
+                    string er = root.TryGetProperty("error", out var eEl) ? eEl.GetString() ?? "" : "";
+                    return (k, u, er);
+                }
+                catch { return (false, "", "Unexpected reply from the core."); }
+            });
+
+            if (ok)
+            {
+                App.Log($"SendToConfluence: ok url={url}", "Confluence");
+                await ShowResultDialogAsync(
+                    "Sent to Confluence",
+                    "The recap is now a page in your Confluence space.",
+                    pageUrl: url, openLabel: "Open in Confluence");
+            }
+            else
+            {
+                App.Log($"SendToConfluence: failed {error}", "Confluence");
+                await ShowResultDialogAsync(
+                    "Couldn't send to Confluence",
+                    string.IsNullOrEmpty(error) ? "Unknown error" : error,
+                    pageUrl: null, openLabel: null);
+            }
+        }
+        catch (Exception ex)
+        {
+            App.Log($"SendToConfluence exc: {ex}", "Confluence");
+            await ShowResultDialogAsync(
+                "Couldn't send to Confluence", ex.Message, pageUrl: null, openLabel: null);
+        }
+        finally
+        {
+            if (sender is Microsoft.UI.Xaml.Controls.Button btn2) { btn2.IsEnabled = true; }
+        }
+    }
+
+    /// <summary>Destination-agnostic result dialog. ShowNotionDialogAsync
+    /// hardcodes "Open in Notion", so a second destination either duplicates
+    /// it or generalises it; this is the generalised one, and the Notion path
+    /// keeps its own only because its copy is already translated in the
+    /// wild.</summary>
+    private async System.Threading.Tasks.Task ShowResultDialogAsync(
+        string title, string content, string? pageUrl, string? openLabel)
+    {
+        var dlg = new Microsoft.UI.Xaml.Controls.ContentDialog
+        {
+            RequestedTheme = Dimmy.Windows.Helpers.ThemeHelper.ResolvedElementTheme(),
+            Title = title,
+            Content = content,
+            CloseButtonText = "Close",
+            XamlRoot = this.Content.XamlRoot,
+        };
+        if (!string.IsNullOrEmpty(pageUrl) && !string.IsNullOrEmpty(openLabel))
+        {
+            dlg.PrimaryButtonText = openLabel;
+            dlg.DefaultButton = Microsoft.UI.Xaml.Controls.ContentDialogButton.Primary;
+        }
+        var result = await dlg.ShowAsync();
+        if (result == Microsoft.UI.Xaml.Controls.ContentDialogResult.Primary
+            && !string.IsNullOrEmpty(pageUrl))
+        {
+            try { await global::Windows.System.Launcher.LaunchUriAsync(new Uri(pageUrl)); }
+            catch (Exception ex) { App.Log($"open url failed: {ex.Message}", "Meeting"); }
+        }
+    }
     private async System.Threading.Tasks.Task ShowNotionDialogAsync(
         string title, string content, bool isError, string? pageUrl)
     {

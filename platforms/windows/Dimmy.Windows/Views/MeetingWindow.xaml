@@ -633,6 +633,15 @@
                     <Image Width="16" Height="16"
                            Source="{ThemeResource NotionMarkSource}"/>
                   </Button>
+                  <!-- Confluence: the real Atlassian mark, shipped as two
+                       monochrome SVGs exactly like the Notion one, because
+                       SvgImageSource ignores currentColor. -->
+                  <Button x:Name="SendToConfluenceBtn" Click="SendToConfluence_Click"
+                          ToolTipService.ToolTip="Send recap to Confluence"
+                          Background="Transparent" BorderThickness="0" Padding="8">
+                    <Image Width="16" Height="16"
+                           Source="{ThemeResource ConfluenceMarkSource}"/>
+                  </Button>
                   <!-- "Recap with Claude Desktop": open Claude with a
                        deeplink prompt that uses our MCP tools to read
                        the meeting + save the recap back. Visible only

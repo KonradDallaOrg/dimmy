@@ -302,6 +302,7 @@ pub enum KeyringScope {
     /// per-provider variant because there's exactly one Notion service
     /// (vs many cloud STT/LLM providers).
     NotionToken,
+    ConfluenceToken,
 }
 
 impl KeyringScope {
@@ -312,6 +313,7 @@ impl KeyringScope {
             Self::Llm(p) => format!("llm-key-{}", p.as_str()),
             Self::Recap(p) => format!("recap-key-{}", p.as_str()),
             Self::NotionToken => "integration-notion-token".to_string(),
+            Self::ConfluenceToken => "integration-confluence-token".to_string(),
         };
         // Entry name must be non-empty and contain a dash separator
         assert!(!name.is_empty(), "entry_name produced empty string");
@@ -329,6 +331,7 @@ impl KeyringScope {
         match self {
             Self::Stt(p) | Self::Llm(p) | Self::Recap(p) => Some(*p),
             Self::NotionToken => None,
+            Self::ConfluenceToken => None,
         }
     }
 }

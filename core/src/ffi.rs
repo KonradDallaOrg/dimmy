@@ -561,6 +561,13 @@ fn dimmy_init_inner() -> c_int {
         notion_target_kind: Mutex::new(file_cfg.notion_target_kind),
         notion_target_title: Mutex::new(file_cfg.notion_target_title),
         notion_auto_send: Mutex::new(file_cfg.notion_auto_send),
+        confluence_site: Mutex::new(file_cfg.confluence_site),
+        confluence_email: Mutex::new(file_cfg.confluence_email),
+        confluence_space_id: Mutex::new(file_cfg.confluence_space_id),
+        confluence_space_key: Mutex::new(file_cfg.confluence_space_key),
+        confluence_space_name: Mutex::new(file_cfg.confluence_space_name),
+        confluence_parent_id: Mutex::new(file_cfg.confluence_parent_id),
+        confluence_auto_send: Mutex::new(file_cfg.confluence_auto_send),
         audio_source: Mutex::new(file_cfg.audio_source),
         key_store,
         audio_debug_session_dir: Mutex::new(None),
@@ -2227,6 +2234,48 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         .map(|b| *b)
         .unwrap_or(false)
         .into();
+    json["confluence_site"] = st
+        .confluence_site
+        .lock()
+        .map(|s| s.clone())
+        .unwrap_or_default()
+        .into();
+    json["confluence_email"] = st
+        .confluence_email
+        .lock()
+        .map(|s| s.clone())
+        .unwrap_or_default()
+        .into();
+    json["confluence_space_id"] = st
+        .confluence_space_id
+        .lock()
+        .map(|s| s.clone())
+        .unwrap_or_default()
+        .into();
+    json["confluence_space_key"] = st
+        .confluence_space_key
+        .lock()
+        .map(|s| s.clone())
+        .unwrap_or_default()
+        .into();
+    json["confluence_space_name"] = st
+        .confluence_space_name
+        .lock()
+        .map(|s| s.clone())
+        .unwrap_or_default()
+        .into();
+    json["confluence_parent_id"] = st
+        .confluence_parent_id
+        .lock()
+        .map(|s| s.clone())
+        .unwrap_or_default()
+        .into();
+    json["confluence_auto_send"] = st
+        .confluence_auto_send
+        .lock()
+        .map(|b| *b)
+        .unwrap_or(false)
+        .into();
     // Configured meeting storage override (raw value, empty = default).
     // The host UI reads the *effective* resolved dir via
     // `dimmy_meetings_dir`; this round-trips the user's setting so the
@@ -2771,6 +2820,49 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
             *slot = s.to_string();
         }
     }
+    // Confluence: same single-writer rule as Notion — the API TOKEN is
+    // never carried in config JSON, only in the keystore via
+    // dimmy_confluence_set_token. Everything here is non-secret.
+    if let Some(s) = v["confluence_site"].as_str() {
+        // Normalised on the way in so every later call, and the UI echo,
+        // agree on one spelling of the host.
+        let s = crate::confluence::normalize_site(s);
+        if let Ok(mut slot) = st.confluence_site.lock() {
+            *slot = s.clone();
+        }
+    }
+    if let Some(s) = v["confluence_email"].as_str() {
+        if let Ok(mut slot) = st.confluence_email.lock() {
+            *slot = s.to_string();
+        }
+    }
+    if let Some(s) = v["confluence_space_id"].as_str() {
+        if let Ok(mut slot) = st.confluence_space_id.lock() {
+            *slot = s.to_string();
+        }
+    }
+    if let Some(s) = v["confluence_space_key"].as_str() {
+        if let Ok(mut slot) = st.confluence_space_key.lock() {
+            *slot = s.to_string();
+        }
+    }
+    if let Some(s) = v["confluence_space_name"].as_str() {
+        if let Ok(mut slot) = st.confluence_space_name.lock() {
+            *slot = s.to_string();
+        }
+    }
+    if let Some(s) = v["confluence_parent_id"].as_str() {
+        if let Ok(mut slot) = st.confluence_parent_id.lock() {
+            *slot = s.to_string();
+        }
+    }
+    if let Some(b) = v["confluence_auto_send"].as_bool() {
+        if let Ok(mut slot) = st.confluence_auto_send.lock() {
+            *slot = b;
+        }
+        log(&format!("[Config] confluence_auto_send set to {}", b));
+    }
+
     if let Some(b) = v["notion_auto_send"].as_bool() {
         if let Ok(mut slot) = st.notion_auto_send.lock() {
             *slot = b;
@@ -5056,6 +5148,247 @@ pub extern "C" fn dimmy_claude_desktop_uninstall() -> c_int {
 /// # Safety
 /// `token_ptr` must be a valid null-terminated UTF-8 C string. NULL is
 /// rejected (-1). Empty string clears the stored token.
+/// Read an optional C string as an owned `String`; null or invalid UTF-8
+/// becomes empty. The Confluence entries take several optional arguments
+/// (the connect wizard supplies them, Settings lets them fall back to the
+/// saved config), and this keeps that from being four nested matches.
+fn cstr_or_empty(ptr: *const c_char) -> String {
+    if ptr.is_null() {
+        return String::new();
+    }
+    unsafe { CStr::from_ptr(ptr) }
+        .to_str()
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Store (or clear, with an empty string) the Confluence API token.
+///
+/// Mirror of `dimmy_notion_set_token`. The token is the only secret here:
+/// site and email ride in config JSON because they are not.
+///
+/// # Safety
+/// `token_ptr` must be a valid NUL-terminated UTF-8 string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_confluence_set_token(token_ptr: *const c_char) -> c_int {
+    if token_ptr.is_null() {
+        return -1;
+    }
+    let token = match unsafe { CStr::from_ptr(token_ptr) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let st = state();
+    match save_key_with_store(&st.key_store, KeyringScope::ConfluenceToken, token, false) {
+        Ok(_) => {
+            log(&format!(
+                "[Confluence] token {} ({} chars)",
+                if token.is_empty() { "cleared" } else { "set" },
+                token.len()
+            ));
+            0
+        }
+        Err(e) => {
+            log(&format!("[Confluence] save_key failed: {}", e));
+            -1
+        }
+    }
+}
+
+/// Returns 1 if a Confluence API token is stored, 0 otherwise.
+#[no_mangle]
+pub extern "C" fn dimmy_confluence_has_token() -> c_int {
+    let st = state();
+    match crate::load_key_with_store(&st.key_store, KeyringScope::ConfluenceToken, false) {
+        Some(t) if !t.is_empty() => 1,
+        _ => 0,
+    }
+}
+
+/// Validate credentials. `{"ok":true,"site":"...","account":"..."}` on success.
+///
+/// Takes site + email as ARGUMENTS rather than reading config, because the
+/// connect wizard tests before it saves: the point of the button is to find
+/// out whether these values work, and persisting them first would leave a
+/// broken configuration behind when they do not.
+///
+/// # Safety
+/// Pointers must be valid NUL-terminated UTF-8; `out_buf` must hold `buf_len`.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_confluence_test_connection(
+    site_ptr: *const c_char,
+    email_ptr: *const c_char,
+    token_ptr: *const c_char,
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let site = cstr_or_empty(site_ptr);
+    let email = cstr_or_empty(email_ptr);
+    // An empty token argument means "use the one already saved": the wizard
+    // sends it explicitly on first connect, Settings re-tests without it.
+    let token = {
+        let arg = cstr_or_empty(token_ptr);
+        if arg.is_empty() {
+            let st = state();
+            crate::load_key_with_store(&st.key_store, KeyringScope::ConfluenceToken, false)
+                .unwrap_or_default()
+        } else {
+            arg
+        }
+    };
+
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(r) => r,
+        Err(_) => return -1,
+    };
+    let json = match rt.block_on(crate::confluence::ping(&site, &email, &token)) {
+        Ok(info) => serde_json::json!({
+            "ok": true,
+            "site": info.site,
+            "account": info.account_name,
+        }),
+        Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
+    };
+    write_to_buf(&json.to_string(), out_buf, buf_len)
+}
+
+/// Spaces the account can see, personal first. `{"ok":true,"spaces":[...]}`.
+///
+/// # Safety
+/// Pointers must be valid NUL-terminated UTF-8; `out_buf` must hold `buf_len`.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_confluence_spaces(
+    site_ptr: *const c_char,
+    email_ptr: *const c_char,
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let st = state();
+    let site = {
+        let arg = cstr_or_empty(site_ptr);
+        if arg.is_empty() {
+            st.confluence_site
+                .lock()
+                .map(|s| s.clone())
+                .unwrap_or_default()
+        } else {
+            arg
+        }
+    };
+    let email = {
+        let arg = cstr_or_empty(email_ptr);
+        if arg.is_empty() {
+            st.confluence_email
+                .lock()
+                .map(|s| s.clone())
+                .unwrap_or_default()
+        } else {
+            arg
+        }
+    };
+    let token = crate::load_key_with_store(&st.key_store, KeyringScope::ConfluenceToken, false)
+        .unwrap_or_default();
+
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(r) => r,
+        Err(_) => return -1,
+    };
+    let json = match rt.block_on(crate::confluence::spaces(&site, &email, &token)) {
+        Ok(list) => serde_json::json!({ "ok": true, "spaces": list }),
+        Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
+    };
+    write_to_buf(&json.to_string(), out_buf, buf_len)
+}
+
+/// Send a meeting recap.md to the configured Confluence space.
+///
+/// Mirrors `dimmy_notion_send_recap` including the AI-Act step: the recap
+/// goes through `recap_for_sharing` first, which drops Dimmy internal HTML
+/// comments and puts a VISIBLE "generated with AI" notice at the top. That
+/// matters more here than on Notion, not less: a corporate wiki page is read
+/// by colleagues who were never in the room.
+///
+/// # Safety
+/// Pointers must be valid NUL-terminated UTF-8; `out_buf` must hold `buf_len`.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_confluence_send_recap(
+    meeting_dir_ptr: *const c_char,
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if meeting_dir_ptr.is_null() || out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let dir_str = match unsafe { CStr::from_ptr(meeting_dir_ptr) }.to_str() {
+        Ok(s) if !s.is_empty() => s,
+        _ => return -1,
+    };
+    let dir = std::path::PathBuf::from(dir_str);
+    let st = state();
+
+    let token =
+        match crate::load_key_with_store(&st.key_store, KeyringScope::ConfluenceToken, false) {
+            Some(t) if !t.is_empty() => t,
+            _ => {
+                let json = r#"{"ok":false,"error":"Confluence API token not set"}"#;
+                return write_to_buf(json, out_buf, buf_len);
+            }
+        };
+    let get = |m: &Mutex<String>| m.lock().map(|s| s.clone()).unwrap_or_default();
+    let site = get(&st.confluence_site);
+    let email = get(&st.confluence_email);
+    let space_id = get(&st.confluence_space_id);
+    let parent_id = get(&st.confluence_parent_id);
+
+    let recap_path = dir.join("recap.md");
+    let markdown = match std::fs::read_to_string(&recap_path) {
+        Ok(m) if !m.trim().is_empty() => m,
+        Ok(_) => {
+            let json = r#"{"ok":false,"error":"recap.md is empty"}"#;
+            return write_to_buf(json, out_buf, buf_len);
+        }
+        Err(_) => {
+            let json = r#"{"ok":false,"error":"recap.md not found in meeting dir"}"#;
+            return write_to_buf(json, out_buf, buf_len);
+        }
+    };
+    let lang = st
+        .language
+        .lock()
+        .map(|l| l.clone())
+        .unwrap_or_else(|_| "en".to_string());
+    let markdown = crate::meeting::recap_for_sharing(&markdown, &lang);
+    let title = crate::notion::meeting_dir_to_title(&dir, &markdown);
+
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(r) => r,
+        Err(_) => return -1,
+    };
+    let json = match rt.block_on(crate::confluence::send_meeting_recap(
+        &site, &email, &token, &space_id, &parent_id, &title, &markdown,
+    )) {
+        Ok(page) => {
+            log(&format!(
+                "[Confluence] recap sent for {} -> {}",
+                dir.display(),
+                page.url
+            ));
+            serde_json::json!({ "ok": true, "id": page.id, "url": page.url })
+        }
+        Err(e) => {
+            log(&format!("[Confluence] recap send failed: {}", e));
+            serde_json::json!({ "ok": false, "error": e.to_string() })
+        }
+    };
+    write_to_buf(&json.to_string(), out_buf, buf_len)
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn dimmy_notion_set_token(token_ptr: *const c_char) -> c_int {
     if token_ptr.is_null() {
@@ -10645,6 +10978,13 @@ mod tests {
                 meeting_chunk_secs: Mutex::new(15.0f32),
                 meeting_storage_path: Mutex::new(String::new()),
                 notion_target_id: Mutex::new(String::new()),
+                confluence_site: Mutex::new(String::new()),
+                confluence_email: Mutex::new(String::new()),
+                confluence_space_id: Mutex::new(String::new()),
+                confluence_space_key: Mutex::new(String::new()),
+                confluence_space_name: Mutex::new(String::new()),
+                confluence_parent_id: Mutex::new(String::new()),
+                confluence_auto_send: Mutex::new(false),
                 notion_target_kind: Mutex::new(String::new()),
                 notion_target_title: Mutex::new(String::new()),
                 notion_auto_send: Mutex::new(false),
