@@ -42,20 +42,73 @@ final class LocalModelListingTests: XCTestCase {
 
     // MARK: - What the pill and the Home page call the running backend
 
+    // AppState is @MainActor isolated, so its statics are too.
     @MainActor
     func testDisplayNameNamesTheEngineNotTheCloudProvider() {
-        let s = AppState()
-        s.localSttBackend = "parakeet"
-        XCTAssertEqual(s.localSttDisplayName, "Parakeet")
+        XCTAssertEqual(
+            AppState.localSttDisplayName(backend: "parakeet", qwenModel: "", whisperModel: ""),
+            "Parakeet"
+        )
+        XCTAssertEqual(
+            AppState.localSttDisplayName(
+                backend: "qwen",
+                qwenModel: "Qwen3-ASR-1.7B-Q8_0.gguf",
+                whisperModel: ""
+            ),
+            "Qwen3-ASR"
+        )
+        XCTAssertEqual(
+            AppState.localSttDisplayName(
+                backend: "qwen",
+                qwenModel: "fluid:qwen3-asr-0.6b-int8",
+                whisperModel: ""
+            ),
+            "Qwen3-ASR · Neural Engine"
+        )
+        XCTAssertEqual(
+            AppState.localSttDisplayName(
+                backend: "whisper",
+                qwenModel: "",
+                whisperModel: "ggml-large-v3-turbo-q8_0.bin"
+            ),
+            "Whisper large-v3-turbo-q8_0"
+        )
+    }
+}
 
-        s.localSttBackend = "qwen"
-        s.qwenAsrModel = "Qwen3-ASR-1.7B-Q8_0.gguf"
-        XCTAssertEqual(s.localSttDisplayName, "Qwen3-ASR")
-        s.qwenAsrModel = "fluid:qwen3-asr-0.6b-int8"
-        XCTAssertEqual(s.localSttDisplayName, "Qwen3-ASR · Neural Engine")
+/// The recap picker is the one model list that never said whether the model
+/// was on disk: the Voice and LLM pickers both mark downloaded entries, so a
+/// user reasonably reads the absence of a mark as "nothing to download".
+final class RecapLocalModelTests: XCTestCase {
 
-        s.localSttBackend = "whisper"
-        s.localModel = "ggml-large-v3-turbo-q8_0.bin"
-        XCTAssertEqual(s.localSttDisplayName, "Whisper large-v3-turbo-q8_0")
+    func testALocalOptionNamesTheFileItWouldRun() {
+        let opt = RecapModelOption(
+            id: "local:gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf",
+            label: "Local, Gemma 4 E2B QAT Q4",
+            provider: .local
+        )
+        XCTAssertEqual(opt.localFilename, "gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf")
+    }
+
+    func testCloudAndAutoOptionsHaveNoFile() {
+        XCTAssertNil(
+            RecapModelOption(id: "", label: "Auto", provider: .auto).localFilename
+        )
+        XCTAssertNil(
+            RecapModelOption(id: "claude-sonnet-5", label: "Sonnet", provider: .anthropic)
+                .localFilename
+        )
+        // A bare prefix names nothing, and must not be probed as a filename.
+        XCTAssertNil(
+            RecapModelOption(id: "local:", label: "Local", provider: .local).localFilename
+        )
+    }
+
+    @MainActor
+    func testEveryCuratedLocalOptionCarriesARealFilename() {
+        for opt in RecapModelOption.curated where opt.provider == .local {
+            XCTAssertNotNil(opt.localFilename, "\(opt.id) has no file to check")
+            XCTAssertTrue(opt.localFilename?.hasSuffix(".gguf") == true, "\(opt.id)")
+        }
     }
 }
