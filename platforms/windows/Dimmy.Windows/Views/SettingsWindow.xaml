@@ -2039,6 +2039,114 @@
                 <TextBlock x:Name="NotionMessageText" FontSize="13" TextWrapping="Wrap" />
               </Border>
 
+              <!-- Group: CONFLUENCE
+                   The corporate sibling of Notion, same shape: a token the
+                   user pastes once, a destination, an auto-send switch. Kept a
+                   separate card rather than a "destination" dropdown on one
+                   card because the two can be on at the same time — a personal
+                   Notion and a team wiki are not alternatives. -->
+              <StackPanel Orientation="Horizontal" Spacing="6" Margin="2,32,0,8">
+                <TextBlock Text="CONFLUENCE"
+                           FontSize="12" FontWeight="SemiBold"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           CharacterSpacing="40" VerticalAlignment="Center" />
+              </StackPanel>
+
+              <!-- Same anatomy as the Anthropic and Notion cards: mark on the
+                   left, name + one line of state, a status glyph on the right,
+                   and the actions on their own row underneath. Two rows swap by
+                   visibility rather than one row changing labels, so a
+                   half-configured state cannot show a button that does not
+                   apply. -->
+              <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="16">
+                <Grid ColumnSpacing="14" RowSpacing="12">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                  </Grid.ColumnDefinitions>
+                  <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                  </Grid.RowDefinitions>
+
+                  <Image Grid.Column="0" Grid.Row="0" Grid.RowSpan="2"
+                         Width="40" Height="40" VerticalAlignment="Top"
+                         Source="{ThemeResource ConfluenceMarkSource}"/>
+
+                  <StackPanel Grid.Column="1" Grid.Row="0" VerticalAlignment="Center" Spacing="2">
+                    <TextBlock Text="Confluence" FontSize="16" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="ConfluenceStatusText"
+                               FontSize="13" TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               Text="Not connected."/>
+                  </StackPanel>
+
+                  <FontIcon x:Name="ConfluenceStatusGlyph"
+                            Grid.Column="2" Grid.Row="0"
+                            Glyph="&#xEA39;" FontSize="20" VerticalAlignment="Top"
+                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+
+                  <StackPanel x:Name="ConfluenceDisconnectedActions"
+                              Grid.Column="1" Grid.ColumnSpan="2" Grid.Row="1"
+                              Orientation="Horizontal" Spacing="8"
+                              Visibility="Visible">
+                    <Button Click="ConfluenceConnect_Click"
+                            Style="{ThemeResource AccentButtonStyle}">
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xE9F5;" FontSize="14"/>
+                        <TextBlock Text="Set up wizard"/>
+                      </StackPanel>
+                    </Button>
+                  </StackPanel>
+
+                  <StackPanel x:Name="ConfluenceConnectedActions"
+                              Grid.Column="1" Grid.ColumnSpan="2" Grid.Row="1"
+                              Orientation="Horizontal" Spacing="8"
+                              Visibility="Collapsed">
+                    <Button Click="ConfluenceTest_Click"
+                            ToolTipService.ToolTip="Check the saved credentials against Confluence right now">
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xE945;" FontSize="14"/>
+                        <TextBlock Text="Test connection"/>
+                      </StackPanel>
+                    </Button>
+                    <Button Content="Change space" Click="ConfluenceChangeSpace_Click"
+                            ToolTipService.ToolTip="Pick a different destination without re-entering credentials"/>
+                    <!-- The whole point of this row: the wizard was reachable
+                         only at step 2 once connected, so a token that needed
+                         replacing had no way in short of disconnecting first. -->
+                    <Button Content="Re-run setup" Click="ConfluenceRerunWizard_Click"
+                            ToolTipService.ToolTip="Re-walk both steps — useful to swap the API token or move to another site"/>
+                    <Button Content="Disconnect" Click="ConfluenceDisconnect_Click"/>
+                  </StackPanel>
+                </Grid>
+              </Border>
+
+              <!-- Same placement and reasoning as the Notion toggle above:
+                   only meaningful once connected, and a thing users flip over
+                   time rather than decide once during setup. Driven from
+                   code-behind rather than bound to the view model, because
+                   SettingsViewModel.ToJson has an if-empty-omit contract for
+                   identity fields and this single write has no business going
+                   through it. -->
+              <controls:SettingCard Glyph="&#xE945;"
+                                    Label="Auto-send each meeting"
+                                    Description="Publish every recap to your Confluence space."
+                                    InfoTip="On publishes each recap to the company wiki as soon as it is ready. Off lets you send manually from the meeting Done view.">
+                <ToggleSwitch x:Name="ConfluenceAutoSendToggle"
+                              Toggled="ConfluenceAutoSend_Toggled"
+                              Style="{StaticResource CompactToggleSwitch}" />
+              </controls:SettingCard>
+
+              <Border x:Name="ConfluenceMessageBar" Background="{ThemeResource SystemFillColorAttentionBackgroundBrush}"
+                      BorderThickness="0" CornerRadius="6" Padding="12,8"
+                      Margin="0,12,0,0" Visibility="Collapsed">
+                <TextBlock x:Name="ConfluenceMessageText" FontSize="13" TextWrapping="Wrap" />
+              </Border>
+
               <!-- Group: ANTHROPIC SUBSCRIPTION
                    The user's Pro / Team / Max plan, accessed via the
                    local `claude` CLI. Once "connected" (signed in)
