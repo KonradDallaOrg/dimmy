@@ -1148,6 +1148,16 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
         break
 
     case "status":
+        // Only while a dictation/command cycle is actually in flight.
+        // HotkeyManager moves the pill to .transcribing BEFORE calling the
+        // core, so a real cycle is never .idle here — but the Command Mode
+        // wizard and the Settings model test call dimmy_command_transform
+        // directly, with their own UI and no pill cycle to end. Those emit
+        // the same "processing" status, which used to strand the pill on
+        // "Processing…" forever: nothing ever set it back.
+        if case .idle = appState.recordingState {
+            break
+        }
         if let state = payload["state"] as? String {
             switch state {
             case "transcribing":
