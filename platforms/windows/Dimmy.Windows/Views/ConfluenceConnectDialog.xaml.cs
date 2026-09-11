@@ -41,11 +41,15 @@ public sealed partial class ConfluenceConnectDialog : ContentDialog
     /// <summary>Display name from the last successful check, for the Settings card.</summary>
     public string AccountName { get; private set; } = "";
 
-    private sealed record SpaceRow(string Id, string Key, string Name, string Kind)
+    private sealed record SpaceRow(string Id, string Key, string Name, string Kind, bool IsMine)
     {
-        /// Personal spaces are keyed `~accountId`, which tells the user nothing.
+        /// Only the space the CORE identified as ours may say so. Deriving
+        /// it from Kind labelled all 530 of a tenant's personal spaces
+        /// "your space", which is worse than saying nothing.
         public override string ToString() =>
-            Kind == "personal" ? $"{Name} (your space)" : $"{Name} ({Key})";
+            IsMine ? $"{Name} (your space)"
+            : Kind == "personal" ? $"{Name} (personal)"
+            : $"{Name} ({Key})";
     }
 
     private int _step = 1;
@@ -54,6 +58,14 @@ public sealed partial class ConfluenceConnectDialog : ContentDialog
     private string _email = "";
     private string _token = "";
     private readonly List<SpaceRow> _spaces = new();
+    /// <summary>True while the dialog fills its own fields.
+    ///
+    /// Prefilling raises TextChanged, and WinUI delivers it AFTER Opened has
+    /// returned — by which point _verified is already true, so
+    /// OnCredentialChanged read the prefill as a user edit, invalidated the
+    /// check and disabled Done. Entering at step 2 from "Change space" then
+    /// looked like a dead button that only Back → Check could revive.</summary>
+    private bool _prefilling;
 
     public ConfluenceConnectDialog()
     {
@@ -67,11 +79,18 @@ public sealed partial class ConfluenceConnectDialog : ContentDialog
         // confirmation, not a re-typing exercise. The token is never read back
         // out of the keystore — an empty box with a stored token is the normal
         // state, and Check treats empty as "use the saved one".
+        _prefilling = true;
         try
         {
             var cfg = ReadConfig();
-            SiteBox.Text = cfg.GetValueOrDefault("confluence_site", "");
-            EmailBox.Text = cfg.GetValueOrDefault("confluence_email", "");
+            // Into the FIELDS as well as the boxes: entering at step 2 skips
+            // Verify_Click, which is the only other place these are set, and
+            // Save would then have written empty strings over a working site
+            // and email.
+            _site = cfg.GetValueOrDefault("confluence_site", "");
+            _email = cfg.GetValueOrDefault("confluence_email", "");
+            SiteBox.Text = _site;
+            EmailBox.Text = _email;
         }
         catch (Exception ex) { App.Log($"Confluence prefill: {ex.Message}", "Confluence"); }
 
@@ -96,6 +115,11 @@ public sealed partial class ConfluenceConnectDialog : ContentDialog
         {
             GoToStep(1);
         }
+
+        // Released on the dispatcher, not here: the TextChanged raised by the
+        // prefill above is still queued and would otherwise land after the
+        // flag was already down.
+        DispatcherQueue.TryEnqueue(() => _prefilling = false);
     }
 
     // ── Step machine ────────────────────────────────────────────────
@@ -113,10 +137,27 @@ public sealed partial class ConfluenceConnectDialog : ContentDialog
 
         SecondaryButtonText = step == 1 ? "" : "Back";
         PrimaryButtonText = step == 1 ? "Next" : "Done";
-        IsPrimaryButtonEnabled = step == 1 ? _verified : true;
+        UpdatePrimaryEnabled();
 
         if (step == 2) _ = LoadSpacesAsync();
     }
+
+    /// <summary>Recompute whether the primary button may be pressed.
+    ///
+    /// Derived rather than assigned at each transition, because assigning it
+    /// once in GoToStep lost the race with whatever raised a field event
+    /// afterwards: entering step 2 from "Change space" showed Done greyed out
+    /// with a space plainly selected. Recomputing from the model on every
+    /// event means no ordering can leave it wrong — and the rule is now the
+    /// honest one: step 1 needs a checked credential, step 2 needs a space.</summary>
+    private void UpdatePrimaryEnabled()
+    {
+        bool allowed = _step == 1 ? _verified : SpaceCombo?.SelectedItem != null;
+        IsPrimaryButtonEnabled = allowed;
+    }
+
+    private void OnSpaceSelectionChanged(object sender, SelectionChangedEventArgs e)
+        => UpdatePrimaryEnabled();
 
     private void OnPrimaryClick(ContentDialog sender, ContentDialogButtonClickEventArgs args)
     {
@@ -147,10 +188,10 @@ public sealed partial class ConfluenceConnectDialog : ContentDialog
     /// screen are no longer the ones that were proven to work.</summary>
     private void OnCredentialChanged(object sender, RoutedEventArgs e)
     {
-        if (!_verified) return;
+        if (_prefilling || !_verified) return;
         _verified = false;
-        IsPrimaryButtonEnabled = false;
         VerifyStatus.Text = "";
+        UpdatePrimaryEnabled();
     }
 
     private void OpenTokenPage_Click(object sender, RoutedEventArgs e)
@@ -195,7 +236,7 @@ public sealed partial class ConfluenceConnectDialog : ContentDialog
         VerifyRing.Visibility = Visibility.Collapsed;
         VerifyBtn.IsEnabled = true;
         _verified = ok;
-        IsPrimaryButtonEnabled = ok;
+        UpdatePrimaryEnabled();
         AccountName = account;
         SetStatus(VerifyStatus, ok, ok ? $"Connected as {account}" : message);
 
@@ -239,7 +280,8 @@ public sealed partial class ConfluenceConnectDialog : ContentDialog
                             s.GetProperty("id").GetString() ?? "",
                             s.GetProperty("key").GetString() ?? "",
                             s.GetProperty("name").GetString() ?? "",
-                            s.GetProperty("kind").GetString() ?? ""));
+                            s.GetProperty("kind").GetString() ?? "",
+                            s.TryGetProperty("is_mine", out var m) && m.GetBoolean()));
                     }
                 }
                 else if (root.TryGetProperty("error", out var err))
@@ -250,16 +292,44 @@ public sealed partial class ConfluenceConnectDialog : ContentDialog
             catch (Exception ex) { App.Log($"spaces parse: {ex.Message}", "Confluence"); }
         }
 
-        SpaceCombo.ItemsSource = _spaces;
+        ApplySpaceFilter();
         SpaceCombo.PlaceholderText = _spaces.Count == 0 ? "No spaces available" : "Pick a space";
 
         // Preselect: whatever was configured before, else the personal space —
         // the core sorts those first, so index 0 is it when one exists.
+        // Preselect what was configured before, else the space the core
+        // positively identified as ours. Never "the first personal one":
+        // on a big tenant that is a colleague.
         var existing = ReadConfig().GetValueOrDefault("confluence_space_id", "");
-        int idx = _spaces.FindIndex(s => s.Id == existing);
-        if (idx < 0) idx = _spaces.FindIndex(s => s.Kind == "personal");
-        if (idx < 0 && _spaces.Count > 0) idx = 0;
+        var shown = (List<SpaceRow>)SpaceCombo.ItemsSource;
+        int idx = shown.FindIndex(s => s.Id == existing);
+        if (idx < 0) idx = shown.FindIndex(s => s.IsMine);
         if (idx >= 0) SpaceCombo.SelectedIndex = idx;
+        UpdatePrimaryEnabled();
+    }
+
+    private void OnSpaceFilterChanged(object sender, TextChangedEventArgs e)
+        => ApplySpaceFilter();
+
+    /// <summary>Narrow the dropdown to what the user typed, matching name or
+    /// key. Keeps the current pick if it still matches, so typing does not
+    /// silently change the destination under the user.</summary>
+    private void ApplySpaceFilter()
+    {
+        var q = (SpaceFilterBox?.Text ?? "").Trim();
+        var selected = SpaceCombo.SelectedItem as SpaceRow;
+        var shown = q.Length == 0
+            ? new List<SpaceRow>(_spaces)
+            : _spaces.FindAll(s =>
+                s.Name.Contains(q, StringComparison.OrdinalIgnoreCase)
+                || s.Key.Contains(q, StringComparison.OrdinalIgnoreCase));
+        SpaceCombo.ItemsSource = shown;
+        if (selected != null)
+        {
+            int keep = shown.FindIndex(s => s.Id == selected.Id);
+            if (keep >= 0) SpaceCombo.SelectedIndex = keep;
+        }
+        UpdatePrimaryEnabled();
     }
 
     private bool Save()
@@ -271,10 +341,15 @@ public sealed partial class ConfluenceConnectDialog : ContentDialog
         }
         try
         {
+            // Never write these away: empty here means the step-1 fields were
+            // never visited, not that the user cleared them.
+            var cfg = ReadConfig();
+            var site = _site.Length > 0 ? _site : cfg.GetValueOrDefault("confluence_site", "");
+            var email = _email.Length > 0 ? _email : cfg.GetValueOrDefault("confluence_email", "");
             var payload = JsonSerializer.Serialize(new
             {
-                confluence_site = _site,
-                confluence_email = _email,
+                confluence_site = site,
+                confluence_email = email,
                 confluence_space_id = picked.Id,
                 confluence_space_key = picked.Key,
                 confluence_space_name = picked.Name,

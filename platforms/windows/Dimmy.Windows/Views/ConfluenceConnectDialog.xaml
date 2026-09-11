@@ -94,8 +94,17 @@
                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                    Text="Each recap becomes a new page in this space. Your personal space is picked by default."/>
 
-        <ComboBox x:Name="SpaceCombo" Header="Space"
+        <!-- A filter, not a nicety: a real tenant returned 530 spaces, and
+             when the token cannot identify the user (granular scopes have
+             no user scope at all) their own space is somewhere in that
+             list rather than preselected. Typing a name is the only way
+             through it. -->
+        <TextBox x:Name="SpaceFilterBox" Header="Space"
+                 PlaceholderText="Type to filter, e.g. your name"
+                 TextChanged="OnSpaceFilterChanged"/>
+        <ComboBox x:Name="SpaceCombo"
                   HorizontalAlignment="Stretch"
+                  SelectionChanged="OnSpaceSelectionChanged"
                   PlaceholderText="Loading spaces..."/>
 
         <!-- Auto-send lives in Settings, not here, exactly as Notion does it:

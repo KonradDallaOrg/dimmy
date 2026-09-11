@@ -44,9 +44,13 @@ pub struct Space {
     pub id: String,
     pub key: String,
     pub name: String,
-    /// `personal` or `global`. The UI sorts personal first: a recap of your
-    /// own meeting belongs in your own space until you say otherwise.
+    /// `personal`, `global`, `collaboration`, …
     pub kind: String,
+    /// True only for the space we positively identified as THIS user's.
+    /// Never inferred from `kind`: every colleague has a personal space too,
+    /// and labelling all of them "your space" is exactly the bug this
+    /// replaces.
+    pub is_mine: bool,
 }
 
 /// Who the credentials belong to, for the "connected as…" line.
@@ -541,8 +545,9 @@ pub async fn spaces(site: &str, email: &str, token: &str) -> Result<Vec<Space>, 
         if !account_id.is_empty() {
             let key = format!("~{account_id}");
             if let Ok(list) = fetch_spaces(&client, &base, email, token, &[("keys", &key)]).await {
-                if let Some(sp) = list.into_iter().next() {
+                if let Some(mut sp) = list.into_iter().next() {
                     mine = Some(sp.id.clone());
+                    sp.is_mine = true;
                     out.push(sp);
                 }
             }
@@ -562,16 +567,14 @@ pub async fn spaces(site: &str, email: &str, token: &str) -> Result<Vec<Space>, 
         let (list, next) = fetch_spaces_page(&client, &base, email, token, &params).await?;
         for sp in list {
             if mine.as_deref() == Some(sp.id.as_str()) {
-                continue; // already first in the list
+                continue; // already first
             }
-            // Other people's personal spaces are noise: hundreds of them,
-            // none writable. But they are only identifiable as OTHER
-            // people's once we know which one is ours — and we do not, when
-            // the token lacks read:confluence-user (a token with only the
-            // GRANULAR v2 scopes cannot reach the user endpoint at all).
-            // Dropping them blind would delete the one space the user
-            // actually wants, so in that case they all stay and the list is
-            // merely long.
+            // Other people's personal spaces: hundreds of them, none
+            // writable. Dropped once we know which one is OURS. When we do
+            // not — a token with only the granular v2 scopes cannot reach any
+            // user endpoint, so this is the normal case for those — they stay
+            // in, because ours is among them and dropping blind would delete
+            // the one space the user is looking for. They sort to the bottom.
             if sp.kind == "personal" && mine.is_some() {
                 continue;
             }
@@ -583,9 +586,16 @@ pub async fn spaces(site: &str, email: &str, token: &str) -> Result<Vec<Space>, 
         }
     }
 
-    // Personal (index 0, if found) stays first; the rest alphabetical.
+    // Order: my own space (when identified), then the shared spaces, then
+    // everyone else's personal ones. Without that last rank a 500-space
+    // tenant buries the handful of team spaces under hundreds of colleagues.
     let tail_from = usize::from(mine.is_some());
-    out[tail_from..].sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    out[tail_from..].sort_by(|a, b| {
+        let rank = |k: &str| u8::from(k == "personal");
+        rank(&a.kind)
+            .cmp(&rank(&b.kind))
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
     crate::log(&format!(
         "[Confluence] spaces: {} offered (own space {})",
         out.len(),
@@ -648,6 +658,7 @@ async fn fetch_spaces_page(
                     key: str_field(s, "key"),
                     name: str_field(s, "name"),
                     kind: str_field(s, "type"),
+                    is_mine: false,
                 })
                 .filter(|s| !s.id.is_empty())
                 .collect()
