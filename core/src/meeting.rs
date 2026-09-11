@@ -2327,6 +2327,90 @@ mod buffer_reclaim {
 }
 
 #[cfg(test)]
+mod encoding_is_not_the_bottleneck {
+    //! What the three track sinks actually cost the capture thread.
+    //!
+    //! Encoding looks like the kind of work THE AUDIO RULE says to move off
+    //! the capture loop, and it was proposed for exactly that reason. It is
+    //! not: the encode IS the write. Moving it would put a queue and a fourth
+    //! thread between captured audio and the disk, which is the thing the rule
+    //! forbids -- and it would buy whatever this test reports.
+    //!
+    //! So this measures rather than argues, and then stays as the guard: it is
+    //! also what fails if someone raises the Vorbis quality target, which is a
+    //! one-character edit with a cost nobody would otherwise see.
+
+    use super::*;
+    use std::time::Instant;
+
+    /// Generous on purpose. Measured at 5% of realtime in a debug build on a
+    /// 2026 laptop; the bound is set five times higher because the claim being
+    /// defended is "encoding is not why a meeting falls behind", which a loose
+    /// bound settles just as well, and a tight one would only fail on a loaded
+    /// CI runner. What it still catches is the change that matters: raising
+    /// the Vorbis quality target is one character and has no other alarm.
+    const BUDGET_FRACTION: f64 = 0.25;
+
+    #[test]
+    fn three_tracks_cost_a_small_fraction_of_the_audio_they_encode() {
+        let dir = std::env::temp_dir().join(format!(
+            "dimmy-encode-cost-{}",
+            std::time::SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+
+        let rate = 48_000u32;
+        let secs = 60u32;
+        // Speech-ish rather than silence: a Vorbis encoder is much cheaper on
+        // a flat signal, and measuring silence would prove nothing.
+        let total = (rate * secs) as usize;
+        let window: Vec<f32> = (0..rate as usize)
+            .map(|i| {
+                let t = i as f32 / rate as f32;
+                0.4 * (2.0 * std::f32::consts::PI * 220.0 * t).sin()
+                    + 0.2 * (2.0 * std::f32::consts::PI * 1_400.0 * t).sin()
+            })
+            .collect();
+
+        let mut sinks: Vec<TrackSink> = ["mix", "mic", "system"]
+            .iter()
+            .map(|base| TrackSink::create(&dir, base, rate).expect("sink"))
+            .collect();
+
+        let t0 = Instant::now();
+        for _ in 0..secs {
+            for s in sinks.iter_mut() {
+                s.write(&window);
+            }
+        }
+        for s in sinks.iter_mut() {
+            s.flush();
+        }
+        let elapsed = t0.elapsed().as_secs_f64();
+        for s in sinks.drain(..) {
+            let _ = s.finalize();
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let audio_secs = total as f64 / rate as f64;
+        let fraction = elapsed / audio_secs;
+        println!(
+            "3 tracks x {audio_secs:.0}s encoded in {elapsed:.3}s = {:.2}% of realtime",
+            fraction * 100.0
+        );
+        assert!(
+            fraction < BUDGET_FRACTION,
+            "encoding three tracks took {:.1}% of realtime ({elapsed:.3}s for {audio_secs:.0}s).              Above {:.0}% it stops being free on the capture thread, and the sinks need              rethinking -- read docs/dev/meeting-audio-durability.md before moving them.",
+            fraction * 100.0,
+            BUDGET_FRACTION * 100.0
+        );
+    }
+}
+
+#[cfg(test)]
 mod audio_never_blocked {
     //! The rule: nothing may stand between captured audio and the disk.
     //!
