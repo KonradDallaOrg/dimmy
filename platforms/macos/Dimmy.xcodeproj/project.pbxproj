@@ -99,6 +99,8 @@
 		AA000200 /* MacAtoms.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000200 /* MacAtoms.swift */; };
 		AA000201 /* MacSettingsContainerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000201 /* MacSettingsContainerView.swift */; };
 		AA000300 /* DimmyCore+License.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000300 /* DimmyCore+License.swift */; };
+		AA00F101 /* DimmyCore+Confluence.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00F101 /* DimmyCore+Confluence.swift */; };
+		AA00F102 /* ConfluenceConnectSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00F102 /* ConfluenceConnectSheet.swift */; };
 		AA000301 /* MacLicensePage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000301 /* MacLicensePage.swift */; };
 		AA000202 /* MacHomePage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000202 /* MacHomePage.swift */; };
 		AA000203 /* MacVoicePage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000203 /* MacVoicePage.swift */; };
@@ -251,6 +253,8 @@
 		AB000200 /* MacAtoms.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAtoms.swift; sourceTree = "<group>"; };
 		AB000201 /* MacSettingsContainerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSettingsContainerView.swift; sourceTree = "<group>"; };
 		AB000300 /* DimmyCore+License.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DimmyCore+License.swift"; sourceTree = "<group>"; };
+		AB00F101 /* DimmyCore+Confluence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DimmyCore+Confluence.swift; sourceTree = "<group>"; };
+		AB00F102 /* ConfluenceConnectSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfluenceConnectSheet.swift; sourceTree = "<group>"; };
 		AB000301 /* MacLicensePage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacLicensePage.swift; sourceTree = "<group>"; };
 		AB000202 /* MacHomePage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacHomePage.swift; sourceTree = "<group>"; };
 		AB000203 /* MacVoicePage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacVoicePage.swift; sourceTree = "<group>"; };
@@ -446,6 +450,7 @@
 				AB000008 /* TextInjector.swift */,
 				AB000030 /* DimmyCore.swift */,
 				AB000300 /* DimmyCore+License.swift */,
+				AB00F101 /* DimmyCore+Confluence.swift */,
 				AB000500 /* DimmyCore+V2.swift */,
 				AB001100 /* DimmyCore+CallDetect.swift */,
 				AB000800 /* DictHotkeyManager.swift */,
@@ -518,6 +523,7 @@
 				AB000211 /* MacPermissionsPage.swift */,
 				AB000301 /* MacLicensePage.swift */,
 				AB000302 /* MacIntegrationsPage.swift */,
+				AB00F102 /* ConfluenceConnectSheet.swift */,
 				AB000303 /* NotionConnectSheet.swift */,
 				AB000304 /* ClaudeConnectSheet.swift */,
 				AB000305 /* ClaudeDesktopConnectSheet.swift */,
@@ -834,6 +840,8 @@ echo \"[gtcrn] bundled $(basename \"$GTCRN_SRC\") into Resources\"
 				AA000211 /* MacPermissionsPage.swift in Sources */,
 				AA000030 /* DimmyCore.swift in Sources */,
 				AA000300 /* DimmyCore+License.swift in Sources */,
+				AA00F101 /* DimmyCore+Confluence.swift in Sources */,
+				AA00F102 /* ConfluenceConnectSheet.swift in Sources */,
 				AA000301 /* MacLicensePage.swift in Sources */,
 				AA000302 /* MacIntegrationsPage.swift in Sources */,
 				AA000303 /* NotionConnectSheet.swift in Sources */,

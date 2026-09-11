@@ -1273,6 +1273,16 @@ final class AppState: ObservableObject {
     /// False = user clicks the "Send to Notion" button per meeting.
     @Published var notionAutoSend: Bool = false
 
+    // Confluence: site, account email and destination space. None of these
+    // is a secret — the API token lives in the encrypted keystore and never
+    // travels in config — so they round-trip like any other setting.
+    @Published var confluenceSite: String = ""
+    @Published var confluenceEmail: String = ""
+    @Published var confluenceSpaceId: String = ""
+    @Published var confluenceSpaceKey: String = ""
+    @Published var confluenceSpaceName: String = ""
+    @Published var confluenceAutoSend: Bool = false
+
     // MARK: - Telegram audio inbox
 
     /// Master switch. The Rust `telegram` worker runs only when this is
@@ -1620,6 +1630,12 @@ final class AppState: ObservableObject {
         if let v = config["notion_target_kind"] as? String { notionTargetKind = v }
         if let v = config["notion_target_title"] as? String { notionTargetTitle = v }
         if let v = config["notion_auto_send"] as? Bool { notionAutoSend = v }
+        if let v = config["confluence_site"] as? String { confluenceSite = v }
+        if let v = config["confluence_email"] as? String { confluenceEmail = v }
+        if let v = config["confluence_space_id"] as? String { confluenceSpaceId = v }
+        if let v = config["confluence_space_key"] as? String { confluenceSpaceKey = v }
+        if let v = config["confluence_space_name"] as? String { confluenceSpaceName = v }
+        if let v = config["confluence_auto_send"] as? Bool { confluenceAutoSend = v }
         if let arr = config["user_dict"] as? [String] {
             // Rust strips empty / whitespace entries already; defensive
             // copy keeps the UI list rendering predictable.
@@ -1968,6 +1984,12 @@ final class AppState: ObservableObject {
             // notion_auto_send IS safe to round-trip (bool toggle,
             // not a load-bearing identifier).
             "notion_auto_send": notionAutoSend,
+            "confluence_site": confluenceSite,
+            "confluence_email": confluenceEmail,
+            "confluence_space_id": confluenceSpaceId,
+            "confluence_space_key": confluenceSpaceKey,
+            "confluence_space_name": confluenceSpaceName,
+            "confluence_auto_send": confluenceAutoSend,
             // telegram_{enabled,auto_process} are safe bool round-trips
             // (setting telegram_enabled also starts/stops the worker in
             // the Rust core). The login session itself lives on disk in

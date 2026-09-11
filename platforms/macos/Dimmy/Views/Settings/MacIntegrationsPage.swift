@@ -21,6 +21,9 @@ struct MacIntegrationsPage: View {
     @State private var mcpRefreshTimer: Timer? = nil
     @State private var showMcpDisconnectConfirm: Bool = false
     @State private var claudeIconPath: String? = nil
+    @State private var showConfluenceSheet: Bool = false
+    @State private var confluenceSheetStep: Int = 1
+    @State private var confluenceConnected: Bool = false
     @State private var showTelegramSheet: Bool = false
     @State private var showTelegramLogoutConfirm: Bool = false
 
@@ -105,6 +108,36 @@ struct MacIntegrationsPage: View {
                 MacInfoButton(text: "Free Notion plans have no per-plan API limits, only the standard 3 requests/sec rate limit. Token + destination are stored locally; only the recap markdown leaves this Mac when you (or auto-send) trigger an upload.")
             }
             .fixedSize(horizontal: false, vertical: true)
+
+            // Confluence: the corporate sibling of Notion, kept a separate
+            // section rather than a destination dropdown on the Notion card.
+            // The two are not alternatives — a personal Notion and a team wiki
+            // can both be on, and someone moving between them wants to see the
+            // old one still connected while trying the new one.
+            Spacer().frame(height: 24)
+            MacGroupLabel(text: "Confluence")
+            confluenceCard
+
+            Spacer().frame(height: 16)
+            MacGroupLabel(text: "Automation")
+            MacTile {
+                MacRow(
+                    "Auto-send each meeting",
+                    hint: "On publishes each recap to the company wiki as soon as it is ready. Off lets you send manually from the meeting Done view.",
+                    showsDivider: false
+                ) {
+                    Toggle("", isOn: Binding(
+                        get: { appState.confluenceAutoSend },
+                        set: { newValue in
+                            appState.confluenceAutoSend = newValue
+                            DimmyCore.shared.setConfig(appState.toRustConfig())
+                        }
+                    ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .disabled(!confluenceConnected)
+                }
+            }
 
             Spacer().frame(height: 24)
             MacGroupLabel(text: "Telegram")
@@ -354,6 +387,79 @@ struct MacIntegrationsPage: View {
     // MARK: - Telegram card
 
     @ViewBuilder
+    // ── Confluence ──────────────────────────────────────────────────
+
+    /// Mirrors the Windows card: mark, one line of state, and the actions.
+    ///
+    /// Three states, not two. A token with no space chosen is connected but
+    /// NOT ready, and saying just "connected" there would promise that sending
+    /// works when the first recap would fail.
+    private var confluenceCard: some View {
+        MacTile {
+            MacRow(
+                "Confluence",
+                description: confluenceStateText,
+                icon: "network",
+                iconBackground: Color(red: 0.09, green: 0.17, blue: 0.30),
+                showsDivider: false
+            ) {
+                HStack(spacing: 8) {
+                    if confluenceConnected {
+                        Button("Change space") { presentConfluenceSheet(step: 2) }
+                        Button("Re-run setup") { presentConfluenceSheet(step: 1) }
+                        Button("Disconnect") { disconnectConfluence() }
+                    } else {
+                        Button("Set up wizard") { presentConfluenceSheet(step: 1) }
+                            .buttonStyle(.borderedProminent)
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showConfluenceSheet) {
+            ConfluenceConnectSheet(appState: appState,
+                                   initialStep: confluenceSheetStep) { completed in
+                showConfluenceSheet = false
+                if completed { refreshConfluence() }
+            }
+        }
+        .onAppear { refreshConfluence() }
+    }
+
+    private var confluenceStateText: String {
+        guard confluenceConnected else { return "Not connected." }
+        let space = appState.confluenceSpaceName
+        let site = appState.confluenceSite
+        return space.isEmpty
+            ? "Connected to \(site). Pick a space to start sending."
+            : "Recaps land in \(space) on \(site)."
+    }
+
+    private func presentConfluenceSheet(step: Int) {
+        confluenceSheetStep = step
+        showConfluenceSheet = true
+    }
+
+    private func refreshConfluence() {
+        confluenceConnected = DimmyCore.shared.confluenceHasToken
+        if let cfg = DimmyCore.shared.getConfig() {
+            appState.loadFromRustConfig(cfg)
+        }
+    }
+
+    private func disconnectConfluence() {
+        // Empty token clears it in the keystore; the rest goes through the
+        // config round-trip so the core stays the only writer.
+        DimmyCore.shared.confluenceSetToken("")
+        appState.confluenceSite = ""
+        appState.confluenceEmail = ""
+        appState.confluenceSpaceId = ""
+        appState.confluenceSpaceKey = ""
+        appState.confluenceSpaceName = ""
+        appState.confluenceAutoSend = false
+        DimmyCore.shared.setConfig(appState.toRustConfig())
+        refreshConfluence()
+    }
+
     private var telegramCard: some View {
         HStack(alignment: .top, spacing: 14) {
             Image(systemName: "paperplane.circle.fill")
