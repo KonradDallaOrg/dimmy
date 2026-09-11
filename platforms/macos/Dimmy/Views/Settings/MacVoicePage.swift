@@ -20,6 +20,10 @@ struct MacVoicePage: View {
     @State private var downloadingIsQwen: Bool = false
     @State private var downloadingIsParakeet: Bool = false
     @State private var downloadFailed: String? = nil
+    /// whisper's Core ML encoder for the selected model. Without it the
+    /// encoder runs on the GPU the window server draws with, which is what
+    /// makes a long local meeting slow the whole Mac down.
+    @State private var coreml: (available: Bool, present: Bool) = (false, false)
 
     /// Whisper model catalog, loaded from the Rust core's single source
     /// of truth (`dimmy_list_local_models`) so the Mac picker offers the
@@ -401,9 +405,9 @@ struct MacVoicePage: View {
                 } else {
                     MacRow(
                         "Local model",
-                        hint: "Whisper sizes run fully offline. Parakeet TDT v3 is faster and strong on European languages, but it downloads once at about 2.5 GB.",
+                        hint: "Whisper sizes run fully offline. Parakeet TDT v3 is faster and strong on European languages, and downloads once at about 466 MB.",
                         hintURL: URL(string: "https://dimmy.app/help/whisper-models"),
-                        showsDivider: !localModelReady || downloadInFlight
+                        showsDivider: !localModelReady || downloadInFlight || coremlRowVisible
                     ) {
                         Picker("", selection: localModelPickerBinding) {
                             ForEach(localModels.indices, id: \.self) { i in
@@ -446,12 +450,29 @@ struct MacVoicePage: View {
                             .buttonStyle(.borderedProminent)
                             .controlSize(.small)
                         }
+                    } else if coremlRowVisible {
+                        MacRow(
+                            "Neural Engine",
+                            description: coreml.present
+                                ? "On. whisper's encoder runs on the Neural Engine, leaving the GPU to the rest of the Mac."
+                                : "Moves whisper's encoder off the GPU, so a long meeting doesn't slow the whole Mac. About 1.2 GB for large models; the first transcription afterwards takes a few minutes while macOS compiles it.",
+                            showsDivider: false
+                        ) {
+                            if coreml.present {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                            } else {
+                                Button("Download") { startCoremlDownload() }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                            }
+                        }
                     }
                 }
 
                 MacRow(
                     "Language",
-                    hint: "Tells the speech engine what to expect. Auto-detect works with cloud speech-to-text only; local models need a specific language. To translate into another language, use the pill's scroll wheel instead.",
+                    hint: "Tells the speech engine what to expect. Auto-detect works with cloud and local models; picking the language you speak is still a little faster and more reliable on short clips. To translate into another language, use the pill's scroll wheel instead.",
                     hintURL: URL(string: "https://dimmy.app/help/language")
                 ) {
                     Picker("", selection: Binding(
@@ -518,7 +539,7 @@ struct MacVoicePage: View {
 
     /// True when the currently-selected local backend has its data on
     /// disk and is ready to transcribe. Whisper: ggml file present.
-    /// Parakeet: full about 2.5 GB bundle present.
+    /// Parakeet: full CoreML bundle (about 466 MB) present.
     private var localModelReady: Bool {
         if localBackendIsQwen {
             return appState.qwenBundlePresent
@@ -591,8 +612,10 @@ struct MacVoicePage: View {
             let models = DimmyCore.shared.listLocalModels() ?? []
             let qwen = DimmyCore.shared.qwenAsrBundlePresent(qwenName)
             let qwenList = DimmyCore.shared.listQwenAsrModels() ?? []
+            let coremlStatus = DimmyCore.shared.coremlEncoderStatus(modelName)
             DispatchQueue.main.async {
                 self.localModelExists = exists
+                self.coreml = coremlStatus
                 self.appState.parakeetBundlePresent = parakeet
                 self.appState.qwenBundlePresent = qwen
                 if !qwenList.isEmpty { self.qwenModels = qwenList }
@@ -658,6 +681,39 @@ struct MacVoicePage: View {
                     } else {
                         downloadFailed = "Download failed. Check your connection and try again."
                     }
+                }
+            }
+        }
+    }
+
+    /// Offered only for a whisper model that is on disk, has an encoder
+    /// upstream, and a build that can use it.
+    private var coremlRowVisible: Bool {
+        !localBackendIsParakeet && !localBackendIsQwen && localModelReady
+            && !downloadInFlight && coreml.available
+    }
+
+    private func startCoremlDownload() {
+        guard !downloadInFlight, DimmyCore.shared.isInitialized else { return }
+        let target = appState.localModel
+        downloadInFlight = true
+        downloadFailed = nil
+        downloadingIsQwen = false
+        downloadingIsParakeet = false
+        // The core reports encoder progress under the whisper model's own
+        // filename, so the existing per-file progress match works unchanged.
+        downloadingTarget = target
+        downloadingLabel = "Neural Engine encoder for \(target)"
+        appState.modelDownloadProgress = 0
+        appState.modelDownloadFilename = ""
+        DispatchQueue.global(qos: .userInitiated).async {
+            let ok = DimmyCore.shared.downloadCoremlEncoder(target)
+            DispatchQueue.main.async {
+                downloadInFlight = false
+                if ok {
+                    refreshLocalModelStatus()
+                } else {
+                    downloadFailed = "Neural Engine encoder download failed. Check your connection and try again."
                 }
             }
         }

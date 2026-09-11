@@ -888,6 +888,36 @@ final class DimmyCore {
         }
     }
 
+    /// Where whisper's Core ML encoder stands for `filename`: `available`
+    /// = upstream publishes one for this architecture AND this build can use
+    /// it; `present` = unpacked next to the model, so the encoder runs on the
+    /// Neural Engine instead of the GPU the window server draws with.
+    func coremlEncoderStatus(_ filename: String) -> (available: Bool, present: Bool) {
+        let bufLen = Self.bufferSize
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
+        defer { buffer.deallocate() }
+        buffer[0] = 0
+        let written = filename.withCString { dimmy_coreml_encoder_status($0, buffer, bufLen) }
+        guard written > 0,
+              let data = String(cString: buffer).data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return (false, false) }
+        let supported = obj["supported"] as? Bool ?? false
+        return (supported && (obj["available"] as? Bool ?? false),
+                supported && (obj["present"] as? Bool ?? false))
+    }
+
+    /// Download + unpack the Core ML encoder. BLOCKING, call from a
+    /// background thread. Progress arrives as `model_download_progress`
+    /// carrying the whisper model's filename, same as the .bin download.
+    func downloadCoremlEncoder(_ filename: String) -> Bool {
+        let result = filename.withCString { dimmy_coreml_encoder_download($0) }
+        if result != 0 {
+            print("[DimmyCore] ERROR: downloadCoremlEncoder(\(filename)) failed with code \(result)")
+        }
+        return result == 0
+    }
+
     /// Directory of the meeting currently recording, or nil.
     ///
     /// Authoritative, unlike picking the newest directory by mtime: any
