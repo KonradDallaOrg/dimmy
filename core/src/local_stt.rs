@@ -848,6 +848,26 @@ fn resolve_ggml_device(
 /// `hw.perflevel0.logicalcpu` is the top (fastest) level; on Intel Macs the
 /// key does not exist and we fall through to the full count, which there is
 /// the right answer anyway because all the cores are the same.
+/// Maps the caller's `language` (config field, `""` meaning "no preference
+/// set" -- Dimmy's "Auto-detect" option) to the string whisper.cpp's
+/// `set_language` actually wants.
+///
+/// whisper-rs also offers `set_detect_language(true)` as a supposedly
+/// equivalent way to request auto-detection ("Either has the same effect",
+/// per its own docs) while leaving `language` untouched. It is not
+/// equivalent on this build: `detect_language` alone returns `Ok` with zero
+/// segments -- confident, correct language detection, empty output, no
+/// error -- while `set_language(Some("auto"))` produces the same detection
+/// and the correct text. So this is the only form the caller uses.
+#[cfg(feature = "local-stt")]
+fn whisper_language_arg(language: &str) -> &str {
+    if language.is_empty() {
+        "auto"
+    } else {
+        language
+    }
+}
+
 #[cfg(feature = "local-stt")]
 pub(crate) fn inference_threads() -> usize {
     let all = std::thread::available_parallelism()
@@ -931,6 +951,26 @@ mod thread_count {
                 super::inference_threads()
             );
         }
+    }
+}
+
+#[cfg(all(test, feature = "local-stt"))]
+mod language_arg {
+    use super::whisper_language_arg;
+
+    #[test]
+    fn empty_maps_to_auto_not_the_boolean_flag() {
+        // "" is Dimmy's "Auto-detect" config value. set_detect_language(true)
+        // with the language field left untouched returns Ok with zero
+        // segments on this whisper.cpp build -- verified live 2026-09-11.
+        // set_language(Some("auto")) is the form that actually produces text.
+        assert_eq!(whisper_language_arg(""), "auto");
+    }
+
+    #[test]
+    fn explicit_language_passes_through_unchanged() {
+        assert_eq!(whisper_language_arg("en"), "en");
+        assert_eq!(whisper_language_arg("it"), "it");
     }
 }
 
@@ -1104,11 +1144,16 @@ mod whisper_cache {
             ));
         }
 
-        if !language.is_empty() {
-            params.set_language(Some(language));
-        } else {
-            params.set_detect_language(true);
-        }
+        // `set_detect_language(true)` alone (leaving `language` at whisper-rs's
+        // own default) returns Ok with zero segments on this whisper.cpp build —
+        // confident, correct language detection, empty output, no error.
+        // Verified live 2026-09-11 on a clean 11s English clip: `language=""`
+        // (-> set_detect_language only) => 0 chars; `language="auto"` (via
+        // set_language) => correct text, same auto-detection. whisper-rs's own
+        // docs call the two equivalent ("Either has the same effect"); they are
+        // not, on this build. set_language(Some("auto")) is the form that works,
+        // so it is the only one this code calls.
+        params.set_language(Some(super::whisper_language_arg(language)));
 
         let n_threads: c_int = super::inference_threads() as c_int;
         params.set_n_threads(n_threads);

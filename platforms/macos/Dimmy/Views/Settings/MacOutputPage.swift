@@ -472,8 +472,17 @@ struct MacOutputPage: View {
                                 // Real vendor logo when we have one, SF
                                 // Symbol fallback for Auto / Local /
                                 // Custom rows (no Anthropic/Gemini/etc.
-                                // brand to render).
-                                if opt.assetName.isEmpty {
+                                // brand to render). A local model that is
+                                // already on disk gets the same green check
+                                // the Voice and LLM pickers use, so "will
+                                // this download 2 GB when I press Recap?"
+                                // is answerable without pressing it.
+                                if let file = opt.localFilename {
+                                    Image(systemName: DimmyCore.shared.llmModelExists(file)
+                                          ? "checkmark.circle.fill" : "arrow.down.circle")
+                                        .foregroundStyle(DimmyCore.shared.llmModelExists(file)
+                                                         ? Color.green : Color.macTextSecondary)
+                                } else if opt.assetName.isEmpty {
                                     Image(systemName: opt.iconName)
                                 } else {
                                     Image(opt.assetName)

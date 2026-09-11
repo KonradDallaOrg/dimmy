@@ -56,6 +56,54 @@ struct MeetingDoneView: View {
         /// Elapsed seconds from the line's timestamp, nil when it has none —
         /// those lines are shown but cannot be jumped to.
         let seconds: TimeInterval?
+        /// "mic" or "system" when the line names its track, nil otherwise.
+        /// Drives the tint and the divider, the way Windows' TranscriptRenderer
+        /// does: without it both sides of a call read as one voice.
+        var speaker: String?
+        /// The line with its `[stamp] [speaker]` prefix removed, which is what
+        /// is actually rendered. Falls back to the whole line when there is no
+        /// prefix to strip.
+        var body: String
+
+        init(id: Int, text: String, seconds: TimeInterval?, speaker: String? = nil, body: String? = nil) {
+            self.id = id
+            self.text = text
+            self.seconds = seconds
+            self.speaker = speaker
+            self.body = body ?? text
+        }
+    }
+
+    /// Split `[00:12:00] [mic] hello` into its stamp, track and text.
+    ///
+    /// Mirrors the shapes Windows parses (TranscriptRenderer.cs): the current
+    /// `[hh:mm:ss] [mic] body`, the pre-2026-09-10 `[  1234 ms] [mic] body`,
+    /// and anything else passed through untouched as plain body text.
+    static func parseTurn(_ line: String) -> (speaker: String?, body: String) {
+        guard line.hasPrefix("["), let close = line.firstIndex(of: "]") else {
+            return (nil, line)
+        }
+        let rest = line[line.index(after: close)...].drop(while: { $0 == " " })
+        guard rest.hasPrefix("["), let close2 = rest.firstIndex(of: "]") else {
+            return (nil, line)
+        }
+        let track = String(rest[rest.index(after: rest.startIndex)..<close2])
+        guard track == "mic" || track == "system" else { return (nil, line) }
+        let body = rest[rest.index(after: close2)...].drop(while: { $0 == " " })
+        return (track, String(body))
+    }
+
+    /// Mic = mint, system = violet, the same two tracks and the same reading
+    /// as Windows' SpeakerColor. Light shades on dark, saturated on light.
+    static func speakerTint(_ speaker: String?, dark: Bool) -> Color {
+        if speaker == "system" {
+            return dark
+                ? Color(red: 0xC9 / 255, green: 0xB0 / 255, blue: 1.0)
+                : Color(red: 0x55 / 255, green: 0x35 / 255, blue: 0x9C / 255)
+        }
+        return dark
+            ? Color(red: 0x7E / 255, green: 0xE8 / 255, blue: 0xC0 / 255)
+            : Color(red: 0x1B / 255, green: 0x6D / 255, blue: 0x4F / 255)
     }
 
     var body: some View {
@@ -345,9 +393,12 @@ struct MeetingDoneView: View {
             .enumerated()
             .map { index, line in
                 let text = String(line)
+                let parsed = Self.parseTurn(text)
                 return TranscriptTurn(id: index,
                                       text: text,
-                                      seconds: Self.elapsedSeconds(from: text))
+                                      seconds: Self.elapsedSeconds(from: text),
+                                      speaker: parsed.speaker,
+                                      body: parsed.body)
             }
     }
 
@@ -374,17 +425,33 @@ struct MeetingDoneView: View {
         return total
     }
 
-    /// Bring the turn being spoken at `time` to the top. Silent no-op when no
-    /// line carries a timestamp — some imported transcripts do not, and there
-    /// is then nothing to align to.
-    private func scrollTranscript(to time: TimeInterval, using proxy: ScrollViewProxy) {
+    /// The turn being spoken at `time`: the last one that had already started.
+    ///
+    /// A seek that lands BEFORE the first stamped line falls back to that
+    /// first line rather than to nothing. The first chunk of a meeting is
+    /// stamped at the end of its window, so a 30 s window leaves the whole
+    /// opening half-minute earlier than any stamp — seeking into it used to
+    /// leave the transcript wherever it was, which reads as "the waveform and
+    /// the transcript are not synced". Mirrors Windows' `hit ??=
+    /// _doneTurnAnchors[0]` in MeetingWindow.xaml.cs::ScrollTranscriptTo.
+    ///
+    /// nil only when no line carries a stamp at all — some imported
+    /// transcripts do not, and there is then nothing to align to.
+    static func turn(at time: TimeInterval, in turns: [TranscriptTurn]) -> TranscriptTurn? {
         var hit: TranscriptTurn?
-        for turn in transcriptTurns {
+        for turn in turns {
             guard let seconds = turn.seconds else { continue }
-            if seconds > time { break }
+            if seconds > time {
+                break
+            }
             hit = turn
         }
-        guard let target = hit else { return }
+        return hit ?? turns.first { $0.seconds != nil }
+    }
+
+    /// Bring the turn being spoken at `time` to the top.
+    private func scrollTranscript(to time: TimeInterval, using proxy: ScrollViewProxy) {
+        guard let target = Self.turn(at: time, in: transcriptTurns) else { return }
         withAnimation(.easeInOut(duration: 0.22)) {
             proxy.scrollTo(target.id, anchor: .top)
         }
@@ -404,13 +471,16 @@ struct MeetingDoneView: View {
                         // TO. The cost is that a drag-selection now covers one
                         // turn rather than the whole transcript; the toolbar
                         // Copy button still takes the lot.
-                        ForEach(transcriptTurns) { turn in
-                            Text(turn.text)
-                                .font(.system(size: 12, design: .monospaced))
-                                .foregroundStyle(Color.primary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .textSelection(.enabled)
-                                .id(turn.id)
+                        ForEach(Array(transcriptTurns.enumerated()), id: \.element.id) { i, turn in
+                            transcriptRow(
+                                turn,
+                                // A thin rule wherever the track changes, so a
+                                // call reads as two voices rather than one wall.
+                                separated: i > 0
+                                    && turn.speaker != nil
+                                    && transcriptTurns[i - 1].speaker != turn.speaker
+                            )
+                            .id(turn.id)
                         }
                     }
                 }
@@ -422,6 +492,45 @@ struct MeetingDoneView: View {
                 scrollTranscript(to: request.time, using: proxy)
             }
         }
+    }
+
+    /// One transcript line: tinted stamp + track badge, then the words.
+    /// Lines with no `[stamp] [track]` prefix fall through as plain body text,
+    /// which is what an imported transcript looks like.
+    @ViewBuilder
+    private func transcriptRow(_ turn: TranscriptTurn, separated: Bool) -> some View {
+        let tint = Self.speakerTint(turn.speaker, dark: colorScheme == .dark)
+        VStack(alignment: .leading, spacing: 0) {
+            if separated {
+                Rectangle()
+                    .fill(tint.opacity(0.25))
+                    .frame(height: 1)
+                    .padding(.vertical, 6)
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                if let speaker = turn.speaker {
+                    Text(Self.stamp(from: turn.text) ?? "")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(tint)
+                    Text(speaker.uppercased())
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(tint)
+                }
+                Text(turn.body)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(Color.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+            .padding(.vertical, 2)
+        }
+    }
+
+    /// The text inside the leading `[...]`, for display. nil when there is none.
+    static func stamp(from line: String) -> String? {
+        guard line.hasPrefix("["), let close = line.firstIndex(of: "]") else { return nil }
+        return String(line[line.index(after: line.startIndex)..<close])
+            .trimmingCharacters(in: .whitespaces)
     }
 
     private var notesContent: some View {

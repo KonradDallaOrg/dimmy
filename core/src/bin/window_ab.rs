@@ -98,7 +98,7 @@ fn transcribe(engine: &str, pcm: &[f32]) -> Result<String, String> {
         return dimmy_lib::parakeet::transcribe(pcm).map_err(|e| format!("{e:?}"));
     }
     if let Some(model) = engine.strip_prefix("qwen:") {
-        return dimmy_lib::qwen_asr::transcribe(pcm, model)
+        return dimmy_lib::qwen_asr::transcribe(pcm, model, "")
             .map(|t| t.text)
             .map_err(|e| format!("{e:?}"));
     }

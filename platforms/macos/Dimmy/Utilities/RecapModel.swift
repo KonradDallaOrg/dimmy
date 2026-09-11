@@ -93,6 +93,18 @@ struct RecapModelOption: Identifiable, Equatable {
         case auto, anthropic, gemini, openai, local, custom
     }
 
+    /// The GGUF this option runs, for a local option; nil for every cloud
+    /// one. The picker needs it to say whether the model is on disk — the
+    /// Voice and LLM pickers both mark downloaded entries, and a recap row
+    /// that does not is the one place the user cannot tell that the model
+    /// they picked will have to be fetched first.
+    var localFilename: String? {
+        let prefix = "local:"
+        guard id.hasPrefix(prefix) else { return nil }
+        let name = String(id.dropFirst(prefix.count))
+        return name.isEmpty ? nil : name
+    }
+
     /// The value persisted in `recap_model_override` for the "Auto"
     /// option. Stored explicitly so we can round-trip cleanly even if
     /// a future version stores the empty string differently.

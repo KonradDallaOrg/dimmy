@@ -58,15 +58,36 @@ fn architecture(model_filename: &str) -> Option<&'static str> {
 
 /// The `.mlmodelc` directory whisper.cpp will look for, given a model file.
 ///
-/// Mirrors `whisper_get_coreml_path_encoder`: drop the extension, append
-/// `-encoder.mlmodelc`.
+/// Mirrors `whisper_get_coreml_path_encoder`: drop the extension, strip a
+/// trailing `-qX_X` quantisation suffix, append `-encoder.mlmodelc`.
 pub fn bundle_path(model_filename: &str) -> PathBuf {
     let model = crate::local_stt::model_path(model_filename);
     let stem = model
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or(model_filename);
+    let stem = strip_quant_suffix(stem);
     model.with_file_name(format!("{stem}-encoder.mlmodelc"))
+}
+
+/// Strip a trailing `-qX_X` quantisation suffix (`-` + `q` + digit + `_` +
+/// digit, 5 bytes), mirroring whisper.cpp's own `whisper_get_coreml_path_encoder`.
+/// whisper.cpp computes the Core ML path itself from `ctx->path_model` with
+/// this exact stripping rule, so a bundle saved under the quantised name
+/// (e.g. `ggml-large-v3-turbo-q5_0-encoder.mlmodelc`) is invisible to it --
+/// verified live 2026-09-11: whisper.cpp requested
+/// `ggml-large-v3-turbo-encoder.mlmodelc`, not the quantised name, and
+/// failed to load until the bundle was renamed to match.
+fn strip_quant_suffix(stem: &str) -> &str {
+    let Some(pos) = stem.rfind('-') else {
+        return stem;
+    };
+    let sub = &stem.as_bytes()[pos..];
+    if sub.len() == 5 && sub[1] == b'q' && sub[3] == b'_' {
+        &stem[..pos]
+    } else {
+        stem
+    }
 }
 
 /// True when the bundle is on disk AND looks like a compiled model rather than
@@ -225,15 +246,40 @@ mod tests {
 
     #[test]
     fn bundle_is_named_the_way_whisper_cpp_looks_for_it() {
-        // whisper_get_coreml_path_encoder drops the extension and appends
-        // "-encoder.mlmodelc" -- to the quantised stem, not the architecture.
+        // whisper.cpp's own whisper_get_coreml_path_encoder() drops the
+        // extension AND strips a trailing "-qX_X" quantisation suffix
+        // before appending "-encoder.mlmodelc" (see whisper.cpp source,
+        // `whisper_get_coreml_path_encoder`). A bundle saved under the
+        // quantised name is therefore invisible to it -- verified live on
+        // 2026-09-11: whisper.cpp requested
+        // '.../ggml-large-v3-turbo-encoder.mlmodelc', not
+        // '.../ggml-large-v3-turbo-q8_0-encoder.mlmodelc'.
         let p = bundle_path("ggml-large-v3-turbo-q8_0.bin");
         assert_eq!(
             p.file_name().unwrap().to_str().unwrap(),
-            "ggml-large-v3-turbo-q8_0-encoder.mlmodelc"
+            "ggml-large-v3-turbo-encoder.mlmodelc"
         );
         // And beside the model, because that is where whisper.cpp looks.
         assert_eq!(p.parent(), crate::local_stt::model_path("x.bin").parent());
+    }
+
+    #[test]
+    fn quant_suffix_stripped_for_every_shipped_quantisation() {
+        // whisper.cpp's check is structural (sub.size()==5, sub[1]=='q',
+        // sub[3]=='_'), not a specific digit pair -- q5_0, q8_0 and q5_1
+        // (every quantisation Dimmy actually ships) must all strip.
+        for name in [
+            "ggml-base-q8_0.bin",
+            "ggml-small-q5_1.bin",
+            "ggml-medium-q5_0.bin",
+        ] {
+            let p = bundle_path(name);
+            let got = p.file_name().unwrap().to_str().unwrap();
+            assert!(
+                !got.contains("-q5_") && !got.contains("-q8_"),
+                "{name} -> {got} still carries a quant suffix whisper.cpp will not look for"
+            );
+        }
     }
 
     #[test]

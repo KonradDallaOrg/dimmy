@@ -413,7 +413,8 @@ object = { version = "0.36", default-features = false, features = ["read", "std"
 # has been releasing tags without pushing to crates.io). Gated by the
 # `local-stt-parakeet-fluid` feature.
 [target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
-fluidaudio-rs = { git = "https://github.com/FluidInference/fluidaudio-rs", tag = "v0.12.6", optional = true }
+# Vendored from tag v0.12.6 to add the Qwen3-ASR bridge; see vendor/fluidaudio-rs/VENDORED.md.
+fluidaudio-rs = { path = "vendor/fluidaudio-rs", optional = true }
 
 # PANIC STRATEGY AT THE FFI BOUNDARY — deliberate NON-choice (audit
 # 2026-07-02). We do NOT set `panic = "abort"` here even though ~100

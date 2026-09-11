@@ -1,0 +1,22 @@
+[package]
+name = "fluidaudio-rs"
+version = "0.12.6"
+edition = "2021"
+description = "Rust bindings for FluidAudio - ASR, VAD, Speaker Diarization, and TTS on Apple platforms"
+license = "MIT"
+repository = "https://github.com/FluidInference/fluidaudio-rs"
+keywords = ["audio", "speech-recognition", "asr", "vad", "diarization"]
+categories = ["multimedia::audio", "api-bindings"]
+
+[lib]
+crate-type = ["lib", "staticlib"]
+
+[dependencies]
+thiserror = "1.0"
+
+[features]
+default = ["asr", "vad", "diarization"]
+asr = []
+vad = []
+diarization = []
+tts = []

@@ -466,6 +466,9 @@ struct MacSettingsContainerView: View {
     private var providerStatusText: String {
         // Mirrors design: "● Listening, groq whisper". Falls back to
         // model name when provider isn't recognised (custom endpoint).
+        if appState.sttMode == "local" {
+            return "on device, \(appState.localSttDisplayName)".lowercased()
+        }
         let provider = appState.sttProvider.displayName
         let model = appState.apiModel
         return "\(provider), \(model.split(separator: "-").first.map(String.init) ?? model)"

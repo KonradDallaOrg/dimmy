@@ -888,6 +888,36 @@ final class DimmyCore {
         }
     }
 
+    /// Where whisper's Core ML encoder stands for `filename`: `available`
+    /// = upstream publishes one for this architecture AND this build can use
+    /// it; `present` = unpacked next to the model, so the encoder runs on the
+    /// Neural Engine instead of the GPU the window server draws with.
+    func coremlEncoderStatus(_ filename: String) -> (available: Bool, present: Bool) {
+        let bufLen = Self.bufferSize
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
+        defer { buffer.deallocate() }
+        buffer[0] = 0
+        let written = filename.withCString { dimmy_coreml_encoder_status($0, buffer, bufLen) }
+        guard written > 0,
+              let data = String(cString: buffer).data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return (false, false) }
+        let supported = obj["supported"] as? Bool ?? false
+        return (supported && (obj["available"] as? Bool ?? false),
+                supported && (obj["present"] as? Bool ?? false))
+    }
+
+    /// Download + unpack the Core ML encoder. BLOCKING, call from a
+    /// background thread. Progress arrives as `model_download_progress`
+    /// carrying the whisper model's filename, same as the .bin download.
+    func downloadCoremlEncoder(_ filename: String) -> Bool {
+        let result = filename.withCString { dimmy_coreml_encoder_download($0) }
+        if result != 0 {
+            print("[DimmyCore] ERROR: downloadCoremlEncoder(\(filename)) failed with code \(result)")
+        }
+        return result == 0
+    }
+
     /// Directory of the meeting currently recording, or nil.
     ///
     /// Authoritative, unlike picking the newest directory by mtime: any
@@ -1118,6 +1148,16 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
         break
 
     case "status":
+        // Only while a dictation/command cycle is actually in flight.
+        // HotkeyManager moves the pill to .transcribing BEFORE calling the
+        // core, so a real cycle is never .idle here — but the Command Mode
+        // wizard and the Settings model test call dimmy_command_transform
+        // directly, with their own UI and no pill cycle to end. Those emit
+        // the same "processing" status, which used to strand the pill on
+        // "Processing…" forever: nothing ever set it back.
+        if case .idle = appState.recordingState {
+            break
+        }
         if let state = payload["state"] as? String {
             switch state {
             case "transcribing":

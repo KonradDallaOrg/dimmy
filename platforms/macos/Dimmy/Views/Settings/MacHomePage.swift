@@ -293,7 +293,7 @@ struct MacHomePage: View {
         let provider = appState.sttProvider.displayName
         let model = appState.apiModel
         return appState.sttMode == "local"
-            ? "On device · \(appState.localModel)"
+            ? "On device · \(appState.localSttDisplayName)"
             : "\(provider) · \(model) · \(mode)"
     }
 

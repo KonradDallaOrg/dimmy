@@ -940,6 +940,38 @@ final class AppState: ObservableObject {
     /// TDT v3 FP32 via ONNX Runtime. The two are mutually exclusive — the
     /// dispatcher in transcribe.rs picks one based on this string.
     @Published var localSttBackend: String = "whisper"
+
+    /// The engine that actually runs on device, for status lines. The cloud
+    /// fields (`sttProvider`, `apiModel`) keep their last values in local
+    /// mode, so reading them there showed "groq, whisper" on a Parakeet setup.
+    var localSttDisplayName: String {
+        AppState.localSttDisplayName(
+            backend: localSttBackend,
+            qwenModel: qwenAsrModel,
+            whisperModel: localModel
+        )
+    }
+
+    /// The engine the user is actually running, for the status dot and the
+    /// Home page. Static and pure because AppState is a singleton with a
+    /// private init: the logic is what needs testing, not the singleton.
+    static func localSttDisplayName(
+        backend: String,
+        qwenModel: String,
+        whisperModel: String
+    ) -> String {
+        switch backend {
+        case "parakeet":
+            return "Parakeet"
+        case "qwen":
+            return qwenModel.hasPrefix("fluid:") ? "Qwen3-ASR · Neural Engine" : "Qwen3-ASR"
+        default:
+            let stem = whisperModel
+                .replacingOccurrences(of: "ggml-", with: "")
+                .replacingOccurrences(of: ".bin", with: "")
+            return "Whisper \(stem)"
+        }
+    }
     @Published var parakeetDownloadProgress: Double = 0.0
     @Published var isDownloadingParakeet: Bool = false
     @Published var parakeetBundlePresent: Bool = false

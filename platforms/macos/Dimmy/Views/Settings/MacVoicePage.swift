@@ -20,6 +20,16 @@ struct MacVoicePage: View {
     @State private var downloadingIsQwen: Bool = false
     @State private var downloadingIsParakeet: Bool = false
     @State private var downloadFailed: String? = nil
+    /// whisper's Core ML encoder for the selected model. Without it the
+    /// encoder runs on the GPU the window server draws with, which is what
+    /// makes a long local meeting slow the whole Mac down.
+    @State private var coreml: (available: Bool, present: Bool) = (false, false)
+
+    /// Filenames of the whisper models whose Neural Engine encoder is already
+    /// on disk. Drives the per-row "· Neural Engine" vs "· GPU" suffix, so the
+    /// list says where each model will actually run instead of making the user
+    /// select one to find out.
+    @State private var coremlReady: Set<String> = []
 
     /// Whisper model catalog, loaded from the Rust core's single source
     /// of truth (`dimmy_list_local_models`) so the Mac picker offers the
@@ -50,7 +60,7 @@ struct MacVoicePage: View {
     /// "Large-v3-Turbo Q8 · 874 MB". The on-disk state is rendered as a
     /// green ✓ next to the row (see `whisperPickerItem` below), not in
     /// the text.
-    private static func modelLabel(_ m: [String: Any]) -> String {
+    static func modelLabel(_ m: [String: Any]) -> String {
         let name = (m["name"] as? String) ?? (m["filename"] as? String) ?? "Model"
         let mb = m["size_mb"] as? Int ?? 0
         let size: String
@@ -70,10 +80,31 @@ struct MacVoicePage: View {
     /// core's `dimmy_list_local_models` already ships a `downloaded:
     /// bool` per entry (see `core/src/ffi.rs::dimmy_list_local_models`)
     /// so Windows can do the exact same with no FFI change.
+    /// The whole row text for a whisper entry, accelerator included.
+    ///
+    /// Pulled out of the view so it can be tested: the suffix is the only
+    /// place the list tells the user where a model will actually run, and
+    /// getting it backwards (promising the Neural Engine for a model whose
+    /// encoder was never downloaded) is worse than not saying anything.
+    static func whisperRowLabel(_ m: [String: Any], neuralEngine: Bool) -> String {
+        modelLabel(m) + (neuralEngine ? " · Neural Engine" : " · GPU")
+    }
+
+    /// Same, for a Qwen3-ASR entry. The Neural Engine variants already carry
+    /// where they run in their catalog name, so only the llama.cpp ones get
+    /// a suffix.
+    static func qwenRowLabel(_ m: [String: Any]) -> String {
+        let file = m["filename"] as? String ?? ""
+        return modelLabel(m) + (file.hasPrefix("fluid:") ? "" : " · GPU")
+    }
+
     @ViewBuilder
-    fileprivate static func whisperPickerItem(_ m: [String: Any]) -> some View {
+    fileprivate static func whisperPickerItem(
+        _ m: [String: Any],
+        neuralEngine: Bool
+    ) -> some View {
         let filename = m["filename"] as? String ?? ""
-        let label = modelLabel(m)
+        let label = whisperRowLabel(m, neuralEngine: neuralEngine)
         if (m["downloaded"] as? Bool) == true {
             Label(label, systemImage: "checkmark.circle.fill")
                 .foregroundStyle(.green)
@@ -93,7 +124,7 @@ struct MacVoicePage: View {
     @ViewBuilder
     fileprivate static func qwenPickerItem(_ m: [String: Any]) -> some View {
         let file = m["filename"] as? String ?? ""
-        let label = modelLabel(m)
+        let label = qwenRowLabel(m)
         if (m["downloaded"] as? Bool) == true {
             Label(label, systemImage: "checkmark.circle.fill")
                 .foregroundStyle(.green)
@@ -401,20 +432,31 @@ struct MacVoicePage: View {
                 } else {
                     MacRow(
                         "Local model",
-                        hint: "Whisper sizes run fully offline. Parakeet TDT v3 is faster and strong on European languages, but it downloads once at about 2.5 GB.",
+                        hint: "Everything here runs offline. Whisper is the broadest, and moves onto the Neural Engine once its encoder is downloaded. Parakeet TDT v3 is the fastest and always runs on the Neural Engine. Qwen3-ASR is the strongest on conversational speech; its 0.6B variant also has a Neural Engine build.",
                         hintURL: URL(string: "https://dimmy.app/help/whisper-models"),
-                        showsDivider: !localModelReady || downloadInFlight
+                        showsDivider: !localModelReady || downloadInFlight || coremlRowVisible
                     ) {
                         Picker("", selection: localModelPickerBinding) {
-                            ForEach(localModels.indices, id: \.self) { i in
-                                Self.whisperPickerItem(localModels[i])
+                            Section("Whisper") {
+                                ForEach(localModels.indices, id: \.self) { i in
+                                    Self.whisperPickerItem(
+                                        localModels[i],
+                                        neuralEngine: coremlReady.contains(
+                                            localModels[i]["filename"] as? String ?? ""
+                                        )
+                                    )
+                                }
                             }
-                            Self.parakeetPickerItem(
-                                label: "Parakeet TDT v3 · 466 MB · Apple Neural Engine",
-                                present: appState.parakeetBundlePresent
-                            )
-                            ForEach(qwenModels.indices, id: \.self) { i in
-                                Self.qwenPickerItem(qwenModels[i])
+                            Section("Parakeet") {
+                                Self.parakeetPickerItem(
+                                    label: "Parakeet TDT v3 · 466 MB · Neural Engine",
+                                    present: appState.parakeetBundlePresent
+                                )
+                            }
+                            Section("Qwen3-ASR") {
+                                ForEach(qwenModels.indices, id: \.self) { i in
+                                    Self.qwenPickerItem(qwenModels[i])
+                                }
                             }
                         }
                         .labelsHidden()
@@ -446,12 +488,29 @@ struct MacVoicePage: View {
                             .buttonStyle(.borderedProminent)
                             .controlSize(.small)
                         }
+                    } else if coremlRowVisible {
+                        MacRow(
+                            "Neural Engine",
+                            description: coreml.present
+                                ? "On. whisper's encoder runs on the Neural Engine, leaving the GPU to the rest of the Mac."
+                                : "Moves whisper's encoder off the GPU, so a long meeting doesn't slow the whole Mac. About 1.2 GB for large models; the first transcription afterwards takes a few minutes while macOS compiles it.",
+                            showsDivider: false
+                        ) {
+                            if coreml.present {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                            } else {
+                                Button("Download") { startCoremlDownload() }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                            }
+                        }
                     }
                 }
 
                 MacRow(
                     "Language",
-                    hint: "Tells the speech engine what to expect. Auto-detect works with cloud speech-to-text only; local models need a specific language. To translate into another language, use the pill's scroll wheel instead.",
+                    hint: "Tells the speech engine what to expect. Auto-detect works with cloud and local models; picking the language you speak is still a little faster and more reliable on short clips. To translate into another language, use the pill's scroll wheel instead.",
                     hintURL: URL(string: "https://dimmy.app/help/language")
                 ) {
                     Picker("", selection: Binding(
@@ -518,7 +577,7 @@ struct MacVoicePage: View {
 
     /// True when the currently-selected local backend has its data on
     /// disk and is ready to transcribe. Whisper: ggml file present.
-    /// Parakeet: full about 2.5 GB bundle present.
+    /// Parakeet: full CoreML bundle (about 466 MB) present.
     private var localModelReady: Bool {
         if localBackendIsQwen {
             return appState.qwenBundlePresent
@@ -591,8 +650,16 @@ struct MacVoicePage: View {
             let models = DimmyCore.shared.listLocalModels() ?? []
             let qwen = DimmyCore.shared.qwenAsrBundlePresent(qwenName)
             let qwenList = DimmyCore.shared.listQwenAsrModels() ?? []
+            let coremlStatus = DimmyCore.shared.coremlEncoderStatus(modelName)
+            var ready = Set<String>()
+            for m in models {
+                guard let f = m["filename"] as? String else { continue }
+                if DimmyCore.shared.coremlEncoderStatus(f).present { ready.insert(f) }
+            }
             DispatchQueue.main.async {
                 self.localModelExists = exists
+                self.coreml = coremlStatus
+                self.coremlReady = ready
                 self.appState.parakeetBundlePresent = parakeet
                 self.appState.qwenBundlePresent = qwen
                 if !qwenList.isEmpty { self.qwenModels = qwenList }
@@ -611,7 +678,9 @@ struct MacVoicePage: View {
         if localBackendIsQwen {
             let target = appState.qwenAsrModel
             downloadingTarget = target
-            downloadingLabel = "\(target) and its projector"
+            downloadingLabel = target.hasPrefix("fluid:")
+                ? "Qwen3-ASR Neural Engine models"
+                : "\(target) and its projector"
             appState.qwenDownloadProgress = 0
             appState.isDownloadingQwen = true
             DispatchQueue.global(qos: .userInitiated).async {
@@ -658,6 +727,39 @@ struct MacVoicePage: View {
                     } else {
                         downloadFailed = "Download failed. Check your connection and try again."
                     }
+                }
+            }
+        }
+    }
+
+    /// Offered only for a whisper model that is on disk, has an encoder
+    /// upstream, and a build that can use it.
+    private var coremlRowVisible: Bool {
+        !localBackendIsParakeet && !localBackendIsQwen && localModelReady
+            && !downloadInFlight && coreml.available
+    }
+
+    private func startCoremlDownload() {
+        guard !downloadInFlight, DimmyCore.shared.isInitialized else { return }
+        let target = appState.localModel
+        downloadInFlight = true
+        downloadFailed = nil
+        downloadingIsQwen = false
+        downloadingIsParakeet = false
+        // The core reports encoder progress under the whisper model's own
+        // filename, so the existing per-file progress match works unchanged.
+        downloadingTarget = target
+        downloadingLabel = "Neural Engine encoder for \(target)"
+        appState.modelDownloadProgress = 0
+        appState.modelDownloadFilename = ""
+        DispatchQueue.global(qos: .userInitiated).async {
+            let ok = DimmyCore.shared.downloadCoremlEncoder(target)
+            DispatchQueue.main.async {
+                downloadInFlight = false
+                if ok {
+                    refreshLocalModelStatus()
+                } else {
+                    downloadFailed = "Neural Engine encoder download failed. Check your connection and try again."
                 }
             }
         }
