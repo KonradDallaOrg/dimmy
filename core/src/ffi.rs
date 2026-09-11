@@ -5142,12 +5142,6 @@ pub extern "C" fn dimmy_claude_desktop_uninstall() -> c_int {
 // in the AES-256 keystore alongside STT/LLM keys, then use it to
 // send meeting recaps via the Notion REST API. See `notion.rs`.
 
-/// Set the Notion integration token. Empty token = clear (no upload
-/// possible until re-set). Returns 0 on success, -1 on lock failure.
-///
-/// # Safety
-/// `token_ptr` must be a valid null-terminated UTF-8 C string. NULL is
-/// rejected (-1). Empty string clears the stored token.
 /// Read an optional C string as an owned `String`; null or invalid UTF-8
 /// becomes empty. The Confluence entries take several optional arguments
 /// (the connect wizard supplies them, Settings lets them fall back to the
@@ -5389,6 +5383,12 @@ pub unsafe extern "C" fn dimmy_confluence_send_recap(
     write_to_buf(&json.to_string(), out_buf, buf_len)
 }
 
+/// Set the Notion integration token. Empty token = clear (no upload
+/// possible until re-set). Returns 0 on success, -1 on lock failure.
+///
+/// # Safety
+/// `token_ptr` must be a valid null-terminated UTF-8 C string. NULL is
+/// rejected (-1). Empty string clears the stored token.
 #[no_mangle]
 pub unsafe extern "C" fn dimmy_notion_set_token(token_ptr: *const c_char) -> c_int {
     if token_ptr.is_null() {

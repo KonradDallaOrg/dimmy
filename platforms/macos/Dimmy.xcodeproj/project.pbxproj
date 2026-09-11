@@ -253,7 +253,7 @@
 		AB000200 /* MacAtoms.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAtoms.swift; sourceTree = "<group>"; };
 		AB000201 /* MacSettingsContainerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSettingsContainerView.swift; sourceTree = "<group>"; };
 		AB000300 /* DimmyCore+License.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DimmyCore+License.swift"; sourceTree = "<group>"; };
-		AB00F101 /* DimmyCore+Confluence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DimmyCore+Confluence.swift; sourceTree = "<group>"; };
+		AB00F101 /* DimmyCore+Confluence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DimmyCore+Confluence.swift"; sourceTree = "<group>"; };
 		AB00F102 /* ConfluenceConnectSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfluenceConnectSheet.swift; sourceTree = "<group>"; };
 		AB000301 /* MacLicensePage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacLicensePage.swift; sourceTree = "<group>"; };
 		AB000202 /* MacHomePage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacHomePage.swift; sourceTree = "<group>"; };
