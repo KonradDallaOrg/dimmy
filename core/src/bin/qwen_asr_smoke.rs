@@ -59,7 +59,7 @@ fn main() {
             continue;
         };
         let t = std::time::Instant::now();
-        match dimmy_lib::qwen_asr::transcribe(&pcm, &model) {
+        match dimmy_lib::qwen_asr::transcribe(&pcm, &model, "") {
             Ok(tr) => {
                 let dt = t.elapsed().as_secs_f32();
                 println!(

@@ -1084,7 +1084,10 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
             Arc::new(|pcm: &[f32]| crate::parakeet::transcribe(pcm))
         } else if local_backend == "qwen" {
             let variant = qwen_asr_variant();
-            Arc::new(move |pcm: &[f32]| crate::qwen_asr::transcribe(pcm, &variant).map(|t| t.text))
+            let language = st.language.lock().map(|l| l.clone()).unwrap_or_default();
+            Arc::new(move |pcm: &[f32]| {
+                crate::qwen_asr::transcribe(pcm, &variant, &language).map(|t| t.text)
+            })
         } else {
             let model_filename = st.local_model.lock().map(|m| m.clone()).unwrap_or_default();
             let model_path = crate::local_stt::model_path(&model_filename);
@@ -1561,7 +1564,7 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
                 "[StopRec] Local STT mode — backend: qwen, model: {}",
                 variant
             ));
-            crate::transcribe::transcribe_audio_local_qwen(&processed, &variant)
+            crate::transcribe::transcribe_audio_local_qwen(&processed, &variant, &language)
         } else {
             log(&format!(
                 "[StopRec] Local STT mode — backend: whisper, model: {}",
@@ -6939,11 +6942,9 @@ pub extern "C" fn dimmy_parakeet_warmup() -> c_int {
 /// are downloaded and used as a pair.
 #[no_mangle]
 pub extern "C" fn dimmy_qwen_asr_models_json(buf: *mut c_char, buf_len: c_int) -> c_int {
-    if !crate::qwen_asr::engine_available() {
-        return write_to_buf("[]", buf, buf_len);
-    }
     let models: Vec<serde_json::Value> = crate::qwen_asr::AVAILABLE_MODELS
         .iter()
+        .filter(|m| crate::qwen_asr::available(m))
         .map(|m| {
             serde_json::json!({
                 "name": m.name,
@@ -8291,7 +8292,7 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
                 .map(|(t, j)| (t, Some(j)))
         } else if backend == "qwen" {
             // No word timestamps: the model returns text, not alignment.
-            crate::transcribe::transcribe_audio_local_qwen(&chunk, &qwen_asr_variant())
+            crate::transcribe::transcribe_audio_local_qwen(&chunk, &qwen_asr_variant(), &language)
                 .map(|t| (t, None))
         } else {
             crate::transcribe::transcribe_audio_local(&chunk, &language, &model, &composed_prompt)
@@ -8584,8 +8585,12 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
                 };
                 let elapsed_ms = (start as f64 / rate as f64 * 1000.0) as u128;
                 let text = if backend == "qwen" {
-                    crate::transcribe::transcribe_audio_local_qwen(&window, &qwen_asr_variant())
-                        .unwrap_or_default()
+                    crate::transcribe::transcribe_audio_local_qwen(
+                        &window,
+                        &qwen_asr_variant(),
+                        &language,
+                    )
+                    .unwrap_or_default()
                 } else if backend == "parakeet" {
                     crate::transcribe::transcribe_audio_local_parakeet_with_word_ts(&window)
                         .map(|(t, _)| t)

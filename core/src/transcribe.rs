@@ -677,6 +677,7 @@ mod backend_resolution {
 pub fn transcribe_audio_local_qwen(
     audio: &crate::audio::ProcessedAudio,
     model_file: &str,
+    language: &str,
 ) -> Result<String, crate::error::TranscribeError> {
     assert!(
         !audio.samples.is_empty(),
@@ -697,7 +698,7 @@ pub fn transcribe_audio_local_qwen(
         "transcribe_audio_local_qwen: downsampled samples must not be empty"
     );
 
-    let transcript = crate::qwen_asr::transcribe(&samples_16k, model_file)?;
+    let transcript = crate::qwen_asr::transcribe(&samples_16k, model_file, language)?;
     if transcript.text.trim().is_empty() {
         return Err(crate::error::TranscribeError::Empty);
     }

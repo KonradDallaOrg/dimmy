@@ -60,6 +60,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_chosen_language_is_named_in_the_instruction() {
+        // Without this the model re-detects per 30 s window and a long
+        // Italian meeting comes back partly in Spanish (measured 2026-09-12).
+        let p = super::transcribe_instruction("it", "<__media__>");
+        assert!(p.contains("Italian"), "{p}");
+        assert!(p.ends_with("<__media__>"), "{p}");
+    }
+
+    #[test]
+    fn auto_detect_asks_for_no_language_at_all() {
+        let p = super::transcribe_instruction("", "<__media__>");
+        assert_eq!(p, "Transcribe the audio. <__media__>");
+    }
+
+    #[test]
+    fn every_language_the_picker_offers_reaches_the_prompt_as_a_name() {
+        for code in ["it", "en", "es", "fr", "de"] {
+            let p = super::transcribe_instruction(code, "<m>");
+            assert!(
+                p.contains(crate::llm::lang_name(code)),
+                "{code} not named in {p}"
+            );
+        }
+    }
+
+    #[test]
     fn splits_language_from_transcript() {
         let (lang, text) = strip_asr_scaffolding("language Italian<asr_text>ma poi non riescono");
         assert_eq!(lang.as_deref(), Some("Italian"));
@@ -102,7 +128,10 @@ mod tests {
 
     #[test]
     fn every_entry_names_two_distinct_files_and_a_real_size() {
-        for m in AVAILABLE_MODELS {
+        for m in AVAILABLE_MODELS
+            .iter()
+            .filter(|m| m.runtime == Runtime::LlamaCpp)
+        {
             assert_ne!(m.model_file, m.mmproj_file, "{}", m.name);
             assert!(m.mmproj_file.starts_with("mmproj-"), "{}", m.name);
             assert!(m.model_file.ends_with(".gguf"), "{}", m.name);
@@ -120,6 +149,38 @@ mod tests {
         seen.sort_unstable();
         seen.dedup();
         assert_eq!(seen.len(), before);
+    }
+
+    #[test]
+    fn neural_engine_variants_carry_no_projector_and_a_real_size() {
+        let ne: Vec<_> = AVAILABLE_MODELS
+            .iter()
+            .filter(|m| m.runtime == Runtime::NeuralEngine)
+            .collect();
+        assert_eq!(ne.len(), 2, "f32 and int8");
+        for m in ne {
+            assert!(m.mmproj_file.is_empty(), "{}", m.name);
+            assert!(m.model_file.starts_with("fluid:"), "{}", m.name);
+            assert!(m.size_mb > 0, "{}", m.name);
+        }
+    }
+
+    #[test]
+    fn the_int8_flag_follows_the_id() {
+        assert!(is_int8(find("fluid:qwen3-asr-0.6b-int8").unwrap()));
+        assert!(!is_int8(find("fluid:qwen3-asr-0.6b-f32").unwrap()));
+    }
+
+    #[test]
+    fn neural_engine_variants_are_offered_only_where_they_can_run() {
+        // False on Linux/Windows CI: the listing must not offer a download
+        // that could never transcribe.
+        for m in AVAILABLE_MODELS
+            .iter()
+            .filter(|m| m.runtime == Runtime::NeuralEngine)
+        {
+            assert_eq!(available(m), crate::qwen_fluid::supported(), "{}", m.name);
+        }
     }
 
     #[test]
@@ -153,6 +214,19 @@ pub struct QwenAsrModel {
     pub size_mb: u32,
     pub description: &'static str,
     repo: &'static str,
+    pub runtime: Runtime,
+}
+
+/// Where a variant runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Runtime {
+    /// llama.cpp's multimodal path: text model + audio projector GGUFs, on
+    /// the GPU (Metal/Vulkan/CUDA) or CPU. Every platform.
+    LlamaCpp,
+    /// FluidAudio's CoreML pipeline on the Apple Neural Engine (`qwen_fluid`).
+    /// Apple Silicon on macOS 15+; no projector, the files live in
+    /// FluidAudio's own cache, and `model_file` is an id, not a file.
+    NeuralEngine,
 }
 
 pub const AVAILABLE_MODELS: &[QwenAsrModel] = &[
@@ -163,6 +237,7 @@ pub const AVAILABLE_MODELS: &[QwenAsrModel] = &[
         size_mb: 971,
         description: "Twice as fast, weaker on acronyms",
         repo: "ggml-org/Qwen3-ASR-0.6B-GGUF",
+        runtime: Runtime::LlamaCpp,
     },
     QwenAsrModel {
         name: "Qwen3-ASR 1.7B",
@@ -171,6 +246,30 @@ pub const AVAILABLE_MODELS: &[QwenAsrModel] = &[
         size_mb: 2404,
         description: "Best accuracy on conversational speech",
         repo: "ggml-org/Qwen3-ASR-1.7B-GGUF",
+        runtime: Runtime::LlamaCpp,
+    },
+    QwenAsrModel {
+        name: "Qwen3-ASR 0.6B · Neural Engine (int8)",
+        model_file: "fluid:qwen3-asr-0.6b-int8",
+        mmproj_file: "",
+        // The whole published variant folder, which is what FluidAudio's
+        // downloadRepo fetches -- roughly twice the four files it then
+        // loads, because the repo ships each model as both .mlmodelc and
+        // .mlpackage. Only the label uses it: the progress bar scales
+        // FluidAudio's own fraction (see download_bundle).
+        size_mb: 2865,
+        description: "Runs on the Neural Engine and leaves the GPU to the Mac. macOS 15",
+        repo: "FluidInference/qwen3-asr-0.6b-coreml",
+        runtime: Runtime::NeuralEngine,
+    },
+    QwenAsrModel {
+        name: "Qwen3-ASR 0.6B · Neural Engine (f32)",
+        model_file: "fluid:qwen3-asr-0.6b-f32",
+        mmproj_file: "",
+        size_mb: 3999,
+        description: "Full precision on the Neural Engine. macOS 15",
+        repo: "FluidInference/qwen3-asr-0.6b-coreml",
+        runtime: Runtime::NeuralEngine,
     },
 ];
 
@@ -184,8 +283,20 @@ pub const DEFAULT_MODEL: &str = "Qwen3-ASR-1.7B-Q8_0.gguf";
 /// `local-stt-qwen` cannot transcribe with it. The FFI listing hides the
 /// variants when this is false, so a lean build never shows a row that
 /// would fail only once the user has downloaded 2.4 GB and pressed record.
-pub const fn engine_available() -> bool {
-    cfg!(feature = "local-stt-qwen")
+pub fn engine_available() -> bool {
+    AVAILABLE_MODELS.iter().any(available)
+}
+
+/// Whether THIS build, on this OS, can run the variant.
+pub fn available(m: &QwenAsrModel) -> bool {
+    match m.runtime {
+        Runtime::LlamaCpp => cfg!(feature = "local-stt-qwen"),
+        Runtime::NeuralEngine => crate::qwen_fluid::supported(),
+    }
+}
+
+fn is_int8(m: &QwenAsrModel) -> bool {
+    m.model_file.ends_with("-int8")
 }
 
 pub fn find(model_file: &str) -> Option<&'static QwenAsrModel> {
@@ -203,7 +314,12 @@ pub fn bundle_present(model_file: &str) -> bool {
     let Some(m) = find(model_file) else {
         return false;
     };
-    file_path(m.model_file).is_file() && file_path(m.mmproj_file).is_file()
+    match m.runtime {
+        Runtime::NeuralEngine => crate::qwen_fluid::models_present(is_int8(m)),
+        Runtime::LlamaCpp => {
+            file_path(m.model_file).is_file() && file_path(m.mmproj_file).is_file()
+        }
+    }
 }
 
 /// Fetch both halves, resumable and integrity-checked, through the shared
@@ -214,12 +330,23 @@ pub async fn download_bundle<F>(
     on_progress: F,
 ) -> Result<(), crate::error::TranscribeError>
 where
-    F: Fn(u64, u64),
+    F: Fn(u64, u64) + Sync,
 {
     use crate::error::TranscribeError;
     let m = find(model_file).ok_or_else(|| {
         TranscribeError::LocalModel(format!("unknown Qwen3-ASR model '{}'", model_file))
     })?;
+
+    if m.runtime == Runtime::NeuralEngine {
+        // FluidAudio owns this download and reports a fraction; scale it to
+        // the catalog size so the host's byte-shaped progress event is kept.
+        let total = u64::from(m.size_mb) * 1024 * 1024;
+        crate::qwen_fluid::download(is_int8(m), &|fraction| {
+            on_progress((fraction.clamp(0.0, 1.0) * total as f64) as u64, total)
+        })?;
+        on_progress(total, total);
+        return Ok(());
+    }
 
     let dir = crate::local_stt::model_directory();
     std::fs::create_dir_all(&dir)
@@ -264,7 +391,52 @@ pub struct Transcript {
 }
 
 #[cfg(feature = "local-stt-qwen")]
-pub use engine::{clear_model_cache, transcribe, QwenAsr};
+use engine::transcribe as transcribe_gguf;
+#[cfg(feature = "local-stt-qwen")]
+pub use engine::{clear_model_cache, QwenAsr};
+
+/// What to ask the model for, given the configured language.
+///
+/// Qwen detects the language per call, and a meeting is transcribed one
+/// 30 s window at a time -- so with nothing to anchor it, a window of
+/// hesitant Italian comes back in Spanish and the next one in Italian
+/// again. Measured 2026-09-12 on the 22-minute Italian reference meeting:
+/// the Neural Engine run drifted mid-file and scored 70% WER. Naming the
+/// language when the user has chosen one costs a few tokens and removes
+/// the whole failure mode; empty (Auto-detect) keeps the old behaviour.
+// Only the llama.cpp runtime builds a prompt -- the Neural Engine one takes
+// the language as a parameter -- but the tests below run in every feature set,
+// so the function stays compiled and the lint is silenced rather than the
+// coverage dropped.
+#[cfg_attr(not(feature = "local-stt-qwen"), allow(dead_code))]
+fn transcribe_instruction(language: &str, marker: &str) -> String {
+    if language.is_empty() {
+        format!("Transcribe the audio. {marker}")
+    } else {
+        format!(
+            "Transcribe the audio in {}. {marker}",
+            crate::llm::lang_name(language)
+        )
+    }
+}
+
+/// Transcribe one window with whichever runtime the variant uses.
+///
+/// `language` is an ISO code, or empty for auto-detect.
+pub fn transcribe(
+    pcm_16k: &[f32],
+    model_file: &str,
+    language: &str,
+) -> Result<Transcript, crate::error::TranscribeError> {
+    match find(model_file) {
+        Some(m) if m.runtime == Runtime::NeuralEngine => {
+            let raw = crate::qwen_fluid::transcribe(pcm_16k, is_int8(m), language)?;
+            let (language, text) = strip_asr_scaffolding(&raw);
+            Ok(Transcript { language, text })
+        }
+        _ => transcribe_gguf(pcm_16k, model_file, language),
+    }
+}
 
 /// No-op when the engine is compiled out, so the VRAM handover in
 /// `local_llm` needs no `cfg` of its own.
@@ -275,9 +447,10 @@ pub fn clear_model_cache() {}
 /// and a build without the engine says so once, in words, instead of
 /// failing to compile the call site.
 #[cfg(not(feature = "local-stt-qwen"))]
-pub fn transcribe(
+fn transcribe_gguf(
     _pcm_16k: &[f32],
     _model_file: &str,
+    _language: &str,
 ) -> Result<Transcript, crate::error::TranscribeError> {
     Err(crate::error::TranscribeError::LocalModel(
         "Qwen3-ASR requires the local-stt-qwen cargo feature".to_string(),
@@ -364,7 +537,11 @@ mod engine {
         }
 
         /// Transcribe one window of 16 kHz mono PCM.
-        pub fn transcribe(&self, pcm_16k: &[f32]) -> Result<Transcript, TranscribeError> {
+        pub fn transcribe(
+            &self,
+            pcm_16k: &[f32],
+            language: &str,
+        ) -> Result<Transcript, TranscribeError> {
             assert!(!pcm_16k.is_empty(), "qwen-asr: empty audio window");
             assert!(
                 pcm_16k.iter().all(|s| s.is_finite()),
@@ -392,7 +569,7 @@ mod engine {
             // indistinguishable from silence. `apply_chat_template` reads the
             // template out of the model, the same way local_llm does, so we
             // carry no per-family branch of our own.
-            let user = format!("Transcribe the audio. {}", MtmdContext::default_marker());
+            let user = super::transcribe_instruction(language, MtmdContext::default_marker());
             let messages = vec![LlamaChatMessage::new("user".to_string(), user)
                 .map_err(|e| TranscribeError::LocalModel(format!("qwen-asr chat msg: {}", e)))?];
             let prompt = self
@@ -476,7 +653,11 @@ mod engine {
     /// 4 GB card the same night this landed -- with 3831 MiB of 4096 already
     /// taken, nothing was offloaded and every engine crawled at a fifth of
     /// its speed with no error anywhere.
-    pub fn transcribe(pcm_16k: &[f32], model_file: &str) -> Result<Transcript, TranscribeError> {
+    pub fn transcribe(
+        pcm_16k: &[f32],
+        model_file: &str,
+        language: &str,
+    ) -> Result<Transcript, TranscribeError> {
         assert!(!model_file.is_empty(), "qwen-asr: no model selected");
         let mut guard = CACHE
             .lock()
@@ -510,7 +691,7 @@ mod engine {
             .as_ref()
             .expect("model just loaded")
             .1
-            .transcribe(pcm_16k)
+            .transcribe(pcm_16k, language)
     }
 
     /// Drop the resident model. Called when something else needs the VRAM.
