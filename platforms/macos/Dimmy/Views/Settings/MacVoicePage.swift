@@ -25,6 +25,12 @@ struct MacVoicePage: View {
     /// makes a long local meeting slow the whole Mac down.
     @State private var coreml: (available: Bool, present: Bool) = (false, false)
 
+    /// Filenames of the whisper models whose Neural Engine encoder is already
+    /// on disk. Drives the per-row "· Neural Engine" vs "· GPU" suffix, so the
+    /// list says where each model will actually run instead of making the user
+    /// select one to find out.
+    @State private var coremlReady: Set<String> = []
+
     /// Whisper model catalog, loaded from the Rust core's single source
     /// of truth (`dimmy_list_local_models`) so the Mac picker offers the
     /// SAME set as Windows, incl. the turbo / large-v3 / distil-EN
@@ -54,7 +60,7 @@ struct MacVoicePage: View {
     /// "Large-v3-Turbo Q8 · 874 MB". The on-disk state is rendered as a
     /// green ✓ next to the row (see `whisperPickerItem` below), not in
     /// the text.
-    private static func modelLabel(_ m: [String: Any]) -> String {
+    static func modelLabel(_ m: [String: Any]) -> String {
         let name = (m["name"] as? String) ?? (m["filename"] as? String) ?? "Model"
         let mb = m["size_mb"] as? Int ?? 0
         let size: String
@@ -74,10 +80,31 @@ struct MacVoicePage: View {
     /// core's `dimmy_list_local_models` already ships a `downloaded:
     /// bool` per entry (see `core/src/ffi.rs::dimmy_list_local_models`)
     /// so Windows can do the exact same with no FFI change.
+    /// The whole row text for a whisper entry, accelerator included.
+    ///
+    /// Pulled out of the view so it can be tested: the suffix is the only
+    /// place the list tells the user where a model will actually run, and
+    /// getting it backwards (promising the Neural Engine for a model whose
+    /// encoder was never downloaded) is worse than not saying anything.
+    static func whisperRowLabel(_ m: [String: Any], neuralEngine: Bool) -> String {
+        modelLabel(m) + (neuralEngine ? " · Neural Engine" : " · GPU")
+    }
+
+    /// Same, for a Qwen3-ASR entry. The Neural Engine variants already carry
+    /// where they run in their catalog name, so only the llama.cpp ones get
+    /// a suffix.
+    static func qwenRowLabel(_ m: [String: Any]) -> String {
+        let file = m["filename"] as? String ?? ""
+        return modelLabel(m) + (file.hasPrefix("fluid:") ? "" : " · GPU")
+    }
+
     @ViewBuilder
-    fileprivate static func whisperPickerItem(_ m: [String: Any]) -> some View {
+    fileprivate static func whisperPickerItem(
+        _ m: [String: Any],
+        neuralEngine: Bool
+    ) -> some View {
         let filename = m["filename"] as? String ?? ""
-        let label = modelLabel(m)
+        let label = whisperRowLabel(m, neuralEngine: neuralEngine)
         if (m["downloaded"] as? Bool) == true {
             Label(label, systemImage: "checkmark.circle.fill")
                 .foregroundStyle(.green)
@@ -97,7 +124,7 @@ struct MacVoicePage: View {
     @ViewBuilder
     fileprivate static func qwenPickerItem(_ m: [String: Any]) -> some View {
         let file = m["filename"] as? String ?? ""
-        let label = modelLabel(m)
+        let label = qwenRowLabel(m)
         if (m["downloaded"] as? Bool) == true {
             Label(label, systemImage: "checkmark.circle.fill")
                 .foregroundStyle(.green)
@@ -405,20 +432,31 @@ struct MacVoicePage: View {
                 } else {
                     MacRow(
                         "Local model",
-                        hint: "Whisper sizes run fully offline. Parakeet TDT v3 is faster and strong on European languages, and downloads once at about 466 MB.",
+                        hint: "Everything here runs offline. Whisper is the broadest, and moves onto the Neural Engine once its encoder is downloaded. Parakeet TDT v3 is the fastest and always runs on the Neural Engine. Qwen3-ASR is the strongest on conversational speech; its 0.6B variant also has a Neural Engine build.",
                         hintURL: URL(string: "https://dimmy.app/help/whisper-models"),
                         showsDivider: !localModelReady || downloadInFlight || coremlRowVisible
                     ) {
                         Picker("", selection: localModelPickerBinding) {
-                            ForEach(localModels.indices, id: \.self) { i in
-                                Self.whisperPickerItem(localModels[i])
+                            Section("Whisper") {
+                                ForEach(localModels.indices, id: \.self) { i in
+                                    Self.whisperPickerItem(
+                                        localModels[i],
+                                        neuralEngine: coremlReady.contains(
+                                            localModels[i]["filename"] as? String ?? ""
+                                        )
+                                    )
+                                }
                             }
-                            Self.parakeetPickerItem(
-                                label: "Parakeet TDT v3 · 466 MB · Apple Neural Engine",
-                                present: appState.parakeetBundlePresent
-                            )
-                            ForEach(qwenModels.indices, id: \.self) { i in
-                                Self.qwenPickerItem(qwenModels[i])
+                            Section("Parakeet") {
+                                Self.parakeetPickerItem(
+                                    label: "Parakeet TDT v3 · 466 MB · Neural Engine",
+                                    present: appState.parakeetBundlePresent
+                                )
+                            }
+                            Section("Qwen3-ASR") {
+                                ForEach(qwenModels.indices, id: \.self) { i in
+                                    Self.qwenPickerItem(qwenModels[i])
+                                }
                             }
                         }
                         .labelsHidden()
@@ -613,9 +651,15 @@ struct MacVoicePage: View {
             let qwen = DimmyCore.shared.qwenAsrBundlePresent(qwenName)
             let qwenList = DimmyCore.shared.listQwenAsrModels() ?? []
             let coremlStatus = DimmyCore.shared.coremlEncoderStatus(modelName)
+            var ready = Set<String>()
+            for m in models {
+                guard let f = m["filename"] as? String else { continue }
+                if DimmyCore.shared.coremlEncoderStatus(f).present { ready.insert(f) }
+            }
             DispatchQueue.main.async {
                 self.localModelExists = exists
                 self.coreml = coremlStatus
+                self.coremlReady = ready
                 self.appState.parakeetBundlePresent = parakeet
                 self.appState.qwenBundlePresent = qwen
                 if !qwenList.isEmpty { self.qwenModels = qwenList }
@@ -634,7 +678,9 @@ struct MacVoicePage: View {
         if localBackendIsQwen {
             let target = appState.qwenAsrModel
             downloadingTarget = target
-            downloadingLabel = "\(target) and its projector"
+            downloadingLabel = target.hasPrefix("fluid:")
+                ? "Qwen3-ASR Neural Engine models"
+                : "\(target) and its projector"
             appState.qwenDownloadProgress = 0
             appState.isDownloadingQwen = true
             DispatchQueue.global(qos: .userInitiated).async {

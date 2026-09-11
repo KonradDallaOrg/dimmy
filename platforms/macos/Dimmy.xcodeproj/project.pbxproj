@@ -42,6 +42,7 @@
 		AA000609 /* WavPeaks.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000609 /* WavPeaks.swift */; };
 		AA000610 /* MeetingAmplitudeAGC.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000610 /* MeetingAmplitudeAGC.swift */; };
 		AA000700 /* AppStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000700 /* AppStateTests.swift */; };
+		AA00071F /* LocalModelListingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00071F /* LocalModelListingTests.swift */; };
 		AA000701 /* MeetingPostProcessServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000701 /* MeetingPostProcessServiceTests.swift */; };
 		AA000702 /* RecapModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000702 /* RecapModelTests.swift */; };
 		AA000703 /* MeetingHistoryRowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000703 /* MeetingHistoryRowTests.swift */; };
@@ -194,6 +195,7 @@
 		AB000610 /* MeetingAmplitudeAGC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAmplitudeAGC.swift; sourceTree = "<group>"; };
 		AB000098 /* DimmyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DimmyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		AB000700 /* AppStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateTests.swift; sourceTree = "<group>"; };
+		AB00071F /* LocalModelListingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalModelListingTests.swift; sourceTree = "<group>"; };
 		AB000701 /* MeetingPostProcessServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingPostProcessServiceTests.swift; sourceTree = "<group>"; };
 		AB000702 /* RecapModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecapModelTests.swift; sourceTree = "<group>"; };
 		AB000703 /* MeetingHistoryRowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingHistoryRowTests.swift; sourceTree = "<group>"; };
@@ -324,6 +326,7 @@
 			isa = PBXGroup;
 			children = (
 				AB000700 /* AppStateTests.swift */,
+				AB00071F /* LocalModelListingTests.swift */,
 				AB000701 /* MeetingPostProcessServiceTests.swift */,
 				AB000702 /* RecapModelTests.swift */,
 				AB000703 /* MeetingHistoryRowTests.swift */,
@@ -904,6 +907,7 @@ echo \"[gtcrn] bundled $(basename \"$GTCRN_SRC\") into Resources\"
 			buildActionMask = 2147483647;
 			files = (
 				AA000700 /* AppStateTests.swift in Sources */,
+				AA00071F /* LocalModelListingTests.swift in Sources */,
 				AA000701 /* MeetingPostProcessServiceTests.swift in Sources */,
 				AA000702 /* RecapModelTests.swift in Sources */,
 				AA000703 /* MeetingHistoryRowTests.swift in Sources */,
