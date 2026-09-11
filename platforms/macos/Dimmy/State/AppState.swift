@@ -945,13 +945,28 @@ final class AppState: ObservableObject {
     /// fields (`sttProvider`, `apiModel`) keep their last values in local
     /// mode, so reading them there showed "groq, whisper" on a Parakeet setup.
     var localSttDisplayName: String {
-        switch localSttBackend {
+        AppState.localSttDisplayName(
+            backend: localSttBackend,
+            qwenModel: qwenAsrModel,
+            whisperModel: localModel
+        )
+    }
+
+    /// The engine the user is actually running, for the status dot and the
+    /// Home page. Static and pure because AppState is a singleton with a
+    /// private init: the logic is what needs testing, not the singleton.
+    static func localSttDisplayName(
+        backend: String,
+        qwenModel: String,
+        whisperModel: String
+    ) -> String {
+        switch backend {
         case "parakeet":
             return "Parakeet"
         case "qwen":
-            return qwenAsrModel.hasPrefix("fluid:") ? "Qwen3-ASR · Neural Engine" : "Qwen3-ASR"
+            return qwenModel.hasPrefix("fluid:") ? "Qwen3-ASR · Neural Engine" : "Qwen3-ASR"
         default:
-            let stem = localModel
+            let stem = whisperModel
                 .replacingOccurrences(of: "ggml-", with: "")
                 .replacingOccurrences(of: ".bin", with: "")
             return "Whisper \(stem)"
