@@ -1409,7 +1409,6 @@ dependencies = [
 [[package]]
 name = "fluidaudio-rs"
 version = "0.12.6"
-source = "git+https://github.com/FluidInference/fluidaudio-rs?tag=v0.12.6#d38f95f679f403b3fc5a00769a86e0c874a2c8dd"
 dependencies = [
  "thiserror 1.0.69",
 ]
