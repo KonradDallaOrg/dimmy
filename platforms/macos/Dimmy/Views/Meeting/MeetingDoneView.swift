@@ -195,12 +195,18 @@ struct MeetingDoneView: View {
                     notionToolbarIcon
                 }
                 // Confluence sits next to Notion because it is the same
-                // action with a different destination. A system symbol rather
-                // than the Atlassian mark: the Mac bundle ships no such asset
-                // and a hand-drawn logo is worse than none.
-                toolbarButton(systemImage: "network",
-                              help: "Send recap to Confluence") {
+                // action with a different destination. The real Atlassian
+                // mark, shipped as a TEMPLATE asset so it takes the
+                // foreground colour and needs no dark-mode inversion the
+                // way the older notion one does.
+                ToolbarIconButton(help: "Send recap to Confluence") {
                     Task { await sendToConfluence() }
+                } label: {
+                    Image("confluence")
+                        .renderingMode(.template)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 16, height: 16)
                 }
                 if claudeMcpInstalled {
                     recapWithClaudeButton

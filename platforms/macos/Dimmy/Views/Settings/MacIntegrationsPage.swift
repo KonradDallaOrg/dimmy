@@ -400,7 +400,7 @@ struct MacIntegrationsPage: View {
                 "Confluence",
                 description: confluenceStateText,
                 icon: "network",
-                iconBackground: Color(red: 0.09, green: 0.17, blue: 0.30),
+                iconBackground: Color(red: 0.02, green: 0.32, blue: 0.80),
                 showsDivider: false
             ) {
                 HStack(spacing: 8) {
