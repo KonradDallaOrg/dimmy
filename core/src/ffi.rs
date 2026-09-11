@@ -4141,12 +4141,19 @@ pub unsafe extern "C" fn dimmy_meeting_start(out_buf: *mut c_char, buf_len: c_in
             .ok()
             .map(|s| s.clone())
             .unwrap_or_default(),
-        local_backend: st
-            .local_stt_backend
-            .lock()
-            .ok()
-            .map(|s| s.clone())
-            .unwrap_or_else(|| "whisper".to_string()),
+        // Through the SAME resolver dictation uses. Without it a meeting
+        // whose chosen engine has no bundle on disk logged one error per
+        // 30 s window and wrote an empty transcript for the whole hour --
+        // silent precisely because a meeting, unlike a dictation, has no
+        // moment where someone is waiting for words to appear.
+        local_backend: effective_local_backend(
+            &st.local_stt_backend
+                .lock()
+                .ok()
+                .map(|s| s.clone())
+                .unwrap_or_else(|| "whisper".to_string()),
+        )
+        .to_string(),
         language: st
             .language
             .lock()
@@ -6683,6 +6690,91 @@ pub unsafe extern "C" fn dimmy_model_exists(filename_ptr: *const c_char) -> c_in
         1
     } else {
         0
+    }
+}
+
+// ── whisper Core ML encoder (macOS) ─────────────────────────
+
+/// Where the Core ML encoder stands for a given whisper model.
+///
+/// `{"available":bool,"present":bool,"supported":bool}` — `available` means
+/// upstream publishes one for this architecture, `present` that it is
+/// unpacked on this machine, `supported` that this build can use it at all.
+/// All three are needed to say anything useful: a build without the feature
+/// must not offer a 600 MB download that would change nothing.
+///
+/// # Safety
+/// `filename_ptr` must be a valid null-terminated UTF-8 C string; `buf` must
+/// point to at least `buf_len` writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_coreml_encoder_status(
+    filename_ptr: *const c_char,
+    buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    let filename = cstr_or_empty(filename_ptr);
+    let supported = cfg!(feature = "local-stt-coreml");
+    let payload = serde_json::json!({
+        "supported": supported,
+        "available": supported && crate::coreml_encoder::bundle_available(&filename),
+        "present": supported && crate::coreml_encoder::bundle_present(&filename),
+    })
+    .to_string();
+    write_to_buf(&payload, buf, buf_len)
+}
+
+/// Download + unpack the Core ML encoder for a whisper model.
+///
+/// Blocking, like `dimmy_download_model`, and reports through the same
+/// `model_download_progress` event so a host already showing a bar for the
+/// `.bin` needs no second one.
+///
+/// Returns 0 on success, -1 on failure, -2 when this build cannot use a Core
+/// ML encoder — which is NOT an error to show: it just means the fast path
+/// is not part of this binary.
+///
+/// # Safety
+/// `filename_ptr` must be a valid null-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_coreml_encoder_download(filename_ptr: *const c_char) -> c_int {
+    if !cfg!(feature = "local-stt-coreml") {
+        return -2;
+    }
+    let filename = cstr_or_empty(filename_ptr);
+    if filename.is_empty() {
+        return -1;
+    }
+    let fname_clone = filename.clone();
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            log(&format!("[CoreML] no runtime: {}", e));
+            return -1;
+        }
+    };
+    let result = rt.block_on(crate::coreml_encoder::download(
+        &filename,
+        move |downloaded, total| {
+            let payload = format!(
+                r#"{{"filename":"{}","downloaded":{},"total":{}}}"#,
+                json_escape_str(&fname_clone),
+                downloaded,
+                total
+            );
+            emit_event("model_download_progress", &payload);
+        },
+    ));
+    crate::telemetry::track(crate::telemetry::Event::ModelDownloadCompleted {
+        kind: "whisper_coreml",
+        success: result.is_ok(),
+    });
+    match result {
+        Ok(_) => 0,
+        Err(e) => {
+            let msg: String = format!("{}", e).chars().take(200).collect();
+            emit_event("error", &message_error_payload(&msg));
+            -1
+        }
     }
 }
 

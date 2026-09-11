@@ -518,6 +518,58 @@ int32_t dimmy_notion_search(const char * _Nonnull query_ptr,
 int32_t dimmy_notion_send_recap(const char * _Nonnull meeting_dir_ptr,
                                 char * _Nonnull out_buf, int32_t buf_len);
 
+// ── Confluence integration ─────────────────────────────
+
+/// Save the Atlassian API token to the AES-256 keystore. Empty string
+/// clears it. Returns 0 on success, -1 on failure.
+int32_t dimmy_confluence_set_token(const char * _Nonnull token_ptr);
+
+/// Returns 1 if an API token is stored, 0 otherwise. Says nothing about
+/// whether it still works.
+int32_t dimmy_confluence_has_token(void);
+
+/// Check credentials against the live API. Site and email are passed in
+/// rather than read from config, because the connect wizard tests BEFORE
+/// it saves; an empty token means "use the stored one". Writes
+/// `{"ok":true,"site":"...","account":"..."}` or
+/// `{"ok":false,"error":"..."}`. Returns the JSON length, -1 on invalid
+/// args.
+int32_t dimmy_confluence_test_connection(const char * _Nonnull site_ptr,
+                                         const char * _Nonnull email_ptr,
+                                         const char * _Nonnull token_ptr,
+                                         char * _Nonnull out_buf, int32_t buf_len);
+
+/// Spaces the account can write to, ours first. Empty site/email fall
+/// back to config. Writes `{"ok":true,"spaces":[{id,key,name,kind,
+/// is_mine}]}`. A real tenant returned 530 of them, so size the buffer
+/// generously. Returns the JSON length, -1 on invalid args.
+int32_t dimmy_confluence_spaces(const char * _Nonnull site_ptr,
+                                const char * _Nonnull email_ptr,
+                                char * _Nonnull out_buf, int32_t buf_len);
+
+/// Publish a meeting's recap as a new Confluence page. Writes
+/// `{"ok":true,"id":"...","url":"https://..."}` or
+/// `{"ok":false,"error":"..."}`. Returns the JSON length, -1 on invalid
+/// args.
+int32_t dimmy_confluence_send_recap(const char * _Nonnull meeting_dir_ptr,
+                                    char * _Nonnull out_buf, int32_t buf_len);
+
+// ── whisper Core ML encoder (macOS) ──────────────────────
+
+/// Where the Core ML encoder stands for a whisper model. Writes
+/// `{"supported":bool,"available":bool,"present":bool}` — `supported`
+/// means this build can use one at all, `available` that upstream
+/// publishes one for that architecture, `present` that it is unpacked
+/// here. Returns the JSON length, -1 on invalid args.
+int32_t dimmy_coreml_encoder_status(const char * _Nonnull filename_ptr,
+                                    char * _Nonnull out_buf, int32_t buf_len);
+
+/// Download + unpack the Core ML encoder for a whisper model. Blocking,
+/// and reports through the same `model_download_progress` event as the
+/// .bin download. Returns 0 on success, -1 on failure, -2 when this
+/// build cannot use one (not an error worth showing).
+int32_t dimmy_coreml_encoder_download(const char * _Nonnull filename_ptr);
+
 // ── Raw LLM call (bypasses dictation rewrite) ────────────────────
 
 /// Send `prompt` to the configured LLM endpoint without the dictation

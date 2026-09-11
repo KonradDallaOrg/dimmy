@@ -831,6 +831,109 @@ fn resolve_ggml_device(
     }
 }
 
+/// How many CPU threads whisper may use for one transcription.
+///
+/// This used to be `available_parallelism().min(4)`, which is not a decision
+/// we made -- it reproduces whisper.cpp's own upstream default, and it arrived
+/// inside an unrelated focus-stealing fix. On a 12-core machine it left two
+/// thirds of the CPU idle while a meeting fell behind.
+///
+/// The cap is gone everywhere except Apple Silicon, where it is replaced by a
+/// better one rather than removed: those cores are not interchangeable.
+/// `available_parallelism` counts efficiency cores too, and handing whisper a
+/// thread on an E-core makes every other thread wait for the slowest one at
+/// each layer boundary -- the classic heterogeneous-core regression. We ask
+/// the kernel for the performance-core count instead.
+///
+/// `hw.perflevel0.logicalcpu` is the top (fastest) level; on Intel Macs the
+/// key does not exist and we fall through to the full count, which there is
+/// the right answer anyway because all the cores are the same.
+#[cfg(feature = "local-stt")]
+pub(crate) fn inference_threads() -> usize {
+    let all = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(2);
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(p) = perf_cores() {
+            // Never zero, never more than the machine has.
+            return p.clamp(1, all);
+        }
+    }
+    all.max(1)
+}
+
+/// Performance-core count from sysctl, or None when the key is absent.
+///
+/// Declared here rather than pulling in `libc`: the symbol lives in
+/// libSystem, which every macOS binary already links.
+#[cfg(all(target_os = "macos", feature = "local-stt"))]
+fn perf_cores() -> Option<usize> {
+    use std::os::raw::{c_char, c_int, c_void};
+    extern "C" {
+        fn sysctlbyname(
+            name: *const c_char,
+            oldp: *mut c_void,
+            oldlenp: *mut usize,
+            newp: *mut c_void,
+            newlen: usize,
+        ) -> c_int;
+    }
+    let mut value: u32 = 0;
+    let mut len = std::mem::size_of::<u32>();
+    // SAFETY: the name is a literal NUL-terminated C string, and the out
+    // buffer is a u32 we own with its true length passed alongside.
+    let rc = unsafe {
+        sysctlbyname(
+            c"hw.perflevel0.logicalcpu".as_ptr(),
+            &mut value as *mut u32 as *mut c_void,
+            &mut len,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if rc == 0 && value > 0 {
+        Some(value as usize)
+    } else {
+        None
+    }
+}
+
+#[cfg(all(test, feature = "local-stt"))]
+mod thread_count {
+    #[test]
+    fn is_at_least_one_and_never_exceeds_the_machine() {
+        let all = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(2);
+        let n = super::inference_threads();
+        assert!(n >= 1, "must hand whisper at least one thread, got {}", n);
+        assert!(
+            n <= all,
+            "asked for {} threads on a {}-core machine",
+            n,
+            all
+        );
+    }
+
+    /// The old cap is what we are deliberately leaving behind, so say so:
+    /// on any machine with more than four cores this must now exceed four.
+    #[test]
+    fn no_longer_capped_at_four() {
+        let all = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(2);
+        if all > 4 && !cfg!(target_os = "macos") {
+            assert!(
+                super::inference_threads() > 4,
+                "{} cores available but only {} threads used",
+                all,
+                super::inference_threads()
+            );
+        }
+    }
+}
+
 // ── WhisperContext cache ─────────────────────────────────────────
 //
 // Loading a whisper model into VRAM takes 2-5 seconds for large models.
@@ -1007,9 +1110,7 @@ mod whisper_cache {
             params.set_detect_language(true);
         }
 
-        let n_threads: c_int = std::thread::available_parallelism()
-            .map(|n| n.get().min(4) as c_int)
-            .unwrap_or(2);
+        let n_threads: c_int = super::inference_threads() as c_int;
         params.set_n_threads(n_threads);
 
         params.set_print_special(false);

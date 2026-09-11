@@ -34,8 +34,15 @@ dimmy_codex_status
 dimmy_command_transform
 dimmy_compute_audio_peaks
 dimmy_config_dir_name
+dimmy_confluence_has_token
+dimmy_confluence_send_recap
+dimmy_confluence_set_token
+dimmy_confluence_spaces
+dimmy_confluence_test_connection
 dimmy_consent_log_event
 dimmy_consent_text
+dimmy_coreml_encoder_download
+dimmy_coreml_encoder_status
 dimmy_cycle_llm_style
 dimmy_cycle_llm_tone
 dimmy_decode_audio_to_wav
@@ -85,6 +92,7 @@ dimmy_license_plan_change
 dimmy_license_redeem
 dimmy_license_refresh
 dimmy_license_request_trial
+dimmy_license_set_server_url
 dimmy_license_status_json
 dimmy_list_devices_json
 dimmy_list_llm_models

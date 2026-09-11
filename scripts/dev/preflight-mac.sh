@@ -58,7 +58,7 @@ echo
 #   - license-client ships too. With no DIMMY_LICENSE_PUBKEY in the environment
 #     check_status() returns Unrestricted anyway (core/src/license.rs), so a dev
 #     build stays permissive — the feature only changes what a RELEASE does.
-MAC_FEATURES="local-stt-metal,local-llm-metal,local-stt-parakeet-coreml,local-stt-parakeet-fluid,local-dfn,license-client,telegram,local-stt-qwen"
+MAC_FEATURES="local-stt-metal,local-stt-coreml,local-llm-metal,local-stt-parakeet-coreml,local-stt-parakeet-fluid,local-dfn,license-client,telegram,local-stt-qwen"
 CI_FEATURES="local-stt,local-llm"
 
 step() { echo; echo "── $* ──"; }

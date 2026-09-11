@@ -20,6 +20,7 @@ pub mod codex;
 /// don't ship a markdown→block-tree converter. See `notion.rs`.
 pub mod confluence;
 pub mod consent;
+pub mod coreml_encoder;
 pub mod deepgram_stream;
 pub mod dfn;
 #[cfg(feature = "local-dfn")]
@@ -816,10 +817,11 @@ pub struct AppConfig {
     // Local STT fields
     pub stt_mode: String,    // "cloud" or "local"
     pub local_model: String, // e.g. "ggml-base-q8_0.bin"
-    /// Which local STT backend to use when `stt_mode == "local"`. Either
-    /// `"whisper"` (whisper.cpp via the `local-stt` feature, default) or
-    /// `"parakeet"` (Parakeet TDT v3 FP32 via the `local-stt-parakeet`
-    /// feature). Old configs default to `"whisper"` for compatibility.
+    /// Which local STT backend to use when `stt_mode == "local"`:
+    /// `"whisper"` (whisper.cpp via `local-stt`), `"parakeet"` (Parakeet
+    /// TDT v3 via `local-stt-parakeet`) or `"qwen"`. See
+    /// [`default_local_stt_backend`] for why the default is not the same
+    /// on every OS. Old configs keep whatever they saved.
     pub local_stt_backend: String,
     /// Which Qwen3-ASR variant runs when `local_stt_backend == "qwen"`.
     /// Names the TEXT half; the projector is derived from it, because the
@@ -971,6 +973,31 @@ pub struct AppConfig {
     pub app_rules: Vec<app_rules::AppRule>,
 }
 
+/// The local STT engine a FRESH install starts on.
+///
+/// macOS gets Parakeet, every other OS keeps whisper, and the difference is
+/// which chip does the work rather than which model is better. whisper.cpp
+/// built with `local-stt-metal` runs its encoder on the GPU -- on Apple
+/// Silicon that is the same GPU the window server draws with, and there is no
+/// separate VRAM to retreat into, so a meeting does not slow Dimmy down, it
+/// slows the whole laptop down. Parakeet through FluidAudio runs on the Neural
+/// Engine, which nothing else contends for.
+///
+/// On Windows and Linux whisper has a discrete GPU (Vulkan) to itself and the
+/// trade does not exist, so nothing changes there.
+///
+/// Only a config with no value saved takes this: an existing install keeps
+/// what it chose. The Mac onboarding has preselected Parakeet for a while
+/// already, so in practice this covers configs written before that and any
+/// path that skips onboarding.
+fn default_local_stt_backend() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "parakeet"
+    } else {
+        "whisper"
+    }
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -1028,7 +1055,7 @@ impl Default for AppConfig {
             }
             .to_string(),
             local_model: "ggml-base-q8_0.bin".to_string(),
-            local_stt_backend: "whisper".to_string(),
+            local_stt_backend: default_local_stt_backend().to_string(),
             qwen_asr_model: crate::qwen_asr::DEFAULT_MODEL.to_string(),
             live_captions_enabled: true,
             call_detect_enabled: true,

@@ -122,6 +122,18 @@ default = ["local-stt", "telemetry-sentry"]
 local-stt = ["dep:whisper-rs", "whisper-rs/raw-api"]
 local-stt-metal = ["local-stt", "whisper-rs/metal"]
 local-stt-cuda = ["local-stt", "whisper-rs/cuda"]
+# whisper's encoder as a compiled Core ML model, so it runs on the Apple
+# Neural Engine instead of the GPU. Composable with `local-stt-metal` on
+# purpose -- the encoder moves to the ANE, the decoder stays on Metal --
+# and that split is the whole point: the GPU is also what draws the screen
+# on Apple Silicon, and an encoder sitting on it is why a meeting made the
+# whole laptop feel slow.
+#
+# Safe to enable before anyone has the bundle: whisper-rs-sys builds with
+# WHISPER_COREML_ALLOW_FALLBACK=1, so a missing .mlmodelc logs a line and
+# falls back to the ordinary encoder. `local_stt::coreml_bundle_present`
+# is what tells the UI whether the fast path is actually live.
+local-stt-coreml = ["local-stt", "whisper-rs/coreml"]
 local-stt-vulkan = ["local-stt", "whisper-rs/vulkan"]
 # Parakeet TDT v3 FP32 local STT via ONNX Runtime (ort crate). Bundle:
 # istupakov/parakeet-tdt-0.6b-v3-onnx (HuggingFace, ~2.5GB). The model
