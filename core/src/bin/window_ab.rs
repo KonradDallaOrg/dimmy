@@ -28,16 +28,42 @@ fn main() {
     }
     let engine = args[1].clone();
     let path = args[2].clone();
-    let windows: Vec<f32> = if args.len() > 3 {
-        args[3..].iter().filter_map(|s| s.parse().ok()).collect()
-    } else {
+
+    // `--max-secs N` keeps only the first N seconds. A real meeting is the
+    // honest input, but a 32-minute one costs ~500 MB just to decode and the
+    // run gets killed on a loaded laptop before a single window reports --
+    // which is worse than a shorter sample, because it reports nothing at all.
+    let mut max_secs: Option<f32> = None;
+    let mut rest: Vec<String> = Vec::new();
+    let mut it = args[3..].iter();
+    while let Some(a) = it.next() {
+        if a == "--max-secs" {
+            max_secs = it.next().and_then(|v| v.parse().ok());
+        } else {
+            rest.push(a.clone());
+        }
+    }
+    let windows: Vec<f32> = if rest.is_empty() {
         vec![3.0, 15.0, 30.0, 0.0]
+    } else {
+        rest.iter().filter_map(|s| s.parse().ok()).collect()
     };
 
-    let Some(pcm) = read_16k_mono(&path) else {
+    let Some(mut pcm) = read_16k_mono(&path) else {
         eprintln!("cannot read {path}");
         std::process::exit(1);
     };
+    if let Some(m) = max_secs {
+        assert!(m > 0.0, "--max-secs must be positive");
+        let keep = (m * 16_000.0) as usize;
+        if keep < pcm.len() {
+            pcm.truncate(keep);
+            // The decoder's slack is what got us killed; hand it back before
+            // the model is loaded rather than holding it for the whole run.
+            pcm.shrink_to_fit();
+        }
+    }
+    let pcm = pcm;
     let total_secs = pcm.len() as f32 / 16_000.0;
     println!("{}  {:.1}s  engine={}\n", short(&path), total_secs, engine);
 

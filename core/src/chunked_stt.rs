@@ -326,6 +326,59 @@ fn downsample_if_needed(samples: &[f32], source_rate: u32) -> Vec<f32> {
 /// lavoro"), this algorithm trims one copy. Trade-off accepted: the
 /// boundary-duplicate noise was reported by users as more frequent and
 /// more annoying than legitimate repetitions.
+/// How much audio to hand the model per chunk during dictation, by local
+/// backend. It was a flat 3.0 s for every engine, which is the wrong shape:
+/// what a chunk COSTS depends entirely on which model receives it.
+///
+/// - **whisper** pads ANY input to a full 30 s encoder window, so the cost
+///   per call is nearly fixed: measured 3.5 s in = 11 s, 15.4 s in = 12 s,
+///   same session. At 3 s chunks a one-minute dictation paid twenty of
+///   those instead of four, for identical text. Bigger is strictly
+///   cheaper here until 30 s; 15 keeps the captions from lagging half a
+///   minute behind the speaker.
+/// - **parakeet** costs what the audio costs, so short chunks are nearly
+///   free and keep latency low. Nudged 3 -> 5 s only for context: window
+///   length is what lets a model get a domain word right, and a 5 s
+///   window still leaves under a second of residual work at 6x realtime.
+/// - **qwen** is built around 7.5 s per encoder chunk and its context is
+///   sized for roughly this; it also dies on a GGML_ASSERT if a chunk
+///   overruns `N_BATCH`, so this stays where the model expects it.
+///
+/// `visible_output` is the second axis, and it is the one that decides
+/// whether the chunk is a latency budget at all. With realtime typing, or
+/// with live captions on screen, the chunk IS the update interval and the
+/// user watches it tick. With "Accelerate transcription" alone, nothing is
+/// shown until the end, so the only thing a short chunk buys is a smaller
+/// tail at release — and it costs accuracy to buy it.
+///
+/// Measured on Parakeet, 10 minutes of real meeting, 2026-09-12:
+///
+/// | window | realtime | words |
+/// |--------|----------|-------|
+/// | 3 s    | 5.3x     | 785   |
+/// | 5 s    | 5.9x     | 866   |
+/// | 15 s   | **6.5x** | **882** |
+/// | 30 s   | 5.4x     | 822   |
+///
+/// 3 s was the WORST on both counts: 11% less text than 15 s, and slower
+/// too. The old flat 3.0 s was costing accuracy to buy responsiveness the
+/// user could not even see when captions were off.
+pub fn chunk_secs_for_backend(local_backend: &str, visible_output: bool) -> f32 {
+    if !visible_output {
+        // Nothing on screen until the end: take the measured optimum.
+        return 15.0;
+    }
+    match local_backend {
+        // Short enough to read as it appears; 5 s already recovers most of
+        // what 3 s was throwing away (866 words vs 785).
+        "parakeet" => 5.0,
+        // Both pay a fixed encoder window per call, so a short chunk buys
+        // responsiveness at several times the compute. Neither is a
+        // realistic choice for live captions in the first place.
+        _ => 15.0,
+    }
+}
+
 pub fn dedup_last_3_words(prev_cumulative: &str, new_chunk: &str) -> String {
     const MIN_K: usize = 2;
     const MAX_K: usize = 6;
@@ -402,6 +455,68 @@ fn normalize_tokens(s: &str) -> Vec<String> {
 fn normalize_one(tok: &str) -> String {
     tok.trim_matches(|c: char| matches!(c, ',' | '.' | '!' | '?' | ';' | ':' | '"' | '\''))
         .to_lowercase()
+}
+
+#[cfg(test)]
+mod chunk_sizing {
+    use super::chunk_secs_for_backend;
+
+    /// The assertion in `ChunkedTranscriber::start` kills the process on a
+    /// bad value, and this function feeds it. Every arm has to survive it,
+    /// including the fallback an unknown backend string takes.
+    #[test]
+    fn every_backend_is_within_the_start_assertion() {
+        for b in ["parakeet", "qwen", "whisper", "", "something-new"] {
+            for visible in [true, false] {
+                let s = chunk_secs_for_backend(b, visible);
+                assert!(
+                    s > 0.0 && s <= 60.0,
+                    "{b}/{visible} -> {s}s trips the assert"
+                );
+            }
+        }
+    }
+
+    /// The measured optimum, taken whenever nothing is on screen to wait
+    /// for. 3 s produced 11% less text than 15 s on the same audio AND ran
+    /// slower, so a short window here would be paying for nothing.
+    #[test]
+    fn invisible_output_takes_the_measured_optimum() {
+        for b in ["parakeet", "whisper", "qwen", "anything"] {
+            assert_eq!(chunk_secs_for_backend(b, false), 15.0, "{b}");
+        }
+    }
+
+    /// whisper pays a full 30 s encoder window whatever you give it, so a
+    /// small chunk is pure waste. This is the whole reason the value stopped
+    /// being one number for everyone.
+    #[test]
+    fn whisper_gets_a_window_worth_paying_for() {
+        assert!(
+            chunk_secs_for_backend("whisper", true) >= 10.0,
+            "short whisper chunks cost a full 30s window each for nothing"
+        );
+    }
+
+    /// Parakeet is the engine people run for live captions and realtime
+    /// typing, and the chunk IS the update interval. Keep it short.
+    /// Only when there is something to be responsive FOR.
+    #[test]
+    fn parakeet_stays_responsive_while_text_is_on_screen() {
+        let s = chunk_secs_for_backend("parakeet", true);
+        assert!(s <= 6.0, "{s}s between caption updates is too slow to read");
+        assert!(s < chunk_secs_for_backend("parakeet", false));
+    }
+
+    /// An unknown backend must not get the shortest window by accident:
+    /// the fallback is whisper, and whisper is the one that suffers most.
+    #[test]
+    fn an_unknown_backend_falls_back_to_the_whisper_value() {
+        assert_eq!(
+            chunk_secs_for_backend("brand-new-engine", true),
+            chunk_secs_for_backend("whisper", true)
+        );
+    }
 }
 
 #[cfg(test)]

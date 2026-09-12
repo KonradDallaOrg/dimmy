@@ -338,12 +338,67 @@ fn transcribe_ort(_pcm_16k: &[f32]) -> Result<String, TranscribeError> {
     ))
 }
 
+/// Longest audio handed to the ONNX encoder in one call.
+///
+/// Parakeet takes the WHOLE input as a single tensor with no internal
+/// segmentation, unlike whisper which always chops to 30 s inside itself.
+/// Two measured consequences, on a 10-minute meeting, 2026-09-12:
+///
+/// - **It breaks outright past some length between 5 and 10 minutes.**
+///   600 s fails with `/layers.0/self_attn/Add_2 ... broadcast 2501 by
+///   7501` — a fixed-size relative-position table in the export, so no
+///   machine and no amount of RAM changes it. Reproduced in a cold
+///   process, i.e. it is the model, not a stale optimised session.
+/// - **It gets worse long before it breaks:** 30 s ran at 6.0x realtime
+///   for 822 words, 120 s at 5.7x for 815, and 300 s at 3.6x for 762.
+///   Conformer attention cost grows faster than linearly, and the output
+///   gets shorter too.
+///
+/// 120 s is the longest window measured to cost nothing, with a wide
+/// margin under the failure. Anything longer is split below.
+///
+/// This matters for ONE caller: dictation with "Accelerate transcription"
+/// off, which hands over the whole recording at once. A ten-minute
+/// dictation used to die here with a developer-facing ONNX message.
+#[cfg(feature = "local-stt-parakeet")]
+const MAX_ORT_WINDOW_SECS: usize = 120;
+
 #[cfg(feature = "local-stt-parakeet")]
 fn transcribe_ort(pcm_16k: &[f32]) -> Result<String, TranscribeError> {
     // ONNX on the CPU: exactly the work EcoQoS demotes to the E-cores. See
     // `win_qos` for the measurement.
     let _no_throttle = crate::win_qos::NoThrottle::for_local_inference();
-    inference::transcribe(pcm_16k)
+
+    let max_samples = MAX_ORT_WINDOW_SECS * 16_000;
+    if pcm_16k.len() <= max_samples {
+        return inference::transcribe(pcm_16k);
+    }
+
+    // Long input: split and stitch rather than fail. The user asked for
+    // their words, not for a particular tensor shape.
+    crate::log(&format!(
+        "[Parakeet] {:.0}s input exceeds the {}s encoder window — splitting",
+        pcm_16k.len() as f32 / 16_000.0,
+        MAX_ORT_WINDOW_SECS
+    ));
+    let mut out = String::new();
+    for window in pcm_16k.chunks(max_samples) {
+        let text = inference::transcribe(window)?;
+        if text.trim().is_empty() {
+            continue;
+        }
+        // Same stitcher the chunked dictation path uses, so a word spoken
+        // across a boundary is not transcribed twice.
+        let delta = crate::chunked_stt::dedup_last_3_words(&out, text.trim());
+        if delta.trim().is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(delta.trim());
+    }
+    Ok(out)
 }
 
 #[cfg(not(feature = "local-stt-parakeet"))]
@@ -809,6 +864,36 @@ mod inference {
 }
 
 // ── Tests ────────────────────────────────────────────────────────
+
+/// The encoder window is a hard constraint of the ONNX export, so the
+/// constant that guards it needs pinning: a well-meaning bump would not
+/// fail a test, it would fail a user's ten-minute dictation with an ONNX
+/// error about a broadcast.
+#[cfg(all(test, feature = "local-stt-parakeet"))]
+mod encoder_window {
+    use super::MAX_ORT_WINDOW_SECS;
+
+    /// 600 s was measured to break the encoder outright (twice, once in a
+    /// cold process). 300 s ran but at 3.6x instead of 6.0x and produced
+    /// 7% fewer words. So the window must stay well under both.
+    #[test]
+    fn stays_far_below_the_measured_failure() {
+        assert!(
+            MAX_ORT_WINDOW_SECS < 300,
+            "{MAX_ORT_WINDOW_SECS}s is at or past the length where Parakeet              starts losing words; 600s fails outright"
+        );
+    }
+
+    /// And it must stay above the meeting/file-load chunk, or every one of
+    /// those calls would take the splitting path for nothing.
+    #[test]
+    fn leaves_the_normal_chunk_sizes_untouched() {
+        assert!(
+            MAX_ORT_WINDOW_SECS > 60,
+            "{MAX_ORT_WINDOW_SECS}s would split ordinary 30s meeting chunks"
+        );
+    }
+}
 
 #[cfg(test)]
 mod tests {
