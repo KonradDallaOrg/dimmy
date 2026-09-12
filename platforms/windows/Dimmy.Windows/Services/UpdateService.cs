@@ -83,9 +83,48 @@ public sealed class UpdateService
     ///
     /// Deliberately NOT baked into the Rust build: that would make the
     /// prebuilt-DLL cache miss on every tag, and this is a display
-    /// string the host already has.</summary>
-    public string InstalledVersion =>
-        _manager?.CurrentVersion?.ToString() ?? "";
+    /// string the host already has.
+    ///
+    /// REGRESSION GUARD, 2026-09-13: this used to read `_manager`, which is
+    /// only assigned INSIDE the update check. Before the first check had
+    /// run, it returned "" and every caller fell back to the core version
+    /// -- which is exactly the suffix-less string this property exists to
+    /// replace. The window it opened is the worst one: right after applying
+    /// an update the app restarts, and About opened in that gap showed
+    /// "0.7.3" over a banner reading "v0.7.3-rc.1". Reported on a real rc.
+    ///
+    /// `CurrentVersion` is read from the local install metadata, so the
+    /// manager built here does no I/O and the source it is given is never
+    /// used. Build it on demand rather than waiting for a network call to
+    /// happen to have run.</summary>
+    public string InstalledVersion
+    {
+        get
+        {
+            try
+            {
+                // Never assigns `_manager`: other code reads it as "a check
+                // has run", and quietly satisfying that from a property
+                // getter would be a nasty thing to debug later.
+                var m = _manager ?? (_identityManager ??= BuildManager(prerelease: false));
+                return m.IsInstalled ? m.CurrentVersion?.ToString() ?? "" : "";
+            }
+            catch
+            {
+                // Unpackaged build, or Velopack metadata we cannot read.
+                // Empty means "ask the core", which is right for a dev build
+                // and is the only case where the suffix-less answer is true.
+                return "";
+            }
+        }
+    }
+
+    /// Identity-only instance, kept apart from `_manager` so a later real
+    /// check still installs one carrying the user's actual channel.
+    private UpdateManager? _identityManager;
+
+    private static UpdateManager BuildManager(bool prerelease) =>
+        new(new GithubSource(RepoUrl, accessToken: null, prerelease: prerelease));
 
     /// <summary>Fires on the UI dispatcher thread when an update is
     /// downloaded and ready to apply. Settings + taskbar overlay
@@ -192,7 +231,7 @@ public sealed class UpdateService
             // Recreate manager each time so the prerelease flag tracks
             // the user's pref without an app restart. Velopack's
             // GithubSource is lightweight, no auth, just hits /releases.
-            _manager = new UpdateManager(new GithubSource(RepoUrl, accessToken: null, prerelease: prerelease));
+            _manager = BuildManager(prerelease);
 
             // IsInstalled is FALSE for unpackaged dev builds — Velopack
             // won't update a binary it doesn't own (no metadata to

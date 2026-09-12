@@ -5189,9 +5189,15 @@ public sealed partial class SettingsWindow : Window
         // Falls back to the core for dev builds, which have no Velopack
         // identity at all.
         var packaged = Services.UpdateService.Instance?.InstalledVersion ?? "";
-        _currentVersion = !string.IsNullOrWhiteSpace(packaged)
-            ? packaged
-            : DimmyNative.ReadBuffer(DimmyNative.dimmy_get_version, 64) ?? "0.0.0";
+        var core = DimmyNative.ReadBuffer(DimmyNative.dimmy_get_version, 64) ?? "";
+        if (Services.VersionDisplay.WouldLoseSuffix(packaged, core))
+        {
+            // Never expected: Resolve prefers `packaged`. Logged because if
+            // it ever appears, the About page is about to tell an rc user
+            // they are on the stable release.
+            App.Log($"version sources disagree: packaged={packaged} core={core}", "About");
+        }
+        _currentVersion = Services.VersionDisplay.Resolve(packaged, core);
         VersionText.Text = $"v{_currentVersion}";
         // Append " · STAGING" suffix on staging builds. The sidebar banner
         // already announces the flavor loudly; this just makes sure About
