@@ -26,20 +26,28 @@ public sealed partial class CommandWizardWindow : Window
     private int _step;
     private const int TotalSteps = 3;
 
-    /// What the wizard offers as the thing to transform. A work-shaped
-    /// paragraph, because "hello world" proves the wiring and teaches nothing
-    /// about what the feature is for.
+    /// What the wizard offers as the thing to transform. Deliberately shaped
+    /// like something dictated and never tidied up: run-on, no punctuation to
+    /// speak of, three subjects in one breath. "Hello world" proves the wiring
+    /// and teaches nothing about what the feature is for.
+    ///
+    /// In English, like every other word in this window. It used to be Italian
+    /// while the interface around it was not, which left the reader deciding
+    /// which language the thing they were about to SAY should be in.
     private const string SampleText =
-        "allora per il progetto NFC dobbiamo decidere chi fa la presentazione, "
-        + "poi c'e' il tema dei costi che non abbiamo ancora chiuso, e Jasmine "
-        + "voleva sapere se il QR code resta o lo togliamo del tutto";
+        "so for the NFC project we still need to decide who runs the demo, "
+        + "then there's the cost question nobody has closed yet, and Jasmine "
+        + "wanted to know whether the QR code stays or we drop it entirely";
 
+    /// Phrased as spoken instructions, not as button labels: "summarise it in
+    /// three points" is something a person says, "Summarise (3 points)" is
+    /// something they look for and fail to find.
     private static readonly string[] Suggestions =
     {
-        "\"fammi lo schema\"",
-        "\"riassumilo in tre punti\"",
-        "\"riscrivilo in modo formale\"",
-        "\"traducilo in inglese\"",
+        "\"turn this into a bullet list\"",
+        "\"summarise it in three points\"",
+        "\"rewrite it so I can send it to a client\"",
+        "\"translate it into Italian\"",
     };
 
     /// The command shortcut in force before the wizard touched the hook, so
@@ -53,7 +61,9 @@ public sealed partial class CommandWizardWindow : Window
     public CommandWizardWindow()
     {
         InitializeComponent();
-        WindowHelper.ResizeLogical(this, 660, 560);
+        // Taller than the other two wizards: step 3 stacks a hint, the sample
+        // box, the speak-don't-type note, a status bar and the result.
+        WindowHelper.ResizeLogical(this, 660, 620);
 
         // Follow the theme the user picked. Without this a wizard renders in
         // the SYSTEM theme while the rest of the app honours the setting, so a
@@ -68,7 +78,8 @@ public sealed partial class CommandWizardWindow : Window
         Recorder.ShortcutChanged += (_, __) => ValidateShortcut();
 
         SampleBox.Text = SampleText;
-        SuggestionLabel.Text = Suggestions[new Random().Next(Suggestions.Length)];
+        SuggestionLabel.Text =
+            $"For example: {Suggestions[new Random().Next(Suggestions.Length)]}";
 
         Closed += (_, __) => Teardown();
         RenderStep();
@@ -298,6 +309,13 @@ public sealed partial class CommandWizardWindow : Window
     {
         SampleBox.Focus(FocusState.Programmatic);
         SampleBox.SelectAll();
+
+        // Name the actual shortcut rather than "your shortcut": this is the
+        // step where the user has to perform it, and it was chosen two screens
+        // ago.
+        TryHint.Text =
+            $"The text below is selected. Hold {Recorder.Shortcut}, say what you "
+            + "want done with it, then let go.";
 
         if (_armed) return;
         var hk = App.Instance?.HotkeyServiceInstance;
