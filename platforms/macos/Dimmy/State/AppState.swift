@@ -1321,6 +1321,12 @@ final class AppState: ObservableObject {
     /// true AND the build has the feature + credentials. Config-mirror;
     /// round-trips via `dimmy_set_config_json`, which also starts/stops
     /// the worker.
+    /// Gate for the Gemini CLI backend, not a preference. Google ended
+    /// Gemini CLI access for personal accounts on 2026-06-18, so the card
+    /// stays shut until the user says they have a Code Assist work seat --
+    /// otherwise the whole flow ends in a refusal from Google after an
+    /// install and a sign-in. See `core/src/gemini_cli.rs`.
+    @Published var geminiCliEnabled: Bool = false
     @Published var telegramEnabled: Bool = false
 
     /// When true the host auto-processes every shared audio (download +
@@ -1548,6 +1554,7 @@ final class AppState: ObservableObject {
         if let arr = config["call_detect_excluded_apps"] as? [String] {
             callDetectExcludedApps = arr.map { $0.lowercased() }
         }
+        if let v = config["gemini_cli_enabled"] as? Bool { geminiCliEnabled = v }
         if let v = config["telegram_enabled"] as? Bool { telegramEnabled = v }
         if let v = config["telegram_auto_process"] as? Bool { telegramAutoProcess = v }
 
@@ -2026,6 +2033,7 @@ final class AppState: ObservableObject {
             // (setting telegram_enabled also starts/stops the worker in
             // the Rust core). The login session itself lives on disk in
             // <config>/telegram/, never in config.json.
+            "gemini_cli_enabled": geminiCliEnabled,
             "telegram_enabled": telegramEnabled,
             "telegram_auto_process": telegramAutoProcess,
             "user_dict": userDictWords,

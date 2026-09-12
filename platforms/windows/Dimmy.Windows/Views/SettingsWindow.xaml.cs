@@ -1748,6 +1748,10 @@ public sealed partial class SettingsWindow : Window
         // Anthropic+subscription to the `claude` CLI.
         var codexReady = Interop.DimmyNative.GetCodexStatus() == Interop.DimmyNative.ClaudeCodeStatus.Ready;
         var isOpenAI = IsOpenAIUrl(llmUrl);
+        // Gemini parallel. Gated as well as signed in — see
+        // GeminiSubscriptionUsable.
+        var geminiReady = GeminiSubscriptionUsable();
+        var isGemini = IsGeminiUrl(llmUrl);
 
         // Coerce LLM subscription off when the provider is not Anthropic —
         // subscription is Claude Code CLI only (Anthropic-only). Without this
@@ -1758,7 +1762,7 @@ public sealed partial class SettingsWindow : Window
         // way to save a key. Burned 2026-05-18 on the first-time Groq pick
         // from a fresh Anthropic+subscription baseline. Mirror of the recap
         // auth-method coercion below.
-        if (!isAnthropic && !(isOpenAI && codexReady)
+        if (!isAnthropic && !(isOpenAI && codexReady) && !(isGemini && geminiReady)
             && string.Equals(ViewModel.LlmAuthMethod, "subscription", StringComparison.Ordinal))
         {
             ViewModel.LlmAuthMethod = "api_key";
@@ -1854,10 +1858,13 @@ public sealed partial class SettingsWindow : Window
         // The "Use Anthropic subscription" toggle only makes sense
         // when (a) the LLM provider is Anthropic and (b) the
         // integration is connected. Otherwise hide entirely.
-        var llmSubShown = (isAnthropic && integrationReady) || (isOpenAI && codexReady);
+        var llmSubShown = (isAnthropic && integrationReady)
+            || (isOpenAI && codexReady)
+            || (isGemini && geminiReady);
         LlmUseSubscriptionCard.Visibility = llmSubShown ? Visibility.Visible : Visibility.Collapsed;
-        LlmUseSubscriptionCard.Label = (isOpenAI && codexReady)
-            ? "Use ChatGPT subscription"
+        LlmUseSubscriptionCard.Label =
+            (isGemini && geminiReady) ? "Use Google account (Gemini CLI)"
+            : (isOpenAI && codexReady) ? "Use ChatGPT subscription"
             : "Use Anthropic subscription";
         LlmUseSubscriptionToggle.IsOn = llmUseSub;
 
@@ -2064,6 +2071,26 @@ public sealed partial class SettingsWindow : Window
         return url.Contains("api.openai.com", StringComparison.OrdinalIgnoreCase)
             || url.StartsWith("codex://", StringComparison.Ordinal);
     }
+
+    /// <summary>True iff this LLM URL is Google's Gemini endpoint, or our
+    /// synthetic CLI scheme. Sibling of IsAnthropicUrl / IsOpenAIUrl.</summary>
+    private static bool IsGeminiUrl(string url)
+    {
+        return url.Contains("generativelanguage.googleapis.com", StringComparison.OrdinalIgnoreCase)
+            || url.StartsWith("gemini-cli://", StringComparison.Ordinal);
+    }
+
+    /// <summary>Whether the Gemini CLI can actually serve a request right
+    /// now: signed in AND the user has declared a Code Assist work account.
+    ///
+    /// <para>Both halves are required. The gate is not decoration — without
+    /// it the subscription toggle would appear for someone whose personal
+    /// account Google stopped serving on 2026-06-18, and every call would
+    /// fail at the CLI.</para></summary>
+    private static bool GeminiSubscriptionUsable() =>
+        GeminiGateOpen()
+        && Interop.DimmyNative.GetGeminiCliStatus()
+            == Interop.DimmyNative.ClaudeCodeStatus.Ready;
 
     /// <summary>True iff STT and LLM URLs map to the same provider
     /// family. Used to gate the "Use same API key as STT" toggle:

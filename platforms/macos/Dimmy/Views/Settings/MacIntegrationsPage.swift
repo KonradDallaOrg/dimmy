@@ -14,6 +14,7 @@ struct MacIntegrationsPage: View {
     @State private var showDisconnectConfirm: Bool = false
     @State private var showClaudeWizard: Bool = false
     @State private var forceClaudeWizardAtStep1: Bool = false
+    @State private var showGeminiWizard: Bool = false
     @State private var showCodexWizard: Bool = false
     @State private var forceCodexWizardAtStep1: Bool = false
     @State private var showMcpWizard: Bool = false
@@ -58,6 +59,18 @@ struct MacIntegrationsPage: View {
                 }
             )
             MacGroupFooter(text: "Uses your ChatGPT plan through the `codex` CLI, no API key spent. The OAuth token stays with Codex in ~/.codex. Dimmy only checks that you're signed in.")
+
+            Spacer().frame(height: 24)
+            MacGroupLabel(text: "Google (Gemini CLI)")
+            // Gated off by default: Google ended Gemini CLI access for
+            // personal accounts on 2026-06-18, so only Code Assist work
+            // seats can use it. See MacGeminiCliCard for why that is a gate
+            // rather than a preference.
+            MacGeminiCliCard(
+                appState: appState,
+                onWizardRequested: { showGeminiWizard = true }
+            )
+            MacGroupFooter(text: "Runs the `gemini` CLI locally with the login it stored. Dimmy never reads your credentials.")
 
             Spacer().frame(height: 24)
             MacGroupLabel(text: "Notion")
@@ -223,6 +236,29 @@ struct MacIntegrationsPage: View {
                     }
                 },
                 forceStartAtStep1: forceClaudeWizardAtStep1
+            )
+        }
+        .sheet(isPresented: $showGeminiWizard) {
+            GeminiConnectSheet(
+                appState: appState,
+                onClose: {
+                    showGeminiWizard = false
+                    _ = DimmyCore.shared.recheckGeminiCli()
+                },
+                onComplete: { ok in
+                    if ok {
+                        // Real endpoint + subscription auth, the shape macOS
+                        // settled on in June. A synthetic URL would be
+                        // migrated away on the next load and make the model
+                        // picker jump.
+                        appState.llmApiUrl =
+                            "https://generativelanguage.googleapis.com/v1beta/models"
+                        appState.llmAuthMethod = "subscription"
+                        DimmyCore.shared.setConfig(appState.toRustConfig())
+                        DimmyCore.shared.trackEvent("gemini_cli.wizard_completed")
+                    }
+                    showGeminiWizard = false
+                }
             )
         }
         .sheet(isPresented: $showCodexWizard) {

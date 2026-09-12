@@ -102,6 +102,9 @@
 		AA000201 /* MacSettingsContainerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000201 /* MacSettingsContainerView.swift */; };
 		AA000300 /* DimmyCore+License.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000300 /* DimmyCore+License.swift */; };
 		AA00F101 /* DimmyCore+Confluence.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00F101 /* DimmyCore+Confluence.swift */; };
+		AA00F201 /* DimmyCore+GeminiCli.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00F201 /* DimmyCore+GeminiCli.swift */; };
+		AA00F202 /* MacGeminiCliCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00F202 /* MacGeminiCliCard.swift */; };
+		AA00F203 /* GeminiConnectSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00F203 /* GeminiConnectSheet.swift */; };
 		AA00F102 /* ConfluenceConnectSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00F102 /* ConfluenceConnectSheet.swift */; };
 		AA000301 /* MacLicensePage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000301 /* MacLicensePage.swift */; };
 		AA000202 /* MacHomePage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000202 /* MacHomePage.swift */; };
@@ -258,6 +261,9 @@
 		AB000201 /* MacSettingsContainerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSettingsContainerView.swift; sourceTree = "<group>"; };
 		AB000300 /* DimmyCore+License.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DimmyCore+License.swift"; sourceTree = "<group>"; };
 		AB00F101 /* DimmyCore+Confluence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DimmyCore+Confluence.swift"; sourceTree = "<group>"; };
+		AB00F201 /* DimmyCore+GeminiCli.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DimmyCore+GeminiCli.swift"; sourceTree = "<group>"; };
+		AB00F202 /* MacGeminiCliCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacGeminiCliCard.swift; sourceTree = "<group>"; };
+		AB00F203 /* GeminiConnectSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeminiConnectSheet.swift; sourceTree = "<group>"; };
 		AB00F102 /* ConfluenceConnectSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfluenceConnectSheet.swift; sourceTree = "<group>"; };
 		AB000301 /* MacLicensePage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacLicensePage.swift; sourceTree = "<group>"; };
 		AB000202 /* MacHomePage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacHomePage.swift; sourceTree = "<group>"; };
@@ -457,6 +463,7 @@
 				AB000030 /* DimmyCore.swift */,
 				AB000300 /* DimmyCore+License.swift */,
 				AB00F101 /* DimmyCore+Confluence.swift */,
+				AB00F201 /* DimmyCore+GeminiCli.swift */,
 				AB000500 /* DimmyCore+V2.swift */,
 				AB001100 /* DimmyCore+CallDetect.swift */,
 				AB000800 /* DictHotkeyManager.swift */,
@@ -530,6 +537,8 @@
 				AB000301 /* MacLicensePage.swift */,
 				AB000302 /* MacIntegrationsPage.swift */,
 				AB00F102 /* ConfluenceConnectSheet.swift */,
+				AB00F202 /* MacGeminiCliCard.swift */,
+				AB00F203 /* GeminiConnectSheet.swift */,
 				AB000303 /* NotionConnectSheet.swift */,
 				AB000304 /* ClaudeConnectSheet.swift */,
 				AB000305 /* ClaudeDesktopConnectSheet.swift */,
@@ -847,6 +856,9 @@ echo \"[gtcrn] bundled $(basename \"$GTCRN_SRC\") into Resources\"
 				AA000030 /* DimmyCore.swift in Sources */,
 				AA000300 /* DimmyCore+License.swift in Sources */,
 				AA00F101 /* DimmyCore+Confluence.swift in Sources */,
+				AA00F201 /* DimmyCore+GeminiCli.swift in Sources */,
+				AA00F202 /* MacGeminiCliCard.swift in Sources */,
+				AA00F203 /* GeminiConnectSheet.swift in Sources */,
 				AA00F102 /* ConfluenceConnectSheet.swift in Sources */,
 				AA000301 /* MacLicensePage.swift in Sources */,
 				AA000302 /* MacIntegrationsPage.swift in Sources */,

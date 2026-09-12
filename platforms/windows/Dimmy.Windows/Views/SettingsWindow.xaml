@@ -60,10 +60,12 @@
                             Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE7B8;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
-        <!-- Integrations (Notion / Claude subscription / MCP) are opt-in
-             extras — Advanced-gated. -->
-        <NavigationViewItem Content="Integrations" Tag="integrations"
-                            Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+        <!-- Integrations (Notion, Confluence, the subscription backends,
+             MCP) used to be Advanced-gated as "opt-in extras". They are the
+             reason a lot of people install Dimmy at all, and hiding the
+             connect flow behind a mode switch meant the feature existed but
+             could not be found. Always visible. -->
+        <NavigationViewItem Content="Integrations" Tag="integrations">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE71B;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
         <NavigationViewItem Content="Privacy &amp; data" Tag="privacy">
@@ -2387,10 +2389,7 @@
                    above. NOT the Gemini desktop app that shipped for
                    Windows on 2026-09-10: that is a GUI with no local API,
                    so there is nothing to drive. -->
-              <TextBlock Text="Google (Gemini CLI)" FontSize="16" FontWeight="SemiBold" Margin="0,28,0,4"/>
-              <TextBlock FontSize="13" TextWrapping="Wrap" Margin="0,0,0,12"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         Text="Use a Gemini Code Assist Standard or Enterprise licence for rewrite and recap. Personal Google accounts no longer work: Google ended individual access to this CLI on 18 June 2026."/>
+              <TextBlock Text="Google (Gemini CLI)" FontSize="16" FontWeight="SemiBold" Margin="0,28,0,12"/>
 
               <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                       BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"

@@ -518,6 +518,43 @@ int32_t dimmy_notion_search(const char * _Nonnull query_ptr,
 int32_t dimmy_notion_send_recap(const char * _Nonnull meeting_dir_ptr,
                                 char * _Nonnull out_buf, int32_t buf_len);
 
+// ── Gemini CLI (Google account) ───────────────────────
+//
+// Mirror of the Codex entries: same three-state contract, same integer
+// codes. NOT the Gemini desktop app, which has no local API — the CLI is
+// the only thing there is to drive.
+
+/// Probe local Gemini CLI state. 0 = ready, 1 = installed-not-signed-in,
+/// 2 = not installed.
+int32_t dimmy_gemini_cli_status(void);
+
+/// Diagnostic snapshot of the CLI-detection path search. Returns bytes
+/// written, -1 on null buf, -2 on too-small buf.
+int32_t dimmy_gemini_cli_diagnostics(char * _Nonnull out_buf, int32_t buf_len);
+
+/// Resolved `gemini` binary path. Length on success, 0 if not installed,
+/// -1 on invalid args / too-small buffer.
+int32_t dimmy_gemini_cli_binary_path(char * _Nonnull out_buf, int32_t buf_len);
+
+/// Launch the CLI in a terminal so the user signs in with Google. There is
+/// no `gemini login` subcommand: a first run with no credentials shows the
+/// auth picker itself. 0 = spawned, -1 = missing binary, -2 = spawn failure.
+int32_t dimmy_gemini_cli_spawn_login(void);
+
+/// Round-trip ping through the CLI. Elapsed ms on success (> 0). Negative
+/// is categorical: -1 not installed, -2 not signed in, -3 spawn failure,
+/// -4 timeout, -5 non-zero exit, -6 stdout not UTF-8, -7 the CLI reported
+/// an error (quota, model) while exiting ZERO, -8 empty response.
+int32_t dimmy_gemini_cli_ping(void);
+
+/// The CLI's own message from the last ping, for the -7 case only. Empty
+/// otherwise: every other failure's text is redacted in Rust because it
+/// could carry a path or a fragment of the transcript.
+int32_t dimmy_gemini_cli_last_error(char * _Nonnull out_buf, int32_t buf_len);
+
+/// Invalidate the cached binary lookup and return the fresh status code.
+int32_t dimmy_gemini_cli_recheck(void);
+
 // ── Confluence integration ─────────────────────────────
 
 /// Save the Atlassian API token to the AES-256 keystore. Empty string
