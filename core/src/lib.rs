@@ -29,6 +29,7 @@ pub mod download;
 pub mod error;
 pub mod ffi;
 pub mod filler;
+pub mod gemini_cli;
 #[cfg(any(feature = "local-stt", feature = "local-llm"))]
 pub mod gpu_diag;
 #[cfg(any(feature = "local-stt", feature = "local-llm"))]
@@ -801,6 +802,20 @@ pub struct AppConfig {
     /// Requires a Deepgram STT key. Orthogonal to `stt_mode` — it takes
     /// over the dictation capture path when enabled and a key is present.
     pub streaming_dictation: bool,
+    /// Master switch for the Gemini CLI backend, OFF by default and meant to
+    /// stay off for most people.
+    ///
+    /// It is not a preference, it is a gate. Google ended Gemini CLI access
+    /// for personal accounts on 2026-06-18 (Code Assist for individuals,
+    /// Google AI Pro and Ultra alike), so the only accounts it still works
+    /// for are Gemini Code Assist Standard / Enterprise company seats. Left
+    /// visible to everyone, the card would walk a normal user through an
+    /// install and a sign-in that CANNOT succeed, and the failure arrives at
+    /// the very end as an opaque message from Google.
+    ///
+    /// So the user states which kind of account they have first, and only
+    /// then is the rest of the card reachable.
+    pub gemini_cli_enabled: bool,
     /// Master switch for the Telegram inbox source (record on phone -> share to
     /// Saved Messages -> Dimmy transcribes + recaps). Off by default; enabling
     /// only starts the user-account client after the user connects an account.
@@ -1030,6 +1045,7 @@ impl Default for AppConfig {
             recap_model_override: String::new(),
             chunk_streaming_enabled: false,
             streaming_dictation: false,
+            gemini_cli_enabled: false,
             telegram_enabled: false,
             telegram_auto_process: false,
             // Default-OFF since 2026-08-31. The three stages behind this flag
@@ -1172,6 +1188,7 @@ pub fn save_config_file(cfg: &AppConfig) {
             "recap_model_override": cfg.recap_model_override,
             "chunk_streaming_enabled": cfg.chunk_streaming_enabled,
             "streaming_dictation": cfg.streaming_dictation,
+            "gemini_cli_enabled": cfg.gemini_cli_enabled,
             "telegram_enabled": cfg.telegram_enabled,
             "telegram_auto_process": cfg.telegram_auto_process,
             "preprocessing_enabled": cfg.preprocessing_enabled,
@@ -1324,6 +1341,9 @@ pub fn load_config_file() -> AppConfig {
                     streaming_dictation: v["streaming_dictation"]
                         .as_bool()
                         .unwrap_or(defaults.streaming_dictation),
+                    gemini_cli_enabled: v["gemini_cli_enabled"]
+                        .as_bool()
+                        .unwrap_or(defaults.gemini_cli_enabled),
                     telegram_enabled: v["telegram_enabled"]
                         .as_bool()
                         .unwrap_or(defaults.telegram_enabled),
@@ -1814,6 +1834,8 @@ pub struct AppState {
     pub llm_log_enabled: Mutex<bool>,
     pub chunk_streaming_enabled: Mutex<bool>,
     pub streaming_dictation: Mutex<bool>,
+    /// See [`AppConfig::gemini_cli_enabled`] — a gate, not a preference.
+    pub gemini_cli_enabled: Mutex<bool>,
     pub telegram_enabled: Mutex<bool>,
     pub telegram_auto_process: Mutex<bool>,
     pub preprocessing_enabled: Mutex<bool>,
@@ -1970,6 +1992,7 @@ impl AppState {
             llm_log_enabled: Mutex::new(file_cfg.llm_log_enabled),
             chunk_streaming_enabled: Mutex::new(file_cfg.chunk_streaming_enabled),
             streaming_dictation: Mutex::new(file_cfg.streaming_dictation),
+            gemini_cli_enabled: Mutex::new(file_cfg.gemini_cli_enabled),
             telegram_enabled: Mutex::new(file_cfg.telegram_enabled),
             telegram_auto_process: Mutex::new(file_cfg.telegram_auto_process),
             preprocessing_enabled: Mutex::new(file_cfg.preprocessing_enabled),
@@ -2113,6 +2136,7 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         .streaming_dictation
         .lock()
         .map_err(|e| e.to_string())?;
+    let gemini_cli_enabled = *state.gemini_cli_enabled.lock().map_err(|e| e.to_string())?;
     let telegram_enabled = *state.telegram_enabled.lock().map_err(|e| e.to_string())?;
     let telegram_auto_process = *state
         .telegram_auto_process
@@ -2210,6 +2234,7 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         recap_model_override,
         chunk_streaming_enabled,
         streaming_dictation,
+        gemini_cli_enabled,
         telegram_enabled,
         telegram_auto_process,
         preprocessing_enabled,

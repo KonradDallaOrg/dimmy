@@ -798,6 +798,10 @@ public static class DimmyNative
         Timeout,
         NonZeroExit,
         InvalidUtf8,
+        // Gemini-only: the CLI exits 0 and reports the failure in its JSON
+        // envelope, so a success exit code is not proof of success.
+        Reported,
+        EmptyResponse,
         UnknownError,
     }
 
@@ -941,6 +945,85 @@ public static class DimmyNative
     public static ClaudeCodeStatus RecheckCodex()
     {
         try { return (ClaudeCodeStatus)dimmy_codex_recheck(); }
+        catch { return ClaudeCodeStatus.NotInstalled; }
+    }
+
+    // ── Gemini CLI (Google account) ────────────────────
+    //
+    // Use the user's Google account (free tier, AI Pro, AI Ultra) via the
+    // official `gemini` CLI instead of an API key. Mirror of the codex
+    // surface above. See `core/src/gemini_cli.rs`.
+    //
+    // NOT the Gemini desktop app: that is a GUI with no local API. The
+    // CLI is the only thing there is to drive.
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_gemini_cli_status();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_gemini_cli_binary_path(byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_gemini_cli_spawn_login();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_gemini_cli_ping();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_gemini_cli_recheck();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_gemini_cli_last_error(byte[] outBuf, int bufLen);
+
+    public static ClaudeCodeStatus GetGeminiCliStatus()
+    {
+        try { return (ClaudeCodeStatus)dimmy_gemini_cli_status(); }
+        catch { return ClaudeCodeStatus.NotInstalled; }
+    }
+
+    public static string? GetGeminiCliBinaryPath() =>
+        ReadBuffer(dimmy_gemini_cli_binary_path, 4096);
+
+    public static bool SpawnGeminiCliLogin()
+    {
+        try { return dimmy_gemini_cli_spawn_login() == 0; }
+        catch { return false; }
+    }
+
+    /// <summary>The CLI's own message from the last ping — populated only
+    /// for the Reported case (quota exhausted, model unavailable). Empty
+    /// otherwise: every other failure's text is redacted in Rust because
+    /// it could carry a path or a transcript fragment.</summary>
+    public static string GetGeminiCliLastError() =>
+        ReadBuffer(dimmy_gemini_cli_last_error, 2048) ?? string.Empty;
+
+    /// <summary>Ping round-trip through the Gemini CLI. Extends the
+    /// PingClaudeCode table with two codes Gemini can return that the
+    /// other two CLIs cannot: -7 the CLI reported an error at exit 0
+    /// (quota!), -8 it answered with nothing.</summary>
+    public static (ClaudeCodePingResult result, int elapsedMs) PingGeminiCli()
+    {
+        int rc;
+        try { rc = dimmy_gemini_cli_ping(); }
+        catch { return (ClaudeCodePingResult.UnknownError, 0); }
+        return rc switch
+        {
+            > 0 => (ClaudeCodePingResult.Ok, rc),
+            -1 => (ClaudeCodePingResult.NotInstalled, 0),
+            -2 => (ClaudeCodePingResult.NotLoggedIn, 0),
+            -3 => (ClaudeCodePingResult.SpawnFailed, 0),
+            -4 => (ClaudeCodePingResult.Timeout, 0),
+            -5 => (ClaudeCodePingResult.NonZeroExit, 0),
+            -6 => (ClaudeCodePingResult.InvalidUtf8, 0),
+            -7 => (ClaudeCodePingResult.Reported, 0),
+            -8 => (ClaudeCodePingResult.EmptyResponse, 0),
+            _ => (ClaudeCodePingResult.UnknownError, 0),
+        };
+    }
+
+    public static ClaudeCodeStatus RecheckGeminiCli()
+    {
+        try { return (ClaudeCodeStatus)dimmy_gemini_cli_recheck(); }
         catch { return ClaudeCodeStatus.NotInstalled; }
     }
 

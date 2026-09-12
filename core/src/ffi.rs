@@ -97,6 +97,12 @@ static RECORDING_STARTED_AT: Mutex<Option<std::time::Instant>> = Mutex::new(None
 /// `dimmy_meeting_start`, NOT via the dictation hotkey).
 static MEETING: Mutex<Option<crate::meeting::MeetingSession>> = Mutex::new(None);
 
+/// The Gemini CLI's own message from the last ping. Kept here rather than
+/// squeezed into the integer return because quota errors are the one
+/// failure the user can actually do something about, and a number does
+/// not say "you have used your 1000 requests for today".
+static GEMINI_LAST_ERROR: Mutex<String> = Mutex::new(String::new());
+
 /// The local backend that can actually run, given what is on disk.
 ///
 /// Wraps the pure decision in `transcribe::resolve_local_backend` with the
@@ -526,6 +532,7 @@ fn dimmy_init_inner() -> c_int {
         recap_model_override: Mutex::new(file_cfg.recap_model_override),
         chunk_streaming_enabled: Mutex::new(file_cfg.chunk_streaming_enabled),
         streaming_dictation: Mutex::new(file_cfg.streaming_dictation),
+        gemini_cli_enabled: Mutex::new(file_cfg.gemini_cli_enabled),
         telegram_enabled: Mutex::new(file_cfg.telegram_enabled),
         telegram_auto_process: Mutex::new(file_cfg.telegram_auto_process),
         preprocessing_enabled: Mutex::new(file_cfg.preprocessing_enabled),
@@ -1136,7 +1143,16 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
         let transcriber = crate::chunked_stt::ChunkedTranscriber::start(
             st.audio_buffer.clone(),
             crate::audio::MEETING_CANONICAL_RATE,
-            3.0,
+            crate::chunked_stt::chunk_secs_for_backend(
+                &local_backend,
+                // Realtime typing always shows text as you speak; the
+                // chunked path only does when captions are switched on.
+                local_typing
+                    || *st
+                        .live_captions_enabled
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner()),
+            ),
             500,
             vad_trim,
             transcribe_fn,
@@ -2085,6 +2101,7 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         "recap_model_override": st.recap_model_override.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         "chunk_streaming_enabled": *st.chunk_streaming_enabled.lock().unwrap_or_else(|e| e.into_inner()),
         "streaming_dictation": *st.streaming_dictation.lock().unwrap_or_else(|e| e.into_inner()),
+        "gemini_cli_enabled": *st.gemini_cli_enabled.lock().unwrap_or_else(|e| e.into_inner()),
         "telegram_enabled": *st.telegram_enabled.lock().unwrap_or_else(|e| e.into_inner()),
         "telegram_auto_process": *st.telegram_auto_process.lock().unwrap_or_else(|e| e.into_inner()),
         "preprocessing_enabled": *st.preprocessing_enabled.lock().unwrap_or_else(|e| e.into_inner()),
@@ -2546,6 +2563,11 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
     }
     if let Some(b) = v["streaming_dictation"].as_bool() {
         if let Ok(mut c) = st.streaming_dictation.lock() {
+            *c = b;
+        }
+    }
+    if let Some(b) = v["gemini_cli_enabled"].as_bool() {
+        if let Ok(mut c) = st.gemini_cli_enabled.lock() {
             *c = b;
         }
     }
@@ -4947,6 +4969,160 @@ pub extern "C" fn dimmy_codex_ping() -> c_int {
 pub extern "C" fn dimmy_codex_recheck() -> c_int {
     crate::codex::clear_cache();
     crate::codex::status().as_code()
+}
+
+// ── Gemini CLI (Google account) bridge ───────────────────
+// Direct mirror of the Codex FFI above, same integer contracts, so the
+// hosts reuse the status-card logic for all three CLI backends.
+
+/// Probe local Gemini CLI state. 0 = ready, 1 = installed-not-signed-in,
+/// 2 = not installed.
+#[no_mangle]
+pub extern "C" fn dimmy_gemini_cli_status() -> c_int {
+    let s = crate::gemini_cli::status();
+    crate::telemetry::track(crate::telemetry::Event::GeminiCliStatusProbed {
+        status: crate::gemini_cli::status_label(&s),
+    });
+    s.as_code()
+}
+
+/// Diagnostic snapshot of the Gemini CLI-detection path search.
+/// Returns bytes written, -1 on null buf, -2 on too-small buf.
+///
+/// # Safety
+/// `out_buf` must be a valid writable buffer of `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_gemini_cli_diagnostics(
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let json = crate::gemini_cli::diagnostics_json();
+    if json.len() + 1 > buf_len as usize {
+        return -2;
+    }
+    write_to_buf(&json, out_buf, buf_len)
+}
+
+/// Resolved `gemini` binary path into `out_buf`. Length on success, 0 if
+/// not installed, -1 on invalid args / too-small buffer.
+///
+/// # Safety
+/// `out_buf` must be a valid writable buffer of `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_gemini_cli_binary_path(
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    match crate::gemini_cli::detect_binary() {
+        Some(p) => {
+            let s = p.to_string_lossy().to_string();
+            if s.len() + 1 > buf_len as usize {
+                return -1;
+            }
+            write_to_buf(&s, out_buf, buf_len)
+        }
+        None => 0,
+    }
+}
+
+/// Spawn the Gemini CLI in a terminal so the user signs in with Google
+/// via browser. 0 = spawned, -1 = missing binary, -2 = spawn failure.
+#[no_mangle]
+pub extern "C" fn dimmy_gemini_cli_spawn_login() -> c_int {
+    match crate::gemini_cli::spawn_login() {
+        Ok(()) => 0,
+        Err(crate::gemini_cli::GeminiError::NotInstalled) => -1,
+        Err(_) => -2,
+    }
+}
+
+/// "Test connection" round-trip through the Gemini CLI. Returns elapsed
+/// ms on success (> 0). Negative = categorical error:
+///   -1 not installed, -2 not signed in, -3 spawn failure, -4 timeout,
+///   -5 non-zero exit, -6 stdout not UTF-8, -7 the CLI reported an error
+///   (quota, model), -8 empty response.
+/// The prompt is hard-coded ("reply with the single word: pong") so no
+/// user content can reach the wire here.
+#[no_mangle]
+pub extern "C" fn dimmy_gemini_cli_ping() -> c_int {
+    use crate::gemini_cli::{error_category, GeminiError};
+    let started = std::time::Instant::now();
+    let result = crate::gemini_cli::run_blocking(
+        "reply with the single word: pong",
+        "",
+        std::time::Duration::from_secs(60),
+    );
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    let (success, category) = match &result {
+        Ok(_) => (true, "ok"),
+        Err(e) => (false, error_category(e)),
+    };
+    if let Ok(mut g) = GEMINI_LAST_ERROR.lock() {
+        // Only the CLI's own report is retained. Every other variant's
+        // Display is redacted precisely because it could carry a path or
+        // a transcript fragment, and this string reaches the UI.
+        *g = match &result {
+            Err(GeminiError::Reported(msg)) => msg.clone(),
+            _ => String::new(),
+        };
+    }
+    crate::telemetry::track(crate::telemetry::Event::GeminiCliInvocation {
+        kind: "test",
+        processing_ms_bucket: crate::telemetry::sanitize::bucket_processing_ms(elapsed_ms),
+        success,
+        error_category: category,
+    });
+    match result {
+        Ok(_) => (elapsed_ms.min(i32::MAX as u64) as c_int).max(1),
+        Err(GeminiError::NotInstalled) => -1,
+        Err(GeminiError::NotLoggedIn) => -2,
+        Err(GeminiError::Spawn(_)) => -3,
+        Err(GeminiError::Timeout) => -4,
+        Err(GeminiError::NonZeroExit { .. }) => -5,
+        Err(GeminiError::InvalidUtf8) => -6,
+        Err(GeminiError::Reported(_)) => -7,
+        Err(GeminiError::EmptyResponse) => -8,
+    }
+}
+
+/// The CLI's own message from the last ping, for the -7 case. Kept out
+/// of the integer contract because it is the one Gemini error a user can
+/// act on: "you have used your 1000 requests today" is advice, "-7" is
+/// not. Returns bytes written, 0 when there is nothing to report.
+///
+/// # Safety
+/// `out_buf` must be a valid writable buffer of `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_gemini_cli_last_error(
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let msg = GEMINI_LAST_ERROR
+        .lock()
+        .map(|g| g.clone())
+        .unwrap_or_default();
+    if msg.is_empty() {
+        return 0;
+    }
+    write_to_buf(&msg, out_buf, buf_len)
+}
+
+/// Invalidate the cached Gemini binary lookup + return the fresh
+/// `dimmy_gemini_cli_status()` code. Used by the Settings "recheck"
+/// button and by the wizard after the user installs or signs in.
+#[no_mangle]
+pub extern "C" fn dimmy_gemini_cli_recheck() -> c_int {
+    crate::gemini_cli::clear_cache();
+    crate::gemini_cli::status().as_code()
 }
 
 // ── Claude Desktop MCP bridge ──────────────────────────────────────
@@ -11042,6 +11218,7 @@ mod tests {
                 recap_model_override: Mutex::new(String::new()),
                 chunk_streaming_enabled: Mutex::new(false),
                 streaming_dictation: Mutex::new(false),
+                gemini_cli_enabled: Mutex::new(false),
                 telegram_enabled: Mutex::new(false),
                 telegram_auto_process: Mutex::new(false),
                 preprocessing_enabled: Mutex::new(true),

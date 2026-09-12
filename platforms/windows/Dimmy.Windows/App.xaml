@@ -31,6 +31,22 @@
                                     UriSource="ms-appx:///Assets/Providers/anthropic.svg" />
                     <SvgImageSource x:Key="OpenAIMarkSource"
                                     UriSource="ms-appx:///Assets/Providers/openai-mark.svg" />
+                    <!-- Mask-free Gemini spark, the same asset the provider
+                         picker uses. One file for both themes: it carries
+                         its own brand gradient.
+
+                         Google's official mark (Wikimedia Commons, public
+                         domain, "Google Gemini icon 2025.svg") was tried
+                         here on 2026-09-12 and RENDERS WRONG: it clips its
+                         gradients with an SVG <mask>, WinUI draws SVG
+                         through Direct2D, and Direct2D's subset has no
+                         masks — so the mask is ignored and the bare
+                         gradient rectangles paint as coloured blocks. The
+                         file is kept as gemini-official.svg for whoever
+                         wants to flatten it; do not point this at it until
+                         they have. -->
+                    <SvgImageSource x:Key="GeminiMarkSource"
+                                    UriSource="ms-appx:///Assets/Providers/gemini.svg" />
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Dark">
                     <SvgImageSource x:Key="NotionMarkSource"
@@ -41,6 +57,8 @@
                                     UriSource="ms-appx:///Assets/Providers/anthropic-dark.svg" />
                     <SvgImageSource x:Key="OpenAIMarkSource"
                                     UriSource="ms-appx:///Assets/Providers/openai-mark-dark.svg" />
+                    <SvgImageSource x:Key="GeminiMarkSource"
+                                    UriSource="ms-appx:///Assets/Providers/gemini.svg" />
 
                     <!-- Lift the three foundational Dark-theme surface
                          colours by ~10/255 (~4%). WinUI's default dark

@@ -549,6 +549,31 @@ struct ChatMessage {
     content: String,
 }
 
+/// Translate a Gemini CLI failure into the LLM error the hosts already
+/// know how to show.
+///
+/// `Reported` keeps its message: it is the CLI telling us about the
+/// REQUEST (quota exhausted, model unavailable), never about the user's
+/// content, and it is the difference between "something went wrong" and
+/// "you have used your 1000 requests for today". Every other variant is
+/// already redacted by its `Display`.
+fn map_gemini_err(e: crate::gemini_cli::GeminiError) -> crate::error::LlmError {
+    use crate::gemini_cli::GeminiError as G;
+    match e {
+        G::NotInstalled | G::NotLoggedIn => crate::error::LlmError::NoApiKey("gemini".to_string()),
+        G::Timeout => crate::error::LlmError::Network("gemini timeout".to_string()),
+        G::Spawn(_) | G::InvalidUtf8 => {
+            crate::error::LlmError::Network("gemini spawn failed".to_string())
+        }
+        G::EmptyResponse => crate::error::LlmError::Network("gemini empty response".to_string()),
+        G::Reported(msg) => crate::error::LlmError::Network(format!("gemini: {msg}")),
+        G::NonZeroExit { code, .. } => crate::error::LlmError::Api {
+            status: code.unsigned_abs() as u16,
+            body: String::new(),
+        },
+    }
+}
+
 /// Send text to an OpenAI-compatible chat completions endpoint for processing.
 ///
 /// `auth_method` is the orthogonal-to-URL routing knob. `"subscription"`
@@ -573,6 +598,53 @@ pub async fn process_text(
     let system_prompt = build_system_prompt(style, tone, custom_prompt, translate_to);
     if system_prompt.is_empty() {
         return Ok(text.to_string());
+    }
+
+    // Gemini CLI (Google account) branch. Same two triggers as Codex:
+    //   • the explicit gemini-cli:// scheme, OR
+    //   • auth_method == "subscription" AND the provider is Gemini — the
+    //     Output → LLM "Use Google account" toggle, which keeps the real
+    //     Gemini url/model and only flips auth_method (so the model the
+    //     user picked is passed through to the CLI's -m).
+    // Must run BEFORE the Codex and claude_code checks, which also match
+    // auth_method == "subscription" but for their own providers.
+    let gemini_google_sub =
+        auth_method == "subscription" && crate::provider::Provider::from_url(api_url).is_gemini();
+    if crate::gemini_cli::is_gemini_cli_url(api_url) || gemini_google_sub {
+        let combined = format!(
+            "{}
+
+---
+Process the following transcription. Output ONLY the transformed text, nothing else.
+
+[TRANSCRIPTION]
+{}
+[/TRANSCRIPTION]",
+            system_prompt, text
+        );
+        let model_owned = model.to_string();
+        let started_at = std::time::Instant::now();
+        let result = tokio::task::spawn_blocking(move || {
+            crate::gemini_cli::run_blocking(
+                &combined,
+                &model_owned,
+                std::time::Duration::from_secs(60),
+            )
+        })
+        .await
+        .map_err(|e| crate::error::LlmError::Network(format!("gemini join: {}", e)))?;
+        let elapsed_ms = started_at.elapsed().as_millis() as u64;
+        let (success, category) = match &result {
+            Ok(_) => (true, "ok"),
+            Err(e) => (false, crate::gemini_cli::error_category(e)),
+        };
+        crate::telemetry::track(crate::telemetry::Event::GeminiCliInvocation {
+            kind: "rewrite",
+            processing_ms_bucket: crate::telemetry::sanitize::bucket_processing_ms(elapsed_ms),
+            success,
+            error_category: category,
+        });
+        return result.map_err(map_gemini_err);
     }
 
     // Codex (ChatGPT subscription) branch. Two triggers:
@@ -1023,6 +1095,38 @@ pub async fn process_raw_prompt(
         max_tokens <= 100_000,
         "process_raw_prompt: max_tokens too large"
     );
+
+    // Gemini CLI branch — gemini-cli:// scheme OR subscription + Gemini
+    // provider (the Output → Recap toggle). Runs BEFORE validate_url,
+    // which rejects any non-HTTPS scheme, ours included.
+    let gemini_google_sub =
+        auth_method == "subscription" && crate::provider::Provider::from_url(api_url).is_gemini();
+    if crate::gemini_cli::is_gemini_cli_url(api_url) || gemini_google_sub {
+        let model_owned = model.to_string();
+        let prompt_owned = user_prompt.to_string();
+        let started_at = std::time::Instant::now();
+        let result = tokio::task::spawn_blocking(move || {
+            crate::gemini_cli::run_blocking(
+                &prompt_owned,
+                &model_owned,
+                std::time::Duration::from_secs(600),
+            )
+        })
+        .await
+        .map_err(|e| crate::error::LlmError::Network(format!("gemini join: {}", e)))?;
+        let elapsed_ms = started_at.elapsed().as_millis() as u64;
+        let (success, category) = match &result {
+            Ok(_) => (true, "ok"),
+            Err(e) => (false, crate::gemini_cli::error_category(e)),
+        };
+        crate::telemetry::track(crate::telemetry::Event::GeminiCliInvocation {
+            kind: "recap",
+            processing_ms_bucket: crate::telemetry::sanitize::bucket_processing_ms(elapsed_ms),
+            success,
+            error_category: category,
+        });
+        return result.map_err(map_gemini_err);
+    }
 
     // Codex (ChatGPT subscription) branch — codex:// scheme OR
     // subscription + OpenAI provider (the Output → Recap toggle). Runs
@@ -2418,6 +2522,50 @@ mod tests {
     // shape, and whether extended thinking should auto-enable.
     // Bug 2026-05-08: Opus 4.7 was being sent budget_tokens form →
     // 400 invalid_request_error. Fixed in commit 9729ca4.
+
+    /// The three CLI backends all match on `auth_method == "subscription"`
+    /// and are told apart ONLY by the provider behind the URL. Their order
+    /// in `process_text` is therefore load-bearing, and nothing else fails
+    /// if it is wrong: a Gemini user would silently get their recap from
+    /// Codex, with a different account and a different bill.
+    #[test]
+    fn subscription_backends_are_told_apart_by_provider() {
+        use crate::provider::Provider;
+        let gemini = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent";
+        let openai = "https://api.openai.com/v1/chat/completions";
+        let anthropic = "https://api.anthropic.com/v1/messages";
+
+        assert!(Provider::from_url(gemini).is_gemini());
+        assert!(!Provider::from_url(gemini).is_openai());
+        assert!(!Provider::from_url(gemini).is_anthropic());
+
+        assert!(Provider::from_url(openai).is_openai());
+        assert!(!Provider::from_url(openai).is_gemini());
+
+        assert!(Provider::from_url(anthropic).is_anthropic());
+        assert!(!Provider::from_url(anthropic).is_gemini());
+    }
+
+    /// Each synthetic scheme must be claimed by exactly one backend.
+    #[test]
+    fn the_three_synthetic_schemes_do_not_overlap() {
+        let schemes = [
+            crate::gemini_cli::PROVIDER_URL,
+            crate::codex::PROVIDER_URL,
+            "claude-code://default",
+        ];
+        for s in schemes {
+            let n = [
+                crate::gemini_cli::is_gemini_cli_url(s),
+                crate::codex::is_codex_url(s),
+                s.starts_with("claude-code://"),
+            ]
+            .iter()
+            .filter(|m| **m)
+            .count();
+            assert_eq!(n, 1, "{s} is claimed by {n} backends, must be exactly 1");
+        }
+    }
 
     #[test]
     fn gemini_native_url_detection() {

@@ -325,6 +325,7 @@ public sealed partial class SettingsWindow : Window
         // providers (RebuildCombo no-ops while loading).
         RefreshAuthIntegrationStatus();
         RefreshCodexIntegrationStatus();
+        RefreshGeminiIntegrationStatus();
     }
 
     /// <summary>Disable the optional command-mode hotkey. Empties the combo
