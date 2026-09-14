@@ -1338,6 +1338,14 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
         appState.telegramAccount = payload["account"] as? String ?? ""
         appState.telegramPending = payload["pending"] as? Int ?? 0
 
+    case "telegram_qr":
+        if let size = payload["size"] as? Int,
+           let modules = payload["modules"] as? String,
+           size > 0, modules.utf8.count == size * size {
+            appState.telegramQrSize = size
+            appState.telegramQrModules = modules
+        }
+
     case "telegram_pending":
         // A new audio landed in Saved Messages. Hand to the orchestrator
         // (auto-process, or a one-at-a-time nudge).

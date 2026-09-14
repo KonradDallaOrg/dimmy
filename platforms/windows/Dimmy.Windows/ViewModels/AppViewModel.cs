@@ -373,6 +373,10 @@ public partial class AppViewModel : ObservableObject
     /// off this.
     public event Action<string, string, int>? TelegramStateChanged;
 
+    /// A fresh QR login code. Args: (side, modules), modules row-major with
+    /// '1' = dark. Refreshed by the core until another device approves it.
+    public event Action<int, string>? TelegramQrChanged;
+
     /// A shared audio is waiting for a decision. Args: (msgId, filename,
     /// dateEpoch, sizeBytes, isBacklog). Host asks "transcribe + recap?"
     /// then calls dimmy_telegram_process(msgId) on accept, or _dismiss.
@@ -616,6 +620,14 @@ public partial class AppViewModel : ObservableObject
                         var account = payload.TryGetProperty("account", out var ac) ? (ac.GetString() ?? "") : "";
                         var pending = payload.TryGetProperty("pending", out var pe) ? pe.GetInt32() : 0;
                         TelegramStateChanged?.Invoke(phase, account, pending);
+                    }
+                    break;
+                case "telegram_qr":
+                    {
+                        var side = payload.TryGetProperty("size", out var sd) ? sd.GetInt32() : 0;
+                        var modules = payload.TryGetProperty("modules", out var md) ? (md.GetString() ?? "") : "";
+                        if (side > 0 && modules.Length == side * side)
+                            TelegramQrChanged?.Invoke(side, modules);
                     }
                     break;
                 case "telegram_pending":

@@ -1334,9 +1334,13 @@ final class AppState: ObservableObject {
     @Published var telegramAutoProcess: Bool = false
 
     /// Live login-state-machine phase from the `telegram_state` event:
-    /// disabled | no_credentials | logged_out | wait_code | wait_password
-    /// | connected | error. NOT persisted — recomputed from the worker.
+    /// disabled | no_credentials | logged_out | wait_code | wait_qr
+    /// | wait_password | connected | error. NOT persisted — recomputed from the worker.
     @Published var telegramPhase: String = "disabled"
+    /// Current QR login code from `telegram_qr`: side length and the
+    /// row-major module grid, "1" = dark.
+    @Published var telegramQrSize: Int = 0
+    @Published var telegramQrModules: String = ""
     /// Connected account display name (empty unless phase == connected).
     @Published var telegramAccount: String = ""
     /// Count of un-handled audio messages waiting in the inbox.

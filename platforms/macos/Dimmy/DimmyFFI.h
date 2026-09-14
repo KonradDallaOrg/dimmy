@@ -845,6 +845,14 @@ void dimmy_telegram_set_enabled(int32_t enabled);
 /// -100 not compiled. Success emits telegram_state {phase:"wait_code"}.
 int32_t dimmy_telegram_start_login(const char * _Nonnull phone);
 
+/// Begin QR login. Emits telegram_qr {size, modules, expires_in} and
+/// telegram_state {phase:"wait_qr"}, refreshed until scanned. 0/-1/-100.
+int32_t dimmy_telegram_start_qr_login(void);
+
+/// Abandon a login in progress; emits telegram_state {phase:"logged_out"}.
+/// 0/-1/-100.
+int32_t dimmy_telegram_cancel_login(void);
+
 /// Submit the login code (after phase=wait_code). 0/-1/-100.
 int32_t dimmy_telegram_submit_code(const char * _Nonnull code);
 

@@ -78,6 +78,7 @@ public sealed partial class SettingsWindow : Window
             app.AppViewModel.LlmModelDownloadProgress += OnLlmModelProgress;
             app.AppViewModel.TelegramStateChanged += OnTelegramStateChanged;
             app.AppViewModel.TelegramError += OnTelegramError;
+            app.AppViewModel.TelegramQrChanged += OnTelegramQrChanged;
             this.Closed += (_, __) =>
             {
                 app.AppViewModel.ParakeetDownloadProgress -= OnParakeetProgress;
@@ -86,6 +87,7 @@ public sealed partial class SettingsWindow : Window
                 app.AppViewModel.LlmModelDownloadProgress -= OnLlmModelProgress;
                 app.AppViewModel.TelegramStateChanged -= OnTelegramStateChanged;
                 app.AppViewModel.TelegramError -= OnTelegramError;
+                app.AppViewModel.TelegramQrChanged -= OnTelegramQrChanged;
             };
         }
 

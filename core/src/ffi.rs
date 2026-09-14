@@ -10547,6 +10547,21 @@ pub unsafe extern "C" fn dimmy_telegram_start_login(phone_ptr: *const c_char) ->
     crate::telegram::start_login(phone)
 }
 
+/// Begin QR login. The worker emits `telegram_qr {size, modules, expires_in}`
+/// and `telegram_state {phase:"wait_qr"}`, refreshing the code until another
+/// device approves it. 0 queued / -1 channel / -100 not compiled.
+#[no_mangle]
+pub extern "C" fn dimmy_telegram_start_qr_login() -> c_int {
+    crate::telegram::start_qr_login()
+}
+
+/// Abandon a login in progress (code, QR or 2FA). Emits
+/// `telegram_state {phase:"logged_out"}`. 0 / -1 / -100.
+#[no_mangle]
+pub extern "C" fn dimmy_telegram_cancel_login() -> c_int {
+    crate::telegram::cancel_login()
+}
+
 /// Submit the login code. On success emits `telegram_state {phase:"connected"}`
 /// or, if 2FA is on, `{phase:"wait_password"}`.
 ///

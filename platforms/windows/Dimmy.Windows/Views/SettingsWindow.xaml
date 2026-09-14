@@ -2664,27 +2664,44 @@
                   </Grid>
 
                   <StackPanel x:Name="TelegramPhonePanel" Spacing="8" Visibility="Collapsed">
-                    <TextBlock Text="Enter your Telegram phone number, with country code."
+                    <Button x:Name="TelegramQrLoginBtn" Content="Log in with QR code"
+                            Click="TelegramQrLogin_Click" Style="{ThemeResource AccentButtonStyle}"/>
+                    <TextBlock Text="Or use your phone number, with country code. The code arrives in the Telegram app, not by SMS."
                                FontSize="13" TextWrapping="Wrap"
                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                     <StackPanel Orientation="Horizontal" Spacing="8">
                       <TextBox x:Name="TelegramPhoneBox" PlaceholderText="+39 333 1234567" Width="220"/>
                       <Button x:Name="TelegramSendCodeBtn" Content="Send code"
-                              Click="TelegramSendCode_Click" Style="{ThemeResource AccentButtonStyle}"/>
+                              Click="TelegramSendCode_Click"/>
                       <ProgressRing x:Name="TelegramPhoneRing" Width="20" Height="20"
                                     IsActive="False" Visibility="Collapsed" VerticalAlignment="Center"/>
                     </StackPanel>
                   </StackPanel>
 
                   <StackPanel x:Name="TelegramCodePanel" Spacing="8" Visibility="Collapsed">
-                    <TextBlock Text="Enter the code Telegram sent to your other devices."
+                    <TextBlock Text="Look in the Telegram app on your phone: the code arrives as a message from Telegram, usually not by SMS."
                                FontSize="13" TextWrapping="Wrap"
                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                     <StackPanel Orientation="Horizontal" Spacing="8">
                       <TextBox x:Name="TelegramCodeBox" PlaceholderText="12345" Width="140"/>
                       <Button x:Name="TelegramSubmitCodeBtn" Content="Confirm"
                               Click="TelegramSubmitCode_Click" Style="{ThemeResource AccentButtonStyle}"/>
+                      <HyperlinkButton Content="Didn't get it? Go back" Click="TelegramBackToPhone_Click"
+                                       VerticalAlignment="Center"/>
                     </StackPanel>
+                  </StackPanel>
+
+                  <StackPanel x:Name="TelegramQrPanel" Spacing="8" Visibility="Collapsed">
+                    <TextBlock Text="On your phone, open Telegram, go to Settings, Devices, Link Desktop Device, and scan this code."
+                               FontSize="13" TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    <Border Background="White" CornerRadius="8" Width="220" Height="220"
+                            HorizontalAlignment="Left">
+                      <Viewbox Stretch="Uniform">
+                        <Canvas x:Name="TelegramQrCanvas" Width="1" Height="1"/>
+                      </Viewbox>
+                    </Border>
+                    <HyperlinkButton Content="Use phone number instead" Click="TelegramBackToPhone_Click"/>
                   </StackPanel>
 
                   <StackPanel x:Name="TelegramPasswordPanel" Spacing="8" Visibility="Collapsed">
