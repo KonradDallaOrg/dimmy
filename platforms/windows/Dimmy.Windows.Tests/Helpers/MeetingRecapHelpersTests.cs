@@ -20,6 +20,41 @@ public class MeetingRecapHelpersTests
 {
     // ── BuildStructuredRecapPrompt ─────────────────────────────────
 
+    // Names: speech recognition misspells people and products, and the
+    // recap kept those spellings even when the notes had the right ones.
+
+    [Fact]
+    public void Names_block_is_absent_without_notes_or_vocabulary()
+    {
+        var prompt = MeetingRecapHelpers.BuildStructuredRecapPrompt("[0 ms] [mic] hi");
+        Assert.DoesNotContain("Correct spelling of names", prompt);
+    }
+
+    [Fact]
+    public void Vocabulary_terms_reach_the_prompt_before_the_transcript()
+    {
+        var prompt = MeetingRecapHelpers.BuildStructuredRecapPrompt(
+            "[0 ms] [mic] ciao", vocabulary: new[] { "Konrad", " Stylewhere ", "konrad", "" });
+        Assert.Contains("Vocabulary: Konrad, Stylewhere\n", prompt);
+        Assert.True(prompt.IndexOf("Correct spelling of names") < prompt.IndexOf("## Transcript\n"));
+    }
+
+    [Fact]
+    public void Notes_alone_make_their_names_the_correct_spelling()
+    {
+        var prompt = MeetingRecapHelpers.BuildStructuredRecapPrompt("t", notes: "PM Paolo Giorgi");
+        Assert.Contains("Any name written in the listener's notes is the CORRECT spelling", prompt);
+        Assert.DoesNotContain("Vocabulary:", prompt);
+    }
+
+    [Fact]
+    public void Hard_rules_allow_correcting_a_misheard_name()
+    {
+        var prompt = MeetingRecapHelpers.BuildStructuredRecapPrompt("t", vocabulary: new[] { "Urely" });
+        Assert.Contains("is NOT inventing", prompt);
+        Assert.Contains("NEVER invent", prompt);
+    }
+
     [Fact]
     public void Prompt_includes_every_canonical_section_marker()
     {

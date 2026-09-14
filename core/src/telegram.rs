@@ -30,6 +30,7 @@ pub const PHASE_NO_CREDENTIALS: &str = "no_credentials";
 pub const PHASE_LOGGED_OUT: &str = "logged_out";
 pub const PHASE_WAIT_CODE: &str = "wait_code";
 pub const PHASE_WAIT_PASSWORD: &str = "wait_password";
+pub const PHASE_WAIT_QR: &str = "wait_qr";
 pub const PHASE_CONNECTED: &str = "connected";
 pub const PHASE_ERROR: &str = "error";
 
@@ -67,16 +68,60 @@ pub fn is_compiled() -> bool {
     cfg!(feature = "telegram")
 }
 
+/// How long a login-code request may take before the user is told.
+pub const LOGIN_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// A worker whose receiver is gone (it exited or panicked) is not running,
+/// even though its sender is still stored. Treating it as running left every
+/// later login attempt failing until the app was restarted.
+#[cfg_attr(not(feature = "telegram"), allow(dead_code))]
+fn worker_running<T>(tx: Option<&tokio::sync::mpsc::UnboundedSender<T>>) -> bool {
+    tx.is_some_and(|tx| !tx.is_closed())
+}
+
+/// `tg://login?token=<base64url>`, the URL a phone's Telegram app scans to
+/// approve a QR login (core.telegram.org/api/qr-login).
+#[cfg_attr(not(feature = "telegram"), allow(dead_code))]
+fn qr_login_url(token: &[u8]) -> String {
+    use base64::Engine as _;
+    assert!(!token.is_empty(), "Telegram returned an empty login token");
+    format!(
+        "tg://login?token={}",
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(token)
+    )
+}
+
+/// The QR code for `text` as `(side, modules)`: `side * side` characters,
+/// row-major, `'1'` dark. The hosts paint it, so both draw the same code.
+#[cfg(feature = "telegram")]
+fn qr_modules(text: &str) -> Option<(usize, String)> {
+    let code = qrcode::QrCode::new(text.as_bytes()).ok()?;
+    let side = code.width();
+    let modules: String = code
+        .to_colors()
+        .iter()
+        .map(|c| if *c == qrcode::Color::Dark { '1' } else { '0' })
+        .collect();
+    assert_eq!(modules.len(), side * side, "QR grid is not square");
+    Some((side, modules))
+}
+
 #[cfg(feature = "telegram")]
 pub use imp::{
-    dismiss, list_pending_json, logout, mark_processed, process, set_enabled, start_login,
-    status_json, submit_code, submit_password,
+    cancel_login, dismiss, list_pending_json, logout, mark_processed, process, set_enabled,
+    start_login, start_qr_login, status_json, submit_code, submit_password,
 };
 
 #[cfg(not(feature = "telegram"))]
 mod stub {
     pub fn set_enabled(_enabled: bool) {}
     pub fn start_login(_phone: &str) -> i32 {
+        -100
+    }
+    pub fn start_qr_login() -> i32 {
+        -100
+    }
+    pub fn cancel_login() -> i32 {
         -100
     }
     pub fn submit_code(_code: &str) -> i32 {
@@ -122,7 +167,7 @@ mod imp {
     use grammers_client::message::Message;
     use grammers_client::peer::User;
     use grammers_client::update::Update;
-    use grammers_client::Client;
+    use grammers_client::{tl, Client};
     use grammers_mtsender::SenderPool;
     use grammers_session::types::{
         ChannelState, DcOption, PeerId, PeerInfo, UpdateState, UpdatesState,
@@ -134,8 +179,13 @@ mod imp {
     use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
     /// Commands the FFI layer sends to the worker task.
+    const LOGIN_TIMEOUT_MSG: &str =
+        "Telegram did not answer within 30 seconds. Check your connection and try again.";
+
     enum Cmd {
         StartLogin(String),
+        StartQrLogin,
+        CancelLogin,
         SubmitCode(String),
         SubmitPassword(String),
         Logout,
@@ -146,6 +196,22 @@ mod imp {
     }
 
     static TX: Mutex<Option<UnboundedSender<Cmd>>> = Mutex::new(None);
+
+    /// Set when the worker leaves because its session is dead (logged out, or
+    /// revoked by Telegram). The session file is removed once the worker's
+    /// connection is gone, so the next login starts from a fresh key.
+    static DISCARD_SESSION: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
+    /// Update-stream errors that mean this session can never work again. With
+    /// the old loop each one came back instantly, about 20 times a second, at
+    /// Telegram's servers and into the log.
+    const DEAD_SESSION_ERRORS: &[&str] = &[
+        "AUTH_KEY_UNREGISTERED",
+        "SESSION_REVOKED",
+        "SESSION_EXPIRED",
+        "USER_DEACTIVATED*",
+    ];
 
     /// Snapshot of the last state we published, so `status_json()` (a sync FFI
     /// call) can answer without reaching into the async worker.
@@ -192,6 +258,21 @@ mod imp {
     pub fn start_login(phone: &str) -> i32 {
         ensure_started();
         if send(Cmd::StartLogin(phone.to_string())) {
+            0
+        } else {
+            -1
+        }
+    }
+    pub fn start_qr_login() -> i32 {
+        ensure_started();
+        if send(Cmd::StartQrLogin) {
+            0
+        } else {
+            -1
+        }
+    }
+    pub fn cancel_login() -> i32 {
+        if send(Cmd::CancelLogin) {
             0
         } else {
             -1
@@ -283,7 +364,7 @@ mod imp {
     fn ensure_started() {
         {
             let g = TX.lock().unwrap();
-            if g.is_some() {
+            if worker_running(g.as_ref()) {
                 return;
             }
         }
@@ -321,6 +402,12 @@ mod imp {
                         set_state(PHASE_ERROR, "", 0);
                     }
                 });
+                // Dropping the runtime ends the connection task, which could
+                // otherwise write the dead key back after the file is gone.
+                drop(rt);
+                if DISCARD_SESSION.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                    let _ = std::fs::remove_file(session_path());
+                }
                 if let Ok(mut g) = TX.lock() {
                     *g = None;
                 }
@@ -550,6 +637,10 @@ mod imp {
         let mut pending: HashMap<i32, Message> = HashMap::new();
         let mut login_token: Option<LoginToken> = None;
         let mut password_token: Option<PasswordToken> = None;
+        // When to ask Telegram for the QR login state again: at the token's
+        // expiry, or immediately once the phone approves it. `None` = no QR
+        // login in progress.
+        let mut qr_refresh: Option<tokio::time::Instant> = None;
         // The peer id of the logged-in account; a Saved-Messages message is one
         // whose peer is ourselves. `None` until authorized. Type is grammers'
         // private `PeerId`, so it is held by inference rather than named.
@@ -565,15 +656,41 @@ mod imp {
         }
 
         loop {
+            let qr_deadline = qr_refresh;
             tokio::select! {
                 cmd = rx.recv() => {
                     let Some(cmd) = cmd else { break };
                     match cmd {
                         Cmd::Shutdown => break,
                         Cmd::StartLogin(phone) => {
-                            match client.request_login_code(&phone, &api_hash).await {
-                                Ok(tok) => { login_token = Some(tok); set_state(PHASE_WAIT_CODE, "", pending.len()); }
-                                Err(e) => emit_error(&format!("login code request failed: {e}")),
+                            qr_refresh = None;
+                            // Its own task, so a panic inside grammers comes back
+                            // as a JoinError instead of killing this worker.
+                            let (c, hash) = (client.clone(), api_hash.clone());
+                            let mut task = tokio::spawn(async move {
+                                c.request_login_code(&phone, &hash).await
+                            });
+                            match tokio::time::timeout(LOGIN_REQUEST_TIMEOUT, &mut task).await {
+                                Ok(Ok(Ok(tok))) => { login_token = Some(tok); set_state(PHASE_WAIT_CODE, "", pending.len()); }
+                                Ok(Ok(Err(e))) => emit_error(&format!("login code request failed: {e}")),
+                                Ok(Err(_)) => emit_error("Telegram sent an answer Dimmy cannot handle. Try logging in with the QR code instead."),
+                                Err(_) => {
+                                    task.abort();
+                                    emit_error(LOGIN_TIMEOUT_MSG);
+                                }
+                            }
+                        }
+                        Cmd::StartQrLogin => {
+                            login_token = None;
+                            password_token = None;
+                            qr_refresh = Some(tokio::time::Instant::now());
+                        }
+                        Cmd::CancelLogin => {
+                            login_token = None;
+                            password_token = None;
+                            qr_refresh = None;
+                            if me_id.is_none() {
+                                set_state(PHASE_LOGGED_OUT, "", pending.len());
                             }
                         }
                         Cmd::SubmitCode(code) => {
@@ -609,9 +726,14 @@ mod imp {
                         }
                         Cmd::Logout => {
                             let _ = client.sign_out().await;
-                            me_id = None; pending.clear();
                             if let Ok(mut g) = PENDING_META.lock() { g.clear(); }
+                            // The key is revoked now; staying on it spins the
+                            // update stream. Leave, and the next login starts
+                            // a worker with a fresh session.
+                            let _ = std::fs::remove_file(session_path());
+                            DISCARD_SESSION.store(true, std::sync::atomic::Ordering::SeqCst);
                             set_state(PHASE_LOGGED_OUT, "", 0);
+                            break;
                         }
                         Cmd::Process(id) => {
                             if let Some(msg) = pending.get(&id).cloned() {
@@ -635,6 +757,29 @@ mod imp {
                         }
                     }
                 }
+                _ = async { tokio::time::sleep_until(qr_deadline.unwrap_or_else(tokio::time::Instant::now)).await }, if qr_deadline.is_some() => {
+                    match qr_export(&client, &session, api_id, &api_hash).await {
+                        QrOutcome::Show(next) => {
+                            qr_refresh = Some(next);
+                            set_state(PHASE_WAIT_QR, "", pending.len());
+                        }
+                        QrOutcome::Password(pt) => {
+                            qr_refresh = None;
+                            password_token = Some(*pt);
+                            set_state(PHASE_WAIT_PASSWORD, "", pending.len());
+                        }
+                        QrOutcome::Connected(user) => {
+                            qr_refresh = None;
+                            me_id = Some(user.id());
+                            set_state(PHASE_CONNECTED, &display_name(&user), pending.len());
+                        }
+                        QrOutcome::Failed(msg) => {
+                            qr_refresh = None;
+                            emit_error(&msg);
+                            set_state(PHASE_LOGGED_OUT, "", pending.len());
+                        }
+                    }
+                }
                 upd = stream.next() => {
                     match upd {
                         Ok(Update::NewMessage(msg)) => {
@@ -642,13 +787,149 @@ mod imp {
                                 handle_incoming(&msg, &processed, &mut pending);
                             }
                         }
+                        // The phone approved the QR code: ask for the result now
+                        // rather than at the token's expiry.
+                        Ok(Update::Raw(raw)) if matches!(raw.raw, tl::enums::Update::LoginToken) => {
+                            crate::log("[Telegram] QR login approved on another device");
+                            if qr_refresh.is_some() {
+                                qr_refresh = Some(tokio::time::Instant::now());
+                            }
+                        }
                         Ok(_) => {}
-                        Err(e) => crate::log(&format!("[Telegram] update error: {e}")),
+                        Err(e) if DEAD_SESSION_ERRORS.iter().any(|name| e.is(name)) => {
+                            crate::log(&format!("[Telegram] session is no longer valid: {e}"));
+                            let _ = std::fs::remove_file(session_path());
+                            DISCARD_SESSION.store(true, std::sync::atomic::Ordering::SeqCst);
+                            if me_id.is_some() {
+                                emit_error("Telegram signed this device out. Log in again.");
+                            }
+                            set_state(PHASE_LOGGED_OUT, "", 0);
+                            break;
+                        }
+                        Err(e) => {
+                            crate::log(&format!("[Telegram] update error: {e}"));
+                            // A dropped connection fails every call at once too.
+                            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        }
                     }
                 }
             }
         }
         Ok(())
+    }
+
+    enum QrOutcome {
+        /// A fresh code was sent to the host; look again at this instant.
+        Show(tokio::time::Instant),
+        Password(Box<PasswordToken>),
+        Connected(Box<User>),
+        Failed(String),
+    }
+
+    /// One round of `auth.exportLoginToken`: a new code to show, or the
+    /// outcome once the phone has approved the previous one. Follows the
+    /// documented flow, including the move to another data center.
+    async fn qr_export(
+        client: &Client,
+        session: &FileSession,
+        api_id: i32,
+        api_hash: &str,
+    ) -> QrOutcome {
+        let request = tl::functions::auth::ExportLoginToken {
+            api_id,
+            api_hash: api_hash.to_string(),
+            except_ids: Vec::new(),
+        };
+        let Ok(first) = tokio::time::timeout(LOGIN_REQUEST_TIMEOUT, client.invoke(&request)).await
+        else {
+            return QrOutcome::Failed(LOGIN_TIMEOUT_MSG.to_string());
+        };
+        let answer = match first {
+            Ok(tl::enums::auth::LoginToken::MigrateTo(m)) => {
+                if let Err(e) = session.set_home_dc_id(m.dc_id).await {
+                    return QrOutcome::Failed(format!("QR login failed: {e}"));
+                }
+                client
+                    .invoke(&tl::functions::auth::ImportLoginToken { token: m.token })
+                    .await
+            }
+            other => other,
+        };
+        match answer {
+            Ok(tl::enums::auth::LoginToken::Token(t)) => {
+                let Some((size, modules)) = qr_modules(&qr_login_url(&t.token)) else {
+                    return QrOutcome::Failed("Could not draw the QR code.".to_string());
+                };
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                let secs = (t.expires as i64 - now).clamp(5, 60) as u64;
+                crate::ffi::emit_event(
+                    "telegram_qr",
+                    &json!({ "size": size, "modules": modules, "expires_in": secs }).to_string(),
+                );
+                QrOutcome::Show(tokio::time::Instant::now() + std::time::Duration::from_secs(secs))
+            }
+            Ok(tl::enums::auth::LoginToken::Success(s)) => match s.authorization {
+                tl::enums::auth::Authorization::Authorization(a) => {
+                    match complete_qr_login(client, session, a).await {
+                        Ok(user) => QrOutcome::Connected(Box::new(user)),
+                        Err(e) => QrOutcome::Failed(format!("QR login failed: {e}")),
+                    }
+                }
+                tl::enums::auth::Authorization::SignUpRequired(_) => QrOutcome::Failed(
+                    "This number has no Telegram account yet. Create it in the Telegram app first."
+                        .to_string(),
+                ),
+            },
+            Ok(tl::enums::auth::LoginToken::MigrateTo(_)) => {
+                QrOutcome::Failed("Telegram moved the login twice. Try again.".to_string())
+            }
+            Err(e) if e.is("SESSION_PASSWORD_NEEDED") => {
+                match client.invoke(&tl::functions::account::GetPassword {}).await {
+                    Ok(pw) => QrOutcome::Password(Box::new(PasswordToken::new(pw.into()))),
+                    Err(e) => QrOutcome::Failed(format!("QR login failed: {e}")),
+                }
+            }
+            Err(e) => QrOutcome::Failed(format!("QR login failed: {e}")),
+        }
+    }
+
+    /// What grammers' private `complete_login` does after `sign_in`, for a
+    /// login that came through a QR code instead: remember who we are and
+    /// where the update stream starts.
+    async fn complete_qr_login(
+        client: &Client,
+        session: &FileSession,
+        auth: tl::types::auth::Authorization,
+    ) -> Result<User, Box<dyn std::error::Error + Send + Sync>> {
+        let update_state = client
+            .invoke(&tl::functions::updates::GetState {})
+            .await
+            .ok();
+        let user = User::from_raw(client, auth.user);
+        let peer_auth = user.to_ref().await?.map(|r| r.auth);
+        session
+            .cache_peer(&PeerInfo::User {
+                id: user.id().bare_id_unchecked(),
+                auth: peer_auth,
+                bot: Some(user.is_bot()),
+                is_self: Some(true),
+            })
+            .await?;
+        if let Some(tl::enums::updates::State::State(s)) = update_state {
+            session
+                .set_update_state(UpdateState::All(UpdatesState {
+                    pts: s.pts,
+                    qts: s.qts,
+                    date: s.date,
+                    seq: s.seq,
+                    channels: Vec::new(),
+                }))
+                .await?;
+        }
+        Ok(user)
     }
 
     fn display_name(user: &User) -> String {
@@ -797,5 +1078,36 @@ mod imp {
     fn emit_error(msg: &str) {
         crate::log(&format!("[Telegram] {msg}"));
         crate::ffi::emit_event("telegram_error", &json!({ "message": msg }).to_string());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_worker_whose_receiver_is_gone_is_not_running() {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+        assert!(worker_running(Some(&tx)));
+        drop(rx);
+        assert!(!worker_running(Some(&tx)));
+        assert!(!worker_running::<()>(None));
+    }
+
+    #[test]
+    fn the_qr_url_uses_base64url_without_padding() {
+        // 0xfb 0xff is "+/8=" in standard base64: both substitutions and the
+        // dropped padding show up in one token.
+        assert_eq!(qr_login_url(&[0xfb, 0xff]), "tg://login?token=-_8");
+    }
+
+    #[cfg(feature = "telegram")]
+    #[test]
+    fn the_qr_grid_is_square_and_binary() {
+        let (side, modules) = qr_modules(&qr_login_url(&[7u8; 32])).expect("encodes");
+        assert!(side >= 21, "smallest QR version is 21 modules, got {side}");
+        assert_eq!(modules.len(), side * side);
+        assert!(modules.bytes().all(|b| b == b'0' || b == b'1'));
+        assert!(modules.contains('1') && modules.contains('0'));
     }
 }

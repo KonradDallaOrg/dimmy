@@ -655,6 +655,9 @@ final class MeetingViewModel: ObservableObject {
             showToast("No transcript on disk to recap.")
             return
         }
+        // The recap reads notes.md: write what is in the editor first, or a
+        // name typed just before pressing Regenerate never reaches it.
+        saveNotes()
         phase = .processing
         processingStep = .generatingRecap
         statusLabel = "Regenerating recap..."

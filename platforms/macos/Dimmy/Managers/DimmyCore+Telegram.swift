@@ -29,6 +29,21 @@ extension DimmyCore {
         return phone.withCString { dimmy_telegram_start_login($0) }
     }
 
+    /// Start a QR login. The code arrives as `telegram_qr` and is refreshed
+    /// by the core until another device approves it.
+    @discardableResult
+    func telegramStartQrLogin() -> Int32 {
+        guard isInitialized else { return -1 }
+        return dimmy_telegram_start_qr_login()
+    }
+
+    /// Abandon a login in progress (code, QR or 2FA).
+    @discardableResult
+    func telegramCancelLogin() -> Int32 {
+        guard isInitialized else { return -1 }
+        return dimmy_telegram_cancel_login()
+    }
+
     /// Submit the login code (meaningful only after phase == wait_code).
     @discardableResult
     func telegramSubmitCode(_ code: String) -> Int32 {

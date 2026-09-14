@@ -544,7 +544,7 @@ struct MacIntegrationsPage: View {
                 : who
         case "no_credentials":
             return "This build has no Telegram API key."
-        case "wait_code", "wait_password":
+        case "wait_code", "wait_qr", "wait_password":
             return "Finishing sign-in…"
         default:
             return "Not connected. Log in to forward audio from your phone."

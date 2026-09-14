@@ -1254,6 +1254,14 @@ public static class DimmyNative
     public static extern int dimmy_telegram_start_login(
         [MarshalAs(UnmanagedType.LPUTF8Str)] string phone);
 
+    /// QR login: emits telegram_qr {size, modules} + telegram_state wait_qr.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_telegram_start_qr_login();
+
+    /// Abandon a login in progress; emits telegram_state logged_out.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_telegram_cancel_login();
+
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_telegram_submit_code(
         [MarshalAs(UnmanagedType.LPUTF8Str)] string code);

@@ -1726,25 +1726,19 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
             } else {
                 "cloud"
             };
+            // The engine that actually RAN, not the configured one: when the
+            // chosen backend has no model on disk `effective_local_backend`
+            // falls back to whisper, and reporting the configured name would
+            // credit Parakeet with a whisper transcription.
             let provider_static: &'static str = if stt_mode == "local" {
-                "local_whisper"
+                crate::telemetry::sanitize::local_provider(&local_stt_backend)
             } else {
                 crate::telemetry::sanitize::provider_from_url(&api_url)
             };
             let llm_enabled_now = st.llm_enabled.lock().map(|e| *e).unwrap_or(false);
-            // local_backend categorical: "whisper" | "parakeet" | "" when cloud.
+            // local_backend categorical: "whisper" | "parakeet" | "qwen" | "" when cloud.
             let local_backend_static: &'static str = if stt_mode == "local" {
-                match st
-                    .local_stt_backend
-                    .lock()
-                    .map(|b| b.clone())
-                    .unwrap_or_default()
-                    .as_str()
-                {
-                    "parakeet" => "parakeet",
-                    "qwen" => "qwen",
-                    _ => "whisper",
-                }
+                crate::telemetry::sanitize::local_backend_tag(&local_stt_backend)
             } else {
                 ""
             };
@@ -1917,8 +1911,11 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
             } else {
                 "cloud"
             };
+            // Named per engine, same as the success path: `transcription.failed`
+            // carries no `local_backend`, so without this a failing Parakeet
+            // was indistinguishable from a failing whisper.
             let provider_static: &'static str = if stt_mode == "local" {
-                "local_whisper"
+                crate::telemetry::sanitize::local_provider(&local_stt_backend)
             } else {
                 crate::telemetry::sanitize::provider_from_url(&api_url)
             };
@@ -9356,6 +9353,12 @@ pub unsafe extern "C" fn dimmy_telemetry_track_typed(
         "claude_code.login_completed" => Some(crate::telemetry::Event::ClaudeCodeLoginCompleted {
             outcome: prop_static("outcome", &["success", "timeout", "spawn_failed"]),
         }),
+        "codex.login_completed" => Some(crate::telemetry::Event::CodexLoginCompleted {
+            outcome: prop_static("outcome", &["success", "timeout", "spawn_failed"]),
+        }),
+        "gemini_cli.login_completed" => Some(crate::telemetry::Event::GeminiCliLoginCompleted {
+            outcome: prop_static("outcome", &["success", "timeout", "spawn_failed"]),
+        }),
         // onboarding.* — wizard funnel emitted from the host wizard
         // window (Win OnboardingWindow, Mac OnboardingContainerView).
         // Step names are categorical so dashboards can build funnels
@@ -10542,6 +10545,21 @@ pub unsafe extern "C" fn dimmy_telegram_start_login(phone_ptr: *const c_char) ->
         Err(_) => return -1,
     };
     crate::telegram::start_login(phone)
+}
+
+/// Begin QR login. The worker emits `telegram_qr {size, modules, expires_in}`
+/// and `telegram_state {phase:"wait_qr"}`, refreshing the code until another
+/// device approves it. 0 queued / -1 channel / -100 not compiled.
+#[no_mangle]
+pub extern "C" fn dimmy_telegram_start_qr_login() -> c_int {
+    crate::telegram::start_qr_login()
+}
+
+/// Abandon a login in progress (code, QR or 2FA). Emits
+/// `telegram_state {phase:"logged_out"}`. 0 / -1 / -100.
+#[no_mangle]
+pub extern "C" fn dimmy_telegram_cancel_login() -> c_int {
+    crate::telegram::cancel_login()
 }
 
 /// Submit the login code. On success emits `telegram_state {phase:"connected"}`

@@ -25,6 +25,40 @@ public sealed partial class SettingsWindow
         });
     }
 
+    private void OnTelegramQrChanged(int side, string modules)
+    {
+        this.DispatcherQueue.TryEnqueue(() =>
+        {
+            try { DrawTelegramQr(side, modules); }
+            catch (Exception ex) { App.Log($"OnTelegramQrChanged exc: {ex.Message}", "Telegram"); }
+        });
+    }
+
+    /// Paints the core's module grid with a 4-module quiet zone, as ONE path
+    /// so neighbouring modules do not show seams when the Viewbox scales it.
+    private void DrawTelegramQr(int side, string modules)
+    {
+        if (TelegramQrCanvas == null || side <= 0 || modules.Length != side * side) return;
+        const int quiet = 4;
+        var geometry = new Microsoft.UI.Xaml.Media.GeometryGroup();
+        for (int i = 0; i < modules.Length; i++)
+        {
+            if (modules[i] != '1') continue;
+            geometry.Children.Add(new Microsoft.UI.Xaml.Media.RectangleGeometry
+            {
+                Rect = new global::Windows.Foundation.Rect(i % side + quiet, i / side + quiet, 1, 1)
+            });
+        }
+        TelegramQrCanvas.Children.Clear();
+        TelegramQrCanvas.Width = side + 2 * quiet;
+        TelegramQrCanvas.Height = side + 2 * quiet;
+        TelegramQrCanvas.Children.Add(new Microsoft.UI.Xaml.Shapes.Path
+        {
+            Data = geometry,
+            Fill = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Black),
+        });
+    }
+
     private void OnTelegramError(string message)
     {
         this.DispatcherQueue.TryEnqueue(() =>
@@ -76,6 +110,7 @@ public sealed partial class SettingsWindow
         // integrations. Everything below the header is state-driven.
         TelegramPhonePanel.Visibility = Visibility.Collapsed;
         TelegramCodePanel.Visibility = Visibility.Collapsed;
+        TelegramQrPanel.Visibility = Visibility.Collapsed;
         TelegramPasswordPanel.Visibility = Visibility.Collapsed;
         TelegramConnectedActions.Visibility = Visibility.Collapsed;
         TelegramAutoProcessCard.Visibility = Visibility.Collapsed;
@@ -98,6 +133,11 @@ public sealed partial class SettingsWindow
             case "wait_code":
                 TelegramStatusText.Text = "Enter the code we sent to your Telegram app.";
                 TelegramCodePanel.Visibility = Visibility.Visible;
+                break;
+
+            case "wait_qr":
+                TelegramStatusText.Text = "Scan the code with Telegram on your phone.";
+                TelegramQrPanel.Visibility = Visibility.Visible;
                 break;
 
             case "wait_password":
@@ -206,6 +246,43 @@ public sealed partial class SettingsWindow
             App.Log($"Telegram start login exc: {ex.Message}", "Telegram");
             TelegramShowMessage("Could not start login.", isError: true);
         }
+    }
+
+    private void TelegramQrLogin_Click(object sender, RoutedEventArgs e)
+    {
+        TelegramMessageBar.Visibility = Visibility.Collapsed;
+        TelegramPhoneRing.IsActive = true;
+        TelegramPhoneRing.Visibility = Visibility.Visible;
+        try
+        {
+            int rc = DimmyNative.dimmy_telegram_start_qr_login();
+            if (rc != 0)
+            {
+                TelegramPhoneRing.IsActive = false;
+                TelegramPhoneRing.Visibility = Visibility.Collapsed;
+                TelegramShowMessage(
+                    rc == -100 ? "This build has no Telegram support." : "Could not start login. Try again.",
+                    isError: true);
+            }
+        }
+        catch (Exception ex)
+        {
+            TelegramPhoneRing.IsActive = false;
+            TelegramPhoneRing.Visibility = Visibility.Collapsed;
+            App.Log($"Telegram QR login exc: {ex.Message}", "Telegram");
+            TelegramShowMessage("Could not start login.", isError: true);
+        }
+    }
+
+    /// Back to the number (kept filled in) from the code or QR step. The core
+    /// drops the login in progress, so a QR code stops refreshing behind it.
+    private void TelegramBackToPhone_Click(object sender, RoutedEventArgs e)
+    {
+        TelegramCodeBox.Text = "";
+        TelegramMessageBar.Visibility = Visibility.Collapsed;
+        try { DimmyNative.dimmy_telegram_cancel_login(); }
+        catch (Exception ex) { App.Log($"Telegram cancel login exc: {ex.Message}", "Telegram"); }
+        TelegramRefreshFromState("logged_out", "", 0);
     }
 
     private void TelegramSubmitCode_Click(object sender, RoutedEventArgs e)

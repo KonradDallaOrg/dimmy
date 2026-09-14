@@ -45,6 +45,37 @@ final class MeetingPostProcessServiceTests: XCTestCase {
         XCTAssertTrue(prompt.contains("VERBATIM"))
     }
 
+    // MARK: - Names spelling (Win parity)
+
+    func testNamesBlockAbsentWithoutNotesOrVocabulary() {
+        let prompt = MeetingPostProcessService.buildStructuredRecapPrompt(transcript: "[0 ms] [mic] hi")
+        XCTAssertFalse(prompt.contains("Correct spelling of names"))
+    }
+
+    func testVocabularyReachesPromptBeforeTranscript() {
+        let prompt = MeetingPostProcessService.buildStructuredRecapPrompt(
+            transcript: "[0 ms] [mic] ciao",
+            vocabulary: ["Konrad", " Stylewhere ", "konrad", ""])
+        XCTAssertTrue(prompt.contains("Vocabulary: Konrad, Stylewhere\n"))
+        let names = prompt.range(of: "Correct spelling of names")!.lowerBound
+        let transcript = prompt.range(of: "## Transcript\n")!.lowerBound
+        XCTAssertTrue(names < transcript)
+    }
+
+    func testNotesAloneMakeTheirNamesTheCorrectSpelling() {
+        let prompt = MeetingPostProcessService.buildStructuredRecapPrompt(
+            transcript: "t", notes: "PM Paolo Giorgi")
+        XCTAssertTrue(prompt.contains("Any name written in the listener's notes is the CORRECT spelling"))
+        XCTAssertFalse(prompt.contains("Vocabulary:"))
+    }
+
+    func testHardRulesAllowCorrectingAMisheardName() {
+        let prompt = MeetingPostProcessService.buildStructuredRecapPrompt(
+            transcript: "t", vocabulary: ["Urely"])
+        XCTAssertTrue(prompt.contains("is NOT inventing"))
+        XCTAssertTrue(prompt.contains("NEVER invent"))
+    }
+
     // MARK: - Listener's notes injection (Win parity)
 
     func testPromptOmitsNotesSectionWhenNotesEmpty() {

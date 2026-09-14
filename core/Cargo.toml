@@ -212,7 +212,7 @@ license-client = ["dep:ed25519-dalek"]
 # the Windows dev/test + release builds enable it. Runtime is ALSO gated by
 # the `telegram_enabled` config (default false) + consent, so enabling the
 # cargo feature alone does nothing until the user connects an account.
-telegram = ["dep:grammers-client", "dep:grammers-session", "dep:grammers-mtsender"]
+telegram = ["dep:grammers-client", "dep:grammers-session", "dep:grammers-mtsender", "dep:qrcode"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -228,6 +228,9 @@ tokio = { version = "1", features = ["full"] }
 grammers-client = { version = "=0.10.0", optional = true }
 grammers-session = { version = "=0.10.0", optional = true, features = ["serde"] }
 grammers-mtsender = { version = "=0.10.0", optional = true }
+# QR login for Telegram: encodes the tg://login URL into a module grid the
+# hosts paint themselves. No image/svg features: nothing rasterises here.
+qrcode = { version = "0.14.1", default-features = false, optional = true }
 # Realtime streaming dictation WebSocket client (Deepgram and future
 # wss STT backends). native-tls feature on purpose: the cdylib already
 # standardised on native-tls (schannel on Windows) — a rustls WS client

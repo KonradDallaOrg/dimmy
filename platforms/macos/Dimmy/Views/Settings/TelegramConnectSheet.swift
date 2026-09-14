@@ -1,6 +1,29 @@
 import SwiftUI
 
-/// Telegram login sheet: phone -> code -> optional 2FA password.
+/// Paints the core's QR module grid (row-major, "1" = dark) with a
+/// 4-module quiet zone, filled as one path so modules show no seams.
+private struct TelegramQrView: View {
+    let size: Int
+    let modules: String
+
+    var body: some View {
+        Canvas { ctx, area in
+            ctx.fill(Path(CGRect(origin: .zero, size: area)), with: .color(.white))
+            guard size > 0, modules.utf8.count == size * size else { return }
+            let unit = min(area.width, area.height) / CGFloat(size + 8)
+            var path = Path()
+            for (i, ch) in modules.utf8.enumerated() where ch == UInt8(ascii: "1") {
+                path.addRect(CGRect(x: CGFloat(i % size + 4) * unit,
+                                    y: CGFloat(i / size + 4) * unit,
+                                    width: unit, height: unit))
+            }
+            ctx.fill(path, with: .color(.black))
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+/// Telegram login sheet: QR code, or phone -> code, then optional 2FA password.
 /// Mac mirror of the inline login panels in Win
 /// `Views/SettingsWindow.Telegram.cs`. Unlike the linear Notion wizard,
 /// this is an event-driven state machine: the panel shown is chosen by
@@ -28,6 +51,8 @@ struct TelegramConnectSheet: View {
                         noCredentials
                     case "wait_code":
                         codeStep
+                    case "wait_qr":
+                        qrStep
                     case "wait_password":
                         passwordStep
                     case "connected":
@@ -93,7 +118,13 @@ struct TelegramConnectSheet: View {
 
     private var footer: some View {
         HStack {
-            Button("Cancel") { onClose() }
+            Button("Cancel") {
+                // A QR login left running would keep refreshing its code.
+                if appState.telegramPhase.hasPrefix("wait_") {
+                    DimmyCore.shared.telegramCancelLogin()
+                }
+                onClose()
+            }
                 .keyboardShortcut(.cancelAction)
             Spacer()
         }
@@ -110,13 +141,26 @@ struct TelegramConnectSheet: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
+            HStack(spacing: 10) {
+                Button("Log in with QR code") { startQrLogin() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(busy)
+                if busy { ProgressView().controlSize(.small) }
+                Spacer()
+            }
+
+            Text("Or use your phone number, with country code. The code arrives in the Telegram app, not by SMS.")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
             TextField("+39 333 1234567", text: $phone)
                 .textFieldStyle(.roundedBorder)
                 .disableAutocorrection(true)
 
             HStack(spacing: 10) {
                 Button("Send code") { sendCode() }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.bordered)
                     .disabled(busy || phone.trimmingCharacters(in: .whitespaces).isEmpty)
                 if busy { ProgressView().controlSize(.small) }
                 Spacer()
@@ -128,9 +172,10 @@ struct TelegramConnectSheet: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Enter the code")
                 .font(.system(size: 16, weight: .semibold))
-            Text("Telegram sent a login code to your other devices (or by SMS). Enter it below.")
+            Text("Look in the Telegram app on your phone: the code arrives as a message from Telegram, usually not by SMS.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             TextField("12345", text: $code)
                 .textFieldStyle(.roundedBorder)
@@ -141,7 +186,28 @@ struct TelegramConnectSheet: View {
                     .disabled(busy || code.trimmingCharacters(in: .whitespaces).isEmpty)
                 if busy { ProgressView().controlSize(.small) }
                 Spacer()
+                // Back to the number, kept filled in, to ask again or switch
+                // to the QR code.
+                Button("Didn't get it? Go back") { cancelLogin() }
+                    .buttonStyle(.link)
             }
+        }
+    }
+
+    private var qrStep: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Scan with Telegram")
+                .font(.system(size: 16, weight: .semibold))
+            Text("On your phone, open Telegram, go to Settings, Devices, Link Desktop Device, and scan this code.")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            TelegramQrView(size: appState.telegramQrSize, modules: appState.telegramQrModules)
+                .frame(width: 220, height: 220)
+
+            Button("Use phone number instead") { cancelLogin() }
+                .buttonStyle(.link)
         }
     }
 
@@ -205,6 +271,28 @@ struct TelegramConnectSheet: View {
                 ? "This build has no Telegram support."
                 : "Could not start login. Check the phone number and try again."
         }
+    }
+
+    private func startQrLogin() {
+        appState.telegramError = nil
+        busy = true
+        let rc = DimmyCore.shared.telegramStartQrLogin()
+        if rc != 0 {
+            busy = false
+            appState.telegramError = rc == -100
+                ? "This build has no Telegram support."
+                : "Could not start login. Try again."
+        }
+    }
+
+    /// Back to the phone step from the code or QR step. The core drops the
+    /// login in progress, so a QR code stops refreshing behind the sheet.
+    private func cancelLogin() {
+        code = ""
+        busy = false
+        appState.telegramError = nil
+        DimmyCore.shared.telegramCancelLogin()
+        appState.telegramPhase = "logged_out"
     }
 
     private func submitCode() {

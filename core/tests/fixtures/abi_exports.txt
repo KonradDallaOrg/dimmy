@@ -142,6 +142,7 @@ dimmy_set_loopback_sample_rate
 dimmy_shutdown
 dimmy_start_recording
 dimmy_stop_recording
+dimmy_telegram_cancel_login
 dimmy_telegram_dismiss
 dimmy_telegram_logout
 dimmy_telegram_mark_processed
@@ -149,6 +150,7 @@ dimmy_telegram_pending
 dimmy_telegram_process
 dimmy_telegram_set_enabled
 dimmy_telegram_start_login
+dimmy_telegram_start_qr_login
 dimmy_telegram_status
 dimmy_telegram_submit_code
 dimmy_telegram_submit_password

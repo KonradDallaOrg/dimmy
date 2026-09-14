@@ -26,6 +26,34 @@ pub fn provider_from_url(url: &str) -> &'static str {
     }
 }
 
+/// Categorical `provider` tag for an on-device transcription.
+///
+/// This used to be the constant "local_whisper" for EVERY local engine, so a
+/// Parakeet or Qwen dictation was counted as whisper in every chart that
+/// breaks transcriptions down by provider, which is exactly what the public
+/// stats do. `local_whisper` keeps its meaning, so history stays comparable
+/// for the engine it always described; the other two get names of their own.
+///
+/// Pass the backend that actually RAN (after `effective_local_backend`'s
+/// fallback), not the configured one.
+pub fn local_provider(backend: &str) -> &'static str {
+    match backend {
+        "parakeet" => "local_parakeet",
+        "qwen" => "local_qwen",
+        _ => "local_whisper",
+    }
+}
+
+/// Bare engine name for the `local_backend` property. Same mapping as
+/// [`local_provider`], so the two properties of one event can never disagree.
+pub fn local_backend_tag(backend: &str) -> &'static str {
+    match backend {
+        "parakeet" => "parakeet",
+        "qwen" => "qwen",
+        _ => "whisper",
+    }
+}
+
 /// Bucket an error into a small set of stable categories.
 ///
 /// `status` is the HTTP status if available (cloud calls), `None` for
@@ -379,6 +407,28 @@ mod tests {
             provider_from_url("https://my-corporate-proxy.local"),
             "custom"
         );
+    }
+
+    #[test]
+    fn local_provider_names_the_engine_that_ran() {
+        assert_eq!(local_provider("whisper"), "local_whisper");
+        assert_eq!(local_provider("parakeet"), "local_parakeet");
+        assert_eq!(local_provider("qwen"), "local_qwen");
+        // Unrecognised falls to whisper, matching effective_local_backend.
+        assert_eq!(local_provider(""), "local_whisper");
+    }
+
+    /// Two properties describing one event. If they ever disagree, a chart
+    /// grouped by one contradicts a chart grouped by the other.
+    #[test]
+    fn local_provider_and_backend_tag_agree() {
+        for b in ["whisper", "parakeet", "qwen", "", "unknown"] {
+            assert_eq!(
+                local_provider(b),
+                format!("local_{}", local_backend_tag(b)),
+                "{b}"
+            );
+        }
     }
 
     #[test]
