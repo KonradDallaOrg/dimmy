@@ -207,7 +207,8 @@ public static class MeetingRecapHelpers
     /// type only nudges which sections fill vs fall to `—`.
     /// </summary>
     public static string BuildStructuredRecapPrompt(
-        string transcript, string notes = "", string meetingType = "", string spokenLanguage = "")
+        string transcript, string notes = "", string meetingType = "", string spokenLanguage = "",
+        IReadOnlyList<string>? vocabulary = null)
     {
         // Told "answer in the transcript's language", a 4B local model answers
         // in English on an Italian meeting; told "answer in Italian" it does
@@ -358,8 +359,10 @@ public static class MeetingRecapHelpers
             "- Output language follows the transcript dominant language.\n" +
             "- NEVER invent: participants, dates, amounts, project names, technical terms, " +
             "deadlines, organizational affiliations, or anything not directly evidenced in " +
-            "the transcript. If unsure, omit rather than fabricate.\n" +
-            "- Quotes (`\"...\"`) must be VERBATIM from the transcript. If you can't find " +
+            "the transcript. If unsure, omit rather than fabricate. Writing a misheard name " +
+            "with the spelling given in the vocabulary or the listener's notes is NOT inventing.\n" +
+            "- Quotes (`\"...\"`) must be VERBATIM from the transcript, except that misheard " +
+            "names take their correct spelling. If you can't find " +
             "an exact match, do NOT include the quote — paraphrase outside of quote marks " +
             "or omit entirely.\n" +
             "- Convert ELAPSED_MS timestamps to MM:SS for display only. Use the original " +
@@ -377,6 +380,7 @@ public static class MeetingRecapHelpers
             "NOT a blank line, NOT an apology. JUST `# <title>` on line one.\n" +
             "═══════════════════════════════════════════════════════════════════\n\n" +
 
+            BuildNamesBlock(notes, vocabulary) +
             "## Transcript\n" + transcript +
             (string.IsNullOrWhiteSpace(notes)
                 ? ""
@@ -388,8 +392,39 @@ public static class MeetingRecapHelpers
                   "that time. Treat the notes as the single strongest signal of importance: " +
                   "weight their content and the discussion around their timestamp heavily, " +
                   "surface them prominently in the relevant sections, and reflect any " +
-                  "explicit asks or to-dos under ACTIONS. Never ignore or drop a note.\n\n" +
+                  "explicit asks or to-dos under ACTIONS. Never ignore or drop a note. " +
+                  "Names written here are the correct spelling.\n\n" +
                   notes.Trim());
+    }
+
+    private const int MaxVocabularyTerms = 200;
+
+    /// <summary>
+    /// The spelling authority for names. Speech recognition turns people,
+    /// companies and products into near-homophones, and the "never invent"
+    /// rule then kept the wrong spelling even when the notes had the right
+    /// one. Empty when there is nothing to correct against.
+    /// </summary>
+    public static string BuildNamesBlock(string notes, IReadOnlyList<string>? vocabulary)
+    {
+        var terms = (vocabulary ?? Array.Empty<string>())
+            .Select(t => (t ?? "").Trim())
+            .Where(t => t.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(MaxVocabularyTerms)
+            .ToList();
+        if (terms.Count == 0 && string.IsNullOrWhiteSpace(notes)) return "";
+        return "## Correct spelling of names\n" +
+            "The transcript comes from speech recognition, which regularly mishears the names of " +
+            "people, companies and products. " +
+            (terms.Count > 0
+                ? "The vocabulary below and any name written in the listener's notes are "
+                : "Any name written in the listener's notes is ") +
+            "the CORRECT spelling. Wherever the transcript has a word that sounds like one of them, " +
+            "write the correct form instead, in every section, quotes included. That is a spelling " +
+            "correction, not invention.\n" +
+            (terms.Count > 0 ? "Vocabulary: " + string.Join(", ", terms) + "\n" : "") +
+            "\n";
     }
 
     /// <summary>

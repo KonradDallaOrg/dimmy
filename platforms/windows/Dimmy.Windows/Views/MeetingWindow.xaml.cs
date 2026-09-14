@@ -1730,8 +1730,12 @@ public sealed partial class MeetingWindow : Window
             var modelOverride = PickRecapModel();
             var spokenLanguage =
                 await Services.MeetingPostProcessService.DetectSpokenLanguageAsync(dir, modelOverride);
+            // Notes were passed as "" here until 2026-09-14, so Regenerate recap
+            // ignored them while the auto-recap at stop used them.
+            var notesPath = Path.Combine(dir, "notes.md");
+            var notes = File.Exists(notesPath) ? (await File.ReadAllTextAsync(notesPath)).Trim() : "";
             var prompt = Helpers.MeetingRecapHelpers.BuildStructuredRecapPrompt(
-                transcript, "", meetingType, spokenLanguage);
+                transcript, notes, meetingType, spokenLanguage, Services.DictionaryService.List());
             App.Log($"recap with model='{modelOverride}', prompt {prompt.Length} chars", "Meeting");
             BeginLiveRecap();
             // This path reported NOTHING until 2026-09-03, so no regenerated
@@ -1898,14 +1902,16 @@ public sealed partial class MeetingWindow : Window
             : Microsoft.UI.Text.FontWeights.Normal;
     }
 
-    /// Persist the Notes tab textbox to `<meetingDir>/notes.md` on
-    /// LostFocus. Local-only for now — not threaded into the recap
-    /// LLM prompt yet. Empty + non-existing file = no-op so we don't
-    /// litter the meeting dirs with zero-byte files.
-    private async void NotesBox_LostFocus(object sender, RoutedEventArgs e)
+    private void NotesBox_LostFocus(object sender, RoutedEventArgs e) => SaveNotesNow();
+
+    /// Persist the Notes textbox to `<meetingDir>/notes.md` right now, and
+    /// synchronously: the recap reads that file, so anything starting a recap
+    /// calls this first. An async write on LostFocus raced the Regenerate
+    /// click. Empty text removes the file instead of leaving a zero-byte one.
+    private void SaveNotesNow()
     {
         var dir = _viewingMeetingDir ?? _activeMeetingDir;
-        if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) return;
+        if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir) || NotesBox == null) return;
         try
         {
             var path = Path.Combine(dir, "notes.md");
@@ -1916,7 +1922,7 @@ public sealed partial class MeetingWindow : Window
             }
             else
             {
-                await File.WriteAllTextAsync(path, text);
+                File.WriteAllText(path, text);
             }
         }
         catch (Exception ex)
@@ -3171,6 +3177,7 @@ public sealed partial class MeetingWindow : Window
 
         var btn = sender as Microsoft.UI.Xaml.Controls.Button;
         if (btn != null) btn.IsEnabled = false;
+        SaveNotesNow();
         try
         {
             var transcript = await File.ReadAllTextAsync(txtPath);
