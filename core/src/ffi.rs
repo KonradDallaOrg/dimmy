@@ -630,6 +630,15 @@ fn dimmy_init_inner() -> c_int {
             log("FFI init complete");
             write_init_trace("P5: GLOBAL_STATE set, init complete");
 
+            // A Core ML encoder downloaded but never compiled (the app quit
+            // first, or it failed) is prepared now, not inside the first
+            // meeting that happens to need it.
+            if let Some(st) = GLOBAL_STATE.get() {
+                if let Ok(model) = st.local_model.lock().map(|m| m.clone()) {
+                    crate::coreml_encoder::prepare_in_background(&model);
+                }
+            }
+
             // Emit app.started — once per process. The cold-start figure
             // includes everything between dimmy_init entry and now
             // (panic-hook setup, config load, key migration, etc).
@@ -4273,6 +4282,7 @@ pub unsafe extern "C" fn dimmy_meeting_stop(out_buf: *mut c_char, buf_len: c_int
     }
 
     let result = session.stop();
+    crate::coreml_encoder::run_deferred();
     // Release the whole-meeting capture buffers NOW: nothing reads them
     // after the worker join (AudioCommand::Stop tears down streams but
     // never clears, and the next Start clears-then-fills). Leaving them
@@ -4393,7 +4403,7 @@ pub unsafe extern "C" fn dimmy_meeting_list_orphans(out_buf: *mut c_char, buf_le
 /// they share the cpal audio buffer.
 #[no_mangle]
 pub extern "C" fn dimmy_meeting_is_active() -> c_int {
-    MEETING.lock().map(|g| g.is_some() as c_int).unwrap_or(0)
+    meeting_is_active() as c_int
 }
 
 /// Directory of the LIVE meeting, or empty when none is recording.
@@ -6897,6 +6907,8 @@ pub unsafe extern "C" fn dimmy_coreml_encoder_status(
         "supported": supported,
         "available": supported && crate::coreml_encoder::bundle_available(&filename),
         "present": supported && crate::coreml_encoder::bundle_present(&filename),
+        "prepared": supported && crate::coreml_encoder::bundle_prepared(&filename),
+        "preparing": supported && crate::coreml_encoder::is_preparing(),
     })
     .to_string();
     write_to_buf(&payload, buf, buf_len)
@@ -6948,7 +6960,10 @@ pub unsafe extern "C" fn dimmy_coreml_encoder_download(filename_ptr: *const c_ch
         success: result.is_ok(),
     });
     match result {
-        Ok(_) => 0,
+        Ok(_) => {
+            crate::coreml_encoder::prepare_in_background(&filename);
+            0
+        }
         Err(e) => {
             let msg: String = format!("{}", e).chars().take(200).collect();
             emit_event("error", &message_error_payload(&msg));
