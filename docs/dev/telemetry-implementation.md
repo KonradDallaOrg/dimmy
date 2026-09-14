@@ -65,8 +65,10 @@ Current variants (V16+):
 | `config.shortcut_changed` | – *(reserved)* |
 | `config.preprocessing_changed` | enabled |
 | `config.input_gain_changed` | gain |
-| `transcription.completed` | mode, provider, audio_secs, processing_ms, word_count, language, success, had_filler_removal, had_llm |
+| `transcription.completed` | mode, provider, local_backend, entry_point, audio_secs, processing_ms, word_count, language, success, had_filler_removal, had_llm, engine |
 | `transcription.failed` | mode, provider, error_category |
+
+**`provider` on local transcriptions** is `local_whisper` / `local_parakeet` / `local_qwen`, named after the engine that actually RAN (post-fallback). Until 2026-09-14 it was the constant `local_whisper` for every local engine, so any chart grouped by `provider` counted Parakeet and Qwen as whisper. Historical `transcription.completed` events can be re-attributed through `local_backend` (present since 2026-05-12); historical `transcription.failed` events cannot, they never carried it.
 | `transcription.cancelled` | audio_secs |
 | `llm.applied` | mode, provider, style, tone, processing_ms, success |
 | `llm.failed` | mode, provider, error_category |
@@ -276,7 +278,8 @@ Config         ConfigSttModeChanged  ConfigCloudProviderChanged  ConfigLlmEnable
 Transcription  TranscriptionCompleted  TranscriptionFailed  TranscriptionCancelled
 LLM            LlmApplied  LlmFailed
 Perf/GPU       PerfGpuStatus  ErrorGpuCrash
-Feature        FeatureHotkeyTriggered  FeatureApiKeySet
+Feature        FeatureHotkeyTriggered  FeatureApiKeySet  FeatureMeetingShortcut
+Capture health DictationCaptureRatio  MeetingCaptureRatio  MeetingTranscriptionBehind  LoopbackRateMismatch
 Licensing      LicenseActivated  LicenseActivationFailed  LicenseRefreshed  LicenseRefreshFailed
                LicenseScopeDenied  LicenseDeviceDeactivated
 Meeting        MeetingStarted  MeetingStopped  MeetingPaused  MeetingResumed
@@ -291,7 +294,14 @@ Pill           PillVisibilityToggled  PillStyleScrolled  PillLanguageScrolled  P
 Update         UpdateChannelChanged  UpdateApplyDeferred
 Permissions    PermissionGranted  PermissionDenied
 Claude Code    ClaudeCodeStatusProbed  ClaudeCodeLoginSpawned  ClaudeCodeLoginCompleted  ClaudeCodeInvocation
+Codex          CodexStatusProbed  CodexLoginSpawned  CodexLoginCompleted  CodexInvocation
+Gemini CLI     GeminiCliStatusProbed  GeminiCliLoginSpawned  GeminiCliLoginCompleted  GeminiCliInvocation
 ```
+
+The three `*LoginCompleted` events are sent by the host through
+`dimmy_telemetry_track_typed`. Until 2026-09-14 only the Claude Code arm
+existed there, so `codex.login_completed` and `gemini_cli.login_completed`
+were dropped on arrival.
 
 `PerfStartupMs` is referenced (not orphaned) but low value — fold into
 `AppStarted.cold_start_ms`.

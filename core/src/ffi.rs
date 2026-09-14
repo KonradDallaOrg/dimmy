@@ -1726,25 +1726,19 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
             } else {
                 "cloud"
             };
+            // The engine that actually RAN, not the configured one: when the
+            // chosen backend has no model on disk `effective_local_backend`
+            // falls back to whisper, and reporting the configured name would
+            // credit Parakeet with a whisper transcription.
             let provider_static: &'static str = if stt_mode == "local" {
-                "local_whisper"
+                crate::telemetry::sanitize::local_provider(&local_stt_backend)
             } else {
                 crate::telemetry::sanitize::provider_from_url(&api_url)
             };
             let llm_enabled_now = st.llm_enabled.lock().map(|e| *e).unwrap_or(false);
-            // local_backend categorical: "whisper" | "parakeet" | "" when cloud.
+            // local_backend categorical: "whisper" | "parakeet" | "qwen" | "" when cloud.
             let local_backend_static: &'static str = if stt_mode == "local" {
-                match st
-                    .local_stt_backend
-                    .lock()
-                    .map(|b| b.clone())
-                    .unwrap_or_default()
-                    .as_str()
-                {
-                    "parakeet" => "parakeet",
-                    "qwen" => "qwen",
-                    _ => "whisper",
-                }
+                crate::telemetry::sanitize::local_backend_tag(&local_stt_backend)
             } else {
                 ""
             };
@@ -1917,8 +1911,11 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
             } else {
                 "cloud"
             };
+            // Named per engine, same as the success path: `transcription.failed`
+            // carries no `local_backend`, so without this a failing Parakeet
+            // was indistinguishable from a failing whisper.
             let provider_static: &'static str = if stt_mode == "local" {
-                "local_whisper"
+                crate::telemetry::sanitize::local_provider(&local_stt_backend)
             } else {
                 crate::telemetry::sanitize::provider_from_url(&api_url)
             };
@@ -9354,6 +9351,12 @@ pub unsafe extern "C" fn dimmy_telemetry_track_typed(
         // (emitted from `process_text` / `process_raw_prompt`) so the
         // host doesn't dispatch it.
         "claude_code.login_completed" => Some(crate::telemetry::Event::ClaudeCodeLoginCompleted {
+            outcome: prop_static("outcome", &["success", "timeout", "spawn_failed"]),
+        }),
+        "codex.login_completed" => Some(crate::telemetry::Event::CodexLoginCompleted {
+            outcome: prop_static("outcome", &["success", "timeout", "spawn_failed"]),
+        }),
+        "gemini_cli.login_completed" => Some(crate::telemetry::Event::GeminiCliLoginCompleted {
             outcome: prop_static("outcome", &["success", "timeout", "spawn_failed"]),
         }),
         // onboarding.* — wizard funnel emitted from the host wizard

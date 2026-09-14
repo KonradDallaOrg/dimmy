@@ -29,8 +29,9 @@ You can disable telemetry and crash reporting at any time from **Settings → Pr
 
 ### Transcription events
 - `transcription.completed` — when a transcription succeeds:
-  - which path (`local` whisper.cpp on your machine vs. `cloud` provider),
-  - which provider (`groq` / `openai` / `anthropic` / `gemini` / `deepgram` / `openrouter` / `local` — **categorical tag only**, never the URL or API key),
+  - which path (`local`, a model running on your machine, vs. `cloud` provider),
+  - which provider (`groq` / `openai` / `anthropic` / `gemini` / `deepgram` / `openrouter`, or for on-device engines `local_whisper` / `local_parakeet` / `local_qwen` — **categorical tag only**, never the URL or API key),
+  - for on-device transcriptions, which engine ran (`whisper` / `parakeet` / `qwen`),
   - audio duration in seconds (number),
   - processing time in milliseconds (number),
   - **word count** (number — never the words themselves),
