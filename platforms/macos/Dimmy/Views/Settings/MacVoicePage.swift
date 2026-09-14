@@ -23,7 +23,8 @@ struct MacVoicePage: View {
     /// whisper's Core ML encoder for the selected model. Without it the
     /// encoder runs on the GPU the window server draws with, which is what
     /// makes a long local meeting slow the whole Mac down.
-    @State private var coreml: (available: Bool, present: Bool) = (false, false)
+    @State private var coreml: (available: Bool, present: Bool, prepared: Bool, preparing: Bool) =
+        (false, false, false, false)
 
     /// Filenames of the whisper models whose Neural Engine encoder is already
     /// on disk. Drives the per-row "· Neural Engine" vs "· GPU" suffix, so the
@@ -491,14 +492,17 @@ struct MacVoicePage: View {
                     } else if coremlRowVisible {
                         MacRow(
                             "Neural Engine",
-                            description: coreml.present
-                                ? "On. whisper's encoder runs on the Neural Engine, leaving the GPU to the rest of the Mac."
-                                : "Moves whisper's encoder off the GPU, so a long meeting doesn't slow the whole Mac. About 1.2 GB for large models; the first transcription afterwards takes a few minutes while macOS compiles it.",
+                            description: coremlDescription,
                             showsDivider: false
                         ) {
-                            if coreml.present {
+                            if coreml.present && coremlIsPrepared {
                                 Image(systemName: "checkmark.circle.fill")
                                     .foregroundStyle(.green)
+                            } else if coreml.present && coremlPrepareState == "failed" {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(.orange)
+                            } else if coreml.present {
+                                ProgressView().controlSize(.small)
                             } else {
                                 Button("Download") { startCoremlDownload() }
                                     .buttonStyle(.bordered)
@@ -654,7 +658,9 @@ struct MacVoicePage: View {
             var ready = Set<String>()
             for m in models {
                 guard let f = m["filename"] as? String else { continue }
-                if DimmyCore.shared.coremlEncoderStatus(f).present { ready.insert(f) }
+                // Prepared, not merely present: an unprepared bundle still
+                // runs on the GPU until macOS has compiled it.
+                if DimmyCore.shared.coremlEncoderStatus(f).prepared { ready.insert(f) }
             }
             DispatchQueue.main.async {
                 self.localModelExists = exists
@@ -734,6 +740,33 @@ struct MacVoicePage: View {
 
     /// Offered only for a whisper model that is on disk, has an encoder
     /// upstream, and a build that can use it.
+    /// Live state from `coreml_prepare`, which can move after the page read
+    /// the status (the compile takes minutes).
+    private var coremlPrepareState: String? {
+        appState.coremlPrepareState[appState.localModel]
+    }
+
+    private var coremlIsPrepared: Bool {
+        coreml.prepared || coremlPrepareState == "ready"
+    }
+
+    private var coremlDescription: String {
+        guard coreml.present else {
+            return "Moves whisper's encoder off the GPU, so a long meeting doesn't slow the whole Mac. About 1.2 GB for large models; macOS then prepares it once, in the background."
+        }
+        if coremlIsPrepared {
+            return "On. whisper's encoder runs on the Neural Engine, leaving the GPU to the rest of the Mac."
+        }
+        switch coremlPrepareState {
+        case "failed":
+            return "macOS could not prepare the encoder, so whisper keeps using the GPU. Dimmy tries again at the next launch."
+        case "deferred":
+            return "Downloaded. macOS prepares it once the current meeting ends; until then whisper uses the GPU."
+        default:
+            return "macOS is preparing it for the Neural Engine. This happens once and takes a few minutes; whisper uses the GPU until it is done."
+        }
+    }
+
     private var coremlRowVisible: Bool {
         !localBackendIsParakeet && !localBackendIsQwen && localModelReady
             && !downloadInFlight && coreml.available

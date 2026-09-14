@@ -892,7 +892,10 @@ final class DimmyCore {
     /// = upstream publishes one for this architecture AND this build can use
     /// it; `present` = unpacked next to the model, so the encoder runs on the
     /// Neural Engine instead of the GPU the window server draws with.
-    func coremlEncoderStatus(_ filename: String) -> (available: Bool, present: Bool) {
+    /// `prepared` = macOS has compiled it for this machine; until then whisper
+    /// keeps the GPU encoder, and `preparing` says the compile is running.
+    func coremlEncoderStatus(_ filename: String)
+        -> (available: Bool, present: Bool, prepared: Bool, preparing: Bool) {
         let bufLen = Self.bufferSize
         let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
         defer { buffer.deallocate() }
@@ -901,10 +904,12 @@ final class DimmyCore {
         guard written > 0,
               let data = String(cString: buffer).data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return (false, false) }
+        else { return (false, false, false, false) }
         let supported = obj["supported"] as? Bool ?? false
         return (supported && (obj["available"] as? Bool ?? false),
-                supported && (obj["present"] as? Bool ?? false))
+                supported && (obj["present"] as? Bool ?? false),
+                supported && (obj["prepared"] as? Bool ?? false),
+                supported && (obj["preparing"] as? Bool ?? false))
     }
 
     /// Download + unpack the Core ML encoder. BLOCKING, call from a
@@ -1358,6 +1363,12 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
         let message = payload["message"] as? String ?? "Telegram error"
         appState.telegramError = message
         print("[DimmyCore] telegram_error: \(message)")
+
+    case "coreml_prepare":
+        if let file = payload["filename"] as? String,
+           let state = payload["state"] as? String {
+            appState.coremlPrepareState[file] = state
+        }
 
     case "model_download_progress":
         if let downloaded = payload["downloaded"] as? Int,

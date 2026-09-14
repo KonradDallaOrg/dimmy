@@ -1348,6 +1348,12 @@ final class AppState: ObservableObject {
     /// Last worker error (from `telegram_error`), shown inline in Settings.
     @Published var telegramError: String?
 
+    // MARK: - whisper Core ML encoder preparation
+
+    /// Latest `coreml_prepare` state per whisper model filename:
+    /// deferred | preparing | ready | failed.
+    @Published var coremlPrepareState: [String: String] = [:]
+
     // MARK: - Custom vocabulary / user dictionary
 
     /// Words / short phrases the user has flagged to boost in STT.

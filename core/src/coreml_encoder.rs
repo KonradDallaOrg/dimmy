@@ -15,13 +15,28 @@
 //!   just as well, because upstream publishes one per architecture. It is
 //!   then saved under the QUANTISED model's name, since that is the only name
 //!   whisper.cpp will look for.
-//! - **The first transcription after installing one is very slow.** Apple's
-//!   ANE service compiles the model to a device-specific format on first load,
-//!   minutes for a large model, once per machine. A caller that reports
-//!   progress should say so, or it reads as a hang.
+//! - **The first load of a bundle is very slow.** Apple's ANE service compiles
+//!   the model to a device-specific format, minutes for a large model, once
+//!   per machine. Left to happen on first use it landed inside a Teams call on
+//!   2026-09-14: 347 s with the transcriber holding whisper's lock, nothing
+//!   transcribed and the whole Mac dragging. So a bundle is now PREPARED in the
+//!   background right after download (or at the next launch, or after the
+//!   meeting in progress), and until then whisper is opened through a hard
+//!   link that hides the bundle and keeps the ordinary GPU encoder.
 
 use crate::error::TranscribeError;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+
+/// Beside the models: hard links to whisper models whose encoder is not
+/// prepared yet. whisper.cpp looks for the bundle next to the file it opened,
+/// so opening the link finds none and runs on the GPU.
+const GPU_UNTIL_PREPARED_DIR: &str = "gpu-until-prepared";
+
+static PREPARING: AtomicBool = AtomicBool::new(false);
+/// A model whose preparation is waiting for the meeting in progress to end.
+static DEFERRED: Mutex<Option<String>> = Mutex::new(None);
 
 /// Where upstream publishes the bundles. Same repo as the `.bin` models.
 const BASE_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
@@ -61,13 +76,31 @@ fn architecture(model_filename: &str) -> Option<&'static str> {
 /// Mirrors `whisper_get_coreml_path_encoder`: drop the extension, strip a
 /// trailing `-qX_X` quantisation suffix, append `-encoder.mlmodelc`.
 pub fn bundle_path(model_filename: &str) -> PathBuf {
-    let model = crate::local_stt::model_path(model_filename);
+    encoder_beside(&crate::local_stt::model_path(model_filename))
+}
+
+/// The bundle whisper.cpp will look for beside `model`, wherever it lives.
+fn encoder_beside(model: &Path) -> PathBuf {
     let stem = model
         .file_stem()
         .and_then(|s| s.to_str())
-        .unwrap_or(model_filename);
+        .unwrap_or_default();
     let stem = strip_quant_suffix(stem);
     model.with_file_name(format!("{stem}-encoder.mlmodelc"))
+}
+
+/// Written beside the bundle (never inside it) once macOS has compiled it.
+fn prepared_marker(model_filename: &str) -> PathBuf {
+    bundle_path(model_filename).with_extension("prepared")
+}
+
+fn gpu_alias(model: &Path) -> Option<PathBuf> {
+    Some(
+        model
+            .parent()?
+            .join(GPU_UNTIL_PREPARED_DIR)
+            .join(model.file_name()?),
+    )
 }
 
 /// Strip a trailing `-qX_X` quantisation suffix (`-` + `q` + digit + `_` +
@@ -105,6 +138,142 @@ pub fn bundle_available(model_filename: &str) -> bool {
     architecture(model_filename).is_some()
 }
 
+/// The bundle is on disk AND macOS has already compiled it for this machine.
+pub fn bundle_prepared(model_filename: &str) -> bool {
+    bundle_present(model_filename) && prepared_marker(model_filename).exists()
+}
+
+pub fn is_preparing() -> bool {
+    PREPARING.load(Ordering::SeqCst)
+}
+
+/// The file whisper should open for `model`.
+///
+/// While the bundle is present but not prepared: a hard link to the same
+/// model under `gpu-until-prepared/`, so the load keeps the GPU encoder and
+/// never starts the multi-minute compile inside a meeting or a dictation.
+/// Same inode, so no extra disk.
+pub fn load_path(model: &Path) -> PathBuf {
+    let Some(name) = model.file_name().and_then(|n| n.to_str()) else {
+        return model.to_path_buf();
+    };
+    if !cfg!(feature = "local-stt-coreml") || !bundle_present(name) || bundle_prepared(name) {
+        return model.to_path_buf();
+    }
+    let Some(alias) = gpu_alias(model) else {
+        return model.to_path_buf();
+    };
+    let linked_already = match (std::fs::metadata(&alias), std::fs::metadata(model)) {
+        (Ok(a), Ok(m)) => a.len() == m.len(),
+        _ => false,
+    };
+    if !linked_already {
+        let _ = std::fs::remove_file(&alias);
+        let dir_ok = alias
+            .parent()
+            .map(|d| std::fs::create_dir_all(d).is_ok())
+            .unwrap_or(false);
+        if !dir_ok || std::fs::hard_link(model, &alias).is_err() {
+            crate::log("[CoreML] could not link the model aside; this load compiles the encoder");
+            return model.to_path_buf();
+        }
+    }
+    alias
+}
+
+/// Compile the bundle for `model_filename` now, on a low-priority thread, so
+/// the first meeting that needs it does not pay minutes of stall. No-op when
+/// there is nothing to prepare or a preparation is already running; waits for
+/// the end of a meeting in progress. Reports through `coreml_prepare`.
+pub fn prepare_in_background(model_filename: &str) {
+    if !cfg!(feature = "local-stt-coreml")
+        || model_filename.is_empty()
+        || !bundle_present(model_filename)
+        || bundle_prepared(model_filename)
+    {
+        return;
+    }
+    if crate::ffi::meeting_is_active() {
+        if let Ok(mut deferred) = DEFERRED.lock() {
+            *deferred = Some(model_filename.to_string());
+        }
+        crate::log("[CoreML] encoder not prepared yet; preparing after the meeting ends");
+        emit_prepare_state(model_filename, "deferred");
+        return;
+    }
+    if PREPARING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let name = model_filename.to_string();
+    let spawned = std::thread::Builder::new()
+        .name("dimmy-coreml-prepare".to_string())
+        .spawn(move || {
+            lower_thread_priority();
+            emit_prepare_state(&name, "preparing");
+            crate::log(&format!(
+                "[CoreML] preparing the Neural Engine encoder for {name} (once; takes minutes)"
+            ));
+            let started = std::time::Instant::now();
+            let result =
+                crate::local_stt::prepare_coreml_encoder(&crate::local_stt::model_path(&name))
+                    .and_then(|()| {
+                        std::fs::write(prepared_marker(&name), b"").map_err(|e| {
+                            TranscribeError::LocalModel(format!("prepared marker: {e}"))
+                        })
+                    });
+            match result {
+                Ok(()) => {
+                    crate::log(&format!(
+                        "[CoreML] encoder prepared in {:.0}s",
+                        started.elapsed().as_secs_f32()
+                    ));
+                    emit_prepare_state(&name, "ready");
+                }
+                Err(e) => {
+                    crate::log(&format!("[CoreML] preparation failed: {e}"));
+                    emit_prepare_state(&name, "failed");
+                }
+            }
+            PREPARING.store(false, Ordering::SeqCst);
+        });
+    if spawned.is_err() {
+        PREPARING.store(false, Ordering::SeqCst);
+    }
+}
+
+/// Start the preparation a meeting made wait. Called when a meeting stops.
+pub fn run_deferred() {
+    let pending = DEFERRED.lock().ok().and_then(|mut d| d.take());
+    if let Some(name) = pending {
+        prepare_in_background(&name);
+    }
+}
+
+fn emit_prepare_state(model_filename: &str, state: &str) {
+    crate::ffi::emit_event(
+        "coreml_prepare",
+        &serde_json::json!({ "filename": model_filename, "state": state }).to_string(),
+    );
+}
+
+/// The compile runs mostly inside Apple's ANE service, which inherits the
+/// requester's QoS; UTILITY keeps it from competing with a call app.
+#[cfg(target_os = "macos")]
+fn lower_thread_priority() {
+    extern "C" {
+        fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: i32) -> i32;
+    }
+    // QOS_CLASS_UTILITY in <sys/qos.h>.
+    const QOS_CLASS_UTILITY: u32 = 0x11;
+    // SAFETY: changes only the calling thread's QoS; no pointers involved.
+    unsafe {
+        pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn lower_thread_priority() {}
+
 /// Download and unpack the Core ML encoder for `model_filename`.
 ///
 /// Progress is forwarded from the download; the unpack that follows is not
@@ -127,6 +296,8 @@ pub async fn download(
     })?;
 
     let dest_dir = bundle_path(model_filename);
+    // A new bundle has to be compiled again, whatever the old one was.
+    let _ = std::fs::remove_file(prepared_marker(model_filename));
     let zip_path = dest_dir.with_extension("mlmodelc.zip");
     let url = format!("{BASE_URL}/ggml-{arch}-encoder.mlmodelc.zip");
     crate::log(&format!("[CoreML] downloading {url}"));
@@ -280,6 +451,35 @@ mod tests {
                 "{name} -> {got} still carries a quant suffix whisper.cpp will not look for"
             );
         }
+    }
+
+    #[test]
+    fn the_gpu_alias_hides_the_encoder_from_whisper_cpp() {
+        let model = crate::local_stt::model_path("ggml-large-v3-turbo-q8_0.bin");
+        let alias = gpu_alias(&model).unwrap();
+        assert_eq!(alias.file_name(), model.file_name());
+        assert_ne!(encoder_beside(&alias), encoder_beside(&model));
+        assert_eq!(encoder_beside(&alias).parent(), alias.parent());
+    }
+
+    #[test]
+    fn the_prepared_marker_sits_beside_the_bundle_not_inside_it() {
+        let marker = prepared_marker("ggml-large-v3-turbo-q8_0.bin");
+        assert_eq!(
+            marker.parent(),
+            bundle_path("ggml-large-v3-turbo-q8_0.bin").parent()
+        );
+        assert_eq!(
+            marker.file_name().unwrap(),
+            "ggml-large-v3-turbo-encoder.prepared"
+        );
+    }
+
+    #[test]
+    fn without_a_bundle_whisper_opens_the_model_itself() {
+        let model = crate::local_stt::model_path("ggml-nothing-here-q8_0.bin");
+        assert_eq!(load_path(&model), model);
+        assert!(!bundle_prepared("ggml-nothing-here-q8_0.bin"));
     }
 
     #[test]

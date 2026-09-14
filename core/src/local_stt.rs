@@ -1245,6 +1245,41 @@ pub fn clear_model_cache() {
 #[cfg(not(feature = "local-stt"))]
 pub fn clear_model_cache() {}
 
+/// Open `model_path` once with its Core ML encoder, so the Neural Engine
+/// compiles it now instead of inside the next meeting. Outside the shared
+/// cache on purpose: transcription waits on that lock, and holding it for
+/// minutes is the stall this exists to prevent.
+#[cfg(feature = "local-stt")]
+pub fn prepare_coreml_encoder(model_path: &Path) -> Result<(), TranscribeError> {
+    use whisper_rs::{WhisperContext, WhisperContextParameters};
+    if !model_path.is_file() {
+        return Err(TranscribeError::LocalModel(format!(
+            "model file not found: {}",
+            model_path.display()
+        )));
+    }
+    let mut params = WhisperContextParameters::default();
+    if let GpuBackendStatus::Available { device } = gpu_backend_status() {
+        params.use_gpu(true);
+        params.gpu_device(device);
+        #[cfg(target_os = "macos")]
+        params.flash_attn(true);
+    }
+    let ctx = WhisperContext::new_with_params(model_path, params)
+        .map_err(|e| TranscribeError::LocalModel(format!("failed to load model: {e}")))?;
+    let _state = ctx
+        .create_state()
+        .map_err(|e| TranscribeError::LocalModel(format!("failed to create state: {e}")))?;
+    Ok(())
+}
+
+#[cfg(not(feature = "local-stt"))]
+pub fn prepare_coreml_encoder(_model_path: &Path) -> Result<(), TranscribeError> {
+    Err(TranscribeError::LocalModel(
+        "local STT is not part of this build".to_string(),
+    ))
+}
+
 // ── Local transcription (feature-gated) ───────────────────────────
 
 #[cfg(feature = "local-stt")]
@@ -1274,7 +1309,8 @@ pub fn transcribe_local(
     // 3 s throttled against 2 s exempt on the same 25 s recording. Smaller
     // than the denoise win, real enough to take. See `win_qos`.
     let _no_throttle = crate::win_qos::NoThrottle::for_local_inference();
-    let result = whisper_cache::transcribe(model_file, samples, language, prompt)?;
+    let load = crate::coreml_encoder::load_path(model_file);
+    let result = whisper_cache::transcribe(&load, samples, language, prompt)?;
 
     // ── Postcondition ────────────────────────────────────────────
     if result.is_empty() {
