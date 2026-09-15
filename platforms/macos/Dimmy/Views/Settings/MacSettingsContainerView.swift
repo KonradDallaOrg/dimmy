@@ -134,12 +134,16 @@ struct MacSettingsContainerView: View {
     /// Per docs/dev/settings-map.md (the user-filled Simple/Advanced
     /// matrix) and Win SettingsWindow.xaml nav definition:
     /// - Always visible (Simple): home, voice, output, shortcut,
-    ///   license, privacy, about, permissions
+    ///   integrations, license, privacy, about, permissions
     /// - Behind Advanced toggle: pill, rules, history (Recordings),
-    ///   integrations, advanced (Debug)
+    ///   advanced (Debug)
     /// - .providers will land here once MacProvidersPage exists.
+    ///
+    /// Integrations used to sit behind Advanced here while Windows always
+    /// showed it (its NavigationViewItem carries no IsAdvanced binding), so a
+    /// Mac user had to flip a developer toggle to find Notion or Telegram.
     private static let advancedOnlyTabs: Set<MacSettingsTab> = [
-        .pill, .rules, .history, .integrations, .advanced
+        .pill, .rules, .history, .advanced
     ]
 
     private var filteredTabs: [MacSettingsTab] {
