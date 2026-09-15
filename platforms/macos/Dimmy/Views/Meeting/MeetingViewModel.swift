@@ -691,9 +691,13 @@ final class MeetingViewModel: ObservableObject {
     /// time — same shape the meeting worker produces live. The Rust side
     /// (`dimmy_meeting_retranscribe`) decodes each band, runs the active
     /// STT backend (local or cloud, backend-aware chunking), writes
-    /// `transcripts.txt` itself, and returns the merged text. Then we
-    /// re-run the recap. Useful when the live STT truncated or the user
-    /// wants a fresh pass.
+    /// `transcripts.txt` itself, and returns the merged text. Useful when
+    /// the live STT truncated or the user wants a fresh pass.
+    ///
+    /// Only the transcript: the recap has its own button. This used to chain
+    /// `regenerateRecap()`, which ran an LLM nobody had asked for and ignored
+    /// "Generate recap" as well. Windows never chained it
+    /// (`MeetingWindow.RegenerateTranscript_Click`), and now neither does Mac.
     func regenerateTranscript() {
         guard !activeMeetingDir.isEmpty || selectedDir != nil else { return }
         let dir = selectedDir ?? activeMeetingDir
@@ -712,7 +716,9 @@ final class MeetingViewModel: ObservableObject {
                 switch result {
                 case .success(let text):
                     self.doneRawTranscript = text
-                    self.regenerateRecap()
+                    self.phase = .done
+                    self.statusLabel = "Transcript regenerated"
+                    self.showToast("Transcript regenerated.")
                 case .failure(let err):
                     self.phase = .done
                     self.statusLabel = "Re-transcribe failed"
