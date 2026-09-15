@@ -155,6 +155,13 @@ enum FileLoadToMeetingService {
             modelOverride: nil,
             notionAutoSend: effectiveAutoSend
         )
+        // Same notice the pill-stop recap posts: an open meeting window loads
+        // the new meeting instead of staying on the stream it was showing.
+        let recapOK = (try? recapResult.get()) != nil
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .meetingRecapSaved, object: nil,
+                                            userInfo: ["dir": dir.path, "success": recapOK])
+        }
         switch recapResult {
         case .success(let res):
             NSLog("[FileLoadToMeeting] recap ok at \(dir.path)")

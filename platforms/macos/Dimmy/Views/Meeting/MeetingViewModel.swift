@@ -239,6 +239,47 @@ final class MeetingViewModel: ObservableObject {
                 }
             }
             .store(in: &liveTranscriptBag)
+        // The same, for a window that is ALREADY open: onWindowShown only
+        // checks once, so an open window stayed on its old view until it
+        // was closed and reopened. The recap-saved notice then lands it on
+        // Done; the count reaching zero is the fallback when no notice comes.
+        AppState.shared.$recapsRunning
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] count in
+                guard let self else { return }
+                if Self.followsExternalRecap(phase: self.phase, recapsRunning: count) {
+                    self.followExternalRecap()
+                } else if count == 0, self.followingExternalRecap {
+                    self.followingExternalRecap = false
+                    guard self.phase == .processing else { return }
+                    self.loadHistory()
+                    if let dir = self.freshestMeetingDir() {
+                        self.loadDoneFromDisk(dir: dir.path)
+                    } else {
+                        self.phase = .idle
+                    }
+                }
+            }
+            .store(in: &liveTranscriptBag)
+    }
+
+    /// True while the window shows a recap it did not start (Telegram, a
+    /// loaded file), so the end of that recap can bring it back out.
+    private var followingExternalRecap = false
+
+    /// A recap started elsewhere takes over the window only from Idle or
+    /// Done: never mid-recording, and never over its own processing (a
+    /// re-transcription, or a recap it started itself).
+    nonisolated static func followsExternalRecap(phase: Phase, recapsRunning: Int) -> Bool {
+        guard recapsRunning > 0 else { return false }
+        return phase == .idle || phase == .done
+    }
+
+    private func followExternalRecap() {
+        followingExternalRecap = true
+        phase = .processing
+        processingStep = .generatingRecap
+        statusLabel = "Generating recap..."
     }
 
     /// Cancel the recording-mode timers when an external stop fires.
@@ -341,9 +382,7 @@ final class MeetingViewModel: ObservableObject {
         // the pane that renders it only exists in the Processing phase, so
         // a window opening in Idle showed nothing while the model wrote.
         if AppState.shared.llmStreamActive, phase != .recording {
-            phase = .processing
-            processingStep = .generatingRecap
-            statusLabel = "Generating recap..."
+            followExternalRecap()
         }
         if DimmyCore.shared.meetingIsActive {
             attachToInflightMeeting()
@@ -1074,6 +1113,7 @@ final class MeetingViewModel: ObservableObject {
     }
 
     func loadDoneFromDisk(dir: String) {
+        followingExternalRecap = false
         // We reached a terminal state, cancel the wrap-up safety net.
         wrapUpWatchdog?.invalidate()
         wrapUpWatchdog = nil

@@ -353,4 +353,14 @@ final class AppStateTests: XCTestCase {
         XCTAssertTrue(MeetingProcessingView.showsRecapStream(retranscribing: false, streamActive: true, hasText: true))
         XCTAssertFalse(MeetingProcessingView.showsRecapStream(retranscribing: false, streamActive: false, hasText: false))
     }
+
+    func testOpenMeetingWindowFollowsARecapStartedElsewhere() {
+        typealias VM = MeetingViewModel
+        XCTAssertTrue(VM.followsExternalRecap(phase: .idle, recapsRunning: 1))
+        XCTAssertTrue(VM.followsExternalRecap(phase: .done, recapsRunning: 1))
+        // Never over a recording, or over the window's own processing.
+        XCTAssertFalse(VM.followsExternalRecap(phase: .recording, recapsRunning: 1))
+        XCTAssertFalse(VM.followsExternalRecap(phase: .processing, recapsRunning: 1))
+        XCTAssertFalse(VM.followsExternalRecap(phase: .idle, recapsRunning: 0))
+    }
 }

@@ -99,6 +99,11 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             .sink { [weak self] _ in self?.refreshIcon() }
             .store(in: &cancellables)
 
+        appState.$recapsRunning
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.refreshIcon() }
+            .store(in: &cancellables)
+
         appState.$showInMenuBar
             .receive(on: DispatchQueue.main)
             .sink { [weak self] visible in
@@ -131,6 +136,18 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                                                  paletteColor: .systemRed)
                 button.toolTip = "Meeting recording"
             }
+            return
+        }
+
+        // A recap runs with the dictation state back at idle (a meeting
+        // stopped from the pill, a Telegram audio): same rule as the pill's
+        // "Recap...". The Telegram path used to hold .processing, and this
+        // purple glyph was the only sign it was working.
+        if PillView.showsRecap(state: state, recapsRunning: appState.recapsRunning) {
+            button.image = Self.menuBarImage(symbolName: "sparkles",
+                                             accessibility: "Dimmy - Recap",
+                                             paletteColor: .systemPurple)
+            button.toolTip = "Generating recap"
             return
         }
 
