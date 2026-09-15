@@ -82,6 +82,14 @@
                         <TextBlock x:Name="ProcessingText" Text="Processing..." FontSize="10" Foreground="#EEFFFFFF" />
                     </StackPanel>
 
+                    <!-- Recap: a meeting recap is running while nothing
+                         else holds the pill (pill stop, Telegram, file load) -->
+                    <StackPanel x:Name="RecapPanel" Orientation="Horizontal" Spacing="8"
+                                VerticalAlignment="Center" Margin="7,0" Visibility="Collapsed">
+                        <ProgressRing IsActive="True" Width="14" Height="14" />
+                        <TextBlock x:Name="RecapText" Text="Recap..." FontSize="10" Foreground="#EEFFFFFF" />
+                    </StackPanel>
+
                     <!-- Completing: checkmark -->
                     <Grid x:Name="CompletingPanel" Visibility="Collapsed"
                           HorizontalAlignment="Center" VerticalAlignment="Center">

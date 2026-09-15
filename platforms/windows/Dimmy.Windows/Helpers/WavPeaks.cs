@@ -339,6 +339,40 @@ public static class WavPeaks
     /// <see cref="ReadPeaks"/> but stops after the format/data
     /// chunk metadata, so it's cheap (no per-sample work).
     /// </summary>
+    /// <summary>Duration for ANY supported container. WAV stays on the
+    /// in-process header read; everything else asks the Rust decoder, which
+    /// reports duration alongside the peaks. A loaded m4a kept its real
+    /// extension from 2026-09-16, so the WAV-only reader would have returned
+    /// 0 and the Done view would have shown a meeting of no length.</summary>
+    public static double ReadDurationAny(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return 0;
+        var ext = Path.GetExtension(path);
+        if (!string.IsNullOrEmpty(ext)
+            && ext.Equals(".wav", StringComparison.OrdinalIgnoreCase))
+        {
+            var wav = ReadDurationSecs(path);
+            if (wav > 0) return wav;
+        }
+        return ReadDurationViaFfi(path);
+    }
+
+    /// <summary>Duration from the Rust decoder. One bucket: we want the
+    /// `duration_secs` field, not a waveform.</summary>
+    private static double ReadDurationViaFfi(string path)
+    {
+        try
+        {
+            var buf = new byte[4096];
+            int rc = Interop.DimmyNative.dimmy_compute_audio_peaks(path, 1, buf, buf.Length);
+            if (rc <= 0) return 0;
+            using var doc = JsonDocument.Parse(Encoding.UTF8.GetString(buf, 0, rc));
+            return doc.RootElement.TryGetProperty("duration_secs", out var d)
+                ? d.GetDouble() : 0;
+        }
+        catch { return 0; }
+    }
+
     public static double ReadDurationSecs(string path)
     {
         try
