@@ -937,11 +937,13 @@ mod llm_cache {
                 .with_flash_attn_type(llama_cpp_4::context::params::LlamaFlashAttnType::Enabled)
                 .with_cache_type_k(llama_cpp_4::quantize::GgmlType::Q8_0)
                 .with_cache_type_v(llama_cpp_4::quantize::GgmlType::Q8_0)
+                .with_no_perf(false)
         };
         let ctx_params_for_retry = || {
             LlamaContextParams::default()
                 .with_n_ctx(Some(ctx_size))
                 .with_n_batch(PROMPT_BATCH.min(ctx_size.get()))
+                .with_no_perf(false)
         };
 
         // Creating the context allocates the compute buffers, and on a single-GPU
@@ -1167,6 +1169,21 @@ mod llm_cache {
         if stream {
             crate::llm::emit_recap_stream_event("end", "");
         }
+
+        // Prefill and decode cost different things and are fixed by different
+        // settings, and a recap's total time alone cannot say which one it was:
+        // the 306 s recap in a user's log (2026-09-14) was unreadable for
+        // exactly that reason.
+        let perf = ctx.timings();
+        crate::log(&format!(
+            "[LocalLLM] timings: prefill {} tok in {:.0} ms ({:.0} tok/s), decode {} tok in {:.0} ms ({:.1} tok/s)",
+            perf.n_p_eval(),
+            perf.t_p_eval_ms(),
+            f64::from(perf.n_p_eval()) * 1000.0 / perf.t_p_eval_ms().max(1.0),
+            perf.n_eval(),
+            perf.t_eval_ms(),
+            f64::from(perf.n_eval()) * 1000.0 / perf.t_eval_ms().max(1.0),
+        ));
 
         crate::log(&format!(
             "[LocalLLM] Raw output ({} tokens): {:?}",
