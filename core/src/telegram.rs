@@ -108,7 +108,7 @@ fn qr_modules(text: &str) -> Option<(usize, String)> {
 
 #[cfg(feature = "telegram")]
 pub use imp::{
-    cancel_login, dismiss, list_pending_json, logout, mark_processed, process, set_enabled,
+    cancel_login, dismiss, list_pending_json, logout, mark_processed, process, reply, set_enabled,
     start_login, start_qr_login, status_json, submit_code, submit_password,
 };
 
@@ -142,6 +142,9 @@ mod stub {
     pub fn mark_processed(_msg_id: i32) -> i32 {
         -100
     }
+    pub fn reply(_msg_id: i32, _text: &str) -> i32 {
+        -100
+    }
     pub fn list_pending_json() -> String {
         "[]".to_string()
     }
@@ -164,7 +167,7 @@ mod imp {
     use super::*;
     use grammers_client::client::{LoginToken, PasswordToken, SignInError, UpdatesConfiguration};
     use grammers_client::media::Media;
-    use grammers_client::message::Message;
+    use grammers_client::message::{InputMessage, Message};
     use grammers_client::peer::User;
     use grammers_client::update::Update;
     use grammers_client::{tl, Client};
@@ -192,8 +195,14 @@ mod imp {
         Process(i32),
         Dismiss(i32),
         MarkProcessed(i32),
+        Reply(i32, String),
         Shutdown,
     }
+
+    /// How many handled messages stay replyable. The host answers after the
+    /// recap, which is long after `MarkProcessed` dropped the message from
+    /// `pending`, so a few are kept aside to reply to.
+    const REPLYABLE_HISTORY: usize = 16;
 
     static TX: Mutex<Option<UnboundedSender<Cmd>>> = Mutex::new(None);
 
@@ -315,6 +324,16 @@ mod imp {
     }
     pub fn mark_processed(msg_id: i32) -> i32 {
         if send(Cmd::MarkProcessed(msg_id)) {
+            0
+        } else {
+            -1
+        }
+    }
+    pub fn reply(msg_id: i32, text: &str) -> i32 {
+        if text.trim().is_empty() {
+            return -1;
+        }
+        if send(Cmd::Reply(msg_id, text.to_string())) {
             0
         } else {
             -1
@@ -635,6 +654,8 @@ mod imp {
 
         let mut processed = load_processed();
         let mut pending: HashMap<i32, Message> = HashMap::new();
+        // Handled messages we can still reply to, oldest first.
+        let mut replyable: Vec<(i32, Message)> = Vec::new();
         let mut login_token: Option<LoginToken> = None;
         let mut password_token: Option<PasswordToken> = None;
         // When to ask Telegram for the QR login state again: at the token's
@@ -737,9 +758,28 @@ mod imp {
                         }
                         Cmd::Process(id) => {
                             if let Some(msg) = pending.get(&id).cloned() {
+                                if !replyable.iter().any(|(mid, _)| *mid == id) {
+                                    replyable.push((id, msg.clone()));
+                                    if replyable.len() > REPLYABLE_HISTORY {
+                                        replyable.remove(0);
+                                    }
+                                }
                                 download_and_emit(&client, &msg).await;
                             } else {
                                 emit_error("message no longer available");
+                            }
+                        }
+                        Cmd::Reply(id, text) => {
+                            let target = replyable.iter().find(|(mid, _)| *mid == id)
+                                .map(|(_, m)| m.clone())
+                                .or_else(|| pending.get(&id).cloned());
+                            match target {
+                                Some(msg) => {
+                                    if let Err(e) = msg.reply(InputMessage::default().text(text)).await {
+                                        crate::log(&format!("[Telegram] reply failed: {e}"));
+                                    }
+                                }
+                                None => crate::log("[Telegram] reply: message no longer available"),
                             }
                         }
                         Cmd::Dismiss(id) => {

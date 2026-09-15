@@ -10622,6 +10622,24 @@ pub extern "C" fn dimmy_telegram_mark_processed(msg_id: c_int) -> c_int {
     crate::telegram::mark_processed(msg_id)
 }
 
+/// Reply to a Telegram audio inside Saved Messages, so the person who sent it
+/// from their phone learns what happened there rather than only on the
+/// computer. 0 queued / -1 bad arg or channel / -100 not compiled.
+///
+/// # Safety
+/// `text_ptr` must be a valid NUL-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_telegram_reply(msg_id: c_int, text_ptr: *const c_char) -> c_int {
+    if text_ptr.is_null() {
+        return -1;
+    }
+    let text = match CStr::from_ptr(text_ptr).to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    crate::telegram::reply(msg_id, text)
+}
+
 /// Current status as JSON: `{compiled, has_credentials, phase, account, pending}`.
 ///
 /// # Safety

@@ -33,6 +33,12 @@ public sealed class TelegramService : IDisposable
     private bool _promptShowing;
     private bool _autoProcess;
     private bool _disposed;
+    /// True while this service is the one driving the pill. Telegram work ran
+    /// for minutes with the pill idle, which read as a frozen app.
+    private bool _drivingPill;
+
+    private const string StartedReply =
+        "Dimmy got it. Transcribing now, I will reply here when the recap is ready.";
 
     private readonly record struct PendingAudio(int MsgId, string Filename, long Size);
 
@@ -86,7 +92,12 @@ public sealed class TelegramService : IDisposable
             {
                 if (_autoProcess)
                 {
+                    // Auto-process shows no prompt, so this was the only
+                    // moment with nothing on screen: download plus
+                    // transcription plus recap can run for many minutes.
+                    DictNotificationService.ShowTelegramReceived(filename);
                     DimmyNative.dimmy_telegram_process(msgId);
+                    DimmyNative.dimmy_telegram_reply(msgId, StartedReply);
                     return;
                 }
                 _queue.Enqueue(new PendingAudio(msgId, filename, size));
@@ -113,7 +124,11 @@ public sealed class TelegramService : IDisposable
         _nudge = new Views.TelegramNudgeWindow();
         _nudge.AcceptRequested += id =>
         {
-            try { DimmyNative.dimmy_telegram_process(id); }
+            try
+            {
+                DimmyNative.dimmy_telegram_process(id);
+                DimmyNative.dimmy_telegram_reply(id, StartedReply);
+            }
             catch (Exception ex) { App.Log($"Telegram accept EXC: {ex.Message}", "Telegram"); }
             _promptShowing = false;
             ShowNextIfIdle();
@@ -133,6 +148,7 @@ public sealed class TelegramService : IDisposable
         // The worker downloaded the file; transcribe + recap off the UI
         // thread, reusing the exact file-load pipeline the Settings card uses.
         // dimmy_transcribe_file saves the transcript to History itself.
+        BeginPillActivity(ViewModels.AppState.Transcribing);
         _ = System.Threading.Tasks.Task.Run(async () =>
         {
             try
@@ -142,32 +158,42 @@ public sealed class TelegramService : IDisposable
                 if (rc <= 0)
                 {
                     App.Log($"Telegram transcribe rc={rc} file={filename}", "Telegram");
+                    EndPillActivity();
                     DictNotificationService.ShowTelegramFailed(filename);
+                    DimmyNative.dimmy_telegram_reply(msgId,
+                        "Dimmy could not transcribe this one. It stays in the inbox, so sending it again is not needed.");
                     return; // leave unprocessed so the user can retry
                 }
 
                 var transcript = System.Text.Encoding.UTF8.GetString(buf, 0, rc);
+                BeginPillActivity(ViewModels.AppState.Processing);
                 var result = await FileLoadToMeetingService.RunAsync(path, transcript);
 
                 // Transcript is saved to History regardless of recap outcome,
                 // so mark the message done either way (retrying wouldn't help
                 // if the recap failed on missing LLM config).
                 DimmyNative.dimmy_telegram_mark_processed(msgId);
+                EndPillActivity();
 
                 if (result.Success)
                 {
                     DictNotificationService.ShowTelegramRecapReady(filename);
+                    DimmyNative.dimmy_telegram_reply(msgId,
+                        RecapReply(result.Dir) ?? "Transcribed and recapped. The recap is in Dimmy.");
                     App.Log($"Telegram audio processed: {filename} ({rc} chars)", "Telegram");
                 }
                 else
                 {
                     App.Log($"Telegram recap failed: {result.Error}", "Telegram");
                     DictNotificationService.ShowTelegramTranscribedNoRecap(filename);
+                    DimmyNative.dimmy_telegram_reply(msgId,
+                        "Transcribed and saved to Dimmy's history. No recap was produced: check the recap model in Settings.");
                 }
             }
             catch (Exception ex)
             {
                 App.Log($"Telegram OnAudioReady EXC: {ex.Message}", "Telegram");
+                EndPillActivity();
                 DictNotificationService.ShowTelegramFailed(filename);
             }
         });
@@ -176,6 +202,45 @@ public sealed class TelegramService : IDisposable
     private void OnError(string message)
     {
         App.Log($"Telegram worker error: {message}", "Telegram");
+    }
+
+    /// <summary>Light up the pill, but never take it from a dictation or a
+    /// meeting: those own the same state and their stop paths would then be
+    /// fighting this one.</summary>
+    private void BeginPillActivity(ViewModels.AppState state)
+    {
+        _dispatcher.TryEnqueue(() =>
+        {
+            if (!_drivingPill && _vm.CurrentState != ViewModels.AppState.Idle) return;
+            _drivingPill = true;
+            _vm.SetState(state);
+        });
+    }
+
+    /// <summary>Back to idle, unless something else took the pill over.</summary>
+    private void EndPillActivity()
+    {
+        _dispatcher.TryEnqueue(() =>
+        {
+            if (!_drivingPill) return;
+            _drivingPill = false;
+            if (_vm.CurrentState is ViewModels.AppState.Transcribing or ViewModels.AppState.Processing)
+                _vm.SetState(ViewModels.AppState.Idle);
+        });
+    }
+
+    /// <summary>The finished-work reply, from the recap.md the pipeline just
+    /// wrote. Null when the file is missing or has nothing worth quoting.</summary>
+    private static string? RecapReply(string dir)
+    {
+        if (string.IsNullOrEmpty(dir)) return null;
+        try
+        {
+            var file = System.IO.Path.Combine(dir, "recap.md");
+            if (!System.IO.File.Exists(file)) return null;
+            return Helpers.TelegramReplyText.FromRecapMarkdown(System.IO.File.ReadAllText(file));
+        }
+        catch { return null; }
     }
 
     public void Dispose()

@@ -869,6 +869,9 @@ int32_t dimmy_telegram_process(int32_t msg_id);
 /// Reject a pending audio without processing (never re-offered). 0/-1/-100.
 int32_t dimmy_telegram_dismiss(int32_t msg_id);
 
+/// Reply to a Telegram audio inside Saved Messages. 0/-1/-100.
+int32_t dimmy_telegram_reply(int32_t msg_id, const char * _Nonnull text);
+
 /// Mark an audio fully handled after the host transcribed it. 0/-1/-100.
 int32_t dimmy_telegram_mark_processed(int32_t msg_id);
 

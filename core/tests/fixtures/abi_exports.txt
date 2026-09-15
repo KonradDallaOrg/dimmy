@@ -99,7 +99,6 @@ dimmy_license_plan_change
 dimmy_license_redeem
 dimmy_license_refresh
 dimmy_license_request_trial
-dimmy_license_set_server_url
 dimmy_license_status_json
 dimmy_list_devices_json
 dimmy_list_llm_models
@@ -148,6 +147,7 @@ dimmy_telegram_logout
 dimmy_telegram_mark_processed
 dimmy_telegram_pending
 dimmy_telegram_process
+dimmy_telegram_reply
 dimmy_telegram_set_enabled
 dimmy_telegram_start_login
 dimmy_telegram_start_qr_login

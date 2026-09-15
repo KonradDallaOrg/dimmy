@@ -1282,6 +1282,12 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_telegram_mark_processed(int msgId);
 
+    /// Reply to a Telegram audio inside Saved Messages, so the phone that
+    /// sent it learns the outcome there. 0/-1/-100.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_telegram_reply(
+        int msgId, [MarshalAs(UnmanagedType.LPUTF8Str)] string text);
+
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_telegram_status(byte[] outBuf, int bufLen);
 
