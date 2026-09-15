@@ -214,6 +214,21 @@ public partial class AppViewModel : ObservableObject
     public string LlmStyleColor =>
         StyleColors.TryGetValue(LlmStyle, out var color) ? color : "#41B0B1";
 
+    /// <summary>Meeting recaps running right now. A count, not a flag: two can
+    /// overlap (a pill stop while a regenerate is still going), and a flag
+    /// would clear when the first one ends. Moved only by the recap paths, so
+    /// the pill and the taskbar reflect all of them - including a recap for a
+    /// Telegram audio, which used to run for minutes with nothing on
+    /// screen.</summary>
+    [ObservableProperty] private int _recapsRunning;
+
+    /// <summary>Whether the UI should say a recap is running. Only while
+    /// otherwise idle: a dictation started during a recap takes the pill, and
+    /// the recap label comes back when the dictation ends. Mac parity:
+    /// PillView.showsRecap.</summary>
+    public static bool ShowsRecap(AppState state, int recapsRunning)
+        => state == AppState.Idle && recapsRunning > 0;
+
     /// <summary>True when the app is doing something (recording, transcribing, processing) and should not start a new recording.</summary>
     public bool IsBusy => CurrentState is AppState.Recording or AppState.Transcribing or AppState.Processing;
 

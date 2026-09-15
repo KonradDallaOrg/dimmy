@@ -1408,15 +1408,18 @@ public partial class App : Application
         var name = e.PropertyName;
         if (name != nameof(AppViewModel.CurrentState)
             && name != nameof(AppViewModel.MeetingActive)
-            && name != nameof(AppViewModel.MeetingPaused)) return;
+            && name != nameof(AppViewModel.MeetingPaused)
+            && name != nameof(AppViewModel.RecapsRunning)) return;
 
         var state = _appViewModel.CurrentState;
         var mActive = _appViewModel.MeetingActive;
         var mPaused = _appViewModel.MeetingPaused;
+        var recapRunning = _appViewModel.RecapsRunning > 0;
         _dispatcherQueue?.TryEnqueue(() =>
         {
-            if (name == nameof(AppViewModel.CurrentState))
-                _taskbarService?.UpdateState(state);
+            if (name == nameof(AppViewModel.CurrentState)
+                || name == nameof(AppViewModel.RecapsRunning))
+                _taskbarService?.UpdateState(state, recapRunning);
             _trayService?.UpdateState(state, mActive, mPaused);
         });
     }

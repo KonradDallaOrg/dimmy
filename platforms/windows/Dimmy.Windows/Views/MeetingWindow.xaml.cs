@@ -1211,18 +1211,11 @@ public sealed partial class MeetingWindow : Window
     // / System). Without headphones the mix carries the AEC/NS/AGC-processed
     // mic on top of the clean loopback, so the system-only track sounds
     // cleaner for system-audio content — let the user pick which to hear.
-    /// Resolve a meeting audio track to its on-disk file: prefer the
-    /// compressed `.ogg` (current format), fall back to legacy `.wav`
-    /// (older recordings / WAV-fallback when the Vorbis encoder was
-    /// unavailable). Null if neither exists.
+    /// Resolve a meeting audio track to its on-disk file: recorded formats
+    /// first, then the containers a loaded or Telegram file arrives in. See
+    /// Helpers/MeetingAudio.
     private static string? ResolveAudioTrack(string dir, string baseName)
-    {
-        var ogg = Path.Combine(dir, baseName + ".ogg");
-        if (File.Exists(ogg)) return ogg;
-        var wav = Path.Combine(dir, baseName + ".wav");
-        if (File.Exists(wav)) return wav;
-        return null;
-    }
+        => Helpers.MeetingAudio.Resolve(dir, baseName);
 
     private async Task LoadDoneAudioAsync(string dir)
     {
@@ -1725,6 +1718,11 @@ public sealed partial class MeetingWindow : Window
 
     private async Task GeneratePostProcessAsync(string dir, string transcript, string meetingType = "")
     {
+        // Windows runs recaps through TWO paths (this one and the shared
+        // service); both count, or the pill would stay silent for whichever
+        // one the user happened to trigger.
+        var vm = (Microsoft.UI.Xaml.Application.Current as App)?.AppViewModel;
+        if (vm != null) vm.RecapsRunning++;
         try
         {
             var modelOverride = PickRecapModel();
@@ -1784,6 +1782,10 @@ public sealed partial class MeetingWindow : Window
         {
             App.Log($"post-process exc: {ex}", "Meeting");
             ShowDoneFallback(transcript, $"Post-process failed: {ex.Message}");
+        }
+        finally
+        {
+            if (vm != null) vm.RecapsRunning--;
         }
     }
 

@@ -141,7 +141,8 @@ public sealed partial class PillWindow : Window
     private void Vm_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(AppViewModel.CurrentState) || e.PropertyName == nameof(AppViewModel.BorderStyle)
-            || e.PropertyName == nameof(AppViewModel.Theme))
+            || e.PropertyName == nameof(AppViewModel.Theme)
+            || e.PropertyName == nameof(AppViewModel.RecapsRunning))
             DispatcherQueue.TryEnqueue(UpdateVisualState);
         if (e.PropertyName == nameof(AppViewModel.LlmStyle)
             || e.PropertyName == nameof(AppViewModel.CommandMode)
@@ -655,7 +656,12 @@ public sealed partial class PillWindow : Window
         // Apply text colors for theme
         ApplyThemeColors();
 
-        FrameworkElement? newPanel = GetPanelForState(_vm.CurrentState);
+        // A recap owns the pill only while nothing else does, so the panel
+        // cannot be derived from the state alone.
+        FrameworkElement? newPanel =
+            AppViewModel.ShowsRecap(_vm.CurrentState, _vm.RecapsRunning)
+                ? RecapPanel
+                : GetPanelForState(_vm.CurrentState);
 
         // Make new panel visible (animation will fade it in from 0)
         if (newPanel != null && newPanel != oldPanel)

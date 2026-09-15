@@ -166,7 +166,11 @@ public sealed class TelegramService : IDisposable
                 }
 
                 var transcript = System.Text.Encoding.UTF8.GetString(buf, 0, rc);
-                BeginPillActivity(ViewModels.AppState.Processing);
+                // The transcript is in; what follows is the recap, and the
+                // pill says so itself ("Recap...", from the recap counter).
+                // Holding Processing here gave the same work two different
+                // labels depending on where it started. Mac parity.
+                EndPillActivity();
                 var result = await FileLoadToMeetingService.RunAsync(path, transcript);
 
                 // Transcript is saved to History regardless of recap outcome,

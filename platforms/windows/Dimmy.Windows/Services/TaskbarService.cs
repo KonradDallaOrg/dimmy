@@ -122,16 +122,26 @@ public sealed class TaskbarService : IDisposable
         EnsureStateIcons();
     }
 
-    /// <summary>Apply overlay icon + progress bar matching the given state.</summary>
-    public void UpdateState(AppState state)
+    /// <summary>Apply overlay icon + progress bar matching the given state.
+    /// <paramref name="recapRunning"/> keeps the taskbar busy while a recap
+    /// runs with the dictation state back at idle - a meeting stopped from
+    /// the pill, or a Telegram audio, which showed a clean idle icon for the
+    /// minutes the model was writing.</summary>
+    public void UpdateState(AppState state, bool recapRunning = false)
     {
         if (_taskbar is null || _disposed) return;
+
+        // A recap borrows the Processing look: same "working, no percentage"
+        // meaning, and no new icon to bake.
+        if (AppViewModel.ShowsRecap(state, recapRunning ? 1 : 0)) state = AppState.Processing;
 
         // Idle clears the overlay so the user gets the clean Dimmy icon
         // when nothing is happening.
         var hIcon = state == AppState.Idle ? IntPtr.Zero
                   : _hicons.TryGetValue(state, out var v) ? v : IntPtr.Zero;
-        var description = state == AppState.Idle ? null : DescribeState(state);
+        var description = state == AppState.Idle ? null
+                        : recapRunning ? "Dimmy: Recap"
+                        : DescribeState(state);
 
         try { _taskbar.SetOverlayIcon(_hwnd, hIcon, description); }
         catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[TaskbarService] SetOverlayIcon: {ex.Message}"); }

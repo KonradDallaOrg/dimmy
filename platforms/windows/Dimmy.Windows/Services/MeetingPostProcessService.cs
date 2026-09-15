@@ -46,6 +46,11 @@ public static class MeetingPostProcessService
             return new RecapResult { Success = false, Dir = dir, Error = "empty transcript" };
 
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        // The pill and the taskbar say "Recap" while this runs, whichever
+        // surface started it. Counted rather than flagged: a regenerate can
+        // overlap a stop.
+        var vm = (Microsoft.UI.Xaml.Application.Current as App)?.AppViewModel;
+        if (vm != null) vm.RecapsRunning++;
         try
         {
             // Listener's notes (notes.md) are the user's own emphasis — fold
@@ -169,6 +174,10 @@ public static class MeetingPostProcessService
             App.Log($"recap (shared) exc: {ex}", "MeetingRecap");
             return new RecapResult { Success = false, Dir = dir, Error = ex.Message };
         }
+        finally
+        {
+            if (vm != null) vm.RecapsRunning--;
+        }
     }
 
     /// Read the notion_auto_send flag from the Rust core's current
@@ -253,10 +262,10 @@ public static class MeetingPostProcessService
     /// language of a meeting is not decided by the microphone alone.</summary>
     internal static string? FindMeetingAudio(string dir)
     {
-        foreach (var name in new[] { "audio.ogg", "audio.wav", "audio_system.ogg", "audio_mic.ogg" })
+        foreach (var baseName in new[] { "audio", "audio_system", "audio_mic" })
         {
-            var p = System.IO.Path.Combine(dir, name);
-            if (System.IO.File.Exists(p)) return p;
+            var found = Helpers.MeetingAudio.Resolve(dir, baseName);
+            if (found != null) return found;
         }
         return null;
     }
