@@ -111,7 +111,11 @@ final class TelegramService {
             let result = DimmyCore.shared.transcribeFile(at: path)
             switch result {
             case .success(let transcript):
-                Task { @MainActor in TelegramService.shared.beginPillActivity(.processing) }
+                // The transcript is in; what follows is the recap, and the pill
+                // says so itself ("Recap...", from runRecap's count). Holding
+                // .processing here gave the same work a different label from
+                // a meeting recap.
+                Task { @MainActor in TelegramService.shared.endPillActivity() }
                 let outcome = FileLoadToMeetingService.run(
                     sourceWavPath: path,
                     transcript: transcript,

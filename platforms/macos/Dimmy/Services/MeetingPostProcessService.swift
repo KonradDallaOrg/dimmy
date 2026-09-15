@@ -761,12 +761,14 @@ enum MeetingPostProcessService {
             : model.hasPrefix("local:")
         guard isLocal else { return "" }
 
-        let base = URL(fileURLWithPath: dir)
-        for name in ["audio.ogg", "audio.wav", "audio_system.ogg", "audio_mic.ogg"] {
-            let candidate = base.appendingPathComponent(name)
-            guard FileManager.default.fileExists(atPath: candidate.path) else { continue }
+        // Through the shared resolver, so a loaded .m4a is found like a
+        // recorded .ogg or .wav instead of being missed by a fixed name list.
+        for base in ["audio", "audio_system", "audio_mic"] {
+            guard let candidate = MeetingViewModel.resolveMeetingAudio(dir: dir, base: base) else {
+                continue
+            }
             let lang = DimmyCore.shared.detectAudioLanguage(path: candidate.path) ?? ""
-            NSLog("[Dimmy] recap language detection: '\(lang)' from \(name)")
+            NSLog("[Dimmy] recap language detection: '\(lang)' from \(candidate.lastPathComponent)")
             return lang
         }
         return ""

@@ -343,4 +343,14 @@ final class AppStateTests: XCTestCase {
         XCTAssertFalse(PillView.showsRecap(state: .processing, recapsRunning: 1))
         XCTAssertFalse(PillView.showsRecap(state: .completing, recapsRunning: 1))
     }
+
+    func testRetranscribeDoesNotShowTheOldRecapStream() {
+        // The previous recap's text is still in memory, no recap is running.
+        XCTAssertFalse(MeetingProcessingView.showsRecapStream(retranscribing: true, streamActive: false, hasText: true))
+        // A recap really streaming (e.g. a Telegram one) still shows.
+        XCTAssertTrue(MeetingProcessingView.showsRecapStream(retranscribing: true, streamActive: true, hasText: true))
+        // The normal post-stop recap is unchanged.
+        XCTAssertTrue(MeetingProcessingView.showsRecapStream(retranscribing: false, streamActive: true, hasText: true))
+        XCTAssertFalse(MeetingProcessingView.showsRecapStream(retranscribing: false, streamActive: false, hasText: false))
+    }
 }

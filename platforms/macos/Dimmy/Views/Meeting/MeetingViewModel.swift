@@ -996,6 +996,12 @@ final class MeetingViewModel: ObservableObject {
         return Self.resolveMeetingAudio(dir: dir, base: "audio_system")
     }
 
+    /// Tried in order: `.ogg` (current meetings), `.wav` (older ones), then the
+    /// containers a loaded file or a Telegram audio arrives in. File load used
+    /// to copy every source as `audio.wav`, so an .m4a lost its waveform, its
+    /// duration and its language detection; it now keeps its own extension.
+    nonisolated static let meetingAudioExtensions = ["ogg", "wav", "m4a", "mp3", "aac", "flac", "mp4"]
+
     /// Resolve a meeting audio track to its on-disk URL, preferring the
     /// newer Ogg/Vorbis file (`feat/meeting-live-notes`) over the older
     /// WAV. Returns nil iff neither exists.
@@ -1009,10 +1015,11 @@ final class MeetingViewModel: ObservableObject {
     /// six. Pure / nonisolated so `MeetingAudioResolverTests` can pin
     /// the precedence on real tmp files without spinning up a ViewModel.
     nonisolated static func resolveMeetingAudio(dir: String, base: String) -> URL? {
-        let oggURL = URL(fileURLWithPath: dir).appendingPathComponent(base + ".ogg")
-        if FileManager.default.fileExists(atPath: oggURL.path) { return oggURL }
-        let wavURL = URL(fileURLWithPath: dir).appendingPathComponent(base + ".wav")
-        if FileManager.default.fileExists(atPath: wavURL.path) { return wavURL }
+        let dirURL = URL(fileURLWithPath: dir)
+        for ext in meetingAudioExtensions {
+            let url = dirURL.appendingPathComponent(base + "." + ext)
+            if FileManager.default.fileExists(atPath: url.path) { return url }
+        }
         return nil
     }
 

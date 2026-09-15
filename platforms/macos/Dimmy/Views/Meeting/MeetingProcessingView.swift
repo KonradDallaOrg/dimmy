@@ -64,7 +64,10 @@ struct MeetingProcessingView: View {
             // opus recap thinks for well over a minute, and an empty panel
             // for that long is what made users ask whether it had died. The
             // moment real text arrives the answer takes the panel over.
-            if !appState.llmStreamText.isEmpty || !appState.llmThinkingText.isEmpty {
+            if Self.showsRecapStream(retranscribing: vm.retranscribePercent != nil,
+                                     streamActive: appState.llmStreamActive,
+                                     hasText: !appState.llmStreamText.isEmpty
+                                        || !appState.llmThinkingText.isEmpty) {
                 let showingThinking = appState.llmStreamText.isEmpty
                 let body = showingThinking
                     ? appState.llmThinkingText : appState.llmStreamText
@@ -89,6 +92,16 @@ struct MeetingProcessingView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// The stream text outlives its recap: it is cleared only when the NEXT
+    /// recap starts. A re-transcription (which no longer chains a recap)
+    /// therefore showed the previous recap's text as if it were being
+    /// written again. While re-transcribing, only a recap that is really
+    /// live may show.
+    static func showsRecapStream(retranscribing: Bool, streamActive: Bool, hasText: Bool) -> Bool {
+        guard hasText else { return false }
+        return !retranscribing || streamActive
     }
 
     private func step(title: String, icon: String, color: Color) -> some View {
