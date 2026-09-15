@@ -80,6 +80,14 @@ extension DimmyCore {
         return dimmy_telegram_dismiss(msgId)
     }
 
+    /// Reply to the audio inside Saved Messages. Whoever sent it is on a
+    /// phone, so that is where the answer belongs.
+    @discardableResult
+    func telegramReply(msgId: Int32, text: String) -> Int32 {
+        guard isInitialized, !text.isEmpty else { return -1 }
+        return text.withCString { dimmy_telegram_reply(msgId, $0) }
+    }
+
     /// Mark an audio fully handled after the host transcribed it.
     @discardableResult
     func telegramMarkProcessed(msgId: Int32) -> Int32 {
