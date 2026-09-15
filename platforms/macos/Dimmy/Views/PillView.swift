@@ -181,7 +181,11 @@ struct PillView: View {
             Color.clear
             switch effectiveState {
             case .idle:
-                idleView
+                if Self.showsRecap(state: effectiveState, recapsRunning: appState.recapsRunning) {
+                    recapView
+                } else {
+                    idleView
+                }
             case .recording(let mode):
                 recordingView(mode: mode)
             case .transcribing:
@@ -597,6 +601,44 @@ struct PillView: View {
                 .stroke(Color.purple.opacity(0.4), lineWidth: 1.5)
         )
         .shadow(color: .purple.opacity(0.3), radius: 8)
+    }
+
+    // MARK: - Recap State
+
+    /// Whether the pill should say a meeting recap is running. Only when it
+    /// is otherwise idle: a dictation started during a recap takes the pill,
+    /// and the recap comes back when the dictation ends.
+    static func showsRecap(state: RecordingState, recapsRunning: Int) -> Bool {
+        guard case .idle = state else { return false }
+        return recapsRunning > 0
+    }
+
+    /// A meeting recap is running. Its own word and colour: the pill used to
+    /// say "Transcribing..." for the whole LLM call when a meeting was stopped
+    /// from it, and nothing at all when the recap started from the meeting
+    /// window or a regenerate.
+    private var recapView: some View {
+        HStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+                .scaleEffect(0.7)
+            Text("Recap...")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+                .fixedSize()
+        }
+        .frame(height: pillHeight)
+        .padding(.horizontal, 14)
+        .background(
+            Capsule()
+                .fill(.ultraThickMaterial)
+        )
+        .overlay(
+            Capsule()
+                .stroke(Color.teal.opacity(0.4), lineWidth: 1.5)
+        )
+        .shadow(color: .teal.opacity(0.3), radius: 8)
     }
 
     // MARK: - Completion State

@@ -326,4 +326,21 @@ final class AppStateTests: XCTestCase {
             "default combo encoded form is part of the contract — update with care"
         )
     }
+
+    // MARK: - Pill recap indicator
+
+    @MainActor
+    func testPillShowsRecapOnlyWhileIdleAndARecapRuns() {
+        XCTAssertFalse(PillView.showsRecap(state: .idle, recapsRunning: 0))
+        XCTAssertTrue(PillView.showsRecap(state: .idle, recapsRunning: 1))
+        // Two recaps overlapping still read as one running.
+        XCTAssertTrue(PillView.showsRecap(state: .idle, recapsRunning: 2))
+        // A dictation started during a recap takes the pill; the recap
+        // indicator returns once the dictation is back to idle.
+        XCTAssertFalse(PillView.showsRecap(state: .recording(.toggle), recapsRunning: 1))
+        XCTAssertFalse(PillView.showsRecap(state: .recording(.pushToTalk), recapsRunning: 1))
+        XCTAssertFalse(PillView.showsRecap(state: .transcribing, recapsRunning: 1))
+        XCTAssertFalse(PillView.showsRecap(state: .processing, recapsRunning: 1))
+        XCTAssertFalse(PillView.showsRecap(state: .completing, recapsRunning: 1))
+    }
 }

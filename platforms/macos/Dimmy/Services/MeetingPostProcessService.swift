@@ -120,6 +120,21 @@ enum MeetingPostProcessService {
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .failure(.emptyTranscript) }
 
+        // The pill says "Recap..." while this runs, whichever path started it.
+        // DispatchQueue.main rather than two `Task { @MainActor }`: the queue
+        // is FIFO, so the decrement can never land before its increment and
+        // leave the pill stuck on "Recap..." for good.
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated { AppState.shared.recapsRunning += 1 }
+        }
+        defer {
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    AppState.shared.recapsRunning = max(0, AppState.shared.recapsRunning - 1)
+                }
+            }
+        }
+
         // Read the user's notes.md (the live + Done tabs share this
         // single file) and fold them into the prompt as HIGH PRIORITY
         // emphasis. Missing file → empty string → no notes section.
