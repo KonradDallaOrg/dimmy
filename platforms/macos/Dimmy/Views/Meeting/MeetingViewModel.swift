@@ -239,6 +239,47 @@ final class MeetingViewModel: ObservableObject {
                 }
             }
             .store(in: &liveTranscriptBag)
+        // The same, for a window that is ALREADY open: onWindowShown only
+        // checks once, so an open window stayed on its old view until it
+        // was closed and reopened. The recap-saved notice then lands it on
+        // Done; the count reaching zero is the fallback when no notice comes.
+        AppState.shared.$recapsRunning
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] count in
+                guard let self else { return }
+                if Self.followsExternalRecap(phase: self.phase, recapsRunning: count) {
+                    self.followExternalRecap()
+                } else if count == 0, self.followingExternalRecap {
+                    self.followingExternalRecap = false
+                    guard self.phase == .processing else { return }
+                    self.loadHistory()
+                    if let dir = self.freshestMeetingDir() {
+                        self.loadDoneFromDisk(dir: dir.path)
+                    } else {
+                        self.phase = .idle
+                    }
+                }
+            }
+            .store(in: &liveTranscriptBag)
+    }
+
+    /// True while the window shows a recap it did not start (Telegram, a
+    /// loaded file), so the end of that recap can bring it back out.
+    private var followingExternalRecap = false
+
+    /// A recap started elsewhere takes over the window only from Idle or
+    /// Done: never mid-recording, and never over its own processing (a
+    /// re-transcription, or a recap it started itself).
+    nonisolated static func followsExternalRecap(phase: Phase, recapsRunning: Int) -> Bool {
+        guard recapsRunning > 0 else { return false }
+        return phase == .idle || phase == .done
+    }
+
+    private func followExternalRecap() {
+        followingExternalRecap = true
+        phase = .processing
+        processingStep = .generatingRecap
+        statusLabel = "Generating recap..."
     }
 
     /// Cancel the recording-mode timers when an external stop fires.
@@ -341,9 +382,7 @@ final class MeetingViewModel: ObservableObject {
         // the pane that renders it only exists in the Processing phase, so
         // a window opening in Idle showed nothing while the model wrote.
         if AppState.shared.llmStreamActive, phase != .recording {
-            phase = .processing
-            processingStep = .generatingRecap
-            statusLabel = "Generating recap..."
+            followExternalRecap()
         }
         if DimmyCore.shared.meetingIsActive {
             attachToInflightMeeting()
@@ -691,9 +730,13 @@ final class MeetingViewModel: ObservableObject {
     /// time — same shape the meeting worker produces live. The Rust side
     /// (`dimmy_meeting_retranscribe`) decodes each band, runs the active
     /// STT backend (local or cloud, backend-aware chunking), writes
-    /// `transcripts.txt` itself, and returns the merged text. Then we
-    /// re-run the recap. Useful when the live STT truncated or the user
-    /// wants a fresh pass.
+    /// `transcripts.txt` itself, and returns the merged text. Useful when
+    /// the live STT truncated or the user wants a fresh pass.
+    ///
+    /// Only the transcript: the recap has its own button. This used to chain
+    /// `regenerateRecap()`, which ran an LLM nobody had asked for and ignored
+    /// "Generate recap" as well. Windows never chained it
+    /// (`MeetingWindow.RegenerateTranscript_Click`), and now neither does Mac.
     func regenerateTranscript() {
         guard !activeMeetingDir.isEmpty || selectedDir != nil else { return }
         let dir = selectedDir ?? activeMeetingDir
@@ -712,7 +755,9 @@ final class MeetingViewModel: ObservableObject {
                 switch result {
                 case .success(let text):
                     self.doneRawTranscript = text
-                    self.regenerateRecap()
+                    self.phase = .done
+                    self.statusLabel = "Transcript regenerated"
+                    self.showToast("Transcript regenerated.")
                 case .failure(let err):
                     self.phase = .done
                     self.statusLabel = "Re-transcribe failed"
@@ -990,6 +1035,12 @@ final class MeetingViewModel: ObservableObject {
         return Self.resolveMeetingAudio(dir: dir, base: "audio_system")
     }
 
+    /// Tried in order: `.ogg` (current meetings), `.wav` (older ones), then the
+    /// containers a loaded file or a Telegram audio arrives in. File load used
+    /// to copy every source as `audio.wav`, so an .m4a lost its waveform, its
+    /// duration and its language detection; it now keeps its own extension.
+    nonisolated static let meetingAudioExtensions = ["ogg", "wav", "m4a", "mp3", "aac", "flac", "mp4"]
+
     /// Resolve a meeting audio track to its on-disk URL, preferring the
     /// newer Ogg/Vorbis file (`feat/meeting-live-notes`) over the older
     /// WAV. Returns nil iff neither exists.
@@ -1003,10 +1054,11 @@ final class MeetingViewModel: ObservableObject {
     /// six. Pure / nonisolated so `MeetingAudioResolverTests` can pin
     /// the precedence on real tmp files without spinning up a ViewModel.
     nonisolated static func resolveMeetingAudio(dir: String, base: String) -> URL? {
-        let oggURL = URL(fileURLWithPath: dir).appendingPathComponent(base + ".ogg")
-        if FileManager.default.fileExists(atPath: oggURL.path) { return oggURL }
-        let wavURL = URL(fileURLWithPath: dir).appendingPathComponent(base + ".wav")
-        if FileManager.default.fileExists(atPath: wavURL.path) { return wavURL }
+        let dirURL = URL(fileURLWithPath: dir)
+        for ext in meetingAudioExtensions {
+            let url = dirURL.appendingPathComponent(base + "." + ext)
+            if FileManager.default.fileExists(atPath: url.path) { return url }
+        }
         return nil
     }
 
@@ -1061,6 +1113,7 @@ final class MeetingViewModel: ObservableObject {
     }
 
     func loadDoneFromDisk(dir: String) {
+        followingExternalRecap = false
         // We reached a terminal state, cancel the wrap-up safety net.
         wrapUpWatchdog?.invalidate()
         wrapUpWatchdog = nil

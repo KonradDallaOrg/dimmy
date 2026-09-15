@@ -326,4 +326,41 @@ final class AppStateTests: XCTestCase {
             "default combo encoded form is part of the contract — update with care"
         )
     }
+
+    // MARK: - Pill recap indicator
+
+    @MainActor
+    func testPillShowsRecapOnlyWhileIdleAndARecapRuns() {
+        XCTAssertFalse(PillView.showsRecap(state: .idle, recapsRunning: 0))
+        XCTAssertTrue(PillView.showsRecap(state: .idle, recapsRunning: 1))
+        // Two recaps overlapping still read as one running.
+        XCTAssertTrue(PillView.showsRecap(state: .idle, recapsRunning: 2))
+        // A dictation started during a recap takes the pill; the recap
+        // indicator returns once the dictation is back to idle.
+        XCTAssertFalse(PillView.showsRecap(state: .recording(.toggle), recapsRunning: 1))
+        XCTAssertFalse(PillView.showsRecap(state: .recording(.pushToTalk), recapsRunning: 1))
+        XCTAssertFalse(PillView.showsRecap(state: .transcribing, recapsRunning: 1))
+        XCTAssertFalse(PillView.showsRecap(state: .processing, recapsRunning: 1))
+        XCTAssertFalse(PillView.showsRecap(state: .completing, recapsRunning: 1))
+    }
+
+    func testRetranscribeDoesNotShowTheOldRecapStream() {
+        // The previous recap's text is still in memory, no recap is running.
+        XCTAssertFalse(MeetingProcessingView.showsRecapStream(retranscribing: true, streamActive: false, hasText: true))
+        // A recap really streaming (e.g. a Telegram one) still shows.
+        XCTAssertTrue(MeetingProcessingView.showsRecapStream(retranscribing: true, streamActive: true, hasText: true))
+        // The normal post-stop recap is unchanged.
+        XCTAssertTrue(MeetingProcessingView.showsRecapStream(retranscribing: false, streamActive: true, hasText: true))
+        XCTAssertFalse(MeetingProcessingView.showsRecapStream(retranscribing: false, streamActive: false, hasText: false))
+    }
+
+    func testOpenMeetingWindowFollowsARecapStartedElsewhere() {
+        typealias VM = MeetingViewModel
+        XCTAssertTrue(VM.followsExternalRecap(phase: .idle, recapsRunning: 1))
+        XCTAssertTrue(VM.followsExternalRecap(phase: .done, recapsRunning: 1))
+        // Never over a recording, or over the window's own processing.
+        XCTAssertFalse(VM.followsExternalRecap(phase: .recording, recapsRunning: 1))
+        XCTAssertFalse(VM.followsExternalRecap(phase: .processing, recapsRunning: 1))
+        XCTAssertFalse(VM.followsExternalRecap(phase: .idle, recapsRunning: 0))
+    }
 }

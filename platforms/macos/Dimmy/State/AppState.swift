@@ -1029,6 +1029,13 @@ final class AppState: ObservableObject {
     /// whether the stream is still live.
     @Published var llmStreamActive: Bool = false
 
+    /// Meeting recaps running right now. A count, not a flag: two can overlap
+    /// (a pill stop while a regenerate is still going), and a flag would clear
+    /// when the first one ends. Incremented and decremented only by
+    /// `MeetingPostProcessService.runRecap`, which every recap path goes
+    /// through, so the pill reflects all of them.
+    @Published var recapsRunning: Int = 0
+
     // MARK: - Call detection
 
     /// Toggle for the 1 Hz CoreAudio poll that detects VoIP calls and

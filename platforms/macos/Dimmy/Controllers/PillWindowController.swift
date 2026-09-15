@@ -382,6 +382,10 @@ final class PillWindowController {
                     }
                     return
                 }
+                // The meeting is stopped and its transcript is final, so what
+                // follows is the recap: drop "Transcribing..." and let the pill
+                // show "Recap..." (recapsRunning, raised inside runRecap).
+                await MainActor.run { appState.recordingState = .idle }
                 let recap = MeetingPostProcessService.runRecap(
                     dir: stopResult.dir,
                     transcript: transcript,

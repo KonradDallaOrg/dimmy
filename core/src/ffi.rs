@@ -8650,25 +8650,15 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
     };
     let dir_path = std::path::Path::new(dir);
 
-    // Resolve per-track files (prefer .ogg, fall back to legacy .wav).
-    fn resolve_track(dir: &std::path::Path, base: &str) -> Option<String> {
-        for ext in ["ogg", "wav"] {
-            let p = dir.join(format!("{}.{}", base, ext));
-            if p.exists() {
-                return Some(p.to_string_lossy().to_string());
-            }
-        }
-        None
-    }
     let mut bands: Vec<(&str, String)> = Vec::new();
-    if let Some(p) = resolve_track(dir_path, "audio_mic") {
+    if let Some(p) = resolve_meeting_track(dir_path, "audio_mic") {
         bands.push(("mic", p));
     }
-    if let Some(p) = resolve_track(dir_path, "audio_system") {
+    if let Some(p) = resolve_meeting_track(dir_path, "audio_system") {
         bands.push(("system", p));
     }
     if bands.is_empty() {
-        if let Some(p) = resolve_track(dir_path, "audio") {
+        if let Some(p) = resolve_meeting_track(dir_path, "audio") {
             bands.push(("mic", p));
         }
     }
@@ -10622,6 +10612,24 @@ pub extern "C" fn dimmy_telegram_mark_processed(msg_id: c_int) -> c_int {
     crate::telegram::mark_processed(msg_id)
 }
 
+/// Reply to a Telegram audio inside Saved Messages, so the person who sent it
+/// from their phone learns what happened there rather than only on the
+/// computer. 0 queued / -1 bad arg or channel / -100 not compiled.
+///
+/// # Safety
+/// `text_ptr` must be a valid NUL-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_telegram_reply(msg_id: c_int, text_ptr: *const c_char) -> c_int {
+    if text_ptr.is_null() {
+        return -1;
+    }
+    let text = match CStr::from_ptr(text_ptr).to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    crate::telegram::reply(msg_id, text)
+}
+
 /// Current status as JSON: `{compiled, has_credentials, phase, account, pending}`.
 ///
 /// # Safety
@@ -10640,11 +10648,41 @@ pub unsafe extern "C" fn dimmy_telegram_pending(out_buf: *mut c_char, buf_len: c
     write_to_buf(&crate::telegram::list_pending_json(), out_buf, buf_len)
 }
 
+/// A meeting track on disk: `<base>.ogg` first (current meetings), then `.wav`
+/// (older ones), then the containers a loaded file or a Telegram audio arrives
+/// in. The Mac file-load bridge keeps the source's own extension, so
+/// `audio.m4a` has to be found here as well as in the host; Symphonia decodes
+/// all of them.
+fn resolve_meeting_track(dir: &std::path::Path, base: &str) -> Option<String> {
+    ["ogg", "wav", "m4a", "mp3", "aac", "flac", "mp4"]
+        .iter()
+        .map(|ext| dir.join(format!("{base}.{ext}")))
+        .find(|p| p.exists())
+        .map(|p| p.to_string_lossy().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serial_test::serial;
     use std::ffi::c_char;
+
+    // ── meeting track resolution ─────────────────────────────────
+
+    #[test]
+    fn a_loaded_m4a_is_found_as_a_meeting_track() {
+        let dir = std::env::temp_dir().join(format!("dimmy_track_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("audio.m4a"), b"").unwrap();
+        let got = resolve_meeting_track(&dir, "audio").expect("m4a found");
+        assert!(got.ends_with("audio.m4a"), "{got}");
+        // A recorded format still wins when both exist.
+        std::fs::write(dir.join("audio.wav"), b"").unwrap();
+        let got = resolve_meeting_track(&dir, "audio").expect("wav found");
+        assert!(got.ends_with("audio.wav"), "{got}");
+        assert!(resolve_meeting_track(&dir, "audio_system").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     // ── realtime engine model selection ──────────────────────────
 

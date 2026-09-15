@@ -198,6 +198,16 @@ public static class DictNotificationService
              $"{what} was transcribed and recapped.");
     }
 
+    /// <summary>An audio just landed in the Telegram inbox and is being
+    /// handled right now. With auto-process on there is no prompt, so before
+    /// this the first sign of life came minutes later, when the recap was
+    /// already done.</summary>
+    public static void ShowTelegramReceived(string filename)
+    {
+        var what = string.IsNullOrEmpty(filename) ? "A Telegram audio" : filename;
+        Show("Telegram audio received", $"Transcribing {what} now.");
+    }
+
     /// <summary>A Telegram voice note was transcribed (and saved to History)
     /// but the recap could not be generated - usually a missing LLM key.
     /// Don't claim a recap that isn't there.</summary>

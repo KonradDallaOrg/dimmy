@@ -33,7 +33,7 @@ struct MacWizardCard: View {
             }
             .padding(.vertical, 16)
             .padding(.horizontal, 12)
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .background(
                 RoundedRectangle(cornerRadius: MacTheme.tileCornerRadius, style: .continuous)
                     .fill(Color(nsColor: .windowBackgroundColor)

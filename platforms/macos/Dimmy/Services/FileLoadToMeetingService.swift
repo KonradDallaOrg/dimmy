@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 
 // MARK: - FileLoadToMeetingService
@@ -93,17 +94,20 @@ enum FileLoadToMeetingService {
                            error: "could not write transcripts.txt: \(error.localizedDescription)")
         }
 
-        // audio.wav copy + duration probe. Best-effort.
+        // Audio copy + duration probe. Best-effort. The copy keeps the
+        // source's own extension: see meetingAudioFileName(forSource:).
         var durationSecs: Double = 0
         if !sourceWavPath.isEmpty,
            FileManager.default.fileExists(atPath: sourceWavPath) {
-            let dest = dir.appendingPathComponent("audio.wav")
+            let dest = dir.appendingPathComponent(meetingAudioFileName(forSource: sourceWavPath))
             do {
                 try? FileManager.default.removeItem(at: dest)
                 try FileManager.default.copyItem(at: URL(fileURLWithPath: sourceWavPath), to: dest)
-                durationSecs = WavPeaks.readDurationSecs(path: dest.path)
+                durationSecs = dest.pathExtension == "wav"
+                    ? WavPeaks.readDurationSecs(path: dest.path)
+                    : ((try? AVAudioPlayer(contentsOf: dest))?.duration ?? 0)
             } catch {
-                NSLog("[FileLoadToMeeting] audio.wav copy failed: \(error.localizedDescription)")
+                NSLog("[FileLoadToMeeting] audio copy failed: \(error.localizedDescription)")
             }
         }
 
@@ -151,6 +155,13 @@ enum FileLoadToMeetingService {
             modelOverride: nil,
             notionAutoSend: effectiveAutoSend
         )
+        // Same notice the pill-stop recap posts: an open meeting window loads
+        // the new meeting instead of staying on the stream it was showing.
+        let recapOK = (try? recapResult.get()) != nil
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .meetingRecapSaved, object: nil,
+                                            userInfo: ["dir": dir.path, "success": recapOK])
+        }
         switch recapResult {
         case .success(let res):
             NSLog("[FileLoadToMeeting] recap ok at \(dir.path)")
@@ -158,5 +169,15 @@ enum FileLoadToMeetingService {
         case .failure(let err):
             return Outcome(dir: dir.path, recapMarkdown: nil, error: "\(err)")
         }
+    }
+
+    /// The meeting's audio copy for a loaded file: `audio.` plus the source's
+    /// own extension. Every reader picks its decoder from the extension, so an
+    /// .m4a saved as `audio.wav` lost its waveform, its duration and its
+    /// language detection (a Telegram voice note, 2026-09-15). No extension at
+    /// all keeps the historical name.
+    nonisolated static func meetingAudioFileName(forSource path: String) -> String {
+        let ext = (path as NSString).pathExtension.lowercased()
+        return "audio." + (ext.isEmpty ? "wav" : ext)
     }
 }

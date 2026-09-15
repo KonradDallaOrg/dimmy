@@ -120,6 +120,21 @@ enum MeetingPostProcessService {
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .failure(.emptyTranscript) }
 
+        // The pill says "Recap..." while this runs, whichever path started it.
+        // DispatchQueue.main rather than two `Task { @MainActor }`: the queue
+        // is FIFO, so the decrement can never land before its increment and
+        // leave the pill stuck on "Recap..." for good.
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated { AppState.shared.recapsRunning += 1 }
+        }
+        defer {
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    AppState.shared.recapsRunning = max(0, AppState.shared.recapsRunning - 1)
+                }
+            }
+        }
+
         // Read the user's notes.md (the live + Done tabs share this
         // single file) and fold them into the prompt as HIGH PRIORITY
         // emphasis. Missing file → empty string → no notes section.
@@ -746,12 +761,14 @@ enum MeetingPostProcessService {
             : model.hasPrefix("local:")
         guard isLocal else { return "" }
 
-        let base = URL(fileURLWithPath: dir)
-        for name in ["audio.ogg", "audio.wav", "audio_system.ogg", "audio_mic.ogg"] {
-            let candidate = base.appendingPathComponent(name)
-            guard FileManager.default.fileExists(atPath: candidate.path) else { continue }
+        // Through the shared resolver, so a loaded .m4a is found like a
+        // recorded .ogg or .wav instead of being missed by a fixed name list.
+        for base in ["audio", "audio_system", "audio_mic"] {
+            guard let candidate = MeetingViewModel.resolveMeetingAudio(dir: dir, base: base) else {
+                continue
+            }
             let lang = DimmyCore.shared.detectAudioLanguage(path: candidate.path) ?? ""
-            NSLog("[Dimmy] recap language detection: '\(lang)' from \(name)")
+            NSLog("[Dimmy] recap language detection: '\(lang)' from \(candidate.lastPathComponent)")
             return lang
         }
         return ""

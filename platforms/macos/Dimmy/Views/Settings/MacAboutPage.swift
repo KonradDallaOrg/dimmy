@@ -52,8 +52,8 @@ struct MacAboutPage: View {
                 MacWizardCard(
                     icon: "sparkles",
                     iconBackground: Color(red: 0.04, green: 0.52, blue: 1.00),
-                    title: "Run setup again",
-                    description: "Model, key and dictation shortcut. Saved keys and models are kept."
+                    title: "Run setup",
+                    description: "Model, key, shortcut."
                 ) {
                     appState.isOnboardingComplete = false
                     AppDelegate.shared?.reopenOnboarding()
@@ -61,20 +61,23 @@ struct MacAboutPage: View {
                 MacWizardCard(
                     icon: "text.cursor",
                     iconBackground: Color(red: 0.55, green: 0.35, blue: 0.95),
-                    title: "Set up Command mode",
-                    description: "Rewrite the selected text by voice. Shortcut, model, and a try-it."
+                    title: "Command mode",
+                    description: "Edit selected text by voice."
                 ) {
                     WizardWindowController.shared.show(.command, appState: appState)
                 }
                 MacWizardCard(
                     icon: "waveform",
                     iconBackground: Color(red: 0.94, green: 0.36, blue: 0.24),
-                    title: "Set up Meeting mode",
-                    description: "Record a meeting and get a recap. Shortcut, recap model, and the destination."
+                    title: "Meeting mode",
+                    description: "Record, then get a recap."
                 ) {
                     WizardWindowController.shared.show(.meeting, appState: appState)
                 }
             }
+            // Same height for all three whatever the text length: each card
+            // fills the row, and the row sizes to its tallest card.
+            .fixedSize(horizontal: false, vertical: true)
         }
     }
 
