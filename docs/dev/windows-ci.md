@@ -1,4 +1,4 @@
-# Windows CI — 10 invariants (read before editing any workflow)
+# Windows CI — 11 invariants (read before editing any workflow)
 
 > Every rule here is paid for in blood. Between v0.6.11 and v0.6.20, eight iterations were burned getting the Windows installer building cleanly on `windows-2025` with MSVC 14.50+. Stamping on one of these = reintroducing that specific shipped bug. Read this page before editing:
 >
@@ -124,6 +124,29 @@ Get-ChildItem ... | Sort-Object { [version]$_.Name } -Descending | Select-Object
 
 ---
 
+## I11. The AVX-512 gate takes two disassemblers, and a small count is not evidence
+
+**Why.** `dumpbin /disasm` is a **linear sweep** over the executable sections: it decodes whatever bytes it finds as instructions, including the data tables the compiler parks inside `.text`. `dimmy_lib.dll` is full of them — measured at `0x180DCD508`: a couple of 32-bit RVAs (`70 D4 DC 00` = `0x00DCD470`) followed by a long run of `08 08 08 …`. Nothing there is code.
+
+The richer a decoder's instruction set, the more exotic the garbage it makes of those bytes. MSVC **14.51 knows AVX10.2** and rendered one such blob as `vcvttph2ibs zmm7{k6},zmm5` — one hit, which failed the `v0.7.3` STABLE run while `v0.7.3-rc.4`, on the **same commit, same runner image and the same 14.51 for both the build and the scan**, reported 0. **Re-running does not clear it.** The earlier disputed failures were the same shape: 4 hits, then 9 decoding as APX `r26` with 8 of them inside a 140-byte window. A real `-march=native` regression looks nothing like this: v0.6.71-rc10 carried **4820**, spread over hundreds of functions.
+
+Two independent decoders settle it, because a decoder only invents an instruction it knows: on a clean DLL dumpbin finds 0 zmm and llvm-objdump finds 0 (but *one* impossible `paddusb (%r16), %mm0`, its own flavour of the same garbage); on a DLL built `/arch:AVX512` both find the same 5 instructions at the **same 5 addresses**.
+
+**What does NOT work — measured and rejected.** "Is the address inside a `RUNTIME_FUNCTION` range?" looks like a structural code-vs-data test and is not one: the table above sits *inside* a function's `.pdata` range. Don't re-derive it.
+
+**How to check.** The gate is [`scripts/dev/avx512-gate.ps1`](../../scripts/dev/avx512-gate.ps1), called from the **"Gate — reject AVX-512 in dimmy_lib.dll"** step of `release.yml`. It fails when both decoders name the same address, when the primary reports **>= 20** hits, or when no second decoder is available — it never fails open. Because it is a script and not an inline step, you can run it on a locally built DLL, which is how every number above was measured:
+
+```powershell
+pwsh scripts/dev/avx512-gate.ps1 -Dll E:\d\release\dimmy_lib.dll `
+  -Dumpbin "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.50.35717\bin\Hostx64\x64\dumpbin.exe"
+```
+
+**Never remove it.** It guards a real crash class — 0xc000001d on the first transcription for every user without AVX-512 (Alder Lake, Zen 2), which is what v0.6.71-rc9/rc10 shipped. Every other CI gate misses it because they all execute on the runner's own CPU. Strengthen it instead; when it fires, read the bytes it prints before believing either verdict.
+
+**Known gaps, deliberate.** The gate scans only `dimmy_lib.dll`. The installer also ships `ggml.dll`, `ggml-base.dll`, `ggml-cpu.dll`, `ggml-vulkan.dll`, `llama*.dll` and `mtmd.dll` — and `ggml-cpu.dll` is exactly where a `-march=native` regression would land. All measured 0 locally on both decoders, so `GGML_NATIVE=OFF` does reach them, but **CI does not check**. The grep is also `zmm`-only: EVEX instructions on `xmm`/`ymm` with `k` mask registers are AVX-512 too and are invisible to it. Both predate the two-decoder change and neither is fixed by it.
+
+---
+
 ## Pre-push checklist (any Windows-CI-touching change)
 
 1. Did you grep for `windows-latest` in `build-windows` jobs? If yes → revert to `windows-2025` (I8).
@@ -135,6 +158,7 @@ Get-ChildItem ... | Sort-Object { [version]$_.Name } -Descending | Select-Object
 7. Is VS 2026 activation still scoped via `shell: cmd` + `call vcvars64.bat`, not leaking to other steps? (I3)
 8. Is `--framework vcredist143-x64` still in the `vpk pack` command? (I10)
 9. Did any `Select -First 1` sneak in without a preceding `Sort-Object`? (I9)
+10. Did you keep the AVX-512 gate two-decoder, and resist "just re-run it" when it fires on a handful of hits? (I11)
 
 Hitting any "no" above = high probability you're reintroducing a shipped bug. The corresponding CHANGELOG entry (v0.6.11–v0.6.20) describes the symptom; this file describes the cure.
 

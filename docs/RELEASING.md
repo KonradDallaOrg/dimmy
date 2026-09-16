@@ -173,11 +173,38 @@ Sparkle 2 verifies every downloaded DMG with an EdDSA signature embedded in `app
 
 GitHub releases marked "prerelease" produce an appcast with `<sparkle:channel>prerelease</sparkle:channel>`. The Mac app's About page exposes a Stable / Prerelease picker; "Stable" users skip prerelease items, "Prerelease" users get both.
 
+## A half-finished run leaves the Mac feed pointing at a draft
+
+**The Mac appcast is published by `build-macos`, which runs BEFORE `publish-release`.** The "Mirror appcast.xml to durable auto-update channel" step `--clobber`s `releases/download/auto-update/appcast.xml` — the fixed URL every installed Mac reads — the moment the Mac job goes green. The DMG it advertises, though, lives in the release, and the release is still a **draft** until `publish-release` runs at the very end.
+
+So between those two moments the production feed advertises a version whose download returns **HTTP 404**, and every Mac user on the stable channel who checks for updates in that window gets a failed update. If the run never reaches `publish-release` — a red Windows job, say — **it stays broken indefinitely, silently.**
+
+Burned 2026-09-16: `v0.7.3` died on the AVX-512 gate (I11) after the Mac job had already published. The prod feed advertised `v0.7.3` against a draft release; every Mac stable user 404'd until the feed was restored by hand. Nothing in the run was red except Windows, and nothing anywhere said users were affected.
+
+**Check it whenever a release run does not finish green:**
+
+```bash
+curl -fsSL https://github.com/KonradDallaOrg/dimmy/releases/download/auto-update/appcast.xml \
+  | grep -oE 'url="[^"]*\.dmg"'
+# then curl -sS -o /dev/null -w '%{http_code}\n' -L <each url>   # anything but 200 is a live outage
+```
+
+**Restore it from the last good release:**
+
+```bash
+gh release download v0.7.2 -p appcast.xml -D /tmp     # last tag that actually published
+gh release upload auto-update /tmp/appcast.xml --clobber
+```
+
+Nothing else is needed afterwards: `scripts/ci/build_appcast.py` always **replaces** the slot of the channel it is publishing and carries over only the other channel's newest item, so the next successful Mac build drops the broken entry on its own.
+
+The durable fix is to mirror the appcast from `publish-release` instead of from `build-macos`, so the feed can never name a draft. Until that lands, treat the check above as part of every failed-release post-mortem.
+
 ## Rolling back
 
 If a release is broken after publication:
 
-1. **Delete the GitHub Release** (mark as draft) to stop the auto-updater from pushing it to users.
+1. **Delete the GitHub Release** (mark as draft) to stop the auto-updater from pushing it to users. **Restore the Mac appcast in the same breath** — drafting the release is exactly what makes its DMG 404 while the feed still advertises it (see the section above). Windows is safe here: Velopack reads `releases.win.json` from the release itself, so drafting it simply stops offering the update.
 2. **Do not delete the tag.** The tag stays as a marker of what shipped (and what's broken). CHANGELOG records the breakage.
 3. Cut the next patch with the fix. Users who already updated will get the patch on the next auto-check.
 
