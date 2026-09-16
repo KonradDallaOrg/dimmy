@@ -28,7 +28,9 @@ Step names to preserve (don't rename, CI logs reference them by name):
 - **"Build Rust DLL (VS 2026 MSVC env)"**
 - **"Gate — verify dimmy_lib.dll linker version"**
 
-**The 14.50 pin is a race, not an availability problem.** The runner image ships 14.51 / 14.44 / 14.29, so the step adds 14.50 through `vs_installer modify`, probing component ids because they are not queryable. `vs_installer` **returns before the toolset is on disk**, and until 2026-09-16 the step waited a single 10 seconds before deciding. Measured on two runs of the same commit, two hours apart on the same image: both tried `…VC.14.50.18.4…`, `…18.0…`, `…18.8…`; `v0.7.4` found 14.50 eleven seconds after the third probe and `v0.7.3` did not, fell back to 14.51 with a warning, and was then failed by the AVX-512 gate (I11) on an artifact only a 14.51 decoder can produce. So: **when a release fails in a way that smells of the toolchain, check which toolset it actually built with before theorising.** The loop now polls for up to 90 s per probe and tries `18.8` first, which is the id that lands on this image.
+**The 14.50 pin is a race, not an availability problem.** The runner image ships 14.51 / 14.44 / 14.29, so the step adds 14.50 through `vs_installer modify`, probing component ids because they are not queryable. `vs_installer` **returns before the toolset is on disk**, and until 2026-09-16 the step waited a single 10 seconds before deciding. Measured on two runs of the same commit, two hours apart on the same image: both tried `…VC.14.50.18.4…`, `…18.0…`, `…18.8…`; `v0.7.4` found 14.50 eleven seconds after the third probe and `v0.7.3` did not, and fell back to 14.51 with a warning. So: **when a release fails in a way that smells of the toolchain, check which toolset it actually built with before theorising.** The loop now polls for up to 90 s per probe and tries `18.8` first, which is the id that lands on this image.
+
+Losing the race is a real defect on its own terms — it silently ships the toolchain this invariant exists to avoid. It is **not**, however, what caused the `v0.7.3` gate failure: all three decoders tested render the disputed bytes identically, so the fallback changed which binary got built, not what the gate could see (I11).
 
 ---
 
@@ -126,28 +128,39 @@ Get-ChildItem ... | Sort-Object { [version]$_.Name } -Descending | Select-Object
 
 ---
 
-## I11. The AVX-512 gate takes two disassemblers, and a small count is not evidence
+## I11. The AVX-512 gate is a detector, not a classifier — any hit aborts
 
-**Why.** `dumpbin /disasm` is a **linear sweep** over the executable sections: it decodes whatever bytes it finds as instructions, including the data tables the compiler parks inside `.text`. `dimmy_lib.dll` is full of them — measured at `0x180DCD508`: a couple of 32-bit RVAs (`70 D4 DC 00` = `0x00DCD470`) followed by a long run of `08 08 08 …`. Nothing there is code.
+**Why.** `dumpbin /disasm` is a **linear sweep** over the executable sections: it decodes whatever bytes it finds as instructions, including the data tables the compiler parks inside `.text`. `dimmy_lib.dll` is full of them — measured at `0x180DCD508`: a couple of 32-bit RVAs (`70 D4 DC 00` = `0x00DCD470`) followed by a long run of `08 08 08 …`. Nothing there is code, and the sweep renders it as instructions anyway. On `v0.7.3` one such blob came out as `vcvttph2ibs zmm7{k6},zmm5` and killed the STABLE release; `v0.7.3-rc.4` on the same commit reported 0. A real `-march=native` regression looks nothing like this: v0.6.71-rc10 carried **4820**, spread over hundreds of functions.
 
-The richer a decoder's instruction set, the more exotic the garbage it makes of those bytes. MSVC **14.51 knows AVX10.2** and rendered one such blob as `vcvttph2ibs zmm7{k6},zmm5` — one hit, which failed the `v0.7.3` STABLE run while `v0.7.3-rc.4`, on the **same commit, same runner image and the same 14.51 for both the build and the scan**, reported 0. **Re-running does not clear it.** The earlier disputed failures were the same shape: 4 hits, then 9 decoding as APX `r26` with 8 of them inside a 140-byte window. A real `-march=native` regression looks nothing like this: v0.6.71-rc10 carried **4820**, spread over hundreds of functions.
+**Why rc and stable differ on the same commit.** `core/build.rs` `resolve_build_id()` reads the ambient `GITHUB_REF_NAME` and bakes it in as `DIMMY_BUILD_ID` (`sentry_pipeline.rs:29`). No workflow sets it, which is why it is absent from every printed `env:` block and why "the tag does not enter the Windows build" looks true and is not. `v0.7.3-rc.4` baked an 11-byte string, `v0.7.3` a 6-byte one; different constant, different layout, the sweep desyncs somewhere else. **The build is reproducible per build-id** — which is why re-running `v0.7.3` reproduced the identical hit at the identical address — and changing the tag rolls the dice again.
 
-Two independent decoders settle it, because a decoder only invents an instruction it knows: on a clean DLL dumpbin finds 0 zmm and llvm-objdump finds 0 (but *one* impossible `paddusb (%r16), %mm0`, its own flavour of the same garbage); on a DLL built `/arch:AVX512` both find the same 5 instructions at the **same 5 addresses**.
+**What does NOT work. All four were built and measured; do not re-derive them.**
 
-**What does NOT work — measured and rejected.** "Is the address inside a `RUNTIME_FUNCTION` range?" looks like a structural code-vs-data test and is not one: the table above sits *inside* a function's `.pdata` range. Don't re-derive it.
+1. **Two decoders agreeing.** They are both deterministic linear sweeps over the same bytes, and x86 self-synchronises. Assemble `62 F5 7C 4E 68 FD` and **dumpbin 14.50, dumpbin 14.51 and llvm-objdump 22 all decode it as `vcvttph2ibs zmm7{k6},zmm5`**. Corroboration would have agreed on the `v0.7.3` hit and blocked the release anyway, while printing a more confident claim than it had earned.
+2. **A hit threshold.** One small function compiled `/arch:AVX512` yields **8** zmm instructions — a genuine leak sails under any "a handful is noise" rule.
+3. **`.pdata` containment.** Looks like a structural code-vs-data test and is not one: the data table above sits *inside* a function's unwind range.
+4. **Re-decoding in phase from a `.pdata` function entry.** It reproduces the sweep byte for byte whenever the sweep was already in phase entering the function, which it usually is. The gate prints it as **evidence**, never as a verdict: "not a boundary" proves an artifact, "is a boundary" proves nothing either way.
 
-**How to check.** The gate is [`scripts/dev/avx512-gate.ps1`](../../scripts/dev/avx512-gate.ps1), called from the **"Gate — reject AVX-512 in dimmy_lib.dll"** step of `release.yml`. It fails when both decoders name the same address, when the primary reports **>= 20** hits, or when no second decoder is available — it never fails open. Because it is a script and not an inline step, you can run it on a locally built DLL, which is how every number above was measured:
+**512-bit only, and that is load-bearing — not a gap.** `dimmy_lib.dll` legitimately *contains* AVX-512: the statically linked UCRT carries 10 EVEX instructions in the `snprintf` family (`vpmullq xmm1,xmm0,xmm7`, `vpminuq xmm1,xmm0,xmm2` — EVEX-only, no VEX encoding exists), CPUID-dispatched through `__isa_available` and never executed on a CPU without the feature. Widening the pattern to "any EVEX" or to k-mask forms **fails every build on Microsoft's own runtime**. 512-bit width is exactly what `/arch:AVX512` and `-march=native` emit and what the CRT's dispatched paths never use.
+
+**How it works now.** [`scripts/dev/avx512-gate.ps1`](../../scripts/dev/avx512-gate.ps1), called from the **"Gate — reject AVX-512 in dimmy_lib.dll"** step of `release.yml`. In order: resolve dumpbin (missing toolchain is a hard fail, never a pass); parse image base / base of code / size of code, asserting every field; sweep with `/disasm` (**not** `:nobytes` — the raw encoding is the evidence); **assert the sweep reached >= 90% of the code section**; then count. Any hit aborts, and before aborting it stages the DLL plus `hits-context.txt`, which the next step uploads as an artifact.
+
+That coverage assert closes the oldest hole here, older than any decoder dispute and the only one that could silently ship the crash: **a `dumpbin` that dies mid-file produces zero matches, and every earlier version of this gate read that as "clean".** Fault-injected on the real DLL: the truncated dump stops at `0x1801B73CE` against a required `0x181041B33` and is rejected.
+
+**When it fires, read the bytes — then cut the next patch version.** Do not re-run (the build reproduces), do not raise a threshold, do not add a corroborator. A new tag changes `DIMMY_BUILD_ID`, changes the layout, and the artifact moves. That is the cheap escape; weakening the gate is not.
+
+**Verify it locally before touching it** — it is a script, not an inline step, precisely so you can:
 
 ```powershell
-pwsh scripts/dev/avx512-gate.ps1 -Dll E:\d\release\dimmy_lib.dll `
-  -Dumpbin "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.50.35717\bin\Hostx64\x64\dumpbin.exe"
+# clean production DLL -> exit 0
+pwsh scripts/dev/avx512-gate.ps1 -Dll E:\d\release\dimmy_lib.dll -EvidenceDir E:\tmp\ev
+# fixture with genuine AVX-512 -> exit 1
+cl /nologo /O2 /arch:AVX512 /LD avx.c && pwsh scripts/dev/avx512-gate.ps1 -Dll avx.dll -EvidenceDir E:\tmp\ev
 ```
 
-**It is coupled to I1.** The gate disassembles with the toolset that compiled the DLL, so it only ever sees AVX10.2 when the 14.50 pin lost its race and the build fell back to 14.51. `v0.7.4` passed with `0` hits — scanned by 14.50, which cannot decode those bytes at all — which means the two-decoder path was never exercised in CI. It was exercised locally, on the controls above. Don't mistake a green run for a field-tested gate.
+**Never remove it.** It guards 0xc000001d on the first transcription for every user without AVX-512 (Alder Lake, Zen 2), which is what v0.6.71-rc9/rc10 shipped. Every other CI gate misses it because they all execute on the runner's own CPU.
 
-**Never remove it.** It guards a real crash class — 0xc000001d on the first transcription for every user without AVX-512 (Alder Lake, Zen 2), which is what v0.6.71-rc9/rc10 shipped. Every other CI gate misses it because they all execute on the runner's own CPU. Strengthen it instead; when it fires, read the bytes it prints before believing either verdict.
-
-**Known gaps, deliberate.** The gate scans only `dimmy_lib.dll`. The installer also ships `ggml.dll`, `ggml-base.dll`, `ggml-cpu.dll`, `ggml-vulkan.dll`, `llama*.dll` and `mtmd.dll` — and `ggml-cpu.dll` is exactly where a `-march=native` regression would land. All measured 0 locally on both decoders, so `GGML_NATIVE=OFF` does reach them, but **CI does not check**. The grep is also `zmm`-only: EVEX instructions on `xmm`/`ymm` with `k` mask registers are AVX-512 too and are invisible to it. Both predate the two-decoder change and neither is fixed by it.
+**One real gap remains.** The gate scans only `dimmy_lib.dll`. The installer also ships `ggml.dll`, `ggml-base.dll`, `ggml-cpu.dll`, `ggml-vulkan.dll`, `llama*.dll` and `mtmd.dll`, and `ggml-cpu.dll` is exactly where a `-march=native` regression would land. All measured 0 locally, so `GGML_NATIVE=OFF` does reach them, but **CI does not look**.
 
 ---
 

@@ -1067,12 +1067,11 @@ jobs:
                 # single 10 s sleep is a race - and we lost it about half the
                 # time. v0.7.3 and v0.7.4 ran these same probes on the same
                 # image two hours apart; the only difference was whether
-                # 14.50 had landed when the check fired. v0.7.3 fell back to
-                # 14.51, and the AVX-512 gate then failed it on an artifact
-                # only a 14.51 decoder can produce (windows-ci.md I11). Poll
-                # instead of guessing, and try the id that actually lands on
-                # this image first - it also saves the ~5 min the other two
-                # probes burn before failing.
+                # 14.50 had landed when the check fired. v0.7.3 fell back
+                # to 14.51 and silently shipped the toolchain I1 exists to
+                # avoid. Poll instead of guessing, and try the id that
+                # actually lands on this image first - it also saves the
+                # ~5 min the other two probes burn before failing.
                 for ($w = 0; $w -lt 9; $w++) {
                   Start-Sleep -Seconds 10
                   $tools = Get-ChildItem $mscvDir -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending
@@ -1363,19 +1362,30 @@ jobs:
         shell: pwsh
         run: |
           # GGML_NATIVE=OFF in the build step is the fix; this is the proof.
-          # Two INDEPENDENT disassemblers must agree before this aborts a
-          # release. `dumpbin /disasm` is a linear sweep: it decodes the data
-          # blobs embedded in .text as if they were instructions, and the
-          # richer a decoder's instruction set, the more of them it swallows.
-          # MSVC 14.51 knows AVX10.2 and rendered one such blob as
-          # `vcvttph2ibs zmm7{k6},zmm5`, which failed the v0.7.3 STABLE release
-          # while v0.7.3-rc.4 - same commit, same image, same toolset -
-          # reported 0. Measurements, the three fail conditions and the earlier
-          # incidents (4 hits, then 9 decoding as APX `r26`) are documented in
-          # the script header. Keeping it in a script is what makes it testable
-          # against a locally built DLL instead of only in CI.
+          # ANY 512-bit hit aborts. No threshold and no second-decoder
+          # corroboration: both were tried and both were refuted against the
+          # real bytes - dumpbin 14.50, 14.51 and llvm-objdump all decode the
+          # disputed sequence identically, and one small /arch:AVX512 function
+          # is only 8 instructions. See windows-ci.md I11 and the script
+          # header; do not re-derive them.
+          # The script also asserts the sweep reached the END of the code
+          # section before trusting a zero - a dumpbin that died mid-file used
+          # to read as "clean" - and stages the DLL plus the hit context, so
+          # the next dispute is settled by reading bytes instead of re-running.
           & "$env:GITHUB_WORKSPACE\scripts\dev\avx512-gate.ps1" -Dll "D:\t\release\dimmy_lib.dll"
           exit $LASTEXITCODE
+
+      # Without this the gate's evidence dies with the runner, which is why
+      # the v0.7.3 hit was unanswerable: the DLL that produced it no longer
+      # existed anywhere by the time anyone asked.
+      - name: Upload AVX-512 gate evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: avx512-gate-evidence
+          path: ${{ runner.temp }}/avx512-evidence
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Gate — verify dimmy_lib.dll linker version
         shell: pwsh
