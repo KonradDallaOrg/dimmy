@@ -1349,55 +1349,20 @@ jobs:
       - name: Gate — reject AVX-512 in dimmy_lib.dll
         shell: pwsh
         run: |
-          # GGML_NATIVE=OFF above is the fix; this is the proof. A DLL built
-          # with -march=native on an AVX-512 runner crashes 0xc000001d on any
-          # CPU without AVX-512 (Alder Lake, Zen 2, ...). It looks random
-          # because the runner CPU varies run to run, and every CI gate passes
-          # because they all execute on the runner's own CPU. Measured on
-          # v0.6.71-rc10: 4820 zmm instructions in the shipped DLL, 0 in a
-          # local build of the same source.
-          $dll = "D:\t\release\dimmy_lib.dll"
-          if (-not (Test-Path $dll)) { throw "dimmy_lib.dll not found at $dll" }
-          # Disassemble with the toolchain that COMPILED the DLL, not the
-          # newest one installed. The build pins -vcvars_ver=$VCVARS_VER
-          # (14.50); picking the newest gave 14.51, whose decoder produced
-          # nonsense on v0.6.72-rc5/rc6: instructions referencing `r26`, a
-          # register that exists only under APX and cannot appear in a
-          # baseline x86-64 build, with 8 of 9 hits inside a 140-byte window
-          # - the signature of a disassembler losing sync inside a data blob
-          # embedded in .text, not of vectorised code. The same source built
-          # locally and scanned with 14.50 reports 0, and the count moved
-          # 4 -> 9 between two tags whose DLL sources are identical.
-          $mscvDir = Join-Path $env:VS2026_PATH "VC\Tools\MSVC"
-          $pinned = Join-Path $mscvDir "$env:VCVARS_VER\bin\Hostx64\x64\dumpbin.exe"
-          if (Test-Path $pinned) {
-            $dumpbin = $pinned
-          } else {
-            Write-Host "::warning title=AVX gate::VCVARS_VER=$env:VCVARS_VER dumpbin not found; falling back to newest MSVC"
-            $tool = Get-ChildItem $mscvDir -Directory | Sort-Object Name -Descending | Select-Object -First 1
-            $dumpbin = Join-Path $tool.FullName "bin\Hostx64\x64\dumpbin.exe"
-          }
-          if (-not (Test-Path $dumpbin)) { throw "dumpbin.exe not found at $dumpbin" }
-          # Report WHERE, not just how many. v0.6.72-rc5 failed this gate with
-          # 4 hits while a local build of the same source and feature set had
-          # 0 — and a bare count cannot tell a real -march=native regression
-          # (rc10: 4820 hits) from a handful of runtime-dispatched or
-          # differently-decoded instructions. Print the matches and the
-          # disassembler, so the next failure is diagnosed by reading the log
-          # instead of by bisecting the build.
-          #
-          # Note the build is pinned to $env:VCVARS_VER while this picks the
-          # NEWEST MSVC on the runner: a newer dumpbin knows encodings the
-          # older one does not, so the two can disagree about the same bytes.
-          Write-Host "disassembler: $dumpbin"
-          $hits = & $dumpbin /disasm:nobytes $dll | Select-String -Pattern 'zmm[0-9]'
-          $zmm = $hits.Count
-          Write-Host "AVX-512 (zmm) instructions in dimmy_lib.dll: $zmm"
-          if ($zmm -gt 0) {
-            Write-Host "--- first 20 matches ---"
-            $hits | Select-Object -First 20 | ForEach-Object { Write-Host $_.Line.Trim() }
-            throw "dimmy_lib.dll contains $zmm AVX-512 instructions. It would crash 0xc000001d on any CPU without AVX-512. GGML_NATIVE=OFF is not taking effect. Aborting release."
-          }
+          # GGML_NATIVE=OFF in the build step is the fix; this is the proof.
+          # Two INDEPENDENT disassemblers must agree before this aborts a
+          # release. `dumpbin /disasm` is a linear sweep: it decodes the data
+          # blobs embedded in .text as if they were instructions, and the
+          # richer a decoder's instruction set, the more of them it swallows.
+          # MSVC 14.51 knows AVX10.2 and rendered one such blob as
+          # `vcvttph2ibs zmm7{k6},zmm5`, which failed the v0.7.3 STABLE release
+          # while v0.7.3-rc.4 - same commit, same image, same toolset -
+          # reported 0. Measurements, the three fail conditions and the earlier
+          # incidents (4 hits, then 9 decoding as APX `r26`) are documented in
+          # the script header. Keeping it in a script is what makes it testable
+          # against a locally built DLL instead of only in CI.
+          & "$env:GITHUB_WORKSPACE\scripts\dev\avx512-gate.ps1" -Dll "D:\t\release\dimmy_lib.dll"
+          exit $LASTEXITCODE
 
       - name: Gate — verify dimmy_lib.dll linker version
         shell: pwsh
