@@ -1,55 +1,56 @@
 <#
 .SYNOPSIS
-  Reject a dimmy_lib.dll that carries AVX-512 instructions.
+  Reject a dimmy_lib.dll that carries 512-bit AVX-512 instructions.
 
 .DESCRIPTION
   GGML_NATIVE=OFF in the build step is the fix; this gate is the proof. A DLL
   built with -march=native on an AVX-512 runner crashes 0xc000001d on any CPU
-  without AVX-512 (Alder Lake, Zen 2, ...). It looks random because the runner
-  CPU varies run to run, and every other CI gate passes because they all run on
-  the runner's own CPU. Measured on v0.6.71-rc10: 4820 zmm instructions in the
-  shipped DLL, 0 in a local build of the same source.
+  without AVX-512 (Alder Lake, Zen 2, ...). Every other CI gate misses it,
+  because they all execute on the runner's own CPU. Measured on v0.6.71-rc10:
+  4820 zmm instructions in the shipped DLL, 0 in a local build of the same
+  source.
 
-  WHY TWO DISASSEMBLERS (2026-09-16). `dumpbin /disasm` is a LINEAR SWEEP over
-  the executable sections: it decodes data blobs embedded in .text as if they
-  were instructions. dimmy_lib.dll contains such blobs - at 0x180DCD508 in a
-  local build the bytes read `D5 D4 DC 00 ...`, repeating table data that
-  dumpbin 14.50 cannot decode at all while llvm-objdump 22 renders as
-  `paddusb (%r16), %mm0`, an APX+MMX instruction no compiler on earth emits.
-  The richer a decoder's instruction set, the more of that data it swallows:
-  MSVC 14.51 knows AVX10.2 and turned one such blob into
-  `vcvttph2ibs zmm7{k6},zmm5`, which failed the v0.7.3 STABLE release while
-  v0.7.3-rc.4 - same commit, same image, same toolset - reported 0. The earlier
-  disputed failures were the same shape: 4 hits, then 9 decoding as APX `r26`
-  with 8 of them inside a 140-byte window.
+  512-BIT ONLY, ON PURPOSE (2026-09-16). dimmy_lib.dll legitimately CONTAINS
+  AVX-512: the statically linked UCRT carries 10 EVEX instructions
+  (`vpmullq xmm1,xmm0,xmm7`, `vpminuq xmm1,xmm0,xmm2` - EVEX-only, no VEX
+  encoding exists), CPUID-dispatched through `__isa_available` and never
+  executed on a CPU without the feature. Widening this to "any EVEX" or to
+  k-mask forms would fail EVERY build on Microsoft's own runtime. 512-bit
+  width is what `/arch:AVX512` and `-march=native` emit and what the CRT's
+  dispatched paths never use. The narrowness is load-bearing.
 
-  So a bare count cannot tell a real regression from a decoding artifact. Two
-  independent decoders can: they desync at DIFFERENT offsets but agree exactly
-  on real code. Measured: on a clean 80 MB dimmy_lib.dll dumpbin finds 0 zmm
-  and llvm-objdump finds 0; on a DLL built with /arch:AVX512 both find the same
-  5 instructions at the same 5 addresses.
+  NO SECOND DECODER, NO THRESHOLD (2026-09-16). Both were tried and measured
+  against the real bytes; do not re-derive them:
+   - Two decoders agreeing does NOT discriminate. They are deterministic
+     linear sweeps over the same bytes, and x86 self-synchronises. dumpbin
+     14.50 decodes the disputed `62 F5 7C 4E 68 FD` as
+     `vcvttph2ibs zmm7{k6},zmm5` exactly like 14.51, and so does
+     llvm-objdump 22 - so corroboration would have AGREED on v0.7.3's hit and
+     failed the release anyway, while claiming more certainty than it had.
+   - A ">= 20 hits" threshold fails open: one small function compiled
+     /arch:AVX512 yields 8 zmm instructions.
+   - `.pdata` containment does not separate code from data: the data table at
+     0x180DCD508 sits INSIDE a function's unwind range.
+   - Re-decoding in phase from a `.pdata` function entry reproduces the sweep
+     byte for byte whenever the sweep was already in phase, which it usually
+     is. Printed below as EVIDENCE, never as a verdict.
 
-  The gate FAILS when:
-    - both disassemblers report zmm at the SAME address, or
-    - the primary reports >= 20 hits (a -march=native regression is thousands,
-      spread over hundreds of functions; a sweep desync is local), or
-    - no second disassembler is available to corroborate a hit.
-  It never fails open: a hit nobody can corroborate aborts the release.
+  So the gate stops classifying and goes back to being a detector that cannot
+  fail open. ANY hit aborts. If the bytes it prints show a data table rather
+  than code, cut the next patch version - that is cheap. Weakening this is
+  not: it guards the crash that shipped in v0.6.71-rc9/rc10.
 
 .PARAMETER Dll
   The DLL to scan.
 
 .PARAMETER Dumpbin
-  Primary disassembler. Defaults to the toolset that COMPILED the DLL,
+  Disassembler. Defaults to the toolset that COMPILED the DLL,
   $env:VS2026_PATH\VC\Tools\MSVC\$env:VCVARS_VER, falling back to the newest
   MSVC installed there.
 
-.PARAMETER Objdump
-  Second, independent disassembler. Defaults to the LLVM on the runner image -
-  the same install that provides libclang to bindgen. When absent, falls back
-  to an MSVC toolset of a DIFFERENT version than the primary; an older one is
-  the better corroborator here because it predates the instruction sets whose
-  decoders turn table data into exotic vector instructions.
+.PARAMETER EvidenceDir
+  Where to stage the DLL and the hit context when the gate fires. Defaults to
+  $env:RUNNER_TEMP\avx512-evidence, which release.yml uploads on failure.
 
 .EXAMPLE
   pwsh scripts/dev/avx512-gate.ps1 -Dll D:\t\release\dimmy_lib.dll
@@ -57,111 +58,147 @@
 param(
   [Parameter(Mandatory = $true)][string]$Dll,
   [string]$Dumpbin,
-  [string]$Objdump
+  [string]$EvidenceDir
 )
 
 $ErrorActionPreference = 'Stop'
-$ZMM = 'zmm[0-9]'
-$HARD_FAIL_AT = 20
+$PSNativeCommandUseErrorActionPreference = $false
 
-function Fail([string]$msg) {
-  Write-Host "::error title=AVX-512 gate::$msg"
-  Write-Host $msg
+# dumpbin puts the address at the very start of an instruction line, behind
+# exactly two spaces. Anchoring to that shape means a symbol name containing
+# "zmm" can never be counted as a hit.
+$INSN = '^\s\s([0-9A-F]{16}): '
+$WIDE = $INSN + '.*(zmm[0-9]|zmmword)'
+
+function Fail([string]$m) {
+  Write-Host "::error title=AVX-512 gate::$m"
+  Write-Host "GATE FAIL: $m"
   exit 1
-}
-
-# Address formats differ between the tools - dumpbin prints
-# `0000000180001000:`, llvm-objdump prints `180001000:` - so normalise both to
-# a number before comparing them.
-function Get-Addr([string]$line) {
-  if ($line -match '^\s*([0-9A-Fa-f]{6,16})[:\s]') { return [Convert]::ToUInt64($Matches[1], 16) }
-  return $null
 }
 
 if (-not (Test-Path $Dll)) { Fail "dll not found at $Dll" }
 $name = Split-Path $Dll -Leaf
-
-$msvcRoot = if ($env:VS2026_PATH) { Join-Path $env:VS2026_PATH "VC\Tools\MSVC" } else { $null }
-$installed = @()
-if ($msvcRoot -and (Test-Path $msvcRoot)) {
-  $installed = @(Get-ChildItem $msvcRoot -Directory | Sort-Object Name -Descending)
+if (-not $EvidenceDir) {
+  $root = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $env:TEMP }
+  $EvidenceDir = Join-Path $root 'avx512-evidence'
 }
+New-Item -ItemType Directory -Force $EvidenceDir | Out-Null
 
 if (-not $Dumpbin) {
+  $msvcRoot = if ($env:VS2026_PATH) { Join-Path $env:VS2026_PATH 'VC\Tools\MSVC' } else { $null }
+  if (-not $msvcRoot -or -not (Test-Path $msvcRoot)) { Fail "VC\Tools\MSVC not found under VS2026_PATH='$env:VS2026_PATH'" }
   $pinned = if ($env:VCVARS_VER) { Join-Path $msvcRoot "$env:VCVARS_VER\bin\Hostx64\x64\dumpbin.exe" } else { $null }
   if ($pinned -and (Test-Path $pinned)) {
     $Dumpbin = $pinned
-  } elseif ($installed.Count -gt 0) {
-    Write-Host "::warning title=AVX gate::VCVARS_VER=$env:VCVARS_VER dumpbin not found; falling back to newest MSVC"
-    $Dumpbin = Join-Path $installed[0].FullName "bin\Hostx64\x64\dumpbin.exe"
-  }
-}
-if (-not $Dumpbin -or -not (Test-Path $Dumpbin)) { Fail "dumpbin.exe not found at '$Dumpbin'" }
-
-Write-Host "primary disassembler: $Dumpbin"
-$hits = & $Dumpbin /disasm:nobytes $Dll | Select-String -Pattern $ZMM
-$n = @($hits).Count
-Write-Host "AVX-512 (zmm) instructions in ${name}: $n"
-if ($n -eq 0) { exit 0 }
-
-# Report WHERE and WITH WHICH BYTES, not just how many, so the next failure is
-# diagnosed by reading the log instead of by bisecting the build.
-Write-Host "--- hits, with raw bytes and +/-4 lines of context ---"
-& $Dumpbin /disasm $Dll | Select-String -Pattern $ZMM -Context 4, 4 |
-  Select-Object -First 20 | ForEach-Object {
-    $_.Context.PreContext | ForEach-Object { Write-Host "      $_" }
-    Write-Host "  >>> $($_.Line.Trim())"
-    $_.Context.PostContext | ForEach-Object { Write-Host "      $_" }
-    Write-Host ""
-  }
-
-if ($n -ge $HARD_FAIL_AT) {
-  Fail "$name contains $n AVX-512 instructions. It would crash 0xc000001d on any CPU without AVX-512. GGML_NATIVE=OFF is not taking effect. Aborting release."
-}
-
-if (-not $Objdump) {
-  $llvm = Join-Path $env:ProgramFiles "LLVM\bin\llvm-objdump.exe"
-  if (Test-Path $llvm) {
-    $Objdump = $llvm
   } else {
-    $other = $installed |
-      Where-Object { (Join-Path $_.FullName "bin\Hostx64\x64\dumpbin.exe") -ne $Dumpbin } |
-      Sort-Object Name | Select-Object -First 1
-    if ($other) { $Objdump = Join-Path $other.FullName "bin\Hostx64\x64\dumpbin.exe" }
+    # I9: filesystem order is not version order.
+    $newest = Get-ChildItem $msvcRoot -Directory | Sort-Object Name -Descending | Select-Object -First 1
+    if (-not $newest) { Fail "no MSVC toolset under $msvcRoot" }
+    Write-Host "::warning title=AVX gate::VCVARS_VER='$env:VCVARS_VER' dumpbin absent; using newest $($newest.Name)"
+    $Dumpbin = Join-Path $newest.FullName 'bin\Hostx64\x64\dumpbin.exe'
   }
 }
-if (-not $Objdump -or -not (Test-Path $Objdump)) {
-  Fail "$n AVX-512 hit(s) and no second disassembler available to corroborate them. Refusing to ship an unverified DLL."
+if (-not (Test-Path $Dumpbin)) { Fail "dumpbin.exe not found at '$Dumpbin'" }
+Write-Host "disassembler: $Dumpbin"
+
+function Invoke-Dumpbin([string[]]$dumpArgs, [string]$what) {
+  $out = & $Dumpbin @dumpArgs
+  if ($LASTEXITCODE -ne 0) { Fail "dumpbin $what exited $LASTEXITCODE. A failed dump must never be read as 'no AVX-512'." }
+  return $out
 }
 
-Write-Host "second disassembler: $Objdump"
-$rc = 0
-$secondAddrs = [System.Collections.Generic.HashSet[UInt64]]::new()
+$hdr = Invoke-Dumpbin @('/headers', '/nologo', $Dll) 'headers'
+$bl = $hdr | Select-String 'image base' | Select-Object -First 1
+if (-not $bl -or $bl.Line -notmatch '([0-9A-F]+) image base') { Fail 'could not parse image base from dumpbin /headers' }
+$BASE = [Convert]::ToUInt64($Matches[1], 16)
+$cl = $hdr | Select-String 'size of code' | Select-Object -First 1
+if (-not $cl -or $cl.Line -notmatch '([0-9A-F]+) size of code') { Fail "could not parse 'size of code' from dumpbin /headers" }
+$CODE = [Convert]::ToUInt64($Matches[1], 16)
+if ($CODE -eq 0) { Fail 'PE reports 0 bytes of code' }
+$bc = $hdr | Select-String 'base of code' | Select-Object -First 1
+if (-not $bc -or $bc.Line -notmatch '([0-9A-F]+) base of code') { Fail "could not parse 'base of code' from dumpbin /headers" }
+$CODEBASE = [Convert]::ToUInt64($Matches[1], 16)
+Write-Host ("image base 0x{0:X}, code 0x{1:X}..0x{2:X} ({3} bytes)" -f $BASE, ($BASE + $CODEBASE), ($BASE + $CODEBASE + $CODE), $CODE)
+
+# /disasm, NOT /disasm:nobytes: the raw encoding IS the evidence. v0.7.3 was
+# argued over for a day about one line whose six bytes would have named it.
+$sweep = Join-Path $EvidenceDir 'disasm.txt'
+Invoke-Dumpbin @('/disasm', '/nologo', "/out:$sweep", $Dll) 'disasm' | Out-Null
+if (-not (Test-Path $sweep)) { Fail 'dumpbin /disasm produced no output file' }
+
+# Coverage assert: prove the sweep reached the END of the code section.
+# Without it, a dumpbin that dies mid-file yields zero matches and the gate
+# PASSES. That is the oldest hole in this step, older than any decoder
+# dispute, and the only one that can silently ship the crash it exists to
+# stop. Reading the tail costs 0.05 s.
+$reach = [UInt64]0
+foreach ($l in (Get-Content $sweep -Tail 2000)) {
+  $m = [regex]::Match($l, $INSN)
+  if ($m.Success) { $reach = [Convert]::ToUInt64($m.Groups[1].Value, 16) }
+}
+$need = $BASE + $CODEBASE + [uint64]($CODE * 0.9)
+Write-Host ("disassembly reached 0x{0:X} (needs >= 0x{1:X})" -f $reach, $need)
+if ($reach -lt $need) { Fail ("dumpbin /disasm stopped at 0x{0:X}, short of the end of the code section (needs >= 0x{1:X}). Refusing to read a truncated dump as clean." -f $reach, $need) }
+
+$hits = @(Select-String -Path $sweep -Pattern $WIDE)
+Write-Host "512-bit AVX-512 instructions in ${name}: $($hits.Count)"
+if ($hits.Count -eq 0) { Remove-Item $sweep -Force -ErrorAction SilentlyContinue; Write-Host 'clean.'; exit 0 }
+
+# ---- From here the release is already dead. Everything below is evidence. ----
+Write-Host ''
+Write-Host '--- hits: raw bytes and +/-4 instructions of context ---'
+Select-String -Path $sweep -Pattern $WIDE -Context 4, 4 | Select-Object -First 20 | ForEach-Object {
+  $_.Context.PreContext | ForEach-Object { Write-Host "        $_" }
+  Write-Host "  >>>   $($_.Line)"
+  $_.Context.PostContext | ForEach-Object { Write-Host "        $_" }
+  Write-Host ''
+}
+
+# Stage the evidence BEFORE the optional diagnostics below, so a hiccup there
+# can never cost us the DLL. Keep the DLL and the hit context, not the ~330 MB
+# dump: the DLL is ground truth and anyone can re-dump from it. v0.7.3 was
+# unanswerable precisely because the gate threw before keeping anything.
+Select-String -Path $sweep -Pattern $WIDE -Context 12, 12 |
+  Select-Object -First 20 |
+  ForEach-Object { $_.Context.PreContext; "  >>>   $($_.Line)"; $_.Context.PostContext; '' } |
+  Set-Content (Join-Path $EvidenceDir 'hits-context.txt') -Encoding utf8
+Remove-Item $sweep -Force -ErrorAction SilentlyContinue
+Copy-Item $Dll (Join-Path $EvidenceDir $name) -Force
+Write-Host "evidence staged in ${EvidenceDir}: $name + hits-context.txt"
+Write-Host ''
+
+# Re-decode each hit's enclosing function from its ENTRY POINT, a boundary
+# .pdata says is real. EVIDENCE, never a verdict: measured on a real
+# dimmy_lib.dll, a sweep already in phase entering the function reproduces the
+# in-phase decode byte for byte, including over the data tables parked inside
+# .text (0x180DCD508). It only disagrees when the sweep entered out of phase.
+# So "not a boundary" proves an artifact; "is a boundary" proves nothing
+# either way. Read the bytes.
 try {
-  if ((Split-Path $Objdump -Leaf) -like 'llvm-objdump*') {
-    $second = & $Objdump -d --no-show-raw-insn $Dll 2>$null
-  } else {
-    $second = & $Objdump /disasm:nobytes $Dll
+  $uw = Join-Path $EvidenceDir 'unwind.txt'
+  Invoke-Dumpbin @('/unwindinfo', '/nologo', "/out:$uw", $Dll) 'unwindinfo' | Out-Null
+  $fb = [System.Collections.Generic.List[UInt64]]::new(); $fe = [System.Collections.Generic.List[UInt64]]::new()
+  foreach ($l in [IO.File]::ReadLines($uw)) {
+    if ($l -match '^  [0-9A-F]{8} ([0-9A-F]{8}) ([0-9A-F]{8}) ') {
+      $fb.Add([Convert]::ToUInt64($Matches[1], 16)); $fe.Add([Convert]::ToUInt64($Matches[2], 16))
+    }
   }
-  $rc = $LASTEXITCODE
-  $second | Select-String -Pattern $ZMM | ForEach-Object {
-    $a = Get-Addr $_.Line
-    if ($null -ne $a) { [void]$secondAddrs.Add($a) }
+  Write-Host "--- in-phase re-decode (evidence only; .pdata entries: $($fb.Count)) ---"
+  foreach ($h in ($hits | Select-Object -First 20)) {
+    if ($h.Line -notmatch $INSN) { continue }
+    $va = [Convert]::ToUInt64($Matches[1], 16); $rva = $va - $BASE
+    $i = -1; for ($k = 0; $k -lt $fb.Count; $k++) { if ($fb[$k] -le $rva -and $rva -lt $fe[$k]) { $i = $k; break } }
+    if ($i -lt 0) { Write-Host ("  0x{0:X}  outside every RUNTIME_FUNCTION (leaf code or data)" -f $va); continue }
+    $s = $BASE + $fb[$i]; $t = $BASE + $fe[$i]
+    $an = Invoke-Dumpbin @('/disasm', '/nologo', ("/range:0x{0:X},0x{1:X}" -f $s, $t), $Dll) 'anchored range'
+    $prev = [UInt64]0; $exact = $false
+    foreach ($al in $an) { if ($al -match $INSN) { $a = [Convert]::ToUInt64($Matches[1], 16); if ($a -eq $va) { $exact = $true; break }; if ($a -lt $va) { $prev = $a } } }
+    if ($exact) { Write-Host ("  0x{0:X}  IS an instruction boundary when decoded in phase from 0x{1:X} - consistent with real code" -f $va, $s) }
+    else { Write-Host ("  0x{0:X}  is NOT a boundary in phase from 0x{1:X} (inside the instruction at 0x{2:X}) - sweep artifact" -f $va, $s, $prev) }
   }
 } catch {
-  Fail "second disassembler failed ($($_.Exception.Message)); cannot corroborate $n hit(s). Refusing to ship an unverified DLL."
-}
-if ($rc -ne 0) { Fail "second disassembler exited $rc; cannot corroborate $n hit(s). Refusing to ship an unverified DLL." }
-Write-Host "second disassembler zmm hits: $($secondAddrs.Count)"
-
-$agreed = @()
-foreach ($h in $hits) {
-  $a = Get-Addr $h.Line
-  if ($null -ne $a -and $secondAddrs.Contains($a)) { $agreed += ('0x{0:X}' -f $a) }
-}
-if ($agreed.Count -gt 0) {
-  Fail "$($agreed.Count) AVX-512 instruction(s) confirmed by BOTH disassemblers at: $($agreed -join ', '). It would crash 0xc000001d on any CPU without AVX-512. Aborting release."
+  Write-Host "::warning title=AVX gate::evidence pass failed ($($_.Exception.Message)); the verdict below is unaffected."
 }
 
-Write-Host "::warning title=AVX gate::$n zmm hit(s) from the primary disassembler, none corroborated by the second at the same address - linear-sweep artifact over data embedded in .text, not shipped AVX-512."
-exit 0
+Write-Host ''
+Fail "$name contains $($hits.Count) 512-bit AVX-512 instruction(s). They crash 0xc000001d on any CPU without AVX-512 (Alder Lake, Zen 2). Aborting release. If the bytes above show this is a linear-sweep decode of a data table, cut the next patch version - do NOT weaken this gate."
