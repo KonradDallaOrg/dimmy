@@ -28,6 +28,8 @@ Step names to preserve (don't rename, CI logs reference them by name):
 - **"Build Rust DLL (VS 2026 MSVC env)"**
 - **"Gate — verify dimmy_lib.dll linker version"**
 
+**The 14.50 pin is a race, not an availability problem.** The runner image ships 14.51 / 14.44 / 14.29, so the step adds 14.50 through `vs_installer modify`, probing component ids because they are not queryable. `vs_installer` **returns before the toolset is on disk**, and until 2026-09-16 the step waited a single 10 seconds before deciding. Measured on two runs of the same commit, two hours apart on the same image: both tried `…VC.14.50.18.4…`, `…18.0…`, `…18.8…`; `v0.7.4` found 14.50 eleven seconds after the third probe and `v0.7.3` did not, fell back to 14.51 with a warning, and was then failed by the AVX-512 gate (I11) on an artifact only a 14.51 decoder can produce. So: **when a release fails in a way that smells of the toolchain, check which toolset it actually built with before theorising.** The loop now polls for up to 90 s per probe and tries `18.8` first, which is the id that lands on this image.
+
 ---
 
 ## I2. VS 2026 BuildTools is installed side-by-side — VS 2022 is NOT removed
@@ -140,6 +142,8 @@ Two independent decoders settle it, because a decoder only invents an instructio
 pwsh scripts/dev/avx512-gate.ps1 -Dll E:\d\release\dimmy_lib.dll `
   -Dumpbin "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.50.35717\bin\Hostx64\x64\dumpbin.exe"
 ```
+
+**It is coupled to I1.** The gate disassembles with the toolset that compiled the DLL, so it only ever sees AVX10.2 when the 14.50 pin lost its race and the build fell back to 14.51. `v0.7.4` passed with `0` hits — scanned by 14.50, which cannot decode those bytes at all — which means the two-decoder path was never exercised in CI. It was exercised locally, on the controls above. Don't mistake a green run for a field-tested gate.
 
 **Never remove it.** It guards a real crash class — 0xc000001d on the first transcription for every user without AVX-512 (Alder Lake, Zen 2), which is what v0.6.71-rc9/rc10 shipped. Every other CI gate misses it because they all execute on the runner's own CPU. Strengthen it instead; when it fires, read the bytes it prints before believing either verdict.
 

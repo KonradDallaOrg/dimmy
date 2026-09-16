@@ -541,14 +541,27 @@ jobs:
             # falls through to the warning below.
             $vsInstaller = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vs_installer.exe"
             if (Test-Path $vsInstaller) {
-              foreach ($vsVer in @('18.4', '18.0', '18.8')) {
+              foreach ($vsVer in @('18.8', '18.4', '18.0')) {
                 $component = "Microsoft.VisualStudio.Component.VC.$preferred.$vsVer.x86.x64"
                 Write-Host "Trying to add $component"
                 & $vsInstaller modify --installPath "$vs2026" --add $component --quiet --norestart --nocache 2>&1 |
                   Out-String | Write-Host
-                Start-Sleep -Seconds 10
-                $tools = Get-ChildItem $mscvDir -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending
-                $pinned = $tools | Where-Object { $_.Name -like "$preferred.*" } | Select-Object -First 1
+                # vs_installer returns BEFORE the toolset is on disk, so a
+                # single 10 s sleep is a race - and we lost it about half the
+                # time. v0.7.3 and v0.7.4 ran these same probes on the same
+                # image two hours apart; the only difference was whether
+                # 14.50 had landed when the check fired. v0.7.3 fell back to
+                # 14.51, and the AVX-512 gate then failed it on an artifact
+                # only a 14.51 decoder can produce (windows-ci.md I11). Poll
+                # instead of guessing, and try the id that actually lands on
+                # this image first - it also saves the ~5 min the other two
+                # probes burn before failing.
+                for ($w = 0; $w -lt 9; $w++) {
+                  Start-Sleep -Seconds 10
+                  $tools = Get-ChildItem $mscvDir -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending
+                  $pinned = $tools | Where-Object { $_.Name -like "$preferred.*" } | Select-Object -First 1
+                  if ($pinned) { break }
+                }
                 if ($pinned) { Write-Host "Component $component installed $($pinned.Name)"; break }
               }
             } else {
