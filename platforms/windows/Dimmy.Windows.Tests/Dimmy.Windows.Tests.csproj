@@ -23,6 +23,7 @@
     <Compile Include="..\Dimmy.Windows\Helpers\HardwareInfo.cs" Link="Helpers\HardwareInfo.cs" />
     <Compile Include="..\Dimmy.Windows\Helpers\TelegramReplyText.cs" Link="Helpers\TelegramReplyText.cs" />
     <Compile Include="..\Dimmy.Windows\Helpers\MeetingAudio.cs" Link="Helpers\MeetingAudio.cs" />
+    <Compile Include="..\Dimmy.Windows\Helpers\TranscriptSeek.cs" Link="Helpers\TranscriptSeek.cs" />
     <Compile Include="..\Dimmy.Windows\ViewModels\AppViewModel.cs" Link="ViewModels\AppViewModel.cs" />
     <Compile Include="..\Dimmy.Windows\ViewModels\SettingsViewModel.cs" Link="ViewModels\SettingsViewModel.cs" />
     <Compile Include="..\Dimmy.Windows\ViewModels\OnboardingViewModel.cs" Link="ViewModels\OnboardingViewModel.cs" />
