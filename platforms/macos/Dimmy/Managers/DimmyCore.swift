@@ -895,7 +895,7 @@ final class DimmyCore {
     /// `prepared` = macOS has compiled it for this machine; until then whisper
     /// keeps the GPU encoder, and `preparing` says the compile is running.
     func coremlEncoderStatus(_ filename: String)
-        -> (available: Bool, present: Bool, prepared: Bool, preparing: Bool) {
+        -> (available: Bool, present: Bool, prepared: Bool, preparing: Bool, bundle: String) {
         let bufLen = Self.bufferSize
         let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
         defer { buffer.deallocate() }
@@ -904,12 +904,23 @@ final class DimmyCore {
         guard written > 0,
               let data = String(cString: buffer).data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return (false, false, false, false) }
+        else { return (false, false, false, false, "") }
         let supported = obj["supported"] as? Bool ?? false
         return (supported && (obj["available"] as? Bool ?? false),
                 supported && (obj["present"] as? Bool ?? false),
                 supported && (obj["prepared"] as? Bool ?? false),
-                supported && (obj["preparing"] as? Bool ?? false))
+                supported && (obj["preparing"] as? Bool ?? false),
+                obj["bundle"] as? String ?? "")
+    }
+
+    /// Start compiling an already-downloaded Core ML encoder for this Mac.
+    /// Returns true when a preparation is running as a result. Not blocking:
+    /// the compile runs on a core thread and reports through `coreml_prepare`.
+    /// Needed because preparation otherwise only starts at launch, on a model
+    /// change, or right after the bundle download — leaving a downloaded but
+    /// uncompiled bundle with no way to get going.
+    func coremlPrepare(_ filename: String) -> Bool {
+        filename.withCString { dimmy_coreml_prepare($0) == 1 }
     }
 
     /// Download + unpack the Core ML encoder. BLOCKING, call from a
@@ -1376,6 +1387,13 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
         if let file = payload["filename"] as? String,
            let state = payload["state"] as? String {
             appState.coremlPrepareState[file] = state
+            // One encoder serves every quantisation of an architecture, and the
+            // work is reported under whichever model started it. Key it by the
+            // bundle too, or the row for a sibling quant never hears that its
+            // encoder is ready (2026-09-22: q5 finished, q8 kept spinning).
+            if let bundle = payload["bundle"] as? String, !bundle.isEmpty {
+                appState.coremlPrepareState[bundle] = state
+            }
         }
 
     case "model_download_progress":

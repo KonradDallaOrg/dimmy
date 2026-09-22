@@ -855,6 +855,14 @@ pub struct AppConfig {
     /// (`call_detector.rs`) emits `call_detected` / `call_ended`
     /// events to the host UI. Off → no popup, no detection thread.
     pub call_detect_enabled: bool,
+    /// Start recording the moment a call is detected instead of asking
+    /// first: no popup, the meeting window opens and the recording
+    /// notice is announced to participants. Only meaningful while
+    /// `call_detect_enabled` — see `call_detector::auto_record_effective`,
+    /// which both hosts and the config setter apply so the pair can never
+    /// act as "record by itself" with nothing detecting. Default false:
+    /// recording a call unasked is never the safe default.
+    pub call_detect_auto_record: bool,
     /// Apps for which the user clicked "Don't ask for X" — never
     /// nudge again until removed from this list via Settings. Stored
     /// as lowercase canonical ids (`teams`, `zoom`, `slack`,
@@ -1076,6 +1084,7 @@ impl Default for AppConfig {
             qwen_asr_model: crate::qwen_asr::DEFAULT_MODEL.to_string(),
             live_captions_enabled: true,
             call_detect_enabled: true,
+            call_detect_auto_record: false,
             // No default exclusions — the user's "Never" click is
             // what populates this list. Pre-seeding it was a hangover
             // from when the C# side maintained a hardcoded canonical
@@ -1201,6 +1210,7 @@ pub fn save_config_file(cfg: &AppConfig) {
             "qwen_asr_model": cfg.qwen_asr_model,
             "live_captions_enabled": cfg.live_captions_enabled,
             "call_detect_enabled": cfg.call_detect_enabled,
+            "call_detect_auto_record": cfg.call_detect_auto_record,
             "call_detect_excluded_apps": cfg.call_detect_excluded_apps,
             "call_detect_cooldown_secs": cfg.call_detect_cooldown_secs,
             "call_detect_min_active_secs": cfg.call_detect_min_active_secs,
@@ -1384,6 +1394,9 @@ pub fn load_config_file() -> AppConfig {
                     call_detect_enabled: v["call_detect_enabled"]
                         .as_bool()
                         .unwrap_or(defaults.call_detect_enabled),
+                    call_detect_auto_record: v["call_detect_auto_record"]
+                        .as_bool()
+                        .unwrap_or(defaults.call_detect_auto_record),
                     call_detect_excluded_apps: v["call_detect_excluded_apps"]
                         .as_array()
                         .map(|arr| {
@@ -1849,6 +1862,7 @@ pub struct AppState {
     pub qwen_asr_model: Mutex<String>,
     pub live_captions_enabled: Mutex<bool>,
     pub call_detect_enabled: Mutex<bool>,
+    pub call_detect_auto_record: Mutex<bool>,
     pub call_detect_excluded_apps: Mutex<Vec<String>>,
     pub call_detect_cooldown_secs: Mutex<u32>,
     pub call_detect_min_active_secs: Mutex<u32>,
@@ -2005,6 +2019,7 @@ impl AppState {
             qwen_asr_model: Mutex::new(file_cfg.qwen_asr_model),
             live_captions_enabled: Mutex::new(file_cfg.live_captions_enabled),
             call_detect_enabled: Mutex::new(file_cfg.call_detect_enabled),
+            call_detect_auto_record: Mutex::new(file_cfg.call_detect_auto_record),
             call_detect_excluded_apps: Mutex::new(file_cfg.call_detect_excluded_apps),
             call_detect_cooldown_secs: Mutex::new(file_cfg.call_detect_cooldown_secs),
             call_detect_min_active_secs: Mutex::new(file_cfg.call_detect_min_active_secs),
@@ -2171,6 +2186,10 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         .call_detect_enabled
         .lock()
         .map_err(|e| e.to_string())?;
+    let call_detect_auto_record = *state
+        .call_detect_auto_record
+        .lock()
+        .map_err(|e| e.to_string())?;
     let call_detect_excluded_apps = state
         .call_detect_excluded_apps
         .lock()
@@ -2247,6 +2266,7 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         qwen_asr_model,
         live_captions_enabled,
         call_detect_enabled,
+        call_detect_auto_record,
         call_detect_excluded_apps,
         call_detect_cooldown_secs,
         call_detect_min_active_secs,

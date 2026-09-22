@@ -89,6 +89,16 @@ fn encoder_beside(model: &Path) -> PathBuf {
     model.with_file_name(format!("{stem}-encoder.mlmodelc"))
 }
 
+/// The bundle's own file name (`ggml-large-v3-encoder.mlmodelc`), which is
+/// what `coreml_prepare` events carry: every quantisation of an architecture
+/// shares one.
+pub fn bundle_name(model_filename: &str) -> String {
+    bundle_path(model_filename)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
 /// Written beside the bundle (never inside it) once macOS has compiled it.
 fn prepared_marker(model_filename: &str) -> PathBuf {
     bundle_path(model_filename).with_extension("prepared")
@@ -249,10 +259,25 @@ pub fn run_deferred() {
     }
 }
 
+/// One encoder serves every quantisation of an architecture: `large-v3` q5
+/// and q8 share `ggml-large-v3-encoder.mlmodelc`. The event therefore carries
+/// the BUNDLE as well as the model that triggered the work, so a host showing
+/// "ready" for the model it has selected does not miss a preparation that ran
+/// under a sibling quant's name — which is exactly what left the Settings row
+/// spinning on a finished encoder (2026-09-22).
 fn emit_prepare_state(model_filename: &str, state: &str) {
+    let bundle = bundle_path(model_filename)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
     crate::ffi::emit_event(
         "coreml_prepare",
-        &serde_json::json!({ "filename": model_filename, "state": state }).to_string(),
+        &serde_json::json!({
+            "filename": model_filename,
+            "bundle": bundle,
+            "state": state,
+        })
+        .to_string(),
     );
 }
 
@@ -385,6 +410,17 @@ fn unpack(_zip: &Path, _dest_dir: &Path) -> Result<(), TranscribeError> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn quantisations_of_one_architecture_share_a_bundle() {
+        let q8 = bundle_path("ggml-large-v3-q8_0.bin");
+        let q5 = bundle_path("ggml-large-v3-q5_0.bin");
+        assert_eq!(q8, q5, "a preparation under one quant covers the other");
+        assert!(q8.ends_with("ggml-large-v3-encoder.mlmodelc"), "{q8:?}");
+        // The turbo is a DIFFERENT architecture and keeps its own bundle.
+        assert_ne!(q8, bundle_path("ggml-large-v3-turbo-q8_0.bin"));
+    }
+
     use super::*;
 
     #[test]

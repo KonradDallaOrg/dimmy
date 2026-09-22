@@ -600,8 +600,30 @@ impl Default for CallDetectorState {
     }
 }
 
+/// Whether a detected call should start recording by itself.
+///
+/// Auto-record is a sub-option of detection, not a peer: with detection
+/// off nothing observes the mic, so an auto-record left on would be a
+/// dead switch that springs back to life the day detection is turned on
+/// again — recording a call the user never agreed to record. The hosts
+/// gate the nudge on this, and the config setter writes it back through
+/// the same rule so the saved pair is always coherent.
+pub fn auto_record_effective(detect_enabled: bool, auto_record: bool) -> bool {
+    detect_enabled && auto_record
+}
+
 #[cfg(test)]
 mod tests {
+
+    // ── auto-record gating ───────────────────────────────────────
+
+    #[test]
+    fn auto_record_needs_detection() {
+        assert!(auto_record_effective(true, true));
+        assert!(!auto_record_effective(false, true), "detection off wins");
+        assert!(!auto_record_effective(true, false));
+        assert!(!auto_record_effective(false, false));
+    }
     use super::*;
 
     fn fresh() -> CallDetectorState {

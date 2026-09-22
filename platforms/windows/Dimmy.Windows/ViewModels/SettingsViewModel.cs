@@ -149,6 +149,7 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool _telegramEnabled;
     [ObservableProperty] private bool _telegramAutoProcess;
     [ObservableProperty] private bool _callDetectEnabled = true;
+    [ObservableProperty] private bool _callDetectAutoRecord;
     public ObservableCollection<string> CallDetectExcludedApps { get; } = new();
     [ObservableProperty] private bool _saveAudioInHistory = false;
     [ObservableProperty] private int _historyAudioKeepDays = 30;
@@ -364,6 +365,15 @@ public partial class SettingsViewModel : ObservableObject
     /// call inside the LLM provider dropdown handler — but as a
     /// partial-method it covers ALL paths that mutate `ApiUrl` (preset
     /// click, typed entry, programmatic save).
+    /// Auto-record is a sub-option of detection, not a peer: turning
+    /// detection off turns it off too, so it can never sit armed waiting
+    /// for detection to come back and record a call unasked. Rust applies
+    /// the same rule on write (`call_detector::auto_record_effective`).
+    partial void OnCallDetectEnabledChanged(bool value)
+    {
+        if (!value) CallDetectAutoRecord = false;
+    }
+
     partial void OnApiUrlChanged(string value)
     {
         HasApiKey = HasSttKeyForUrl(value);
@@ -576,6 +586,7 @@ public partial class SettingsViewModel : ObservableObject
             TelegramEnabled = r.TryGetProperty("telegram_enabled", out var tge) && tge.GetBoolean();
             TelegramAutoProcess = r.TryGetProperty("telegram_auto_process", out var tgap) && tgap.GetBoolean();
             CallDetectEnabled = !r.TryGetProperty("call_detect_enabled", out var cde) || cde.GetBoolean();
+            CallDetectAutoRecord = r.TryGetProperty("call_detect_auto_record", out var cdar) && cdar.GetBoolean();
             CallDetectExcludedApps.Clear();
             if (r.TryGetProperty("call_detect_excluded_apps", out var cdex)
                 && cdex.ValueKind == System.Text.Json.JsonValueKind.Array)
@@ -782,6 +793,7 @@ public partial class SettingsViewModel : ObservableObject
             ["telegram_enabled"] = TelegramEnabled,
             ["telegram_auto_process"] = TelegramAutoProcess,
             ["call_detect_enabled"] = CallDetectEnabled,
+            ["call_detect_auto_record"] = CallDetectAutoRecord,
             ["call_detect_excluded_apps"] = CallDetectExcludedApps.ToList(),
             ["save_audio_in_history"] = SaveAudioInHistory,
             ["history_audio_keep_days"] = HistoryAudioKeepDays,

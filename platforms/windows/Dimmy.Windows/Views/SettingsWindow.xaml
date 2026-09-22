@@ -970,6 +970,14 @@
                   <ToggleSwitch IsOn="{Binding CallDetectEnabled, Mode=TwoWay}"
                                 Style="{StaticResource CompactToggleSwitch}" />
                 </controls:SettingCard>
+                <controls:SettingCard Glyph="&#xE7C8;"
+                                      Label="Start recording automatically"
+                                      InfoTip="Skips the prompt: the meeting starts the moment a call is detected, the window opens and the recording notice is read aloud to the participants. Needs call detection on."
+                                      IsEnabled="{Binding CallDetectEnabled}"
+                                      HelpUrl="https://dimmy.app/help/use-meeting-recaps">
+                  <ToggleSwitch IsOn="{Binding CallDetectAutoRecord, Mode=TwoWay}"
+                                Style="{StaticResource CompactToggleSwitch}" />
+                </controls:SettingCard>
                 <controls:SettingCard Glyph="&#xE71F;"
                                       Label="Excluded apps"
                                       InfoTip="Choosing 'Don't ask' on a prompt adds that app here. Discord is excluded by default."

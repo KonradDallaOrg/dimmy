@@ -373,9 +373,10 @@ public sealed partial class MeetingWindow : Window
     /// meeting is now recording. Centralising start here is what fixes the
     /// call-detect path leaving the window idle: App used to start the meeting
     /// in the core directly, bypassing all this wiring.
-    public Task<bool> StartFromCallDetectAsync() => BeginStartAsync(fromCallDetect: true);
+    public Task<bool> StartFromCallDetectAsync(bool autoConsent = false) =>
+        BeginStartAsync(fromCallDetect: true, autoConsent: autoConsent);
 
-    private async Task<bool> BeginStartAsync(bool fromCallDetect)
+    private async Task<bool> BeginStartAsync(bool fromCallDetect, bool autoConsent = false)
     {
         StartBtn.IsEnabled = false;
         try
@@ -384,7 +385,16 @@ public sealed partial class MeetingWindow : Window
             // audio = other people, so we confirm consent and announce before
             // a single sample is recorded. If the user cancels, abort the start.
             var lang = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
-            if (!await ConsentFlow.ConfirmAndAnnounceAsync(this.Content?.XamlRoot, lang))
+            if (autoConsent)
+            {
+                // Auto-record cannot show the blocking dialog: the whole
+                // point is that recording starts without a click. The
+                // announcement (spoken + pasteable) still goes out and is
+                // still written to the consent audit log.
+                ConsentFlow.AnnounceOnly(lang);
+                AutoRecordBar.Visibility = Visibility.Visible;
+            }
+            else if (!await ConsentFlow.ConfirmAndAnnounceAsync(this.Content?.XamlRoot, lang))
             {
                 StartBtn.IsEnabled = true;
                 return false;
@@ -2578,6 +2588,19 @@ public sealed partial class MeetingWindow : Window
     }
 
     // ── Toast (transient notice at bottom of main panel) ─────────
+
+    /// The notice belongs to the recording it announced, so Stop takes the
+    /// same path the Stop button does. Mac mirror: autoRecordBanner.
+    private void AutoRecordStop_Click(object sender, RoutedEventArgs e)
+    {
+        AutoRecordBar.Visibility = Visibility.Collapsed;
+        Stop_Click(sender, e);
+    }
+
+    private void AutoRecordDismiss_Click(object sender, RoutedEventArgs e)
+    {
+        AutoRecordBar.Visibility = Visibility.Collapsed;
+    }
 
     private void ShowToast(string message)
     {

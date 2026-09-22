@@ -23,8 +23,8 @@ struct MacVoicePage: View {
     /// whisper's Core ML encoder for the selected model. Without it the
     /// encoder runs on the GPU the window server draws with, which is what
     /// makes a long local meeting slow the whole Mac down.
-    @State private var coreml: (available: Bool, present: Bool, prepared: Bool, preparing: Bool) =
-        (false, false, false, false)
+    @State private var coreml: (available: Bool, present: Bool, prepared: Bool, preparing: Bool, bundle: String) =
+        (false, false, false, false, "")
 
     /// Filenames of the whisper models whose Neural Engine encoder is already
     /// on disk. Drives the per-row "· Neural Engine" vs "· GPU" suffix, so the
@@ -501,8 +501,16 @@ struct MacVoicePage: View {
                             } else if coreml.present && coremlPrepareState == "failed" {
                                 Image(systemName: "exclamationmark.triangle.fill")
                                     .foregroundStyle(.orange)
-                            } else if coreml.present {
+                            } else if coreml.present && coremlIsPreparing {
                                 ProgressView().controlSize(.small)
+                            } else if coreml.present {
+                                // Present but nothing is preparing it: the row
+                                // used to show a spinner here regardless, so a
+                                // bundle that was never compiled looked like a
+                                // compile that never ended (2026-09-22).
+                                Button("Prepare") { startCoremlPrepare() }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
                             } else {
                                 Button("Download") { startCoremlDownload() }
                                     .buttonStyle(.bordered)
@@ -567,6 +575,13 @@ struct MacVoicePage: View {
         }
         .onAppear {
             localModels = DimmyCore.shared.listLocalModels() ?? []
+            refreshLocalModelStatus()
+        }
+        // A preparation that finishes has to reach this row by itself. Without
+        // this the row only re-read the core on appear or on a model change,
+        // so a compile that ended while the page was open stayed a spinner
+        // until the user went and poked something (2026-09-22).
+        .onChange(of: appState.coremlPrepareState) { _ in
             refreshLocalModelStatus()
         }
     }
@@ -743,11 +758,21 @@ struct MacVoicePage: View {
     /// Live state from `coreml_prepare`, which can move after the page read
     /// the status (the compile takes minutes).
     private var coremlPrepareState: String? {
-        appState.coremlPrepareState[appState.localModel]
+        AppState.coremlState(appState.coremlPrepareState,
+                             model: appState.localModel,
+                             bundle: coreml.bundle)
     }
 
     private var coremlIsPrepared: Bool {
         coreml.prepared || coremlPrepareState == "ready"
+    }
+
+    /// Whether a preparation is REALLY running. The core reports it
+    /// (`is_preparing`, plus the `coreml_prepare` events); the row used to
+    /// infer it from the missing marker instead and so span a spinner over a
+    /// bundle nobody was compiling.
+    private var coremlIsPreparing: Bool {
+        coreml.preparing || coremlPrepareState == "preparing" || coremlPrepareState == "deferred"
     }
 
     private var coremlDescription: String {
@@ -759,17 +784,34 @@ struct MacVoicePage: View {
         }
         switch coremlPrepareState {
         case "failed":
-            return "macOS could not prepare the encoder, so whisper keeps using the GPU. Dimmy tries again at the next launch."
+            return "macOS could not prepare the encoder, so whisper keeps using the GPU. Press Prepare to try again."
         case "deferred":
             return "Downloaded. macOS prepares it once the current meeting ends; until then whisper uses the GPU."
         default:
-            return "macOS is preparing it for the Neural Engine. This happens once and takes a few minutes; whisper uses the GPU until it is done."
+            return coremlIsPreparing
+                ? "macOS is preparing it for the Neural Engine. This happens once and takes a few minutes; whisper uses the GPU until it is done."
+                : "Downloaded but not prepared for this Mac yet, so whisper still uses the GPU. Press Prepare — it takes a few minutes, once."
         }
     }
 
     private var coremlRowVisible: Bool {
         !localBackendIsParakeet && !localBackendIsQwen && localModelReady
             && !downloadInFlight && coreml.available
+    }
+
+    /// Compile the already-downloaded bundle for this Mac. Preparation
+    /// otherwise starts at launch, on a model change or right after the
+    /// download — none of which covers a bundle left uncompiled, which is
+    /// exactly where the row could only sit and spin.
+    private func startCoremlPrepare() {
+        guard DimmyCore.shared.isInitialized else { return }
+        let target = appState.localModel
+        DispatchQueue.global(qos: .userInitiated).async {
+            _ = DimmyCore.shared.coremlPrepare(target)
+            DispatchQueue.main.async {
+                refreshLocalModelStatus()
+            }
+        }
     }
 
     private func startCoremlDownload() {
@@ -983,17 +1025,42 @@ struct MacVoicePage: View {
                     MacRow(
                         "Auto-detect meetings",
                         hint: "Polls the default microphone once a second and shows a bottom-right popup when a call lasts longer than 5 s. Per-app cooldown of 30 min after \"Not now\", permanent skip after \"Don't ask for this app\".",
-                        showsDivider: !appState.callDetectExcludedApps.isEmpty
+                        showsDivider: true
                     ) {
                         Toggle("", isOn: Binding(
                             get: { appState.callDetectEnabled },
                             set: { newValue in
                                 appState.callDetectEnabled = newValue
+                                // Auto-record is a sub-option: it goes off
+                                // with detection, here and in the saved
+                                // config (Rust does the same on write).
+                                if !newValue { appState.callDetectAutoRecord = false }
                                 persistConfig()
                             }
                         ))
                         .toggleStyle(.switch)
                         .labelsHidden()
+                    }
+
+                    MacRow(
+                        "Start recording automatically",
+                        hint: "Skips the popup: the meeting starts the moment a call is detected, the window opens and the recording notice is read aloud to the participants. Needs auto-detect on.",
+                        showsDivider: !appState.callDetectExcludedApps.isEmpty
+                    ) {
+                        Toggle("", isOn: Binding(
+                            get: {
+                                AppState.autoRecordEffective(
+                                    detectEnabled: appState.callDetectEnabled,
+                                    autoRecord: appState.callDetectAutoRecord)
+                            },
+                            set: { newValue in
+                                appState.callDetectAutoRecord = newValue
+                                persistConfig()
+                            }
+                        ))
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                        .disabled(!appState.callDetectEnabled)
                     }
 
                     // Exclusion list, apps the user picked "Don't ask
