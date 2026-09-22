@@ -8,6 +8,9 @@ struct ModelDownloadStepView: View {
     /// Sentinel for the Parakeet entry. Same value used by the Settings
     /// page + the Windows onboarding (`ParakeetTag` constant).
     private static let parakeetTag = "parakeet:fp32"
+    /// Qwen entries are tagged by file, like Settings does, so the picker can
+    /// hold three families in one selection string.
+    private static let qwenTagPrefix = "qwen:"
     private static let defaultWhisper = "ggml-base-q8_0.bin"
 
     /// Whisper catalog from the Rust core (`dimmy_list_local_models`) so
@@ -21,6 +24,9 @@ struct ModelDownloadStepView: View {
     /// local STT via Apple Neural Engine. `applyAutoPick` downgrades to
     /// Whisper Base only when the disk is too small for the 466 MB bundle.
     @State private var selection: String = parakeetTag
+    /// Qwen3-ASR variants. Onboarding offered Whisper and Parakeet only, so a
+    /// family Settings shows was invisible to anyone setting Dimmy up.
+    @State private var qwenModels: [[String: Any]] = []
 
     /// Two-card mode selector. Mirrors Windows `IsLocalSelected` /
     /// `IsCloudSelected`. Defaults to local on Mac (no key required to
@@ -70,6 +76,7 @@ struct ModelDownloadStepView: View {
         .padding(.top, 12)
         .onAppear {
             whisperModels = DimmyCore.shared.listLocalModels() ?? []
+            qwenModels = DimmyCore.shared.listQwenAsrModels() ?? []
             persistSelectionToAppState()
             refreshFromCore()
             applyAutoPick()
@@ -128,6 +135,9 @@ struct ModelDownloadStepView: View {
                     parakeetPickerEntry
                     ForEach(whisperModels.indices, id: \.self) { i in
                         whisperPickerEntry(whisperModels[i])
+                    }
+                    ForEach(qwenModels.indices, id: \.self) { i in
+                        qwenPickerEntry(qwenModels[i])
                     }
                 }
                 .labelsHidden()
@@ -376,11 +386,29 @@ struct ModelDownloadStepView: View {
     }
 
     private var isParakeet: Bool { selection == Self.parakeetTag }
+    private var isQwen: Bool { selection.hasPrefix(Self.qwenTagPrefix) }
+    /// The model file behind a Qwen selection (one entry is two files on disk).
+    private var qwenFile: String { String(selection.dropFirst(Self.qwenTagPrefix.count)) }
 
     /// Picker rows. Downloaded entries (whisper via `downloaded` from
     /// `dimmy_list_local_models`, Parakeet via `parakeetBundlePresent`)
     /// get a green ✓; not-downloaded rows stay plain. Mirror of the
     /// Settings → Voice picker so the visual contract matches.
+    @ViewBuilder
+    private func qwenPickerEntry(_ m: [String: Any]) -> some View {
+        let file = m["filename"] as? String ?? ""
+        let name = m["name"] as? String ?? file
+        let mb = m["size_mb"] as? Int ?? 0
+        let label = mb > 0 ? "Qwen3-ASR \(name) · \(mb) MB" : "Qwen3-ASR \(name)"
+        if (m["downloaded"] as? Bool) == true {
+            Label(label, systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+                .tag(Self.qwenTagPrefix + file)
+        } else {
+            Text(label).tag(Self.qwenTagPrefix + file)
+        }
+    }
+
     @ViewBuilder
     private var parakeetPickerEntry: some View {
         if appState.parakeetBundlePresent {
@@ -421,11 +449,13 @@ struct ModelDownloadStepView: View {
     }
 
     private var downloadButtonLabel: String {
-        isParakeet ? "Download Parakeet (466 MB)" : "Download model"
+        if isParakeet { return "Download Parakeet (466 MB)" }
+        return isQwen ? "Download model + projector" : "Download model"
     }
 
     private var currentProgress: Double {
-        isParakeet ? appState.parakeetDownloadProgress : appState.modelDownloadProgress
+        if isParakeet { return appState.parakeetDownloadProgress }
+        return isQwen ? appState.qwenDownloadProgress : appState.modelDownloadProgress
     }
 
     /// Mirror the local `selection` into AppState AND push to Rust so the
@@ -436,6 +466,9 @@ struct ModelDownloadStepView: View {
     private func persistSelectionToAppState() {
         if isParakeet {
             appState.localSttBackend = "parakeet"
+        } else if isQwen {
+            appState.localSttBackend = "qwen"
+            appState.qwenAsrModel = qwenFile
         } else {
             appState.localSttBackend = "whisper"
             appState.localModel = selection
@@ -447,6 +480,8 @@ struct ModelDownloadStepView: View {
         let ready: Bool
         if isParakeet {
             ready = DimmyCore.shared.parakeetBundlePresent()
+        } else if isQwen {
+            ready = DimmyCore.shared.qwenAsrBundlePresent(qwenFile)
         } else {
             ready = DimmyCore.shared.modelExists(selection)
         }
@@ -454,7 +489,11 @@ struct ModelDownloadStepView: View {
             downloadState = .downloading
             return
         }
-        if !isParakeet && !ready && appState.isDownloadingModel {
+        if isQwen && !ready && appState.isDownloadingQwen {
+            downloadState = .downloading
+            return
+        }
+        if !isParakeet && !isQwen && !ready && appState.isDownloadingModel {
             downloadState = .downloading
             return
         }
@@ -466,12 +505,29 @@ struct ModelDownloadStepView: View {
             downloadState = .downloading
             return
         }
-        if !isParakeet && appState.isDownloadingModel {
+        if isQwen && appState.isDownloadingQwen {
+            downloadState = .downloading
+            return
+        }
+        if !isParakeet && !isQwen && appState.isDownloadingModel {
             downloadState = .downloading
             return
         }
         downloadState = .downloading
-        if isParakeet {
+        if isQwen {
+            let target = qwenFile
+            appState.localSttBackend = "qwen"
+            appState.qwenAsrModel = target
+            appState.qwenDownloadProgress = 0
+            appState.isDownloadingQwen = true
+            DispatchQueue.global(qos: .userInitiated).async {
+                let success = DimmyCore.shared.downloadQwenAsr(target)
+                DispatchQueue.main.async {
+                    appState.isDownloadingQwen = false
+                    downloadState = success ? .completed : .failed
+                }
+            }
+        } else if isParakeet {
             appState.localSttBackend = "parakeet"
             appState.parakeetDownloadProgress = 0.0
             appState.isDownloadingParakeet = true
