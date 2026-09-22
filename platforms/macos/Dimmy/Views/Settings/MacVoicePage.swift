@@ -995,28 +995,30 @@ struct MacVoicePage: View {
                         .labelsHidden()
                     }
 
-                    // Live captions toggle, only meaningful when
-                    // the chunked engine is firing AND the backend
-                    // is Parakeet (Whisper.cpp is too slow per-chunk
-                    // to keep up). Hide the row otherwise so it
-                    // doesn't masquerade as a knob the user can flip.
-                    if appState.chunkStreamingEnabled
-                        && appState.localSttBackend == "parakeet" {
-                        MacRow(
-                            "Live captions",
-                            hint: "Shows a floating caption while chunk streaming is on. Turn it off to keep the speed without showing text on screen.",
-                            showsDivider: true
-                        ) {
-                            Toggle("", isOn: Binding(
-                                get: { appState.liveCaptionsEnabled },
-                                set: { newValue in
-                                    appState.liveCaptionsEnabled = newValue
-                                    persistConfig()
-                                }
-                            ))
-                            .toggleStyle(.switch)
-                            .labelsHidden()
-                        }
+                    // Live captions toggle. Always shown in Advanced, the
+                    // way Windows shows it: the caption window is driven by
+                    // `stt_chunk` events, which the core emits from the
+                    // CLOUD streaming path (Deepgram / OpenAI realtime) as
+                    // well as the local chunked one. Gating this row on
+                    // "chunk streaming AND parakeet" hid the only off switch
+                    // from everyone else, so the subtitle appeared with no
+                    // way to dismiss it (reported 2026-09-22 on whisper).
+                    // A visible switch for something the user can see beats
+                    // a hidden one for something they cannot.
+                    MacRow(
+                        "Live captions",
+                        hint: "Shows a floating caption of what you are saying while you speak. Appears whenever transcription streams in chunks, local or cloud. Turn it off to keep the speed without text on screen.",
+                        showsDivider: true
+                    ) {
+                        Toggle("", isOn: Binding(
+                            get: { appState.liveCaptionsEnabled },
+                            set: { newValue in
+                                appState.liveCaptionsEnabled = newValue
+                                persistConfig()
+                            }
+                        ))
+                        .toggleStyle(.switch)
+                        .labelsHidden()
                     }
 
                     // Call-detect nudge, 1 Hz CoreAudio poll surfaces

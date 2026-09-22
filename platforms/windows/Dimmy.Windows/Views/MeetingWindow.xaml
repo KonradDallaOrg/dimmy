@@ -510,8 +510,15 @@
                   <Border Grid.Row="0" Height="74">
                     <Canvas x:Name="DoneWaveformCanvas"
                             Background="Transparent"
+                            IsTabStop="True" UseSystemFocusVisuals="True"
+                            AutomationProperties.Name="Playback position"
+                            ToolTipService.ToolTip="Click or drag to seek. Arrow keys move 5 s, Home and End jump to the ends."
+                            KeyDown="DoneWaveform_KeyDown"
                             SizeChanged="DoneWaveformCanvas_SizeChanged"
-                            PointerPressed="DoneWaveform_PointerPressed"/>
+                            PointerPressed="DoneWaveform_PointerPressed"
+                            PointerMoved="DoneWaveform_PointerMoved"
+                            PointerReleased="DoneWaveform_PointerReleased"
+                            PointerCaptureLost="DoneWaveform_PointerReleased"/>
                   </Border>
                   <!-- Position / duration, the way a player shows it. Clicking
                        the waveform seeks, and until now nothing said WHERE it
@@ -538,8 +545,13 @@
                                       AutoPlay="False"
                                       MinHeight="64">
                     <MediaPlayerElement.TransportControls>
+                      <!-- The waveform above IS the scrubber (click or drag),
+                           and the position / duration are spelled out under it,
+                           so the transport's own seek bar was a second control
+                           for the same thing. Mac has only the waveform too. -->
                       <MediaTransportControls IsCompact="True"
-                                              IsZoomButtonVisible="False"/>
+                                              IsZoomButtonVisible="False"
+                                              IsSeekBarVisible="False"/>
                     </MediaPlayerElement.TransportControls>
                   </MediaPlayerElement>
                 </Grid>
@@ -666,6 +678,7 @@
             <ScrollViewer Grid.Row="1" x:Name="DoneBodyScroll"
                           VerticalScrollBarVisibility="Auto"
                           HorizontalScrollBarVisibility="Disabled"
+                          ViewChanged="DoneBodyScroll_ViewChanged"
                           Margin="0,14,0,0">
               <StackPanel Spacing="14" Padding="0,0,14,20">
 

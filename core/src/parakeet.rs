@@ -70,7 +70,23 @@ pub fn bundle_present() -> bool {
     })
 }
 
-pub fn download_bundle(mut progress: impl FnMut(u64, u64)) -> Result<(), TranscribeError> {
+/// Download the ONNX bundle into the config dir.
+///
+/// Every file goes through [`crate::download::download_resumable`], which is
+/// the only place that knows how to ask Hugging Face for a file's real hash: a
+/// HEAD that does NOT follow the redirect, reading `x-linked-etag` off the 302.
+///
+/// The hand-rolled loop this replaced read the headers of the FOLLOWED
+/// response instead. Since HF moved these repos to Xet storage the CDN's
+/// `ETag` is the Xet block id — 64 hex characters, so it passed `is_sha256`
+/// and was then compared against the file's actual SHA-256. Every download
+/// died on the first 139 KB file with "failed integrity check", deleted it,
+/// and the retry did the same: 163 failures across 124 users between June and
+/// September 2026 against 13 successes. Reproduced and fixed 2026-09-22.
+///
+/// The old client also carried a 60 s timeout, which in reqwest covers the
+/// body read — a 2.4 GB bundle needed a sustained 310 Mbit/s to beat it.
+pub async fn download_bundle(progress: impl Fn(u64, u64)) -> Result<(), TranscribeError> {
     let dir =
         bundle_dir().ok_or_else(|| TranscribeError::LocalModel("config dir unknown".into()))?;
     std::fs::create_dir_all(&dir)
@@ -84,147 +100,72 @@ pub fn download_bundle(mut progress: impl FnMut(u64, u64)) -> Result<(), Transcr
         FILE_DECODER_JOINT,
     ];
 
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(1800))
         .build()
         .map_err(|e| TranscribeError::LocalModel(format!("http client: {}", e)))?;
 
-    // Throttle progress callbacks: at 64 KB chunks for a 2.5 GB bundle
-    // we'd fire ~40 K events. Even 200 ns of FFI marshalling per call
-    // would stall the download for ~8 ms cumulative on the worker
-    // thread, plus the dispatcher queue on the UI side has nowhere
-    // useful to put 40 K updates per second. Emit at most every
-    // 100 ms or every 1 MB, whichever arrives first.
-    const PROGRESS_BYTES_INTERVAL: u64 = 1 << 20;
-    const PROGRESS_TIME_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
-    let mut last_emit_bytes: u64 = 0;
-    let mut last_emit_time = std::time::Instant::now();
-
+    // Total for the progress bar: bytes already on disk, plus a HEAD for the
+    // files still missing. A HEAD that fails only costs us a wrong total.
     let mut grand_total: u64 = 0;
-    let mut grand_done: u64 = 0;
     for name in files {
         let dest = dir.join(name);
         if let Ok(meta) = std::fs::metadata(&dest) {
             if meta.len() > 0 {
-                grand_done += meta.len();
-                grand_total += meta.len();
+                grand_total = grand_total.saturating_add(meta.len());
                 continue;
             }
         }
         let url = format!("{}/{}", HF_BASE, name);
-        let r = client
-            .head(&url)
-            .send()
-            .map_err(|e| TranscribeError::LocalModel(format!("HEAD {}: {}", url, e)))?;
-        let len: u64 = r
-            .headers()
-            .get(reqwest::header::CONTENT_LENGTH)
-            .and_then(|v: &reqwest::header::HeaderValue| v.to_str().ok())
-            .and_then(|s: &str| s.parse::<u64>().ok())
-            .unwrap_or(0);
-        grand_total += len;
+        if let Ok(r) = client.head(&url).send().await {
+            let len = r
+                .headers()
+                .get(reqwest::header::CONTENT_LENGTH)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(0);
+            grand_total = grand_total.saturating_add(len);
+        }
     }
-    progress(grand_done, grand_total);
 
+    // Throttle the host callback: at 64 KB chunks a 2.4 GB bundle would fire
+    // ~40 K events, and the dispatcher queue has nowhere useful to put them.
+    const PROGRESS_BYTES_INTERVAL: u64 = 1 << 20;
+    let last_emit = std::sync::atomic::AtomicU64::new(0);
+
+    let mut base: u64 = 0;
     for name in files {
         let dest = dir.join(name);
         if let Ok(meta) = std::fs::metadata(&dest) {
             if meta.len() > 0 {
+                base = base.saturating_add(meta.len());
+                progress(base, grand_total);
                 continue;
             }
         }
         let url = format!("{}/{}", HF_BASE, name);
-
-        // Resume a previous interrupted attempt: for a 2.5 GB bundle a
-        // mid-download network drop is the common case, and restarting
-        // from byte 0 on every retry turns flaky Wi-Fi into a dead end.
-        let tmp = dest.with_extension("part");
-        let resume_from = std::fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0);
-        let mut req = client.get(&url);
-        if resume_from > 0 {
-            req = req.header(reqwest::header::RANGE, format!("bytes={}-", resume_from));
-        }
-        let resp = req
-            .send()
-            .map_err(|e| TranscribeError::LocalModel(format!("GET {}: {}", url, e)))?;
-        if resume_from > 0 && resp.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
-            // The .part already holds every byte (crash between write
-            // and rename). Promote it instead of 416-looping forever.
-            std::fs::rename(&tmp, &dest)
-                .map_err(|e| TranscribeError::LocalModel(format!("rename {:?}: {}", tmp, e)))?;
-            grand_done = grand_done.saturating_add(resume_from);
-            progress(grand_done, grand_total);
-            continue;
-        }
-        let mut resp = resp
-            .error_for_status()
-            .map_err(|e| TranscribeError::LocalModel(format!("GET {}: {}", url, e)))?;
-
-        // HF LFS serves each file's SHA-256 as the (X-Linked-)ETag → use it to
-        // verify the bytes after download (catches a corrupt resumed partial).
-        let expected_sha = resp
-            .headers()
-            .get("x-linked-etag")
-            .or_else(|| resp.headers().get(reqwest::header::ETAG))
-            .and_then(|v| v.to_str().ok())
-            .map(crate::download::normalize_etag)
-            .filter(|s| crate::download::is_sha256(s));
-
-        // Only append when the server honoured the Range request; a
-        // 200 means it sent the whole file again, so start clean.
-        let resuming = resume_from > 0 && resp.status() == reqwest::StatusCode::PARTIAL_CONTENT;
-        let mut out = if resuming {
-            grand_done = grand_done.saturating_add(resume_from);
-            std::fs::OpenOptions::new()
-                .append(true)
-                .open(&tmp)
-                .map_err(|e| TranscribeError::LocalModel(format!("open {:?}: {}", tmp, e)))?
-        } else {
-            std::fs::File::create(&tmp)
-                .map_err(|e| TranscribeError::LocalModel(format!("create {:?}: {}", tmp, e)))?
-        };
-        let mut buf = [0u8; 1 << 16];
-        loop {
-            use std::io::{Read, Write};
-            let n = resp
-                .read(&mut buf)
-                .map_err(|e| TranscribeError::LocalModel(format!("read {}: {}", url, e)))?;
-            if n == 0 {
-                break;
+        crate::log(&format!("[Parakeet] downloading {}", name));
+        // No magic bytes: ONNX and the plain-text vocab share none, so the
+        // SHA-256 from x-linked-etag is the whole integrity story.
+        crate::download::download_resumable(&client, &url, &dest, &[], |done, _| {
+            let total_done = base.saturating_add(done);
+            let prev = last_emit.load(std::sync::atomic::Ordering::Relaxed);
+            if total_done.saturating_sub(prev) >= PROGRESS_BYTES_INTERVAL {
+                last_emit.store(total_done, std::sync::atomic::Ordering::Relaxed);
+                progress(total_done, grand_total);
             }
-            out.write_all(&buf[..n])
-                .map_err(|e| TranscribeError::LocalModel(format!("write {:?}: {}", tmp, e)))?;
-            grand_done = grand_done.saturating_add(n as u64);
+        })
+        .await
+        .map_err(|e| TranscribeError::LocalModel(format!("{}: {}", name, e)))?;
 
-            let bytes_since = grand_done.saturating_sub(last_emit_bytes);
-            if bytes_since >= PROGRESS_BYTES_INTERVAL
-                || last_emit_time.elapsed() >= PROGRESS_TIME_INTERVAL
-            {
-                progress(grand_done, grand_total);
-                last_emit_bytes = grand_done;
-                last_emit_time = std::time::Instant::now();
-            }
-        }
-        // Always emit a fresh value at end-of-file so the UI doesn't
-        // get stuck a few hundred KB shy of 100 % between files.
-        progress(grand_done, grand_total);
-        last_emit_bytes = grand_done;
-        last_emit_time = std::time::Instant::now();
-        // Integrity: hash the finished file against the server's SHA-256. A
-        // corrupt partial (resumed onto bad bytes) or truncated body is caught
-        // here; delete it so the retry re-downloads this file clean. ONNX/JSON
-        // have no shared magic, so rely on the hash (magic list empty).
-        if let Err(e) = crate::download::verify_file(&tmp, &[], expected_sha.as_deref()) {
-            let _ = std::fs::remove_file(&tmp);
-            return Err(TranscribeError::LocalModel(format!(
-                "{} failed integrity check ({}) — deleted, retry to re-download",
-                name, e
-            )));
-        }
-        std::fs::rename(&tmp, &dest)
-            .map_err(|e| TranscribeError::LocalModel(format!("rename {:?}: {}", tmp, e)))?;
+        base = base.saturating_add(std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0));
+        progress(base, grand_total);
     }
 
+    assert!(
+        bundle_present(),
+        "every bundle file must exist after a successful download"
+    );
     Ok(())
 }
 
@@ -253,7 +194,7 @@ pub fn active_bundle_present() -> bool {
 /// emitted as `(downloaded_bytes, total_bytes)`; fluid only emits
 /// `(0, 0)` then `(1, 1)` because the underlying Swift framework
 /// doesn't expose a byte-level callback.
-pub fn download_active_bundle(progress: impl FnMut(u64, u64)) -> Result<(), TranscribeError> {
+pub async fn download_active_bundle(progress: impl Fn(u64, u64)) -> Result<(), TranscribeError> {
     #[cfg(all(
         feature = "local-stt-parakeet-fluid",
         target_os = "macos",
@@ -263,7 +204,7 @@ pub fn download_active_bundle(progress: impl FnMut(u64, u64)) -> Result<(), Tran
         return crate::parakeet_fluid::download_bundle(progress);
     }
     #[allow(unreachable_code)]
-    download_bundle(progress)
+    download_bundle(progress).await
 }
 
 /// Top-level dispatch for Parakeet transcribe across the two backends:

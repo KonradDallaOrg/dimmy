@@ -1058,14 +1058,26 @@ jobs:
             # VS 18.8. Same loop as staging-auto-update.yml.
             $vsInstaller = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vs_installer.exe"
             if (Test-Path $vsInstaller) {
-              foreach ($vsVer in @('18.4', '18.0', '18.8')) {
+              foreach ($vsVer in @('18.8', '18.4', '18.0')) {
                 $component = "Microsoft.VisualStudio.Component.VC.$preferred.$vsVer.x86.x64"
                 Write-Host "Trying to add $component"
                 & $vsInstaller modify --installPath "$vs2026" --add $component `
                   --quiet --norestart --nocache 2>&1 | Out-String | Write-Host
-                Start-Sleep -Seconds 10
-                $tools = Get-ChildItem $mscvDir -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending
-                $pinned = $tools | Where-Object { $_.Name -like "$preferred.*" } | Select-Object -First 1
+                # vs_installer returns BEFORE the toolset is on disk, so a
+                # single 10 s sleep is a race - and we lost it about half the
+                # time. v0.7.3 and v0.7.4 ran these same probes on the same
+                # image two hours apart; the only difference was whether
+                # 14.50 had landed when the check fired. v0.7.3 fell back
+                # to 14.51 and silently shipped the toolchain I1 exists to
+                # avoid. Poll instead of guessing, and try the id that
+                # actually lands on this image first - it also saves the
+                # ~5 min the other two probes burn before failing.
+                for ($w = 0; $w -lt 9; $w++) {
+                  Start-Sleep -Seconds 10
+                  $tools = Get-ChildItem $mscvDir -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending
+                  $pinned = $tools | Where-Object { $_.Name -like "$preferred.*" } | Select-Object -First 1
+                  if ($pinned) { break }
+                }
                 if ($pinned) { Write-Host "Component $component installed $($pinned.Name)"; break }
               }
             } else {
@@ -1349,55 +1361,31 @@ jobs:
       - name: Gate — reject AVX-512 in dimmy_lib.dll
         shell: pwsh
         run: |
-          # GGML_NATIVE=OFF above is the fix; this is the proof. A DLL built
-          # with -march=native on an AVX-512 runner crashes 0xc000001d on any
-          # CPU without AVX-512 (Alder Lake, Zen 2, ...). It looks random
-          # because the runner CPU varies run to run, and every CI gate passes
-          # because they all execute on the runner's own CPU. Measured on
-          # v0.6.71-rc10: 4820 zmm instructions in the shipped DLL, 0 in a
-          # local build of the same source.
-          $dll = "D:\t\release\dimmy_lib.dll"
-          if (-not (Test-Path $dll)) { throw "dimmy_lib.dll not found at $dll" }
-          # Disassemble with the toolchain that COMPILED the DLL, not the
-          # newest one installed. The build pins -vcvars_ver=$VCVARS_VER
-          # (14.50); picking the newest gave 14.51, whose decoder produced
-          # nonsense on v0.6.72-rc5/rc6: instructions referencing `r26`, a
-          # register that exists only under APX and cannot appear in a
-          # baseline x86-64 build, with 8 of 9 hits inside a 140-byte window
-          # - the signature of a disassembler losing sync inside a data blob
-          # embedded in .text, not of vectorised code. The same source built
-          # locally and scanned with 14.50 reports 0, and the count moved
-          # 4 -> 9 between two tags whose DLL sources are identical.
-          $mscvDir = Join-Path $env:VS2026_PATH "VC\Tools\MSVC"
-          $pinned = Join-Path $mscvDir "$env:VCVARS_VER\bin\Hostx64\x64\dumpbin.exe"
-          if (Test-Path $pinned) {
-            $dumpbin = $pinned
-          } else {
-            Write-Host "::warning title=AVX gate::VCVARS_VER=$env:VCVARS_VER dumpbin not found; falling back to newest MSVC"
-            $tool = Get-ChildItem $mscvDir -Directory | Sort-Object Name -Descending | Select-Object -First 1
-            $dumpbin = Join-Path $tool.FullName "bin\Hostx64\x64\dumpbin.exe"
-          }
-          if (-not (Test-Path $dumpbin)) { throw "dumpbin.exe not found at $dumpbin" }
-          # Report WHERE, not just how many. v0.6.72-rc5 failed this gate with
-          # 4 hits while a local build of the same source and feature set had
-          # 0 — and a bare count cannot tell a real -march=native regression
-          # (rc10: 4820 hits) from a handful of runtime-dispatched or
-          # differently-decoded instructions. Print the matches and the
-          # disassembler, so the next failure is diagnosed by reading the log
-          # instead of by bisecting the build.
-          #
-          # Note the build is pinned to $env:VCVARS_VER while this picks the
-          # NEWEST MSVC on the runner: a newer dumpbin knows encodings the
-          # older one does not, so the two can disagree about the same bytes.
-          Write-Host "disassembler: $dumpbin"
-          $hits = & $dumpbin /disasm:nobytes $dll | Select-String -Pattern 'zmm[0-9]'
-          $zmm = $hits.Count
-          Write-Host "AVX-512 (zmm) instructions in dimmy_lib.dll: $zmm"
-          if ($zmm -gt 0) {
-            Write-Host "--- first 20 matches ---"
-            $hits | Select-Object -First 20 | ForEach-Object { Write-Host $_.Line.Trim() }
-            throw "dimmy_lib.dll contains $zmm AVX-512 instructions. It would crash 0xc000001d on any CPU without AVX-512. GGML_NATIVE=OFF is not taking effect. Aborting release."
-          }
+          # GGML_NATIVE=OFF in the build step is the fix; this is the proof.
+          # ANY 512-bit hit aborts. No threshold and no second-decoder
+          # corroboration: both were tried and both were refuted against the
+          # real bytes - dumpbin 14.50, 14.51 and llvm-objdump all decode the
+          # disputed sequence identically, and one small /arch:AVX512 function
+          # is only 8 instructions. See windows-ci.md I11 and the script
+          # header; do not re-derive them.
+          # The script also asserts the sweep reached the END of the code
+          # section before trusting a zero - a dumpbin that died mid-file used
+          # to read as "clean" - and stages the DLL plus the hit context, so
+          # the next dispute is settled by reading bytes instead of re-running.
+          & "$env:GITHUB_WORKSPACE\scripts\dev\avx512-gate.ps1" -Dll "D:\t\release\dimmy_lib.dll"
+          exit $LASTEXITCODE
+
+      # Without this the gate's evidence dies with the runner, which is why
+      # the v0.7.3 hit was unanswerable: the DLL that produced it no longer
+      # existed anywhere by the time anyone asked.
+      - name: Upload AVX-512 gate evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: avx512-gate-evidence
+          path: ${{ runner.temp }}/avx512-evidence
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Gate — verify dimmy_lib.dll linker version
         shell: pwsh

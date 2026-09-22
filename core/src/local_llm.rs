@@ -937,11 +937,13 @@ mod llm_cache {
                 .with_flash_attn_type(llama_cpp_4::context::params::LlamaFlashAttnType::Enabled)
                 .with_cache_type_k(llama_cpp_4::quantize::GgmlType::Q8_0)
                 .with_cache_type_v(llama_cpp_4::quantize::GgmlType::Q8_0)
+                .with_no_perf(false)
         };
         let ctx_params_for_retry = || {
             LlamaContextParams::default()
                 .with_n_ctx(Some(ctx_size))
                 .with_n_batch(PROMPT_BATCH.min(ctx_size.get()))
+                .with_no_perf(false)
         };
 
         // Creating the context allocates the compute buffers, and on a single-GPU
@@ -1139,16 +1141,29 @@ mod llm_cache {
                 continue;
             }
 
+            let first_visible = output.is_empty();
+            let line_from = output.len();
+            output.push_str(&piece);
+
+            // A small model that finishes its answer can keep going by copying
+            // the prompt back. Everything from that heading on is cut by
+            // strip_leaked_prompt anyway, so decoding it was pure waste:
+            // measured 2026-09-15, Gemma 4 E2B on a 44-minute meeting ran to
+            // the 4096-token budget, ~2600 of them echo — over a minute of GPU.
+            if let Some(at) = super::prompt_echo_start(&output, line_from) {
+                output.truncate(at);
+                break;
+            }
+
             if stream {
                 // "start" on the first VISIBLE token, not before: a model that
                 // opens with control tokens would otherwise clear the pane and
                 // then sit empty. Same lazy-start rule as the cloud readers.
-                if output.is_empty() {
+                if first_visible {
                     crate::llm::emit_recap_stream_event("start", "");
                 }
                 crate::llm::emit_recap_stream_event("delta", &piece);
             }
-            output.push_str(&piece);
             n_generated += 1;
 
             // Prepare next decode
@@ -1167,6 +1182,21 @@ mod llm_cache {
         if stream {
             crate::llm::emit_recap_stream_event("end", "");
         }
+
+        // Prefill and decode cost different things and are fixed by different
+        // settings, and a recap's total time alone cannot say which one it was:
+        // the 306 s recap in a user's log (2026-09-14) was unreadable for
+        // exactly that reason.
+        let perf = ctx.timings();
+        crate::log(&format!(
+            "[LocalLLM] timings: prefill {} tok in {:.0} ms ({:.0} tok/s), decode {} tok in {:.0} ms ({:.1} tok/s)",
+            perf.n_p_eval(),
+            perf.t_p_eval_ms(),
+            f64::from(perf.n_p_eval()) * 1000.0 / perf.t_p_eval_ms().max(1.0),
+            perf.n_eval(),
+            perf.t_eval_ms(),
+            f64::from(perf.n_eval()) * 1000.0 / perf.t_eval_ms().max(1.0),
+        ));
 
         crate::log(&format!(
             "[LocalLLM] Raw output ({} tokens): {:?}",
@@ -1312,26 +1342,70 @@ pub fn process_text_local(
 /// than leaving scaffolding in. Everything from the marker to the end
 /// goes, because the echo runs to the end of the generation.
 pub fn strip_leaked_prompt(text: &str) -> String {
-    // Markers, in the order they appear in the prompt. Matched only at
-    // the start of a line so a mention inside prose cannot trigger a cut.
-    const MARKERS: [&str; 3] = ["## Hard rules", "═══", "## Transcript"];
-    let mut cut = text.len();
-    for (idx, line) in text
-        .char_indices()
-        .filter(|(i, _)| *i == 0 || text[..*i].ends_with('\n'))
-    {
-        let _ = line;
-        let rest = &text[idx..];
-        if MARKERS.iter().any(|m| rest.starts_with(m)) {
-            cut = cut.min(idx);
-        }
-    }
+    let cut = prompt_echo_start(text, 0).unwrap_or(text.len());
     text[..cut].trim_end().to_string()
+}
+
+/// Headings of our own prompt, in the order they appear in it. Matched only
+/// at the start of a line so a mention inside prose cannot trigger a cut.
+const LEAKED_PROMPT_MARKERS: [&str; 3] = ["## Hard rules", "═══", "## Transcript"];
+
+/// Byte offset of the first line, from the one containing `from` onwards,
+/// that starts with one of our prompt's headings — where an echo begins.
+///
+/// Shared by the strip above and the decode loop, which stops generating at
+/// the same place the strip would cut: what is never generated is exactly
+/// what used to be thrown away, so the text a user gets cannot change.
+pub fn prompt_echo_start(text: &str, from: usize) -> Option<usize> {
+    assert!(from <= text.len(), "prompt_echo_start: from past the end");
+    let mut idx = text[..from].rfind('\n').map_or(0, |i| i + 1);
+    loop {
+        if LEAKED_PROMPT_MARKERS
+            .iter()
+            .any(|m| text[idx..].starts_with(m))
+        {
+            return Some(idx);
+        }
+        idx += text[idx..].find('\n')? + 1;
+    }
 }
 
 #[cfg(test)]
 mod leaked_prompt {
-    use super::strip_leaked_prompt;
+    use super::{prompt_echo_start, strip_leaked_prompt};
+
+    #[test]
+    fn finds_the_echo_where_the_strip_would_cut() {
+        // Decoding stops where the strip cuts, so the text a user gets cannot
+        // change: measured 2026-09-15, Gemma 4 E2B wrote ~1500 tokens of recap
+        // and then 2600 more copying the prompt back, all of it thrown away.
+        let text = "# Titolo\nTesto.\n## Hard rules\n- rule\n";
+        let at = prompt_echo_start(text, 0).expect("echo found");
+        assert_eq!(&text[..at], "# Titolo\nTesto.\n");
+        assert_eq!(text[..at].trim_end(), strip_leaked_prompt(text));
+    }
+
+    #[test]
+    fn a_marker_inside_prose_is_not_an_echo() {
+        assert_eq!(
+            prompt_echo_start("We read ## Hard rules in the doc.\n", 0),
+            None
+        );
+    }
+
+    #[test]
+    fn a_half_written_marker_is_not_yet_an_echo() {
+        // Tokens arrive a few characters at a time: "## Hard" is not a match
+        // until "## Hard rules" has been written.
+        assert_eq!(prompt_echo_start("Testo.\n## Hard", 0), None);
+        assert_eq!(prompt_echo_start("Testo.\n## Hard rules", 0), Some(7));
+    }
+
+    #[test]
+    fn scanning_from_a_later_line_still_finds_it() {
+        let text = "a\nb\nc\n═══\n";
+        assert_eq!(prompt_echo_start(text, 4), Some(6));
+    }
 
     #[test]
     fn cuts_the_hard_rules_block_a_real_recap_ended_with() {

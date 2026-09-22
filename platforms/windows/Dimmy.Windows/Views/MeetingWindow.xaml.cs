@@ -1221,18 +1221,11 @@ public sealed partial class MeetingWindow : Window
     // / System). Without headphones the mix carries the AEC/NS/AGC-processed
     // mic on top of the clean loopback, so the system-only track sounds
     // cleaner for system-audio content — let the user pick which to hear.
-    /// Resolve a meeting audio track to its on-disk file: prefer the
-    /// compressed `.ogg` (current format), fall back to legacy `.wav`
-    /// (older recordings / WAV-fallback when the Vorbis encoder was
-    /// unavailable). Null if neither exists.
+    /// Resolve a meeting audio track to its on-disk file: recorded formats
+    /// first, then the containers a loaded or Telegram file arrives in. See
+    /// Helpers/MeetingAudio.
     private static string? ResolveAudioTrack(string dir, string baseName)
-    {
-        var ogg = Path.Combine(dir, baseName + ".ogg");
-        if (File.Exists(ogg)) return ogg;
-        var wav = Path.Combine(dir, baseName + ".wav");
-        if (File.Exists(wav)) return wav;
-        return null;
-    }
+        => Helpers.MeetingAudio.Resolve(dir, baseName);
 
     private async Task LoadDoneAudioAsync(string dir)
     {
@@ -1379,6 +1372,11 @@ public sealed partial class MeetingWindow : Window
     {
         try
         {
+            if (_suppressTranscriptScroll)
+            {
+                _suppressTranscriptScroll = false;
+                return;
+            }
             var pos = session.Position;
             DispatcherQueue.TryEnqueue(() => ScrollTranscriptTo(pos));
         }
@@ -1599,26 +1597,84 @@ public sealed partial class MeetingWindow : Window
             : $"{(int)t.TotalMinutes:00}:{t.Seconds:00}";
     }
 
+    // The waveform is the only scrubber in this view (the transport's own seek
+    // bar is hidden), so it has to scrub the way one does: press, drag, release.
+    // Click-only was the whole interaction until 2026-09-17 — the knob looked
+    // draggable and was not.
+    private bool _waveScrubbing;
+
     private void DoneWaveform_PointerPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        _suppressTranscriptScroll = false;
+        if (!SeekWaveformToPointer(e)) return;
+        DoneWaveformCanvas.Focus(FocusState.Pointer);
+        _waveScrubbing = DoneWaveformCanvas.CapturePointer(e.Pointer);
+    }
+
+    /// <summary>Keyboard seek. The waveform replaced the transport's seek bar
+    /// as the only scrubber in this view, and that bar was focusable and
+    /// arrow-seekable — dropping it without this would have taken playback
+    /// position away from anyone not driving a mouse.</summary>
+    private void DoneWaveform_KeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
+    {
+        var session = DoneAudioPlayer?.MediaPlayer?.PlaybackSession;
+        if (session == null) return;
+        var total = session.NaturalDuration;
+        if (total.TotalSeconds <= 0) return;
+
+        const double StepSecs = 5;
+        double? target = e.Key switch
+        {
+            global::Windows.System.VirtualKey.Left => session.Position.TotalSeconds - StepSecs,
+            global::Windows.System.VirtualKey.Right => session.Position.TotalSeconds + StepSecs,
+            global::Windows.System.VirtualKey.Home => 0,
+            global::Windows.System.VirtualKey.End => total.TotalSeconds,
+            _ => null,
+        };
+        if (target == null) return;
+
+        var secs = Math.Max(0, Math.Min(total.TotalSeconds, target.Value));
+        _suppressTranscriptScroll = false;
+        session.Position = TimeSpan.FromSeconds(secs);
+        UpdateDonePlayhead(secs / total.TotalSeconds);
+        e.Handled = true;
+    }
+
+    private void DoneWaveform_PointerMoved(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        if (!_waveScrubbing) return;
+        SeekWaveformToPointer(e);
+    }
+
+    private void DoneWaveform_PointerReleased(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        if (!_waveScrubbing) return;
+        _waveScrubbing = false;
+        try { DoneWaveformCanvas.ReleasePointerCapture(e.Pointer); } catch { }
+    }
+
+    /// <summary>Move the playhead to where the pointer is over the waveform.
+    /// False when there is nothing to seek (no audio loaded, zero width).</summary>
+    private bool SeekWaveformToPointer(Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
     {
         try
         {
             var pt = e.GetCurrentPoint(DoneWaveformCanvas).Position;
             double w = DoneWaveformCanvas.ActualWidth;
-            if (w <= 0) return;
+            if (w <= 0) return false;
             double frac = Math.Max(0, Math.Min(1, pt.X / w));
             var session = DoneAudioPlayer?.MediaPlayer?.PlaybackSession;
-            if (session == null) return;
+            if (session == null) return false;
             var total = session.NaturalDuration;
-            if (total.TotalSeconds <= 0) return;
-            var target = TimeSpan.FromSeconds(total.TotalSeconds * frac);
-            session.Position = target;
+            if (total.TotalSeconds <= 0) return false;
+            session.Position = TimeSpan.FromSeconds(total.TotalSeconds * frac);
             UpdateDonePlayhead(frac);
             // The transcript follows via SeekCompleted, which this Position
             // assignment raises — same path as the transport bar, so there is
             // one place where a seek scrolls the transcript and not two.
+            return true;
         }
-        catch { }
+        catch { return false; }
     }
 
     /// <summary>Bring the speaker turn covering <paramref name="position"/> to
@@ -1653,11 +1709,83 @@ public sealed partial class MeetingWindow : Window
             if (DoneBodyScroll.Content is not UIElement content) return;
             var offset = RawTranscriptText.TransformToVisual(content)
                 .TransformPoint(new global::Windows.Foundation.Point(0, rect.Top));
-            DoneBodyScroll.ChangeView(null, Math.Max(0, offset.Y - 12), null);
+            _suppressScrollSeek = true;
+            _lastProgrammaticScroll = DateTime.UtcNow;
+            DoneBodyScroll.ChangeView(null, Math.Max(0, offset.Y - AnchorScrollPad), null);
         }
         catch (Exception ex)
         {
             App.Log($"ScrollTranscriptTo: {ex.GetType().Name}", "Meeting");
+        }
+    }
+
+    // The two directions drive each other — a seek scrolls the transcript, a
+    // scroll seeks the audio — so each one has to say "this move was mine" or
+    // they ping-pong. _suppressScrollSeek covers our own ChangeView,
+    // _suppressTranscriptScroll covers our own Position assignment. The
+    // timestamp is the escape hatch: a ChangeView that lands on the offset the
+    // scroller is already at raises no ViewChanged, which would otherwise leave
+    // the flag set and kill the next real scroll.
+    private bool _suppressScrollSeek;
+    private bool _suppressTranscriptScroll;
+    private DateTime _lastProgrammaticScroll = DateTime.MinValue;
+    private const double AnchorScrollPad = 12;
+
+    private void DoneBodyScroll_ViewChanged(object? sender, Microsoft.UI.Xaml.Controls.ScrollViewerViewChangedEventArgs e)
+    {
+        if (e.IsIntermediate) return;
+        if (_suppressScrollSeek)
+        {
+            _suppressScrollSeek = false;
+            if ((DateTime.UtcNow - _lastProgrammaticScroll).TotalSeconds < 1.0) return;
+        }
+        SeekToScrolledTranscript();
+    }
+
+    /// <summary>The reader scrolled the transcript: move the playhead to the
+    /// turn now at the top of the pane, so the waveform keeps saying where in
+    /// the meeting you are. Only from the Transcript tab, and only when the
+    /// transcript carries per-turn timestamps — scrolling a recap maps to no
+    /// audio position at all.</summary>
+    private void SeekToScrolledTranscript()
+    {
+        try
+        {
+            if (_doneTurnAnchors.Count == 0) return;
+            if (TranscriptTabPanel == null || DoneBodyScroll == null) return;
+            if (TranscriptTabPanel.Visibility != Visibility.Visible) return;
+            var session = DoneAudioPlayer?.MediaPlayer?.PlaybackSession;
+            if (session == null) return;
+            var total = session.NaturalDuration;
+            if (total.TotalSeconds <= 0) return;
+            if (DoneBodyScroll.Content is not UIElement content) return;
+
+            double top = DoneBodyScroll.VerticalOffset + AnchorScrollPad + 1;
+            double OffsetOf(int i)
+            {
+                try
+                {
+                    var rect = _doneTurnAnchors[i].Block.ContentStart.GetCharacterRect(
+                        Microsoft.UI.Xaml.Documents.LogicalDirection.Forward);
+                    return RawTranscriptText.TransformToVisual(content)
+                        .TransformPoint(new global::Windows.Foundation.Point(0, rect.Top)).Y;
+                }
+                catch { return double.NaN; }
+            }
+
+            int idx = Helpers.TranscriptSeek.IndexAtOffset(_doneTurnAnchors.Count, OffsetOf, top);
+            if (idx < 0) return;
+            var secs = Math.Max(0, Math.Min(_doneTurnAnchors[idx].Seconds, total.TotalSeconds));
+            // A sub-second move is the scroller settling, not a new intent.
+            if (Math.Abs(secs - session.Position.TotalSeconds) < 0.5) return;
+
+            _suppressTranscriptScroll = true;
+            session.Position = TimeSpan.FromSeconds(secs);
+            UpdateDonePlayhead(secs / total.TotalSeconds);
+        }
+        catch (Exception ex)
+        {
+            App.Log($"SeekToScrolledTranscript: {ex.GetType().Name}", "Meeting");
         }
     }
 
@@ -1735,6 +1863,11 @@ public sealed partial class MeetingWindow : Window
 
     private async Task GeneratePostProcessAsync(string dir, string transcript, string meetingType = "")
     {
+        // Windows runs recaps through TWO paths (this one and the shared
+        // service); both count, or the pill would stay silent for whichever
+        // one the user happened to trigger.
+        var vm = (Microsoft.UI.Xaml.Application.Current as App)?.AppViewModel;
+        if (vm != null) vm.RecapsRunning++;
         try
         {
             var modelOverride = PickRecapModel();
@@ -1794,6 +1927,10 @@ public sealed partial class MeetingWindow : Window
         {
             App.Log($"post-process exc: {ex}", "Meeting");
             ShowDoneFallback(transcript, $"Post-process failed: {ex.Message}");
+        }
+        finally
+        {
+            if (vm != null) vm.RecapsRunning--;
         }
     }
 

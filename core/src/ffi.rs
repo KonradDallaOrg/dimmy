@@ -7208,10 +7208,15 @@ pub extern "C" fn dimmy_parakeet_bundle_present() -> c_int {
 /// on -1 also emits an `error` event with a short message.
 #[no_mangle]
 pub extern "C" fn dimmy_parakeet_download_bundle() -> c_int {
-    let result = crate::parakeet::download_active_bundle(|downloaded, total| {
-        let payload = format!(r#"{{"downloaded":{},"total":{}}}"#, downloaded, total);
-        emit_event("parakeet_bundle_download_progress", &payload);
-    });
+    let Ok(rt) = tokio::runtime::Runtime::new() else {
+        return -1;
+    };
+    let result = rt.block_on(crate::parakeet::download_active_bundle(
+        |downloaded, total| {
+            let payload = format!(r#"{{"downloaded":{},"total":{}}}"#, downloaded, total);
+            emit_event("parakeet_bundle_download_progress", &payload);
+        },
+    ));
     crate::telemetry::track(crate::telemetry::Event::ModelDownloadCompleted {
         kind: "parakeet",
         success: result.is_ok(),
@@ -7220,6 +7225,10 @@ pub extern "C" fn dimmy_parakeet_download_bundle() -> c_int {
         Ok(()) => 0,
         Err(e) => {
             let msg: String = format!("{}", e).chars().take(200).collect();
+            // Also to the log: this used to reach the host ONLY as an event,
+            // so every failed bundle download left dimmy.log silent and the
+            // reason had to be pulled out of the running DLL by hand.
+            log(&format!("[Parakeet download] {}", msg));
             emit_event("error", &message_error_payload(&msg));
             -1
         }
