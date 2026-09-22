@@ -167,6 +167,33 @@ enum SelfTests {
         assert(!single.isValid, "Single modifier must be invalid")
         assert(original.isValid, "Two modifiers must be valid")
         assert(ModifierShortcut.fnOnly.isValid, "Fn alone must be valid")
+
+        // Modifier + key, the shape the dictation chord gained in 0.7.6.
+        // kVK_ANSI_D = 0x02.
+        let modKey = ModifierShortcut(
+            fn: false, control: true, option: false, command: false, shift: true,
+            keyCode: 0x02, keyChar: "D"
+        )
+        assert(modKey.isValid, "One modifier plus a key must be valid")
+        assert(!modKey.isModifierOnly, "A chord with a key is not modifier-only")
+        assert(modKey.displayString == "⌃⇧D", "Mod+key display string")
+        assert(modKey.rustGrammar == "ctrl+shift+d", "Mod+key rust grammar")
+        assert(modKey.asHotkeyCombo?.keyCode == 0x02, "Mod+key maps onto a HotkeyCombo")
+        let modKeyDecoded = ModifierShortcut(encoded: modKey.encoded)
+        assert(modKeyDecoded.keyCode == modKey.keyCode, "Key code must survive persistence")
+        assert(modKeyDecoded.isValid, "Decoded mod+key chord must stay valid")
+        // Old builds wrote the bare modifier bitfield; it must still read
+        // back as a modifier-only chord rather than an accidental key.
+        assert(ModifierShortcut(encoded: 3).isModifierOnly, "Legacy encoding stays modifier-only")
+        // The modifiers alone must never fire a chord that wants a key.
+        assert(
+            !modKey.matches(flags: [.control, .shift]),
+            "Modifiers alone must not match a chord that needs a key"
+        )
+        assert(
+            ModifierShortcut.fnOnly.asHotkeyCombo == nil,
+            "Fn has no HotkeyCombo representation and stays on the flags path"
+        )
     }
 
     // MARK: - Border style

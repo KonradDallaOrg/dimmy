@@ -473,13 +473,26 @@ enum SttProvider: String, CaseIterable, Identifiable {
     }
 }
 
-/// Represents a modifier-key-only shortcut (e.g., ⌃⌥ or Fn)
+/// The dictation shortcut: modifiers, optionally plus one key.
+///
+/// It started modifier-only (⌃⌥ or Fn) while the dictionary and
+/// Command-Mode hotkeys grew a key of their own, so the app's primary
+/// shortcut was the least capable of the three. `keyCode` closes that
+/// gap: `nil` keeps the historical modifier-only behaviour — including
+/// Fn, which `HotkeyCombo` cannot express — and a key routes the chord
+/// through the same `CommandComboState` machine the other two use.
 struct ModifierShortcut: Equatable {
     var fn: Bool
     var control: Bool
     var option: Bool
     var command: Bool
     var shift: Bool
+    /// macOS virtual key code for the non-modifier key, when present.
+    /// `nil` = modifier-only chord, fired on `.flagsChanged` alone.
+    var keyCode: UInt16?
+    /// Display glyph for `keyCode` ("D", "F1", "SPACE"). Empty when
+    /// `keyCode` is nil.
+    var keyChar: String
 
     var displayString: String {
         displayParts.joined(separator: "")
@@ -492,14 +505,40 @@ struct ModifierShortcut: Equatable {
         if option { parts.append("⌥") }
         if shift { parts.append("⇧") }
         if command { parts.append("⌘") }
+        if !keyChar.isEmpty { parts.append(keyChar) }
         return parts
+    }
+
+    /// True when no non-modifier key is bound. Modifier-only chords are
+    /// driven entirely by `.flagsChanged`; chords with a key need
+    /// `.keyDown` / `.keyUp` and go through `CommandComboState`.
+    var isModifierOnly: Bool { keyCode == nil }
+
+    /// The equivalent `HotkeyCombo` for the shared state machine, or nil
+    /// when this chord cannot be represented as one — modifier-only
+    /// (handled by the legacy flags path) or Fn-bearing (`HotkeyCombo`
+    /// has no Fn).
+    var asHotkeyCombo: HotkeyCombo? {
+        guard let keyCode, !fn else { return nil }
+        return HotkeyCombo(
+            control: control,
+            option: option,
+            command: command,
+            shift: shift,
+            keyCode: keyCode,
+            keyChar: keyChar
+        )
     }
 
     var isFnOnly: Bool {
         fn && !control && !option && !command && !shift
     }
 
+    /// Modifier-set equality. A chord that also needs a key NEVER matches
+    /// here: the modifiers alone must not start a recording while the
+    /// user is still on their way to pressing the key.
     func matches(flags: NSEvent.ModifierFlags) -> Bool {
+        guard keyCode == nil else { return false }
         let f = flags.intersection(.deviceIndependentFlagsMask)
         return f.contains(.function) == fn
             && f.contains(.control) == control
@@ -508,10 +547,13 @@ struct ModifierShortcut: Equatable {
             && f.contains(.shift) == shift
     }
 
-    /// Fn alone is valid; otherwise need 2+ modifiers
+    /// Fn alone is valid; a key needs at least one modifier to carry it;
+    /// otherwise 2+ modifiers. The one-modifier-plus-key form is what the
+    /// dictionary and Command-Mode hotkeys already accept.
     var isValid: Bool {
-        if fn && !control && !option && !command && !shift { return true }
         let count = [control, option, command, shift].filter { $0 }.count
+        if keyCode != nil { return count >= 1 }
+        if fn && count == 0 { return true }
         return count >= 2
     }
 
@@ -527,6 +569,9 @@ struct ModifierShortcut: Equatable {
         if option { parts.append("opt") }
         if command { parts.append("cmd") }
         if shift { parts.append("shift") }
+        if let keyCode, let name = HotkeyCombo.macKeyCodeRustName(keyCode) {
+            parts.append(name)
+        }
         // Need ≥2 tokens for the Rust parser to accept the input; a single
         // mod alone is not a valid grammar form.
         guard parts.count >= 2 else { return "" }
@@ -537,7 +582,13 @@ struct ModifierShortcut: Equatable {
     static let controlOption = ModifierShortcut(fn: false, control: true, option: true, command: false, shift: false)
     static let `default` = fnOnly
 
-    // Persistence
+    // Persistence. The low 5 bits are the modifiers, exactly as they were
+    // before the key existed; the key rides in bits 8+ with a presence
+    // flag at bit 7. Every value written by an older build therefore
+    // decodes to "no key", so an upgrade keeps the user's shortcut.
+    private static let hasKeyBit = 1 << 7
+    private static let keyShift = 8
+
     var encoded: Int {
         var val = 0
         if control { val |= 1 }
@@ -545,15 +596,29 @@ struct ModifierShortcut: Equatable {
         if command { val |= 4 }
         if shift { val |= 8 }
         if fn { val |= 16 }
+        if let keyCode {
+            val |= Self.hasKeyBit
+            val |= Int(keyCode) << Self.keyShift
+        }
         return val
     }
 
-    init(fn: Bool = false, control: Bool, option: Bool, command: Bool, shift: Bool) {
+    init(
+        fn: Bool = false,
+        control: Bool,
+        option: Bool,
+        command: Bool,
+        shift: Bool,
+        keyCode: UInt16? = nil,
+        keyChar: String = ""
+    ) {
         self.fn = fn
         self.control = control
         self.option = option
         self.command = command
         self.shift = shift
+        self.keyCode = keyCode
+        self.keyChar = keyChar
     }
 
     init(encoded: Int) {
@@ -562,6 +627,16 @@ struct ModifierShortcut: Equatable {
         self.command = encoded & 4 != 0
         self.shift = encoded & 8 != 0
         self.fn = encoded & 16 != 0
+        if encoded & Self.hasKeyBit != 0 {
+            let code = UInt16(truncatingIfNeeded: encoded >> Self.keyShift)
+            self.keyCode = code
+            // Recovered from the Rust grammar name so no second keyCode →
+            // glyph table has to be kept in sync with the recorder's.
+            self.keyChar = HotkeyCombo.macKeyCodeRustName(code)?.uppercased() ?? ""
+        } else {
+            self.keyCode = nil
+            self.keyChar = ""
+        }
     }
 }
 

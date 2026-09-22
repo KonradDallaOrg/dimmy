@@ -5,6 +5,8 @@ struct ShortcutStepView: View {
     @State private var isRecording = false
     @State private var localMonitor: Any?
     @State private var globalMonitor: Any?
+    @State private var keyMonitor: Any?
+    @State private var pendingWork: DispatchWorkItem?
 
     private var activeShortcut: ModifierShortcut {
         appState.shortcut
@@ -89,7 +91,7 @@ struct ShortcutStepView: View {
     private var currentShortcutDisplay: some View {
         HStack(spacing: 8) {
             if isRecording {
-                Text("Press your shortcut...")
+                Text("Press two modifiers, or modifiers plus a key...")
                     .font(.system(size: 15, weight: .medium))
                     .foregroundColor(.orange)
             } else {
@@ -216,6 +218,12 @@ struct ShortcutStepView: View {
                 handleFlags(event.modifierFlags)
             }
         }
+        // Same two-shapes capture as the Settings recorder: the keyDown
+        // decides between ⌃⇧ and ⌃⇧D.
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            handleKeyDown(event)
+            return nil
+        }
     }
 
     private func handleFlags(_ modifierFlags: NSEvent.ModifierFlags) {
@@ -227,17 +235,57 @@ struct ShortcutStepView: View {
             command: flags.contains(.command),
             shift: flags.contains(.shift)
         )
-        if candidate.isValid {
+        pendingWork?.cancel()
+        guard candidate.isValid else { return }
+        // Deferred so a key pressed right after the modifiers still wins.
+        let work = DispatchWorkItem {
             withAnimation(.easeInOut(duration: 0.2)) {
                 appState.shortcut = candidate
             }
             stopRecording()
         }
+        pendingWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
+    }
+
+    private func handleKeyDown(_ event: NSEvent) {
+        pendingWork?.cancel()
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let modCount = [
+            flags.contains(.control), flags.contains(.option),
+            flags.contains(.command), flags.contains(.shift),
+        ].filter { $0 }.count
+        guard modCount >= 1, let rustName = HotkeyCombo.macKeyCodeRustName(event.keyCode) else {
+            return
+        }
+        let display: String
+        if let chars = event.charactersIgnoringModifiers, !chars.isEmpty,
+           chars.first?.isLetter == true || chars.first?.isNumber == true {
+            display = chars.uppercased()
+        } else {
+            display = rustName.uppercased()
+        }
+        let candidate = ModifierShortcut(
+            fn: flags.contains(.function),
+            control: flags.contains(.control),
+            option: flags.contains(.option),
+            command: flags.contains(.command),
+            shift: flags.contains(.shift),
+            keyCode: event.keyCode,
+            keyChar: display
+        )
+        withAnimation(.easeInOut(duration: 0.2)) {
+            appState.shortcut = candidate
+        }
+        stopRecording()
     }
 
     private func stopRecording() {
         isRecording = false
+        pendingWork?.cancel()
+        pendingWork = nil
         if let m = localMonitor { NSEvent.removeMonitor(m); localMonitor = nil }
         if let m = globalMonitor { NSEvent.removeMonitor(m); globalMonitor = nil }
+        if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil }
     }
 }

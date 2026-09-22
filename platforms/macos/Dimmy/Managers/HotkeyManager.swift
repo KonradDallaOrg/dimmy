@@ -79,6 +79,12 @@ final class HotkeyManager {
     // we act on the pressed edge and ignore the release.
     private let meetingComboState = CommandComboState()
 
+    // Dictation, when the user bound a chord that carries a key (⌃⇧D).
+    // Modifier-only chords — including Fn, which HotkeyCombo cannot
+    // express — stay on `handleFlags` below, untouched. Nil combo ⇒ the
+    // machine ignores every event, so binding one costs nothing.
+    private let dictComboState = CommandComboState()
+
     private init() {
         hkLog("[HotkeyManager] singleton init")
     }
@@ -138,6 +144,18 @@ final class HotkeyManager {
                 hkLog("[MtgHotkey] state machine rebound to \(newValue?.displayString ?? "<nil>")")
             }
             .store(in: &cancellables)
+
+        // And for dictation, but only when the chord carries a key —
+        // `asHotkeyCombo` returns nil for the modifier-only and Fn forms,
+        // which keeps them on the original flags path.
+        dictComboState.setCombo(appState.shortcut.asHotkeyCombo)
+        appState.$shortcut
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] newValue in
+                self?.dictComboState.setCombo(newValue.asHotkeyCombo)
+                hkLog("[HotkeyManager] dictation state machine rebound to \(newValue.displayString) (key=\(newValue.isModifierOnly ? "no" : "yes"))")
+            }
+            .store(in: &cancellables)
     }
 
     private var cancellables = Set<AnyCancellable>()
@@ -153,6 +171,7 @@ final class HotkeyManager {
         wakeObserver = nil
         commandComboState.reset()
         meetingComboState.reset()
+        dictComboState.reset()
         cancellables.removeAll()
         appState?.hotkeyStatus = .uninstalled
     }
@@ -344,10 +363,13 @@ final class HotkeyManager {
     @discardableResult
     private func handleFlagsAll(_ rawFlags: NSEvent.ModifierFlags) -> Bool {
         let dictConsume = handleFlags(rawFlags)
+        // Dropping a modifier mid-chord releases a mod+key dictation
+        // chord too — same bail-out the command hotkey relies on.
+        let dictKeyConsume = dispatchDictationEvent(dictComboState.processFlags(rawFlags))
         let cmdEvent = commandComboState.processFlags(rawFlags)
         let cmdConsume = dispatchCommandEvent(cmdEvent)
         let mtgConsume = dispatchMeetingEvent(meetingComboState.processFlags(rawFlags))
-        return dictConsume || cmdConsume || mtgConsume
+        return dictConsume || dictKeyConsume || cmdConsume || mtgConsume
     }
 
     /// keyDown handler — feeds the command-combo state machine. Only the
@@ -360,7 +382,9 @@ final class HotkeyManager {
         let event = commandComboState.processKeyDown(keyCode: keyCode, flags: flags)
         let cmdConsume = dispatchCommandEvent(event)
         let mtgConsume = dispatchMeetingEvent(meetingComboState.processKeyDown(keyCode: keyCode, flags: flags))
-        return cmdConsume || mtgConsume
+        let dictConsume = dispatchDictationEvent(
+            dictComboState.processKeyDown(keyCode: keyCode, flags: flags))
+        return cmdConsume || mtgConsume || dictConsume
     }
 
     /// keyUp handler — also for the command-combo state machine. Fires
@@ -373,7 +397,26 @@ final class HotkeyManager {
         let event = commandComboState.processKeyUp(keyCode: keyCode)
         let cmdConsume = dispatchCommandEvent(event)
         let mtgConsume = dispatchMeetingEvent(meetingComboState.processKeyUp(keyCode: keyCode))
-        return cmdConsume || mtgConsume
+        let dictConsume = dispatchDictationEvent(dictComboState.processKeyUp(keyCode: keyCode))
+        return cmdConsume || mtgConsume || dictConsume
+    }
+
+    /// Map a dictation mod+key chord event onto the same press / release
+    /// handlers the modifier-only path uses, so both shapes of shortcut
+    /// honour Push-to-talk vs Toggle identically.
+    @discardableResult
+    private func dispatchDictationEvent(_ event: CommandComboState.Event) -> Bool {
+        switch event {
+        case .none:
+            return false
+        case .pressed:
+            lastPressTime = Date()
+            handlePress()
+            return true
+        case .released:
+            handleRelease()
+            return true
+        }
     }
 
     /// Map a `CommandComboState` event onto the press/release handlers
