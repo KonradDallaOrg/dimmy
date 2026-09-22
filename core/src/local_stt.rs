@@ -89,6 +89,20 @@ pub const AVAILABLE_MODELS: &[LocalModel] = &[
             "https://huggingface.co/Pomni/whisper-large-v3-ggml-allquants/resolve/main/ggml-large-v3-q8_0.bin",
         ),
     },
+    LocalModel {
+        // The unquantised reference weights, straight from the official
+        // repo (hence `url: None`). Nearly twice the bytes of Q8 for a
+        // quality difference whisper.cpp itself calls negligible, and
+        // being memory-bandwidth-bound it runs SLOWER, not faster. It is
+        // here because "the original" is a legitimate thing to want —
+        // for a baseline, for a comparison, for a machine with VRAM to
+        // spare. Pick Q8 unless you know why you want this one.
+        name: "Large-v3 (original f16)",
+        filename: "ggml-large-v3.bin",
+        size_mb: 2952,
+        description: "Unquantised reference weights. Bigger and slower than Q8, not more accurate in practice",
+        url: None,
+    },
     // ── Distil-Whisper (English only, fastest large-class) ───────
     LocalModel {
         name: "Distil-Large-v3.5 Q8 (EN)",
