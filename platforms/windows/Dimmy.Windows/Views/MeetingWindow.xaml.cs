@@ -88,6 +88,12 @@ public sealed partial class MeetingWindow : Window
         RecapTypePicker.ItemsSource = Helpers.MeetingRecapHelpers.MeetingTypes;
         RecapTypePicker.SelectedIndex = 0;
 
+        // The recap tick starts from the saved preference instead of being
+        // hardcoded on. It stays a per-meeting tick — untick it here and only
+        // this meeting goes without a recap; the setting is what it reverts
+        // to next time.
+        GenerateRecapCheck.IsChecked = MeetingGenerateRecapDefault();
+
         // Match settings-window theme (Light/Dark/Auto from UiPreferences)
         try
         {
@@ -373,9 +379,10 @@ public sealed partial class MeetingWindow : Window
     /// meeting is now recording. Centralising start here is what fixes the
     /// call-detect path leaving the window idle: App used to start the meeting
     /// in the core directly, bypassing all this wiring.
-    public Task<bool> StartFromCallDetectAsync() => BeginStartAsync(fromCallDetect: true);
+    public Task<bool> StartFromCallDetectAsync(bool autoConsent = false) =>
+        BeginStartAsync(fromCallDetect: true, autoConsent: autoConsent);
 
-    private async Task<bool> BeginStartAsync(bool fromCallDetect)
+    private async Task<bool> BeginStartAsync(bool fromCallDetect, bool autoConsent = false)
     {
         StartBtn.IsEnabled = false;
         try
@@ -384,7 +391,15 @@ public sealed partial class MeetingWindow : Window
             // audio = other people, so we confirm consent and announce before
             // a single sample is recorded. If the user cancels, abort the start.
             var lang = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
-            if (!await ConsentFlow.ConfirmAndAnnounceAsync(this.Content?.XamlRoot, lang))
+            if (autoConsent)
+            {
+                // Auto-record cannot show the blocking dialog: the whole
+                // point is that recording starts without a click. The
+                // announcement (spoken + pasteable) still goes out and is
+                // still written to the consent audit log.
+                ConsentFlow.AnnounceOnly(lang);
+            }
+            else if (!await ConsentFlow.ConfirmAndAnnounceAsync(this.Content?.XamlRoot, lang))
             {
                 StartBtn.IsEnabled = true;
                 return false;
@@ -395,9 +410,13 @@ public sealed partial class MeetingWindow : Window
             // window and the meeting lifecycle is decoupled (window can close,
             // pill/popup stop independently), so the live checkbox isn't
             // reachable from those paths. Call-detect starts force recap on.
+            // The tick is the answer either way: it was seeded from the saved
+            // preference when this window opened, so a call-detect start
+            // follows the setting instead of forcing the recap on over a user
+            // who had turned recaps off.
             if (App.Instance?.AppViewModel != null)
                 App.Instance.AppViewModel.MeetingGenerateRecap =
-                    fromCallDetect || GenerateRecapCheck.IsChecked == true;
+                    GenerateRecapCheck.IsChecked == true;
             var buf = new byte[256];
             int rc = DimmyNative.dimmy_meeting_start(buf, buf.Length);
             if (rc <= 0)
@@ -480,8 +499,30 @@ public sealed partial class MeetingWindow : Window
         }
     }
 
+    /// The saved default for the recap tick, read from the live core
+    /// snapshot. Absent or unreadable ⇒ true: a missing preference must
+    /// never be the reason a meeting silently ends without its recap.
+    internal static bool MeetingGenerateRecapDefault()
+    {
+        try
+        {
+            var buf = new byte[1 << 14];
+            int n = Interop.DimmyNative.dimmy_get_config_json(buf, buf.Length);
+            if (n <= 0) return true;
+            using var doc = JsonDocument.Parse(System.Text.Encoding.UTF8.GetString(buf, 0, n));
+            return !doc.RootElement.TryGetProperty("meeting_generate_recap", out var el)
+                   || el.ValueKind != System.Text.Json.JsonValueKind.False;
+        }
+        catch { return true; }
+    }
+
     private async void Stop_Click(object sender, RoutedEventArgs e)
     {
+        // Every stop leaves a line. "The stop didn't work" was unanswerable
+        // on 2026-09-23 because nothing recorded that the button had even
+        // been pressed — the log jumped straight from the suggestion to the
+        // meeting ending 44 s later, with no way to tell the two apart.
+        App.Log("Stop button pressed", "Meeting");
         StopBtn.IsEnabled = false;
         StopPolling();
         StopAmplitudePoll();

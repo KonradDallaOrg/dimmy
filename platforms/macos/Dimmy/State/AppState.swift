@@ -1065,6 +1065,10 @@ final class AppState: ObservableObject {
     /// latency on long recordings) while preferring no live captions.
     /// Defaults to true to match the Win shipping behaviour.
     @Published var liveCaptionsEnabled: Bool = true
+    /// Default for the meeting window's recap tick. Mirror of Rust
+    /// Config::meeting_generate_recap and of Win SettingsViewModel
+    /// .MeetingGenerateRecap. The per-meeting toggle reads it at start.
+    @Published var meetingGenerateRecapDefault: Bool = true
     /// Per-chunk delta pushed by the Rust core via `stt_chunk` events.
     /// CaptionWindowController subscribes — UI publishers like a
     /// status pill could subscribe too.
@@ -1118,6 +1122,19 @@ final class AppState: ObservableObject {
     /// of Rust `Config::call_detect_enabled`. Round-trips via
     /// `dimmy_set_config_json` → Rust `state.call_detect_enabled`.
     @Published var callDetectEnabled: Bool = true
+
+    /// Mirror of Rust `Config::call_detect_auto_record`. When on, a
+    /// detected call starts recording straight away instead of showing
+    /// the nudge popup.
+    @Published var callDetectAutoRecord: Bool = false
+
+    /// Whether a detected call should start recording by itself. Auto-record
+    /// is a sub-option of detection: with detection off the switch is dead,
+    /// and it must not spring back to life on its own. Rust mirror:
+    /// `call_detector::auto_record_effective`.
+    nonisolated static func autoRecordEffective(detectEnabled: Bool, autoRecord: Bool) -> Bool {
+        detectEnabled && autoRecord
+    }
 
     /// Lowercase canonical app ids the user has chosen never to be
     /// nudged about (popup "Don't ask for X again"). Mirror of Rust
@@ -1440,6 +1457,18 @@ final class AppState: ObservableObject {
     /// deferred | preparing | ready | failed.
     @Published var coremlPrepareState: [String: String] = [:]
 
+    /// The preparation state that applies to a model. The bundle key wins: it
+    /// is written by whichever quantisation ran the work, while the model's
+    /// own entry can be a stale "preparing" from an attempt that never
+    /// finished — which is precisely what kept the row spinning over an
+    /// encoder that was already compiled.
+    nonisolated static func coremlState(_ states: [String: String],
+                                        model: String,
+                                        bundle: String) -> String? {
+        if !bundle.isEmpty, let shared = states[bundle] { return shared }
+        return states[model]
+    }
+
     // MARK: - Custom vocabulary / user dictionary
 
     /// Words / short phrases the user has flagged to boost in STT.
@@ -1641,8 +1670,12 @@ final class AppState: ObservableObject {
         if let v = config["local_stt_backend"] as? String { localSttBackend = v }
         if let v = config["qwen_asr_model"] as? String { qwenAsrModel = v }
         if let v = config["live_captions_enabled"] as? Bool { liveCaptionsEnabled = v }
+        // Absent ⇒ stays true: an older config must not silently stop
+        // producing recaps after an update.
+        if let v = config["meeting_generate_recap"] as? Bool { meetingGenerateRecapDefault = v }
         if let v = config["filler_removal_enabled"] as? Bool { fillerRemovalEnabled = v }
         if let v = config["call_detect_enabled"] as? Bool { callDetectEnabled = v }
+        if let v = config["call_detect_auto_record"] as? Bool { callDetectAutoRecord = v }
         if let arr = config["call_detect_excluded_apps"] as? [String] {
             callDetectExcludedApps = arr.map { $0.lowercased() }
         }
@@ -1978,6 +2011,14 @@ final class AppState: ObservableObject {
     /// nudge popup unless the user has disabled the feature.
     func onCallDetected(app: String?, sinceSecs: Int) {
         guard callDetectEnabled else { return }
+        // Auto-record answers the popup's question in Settings instead of
+        // at call time: start now, and let the meeting window plus the
+        // spoken notice be the feedback that it happened.
+        if Self.autoRecordEffective(detectEnabled: callDetectEnabled,
+                                    autoRecord: callDetectAutoRecord) {
+            callNudgeRespond(app: app, response: "record_now")
+            return
+        }
         CallNudgeWindowController.shared.showDetected(app: app)
     }
 
@@ -1990,6 +2031,14 @@ final class AppState: ObservableObject {
     /// enforced Rust-side; we just paint the stop-mode popup.
     func onCallStopSuggested(app: String?, inactiveSecs _: Int) {
         guard callDetectEnabled else { return }
+        // Mirror of Win App.xaml.cs OnCallStopSuggested: auto-record answers
+        // the stop question the same way it answered the start one. A
+        // recording that begins by itself and then waits to be dismissed is
+        // half a feature.
+        if callDetectAutoRecord {
+            callNudgeRespond(app: app, response: "stop_and_recap")
+            return
+        }
         CallNudgeWindowController.shared.showStopSuggestion(app: app)
     }
 
@@ -2015,12 +2064,17 @@ final class AppState: ObservableObject {
             AppDelegate.shared?.openMeetingWindow()
             // openMeetingWindow shows + reattaches; the Meeting VM is
             // owned by the controller so we drive .start() through it.
-            // Call-detect-started meetings default the recap flag to
-            // true — the popup choice was "record this call", which
-            // implies the user wants the recap too. Win parity:
-            // MeetingGenerateRecap = true for call-detect-started.
-            MeetingWindowController.shared.viewModel.generateRecap = true
-            MeetingWindowController.shared.viewModel.start()
+            // A call-detect meeting has no tick of its own to read, so it
+            // follows the saved preference. It used to force the recap on,
+            // which quietly overruled a user who had turned recaps off.
+            MeetingWindowController.shared.viewModel.generateRecap =
+                meetingGenerateRecapDefault
+            // Auto-record cannot show the blocking consent modal: the whole
+            // point is that recording starts without a click. Participants
+            // still get the spoken notice and the pasteable text.
+            let auto = Self.autoRecordEffective(detectEnabled: callDetectEnabled,
+                                                autoRecord: callDetectAutoRecord)
+            MeetingWindowController.shared.viewModel.start(consent: auto ? .announceOnly : .modal)
             // Bind the detected call as this meeting's origin so the
             // deterministic "call ended" path can watch it (Mac mirror of
             // Win MarkMeetingOriginFromCurrentSession). Falls back to the
@@ -2094,8 +2148,10 @@ final class AppState: ObservableObject {
             "local_stt_backend": localSttBackend,
             "qwen_asr_model": qwenAsrModel,
             "live_captions_enabled": liveCaptionsEnabled,
+            "meeting_generate_recap": meetingGenerateRecapDefault,
             "filler_removal_enabled": fillerRemovalEnabled,
             "call_detect_enabled": callDetectEnabled,
+            "call_detect_auto_record": callDetectAutoRecord,
             "call_detect_excluded_apps": callDetectExcludedApps,
             "preprocessing_enabled": preprocessingEnabled,
             "chunk_streaming_enabled": chunkStreamingEnabled,

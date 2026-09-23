@@ -545,6 +545,7 @@ fn dimmy_init_inner() -> c_int {
         qwen_asr_model: Mutex::new(file_cfg.qwen_asr_model),
         live_captions_enabled: Mutex::new(file_cfg.live_captions_enabled),
         call_detect_enabled: Mutex::new(file_cfg.call_detect_enabled),
+        call_detect_auto_record: Mutex::new(file_cfg.call_detect_auto_record),
         call_detect_excluded_apps: Mutex::new(file_cfg.call_detect_excluded_apps),
         call_detect_cooldown_secs: Mutex::new(file_cfg.call_detect_cooldown_secs),
         call_detect_min_active_secs: Mutex::new(file_cfg.call_detect_min_active_secs),
@@ -553,6 +554,7 @@ fn dimmy_init_inner() -> c_int {
         history_audio_keep_days: Mutex::new(file_cfg.history_audio_keep_days),
         history_audio_max_mb: Mutex::new(file_cfg.history_audio_max_mb),
         auto_recap_threshold_secs: Mutex::new(file_cfg.auto_recap_threshold_secs),
+        meeting_generate_recap: Mutex::new(file_cfg.meeting_generate_recap),
         filler_removal_enabled: Mutex::new(file_cfg.filler_removal_enabled),
         llm_mode: Mutex::new(file_cfg.llm_mode),
         local_llm_model: Mutex::new(file_cfg.local_llm_model),
@@ -2120,6 +2122,7 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         "qwen_asr_model": *st.qwen_asr_model.lock().unwrap_or_else(|e| e.into_inner()),
         "live_captions_enabled": *st.live_captions_enabled.lock().unwrap_or_else(|e| e.into_inner()),
         "call_detect_enabled": *st.call_detect_enabled.lock().unwrap_or_else(|e| e.into_inner()),
+        "call_detect_auto_record": *st.call_detect_auto_record.lock().unwrap_or_else(|e| e.into_inner()),
         "call_detect_excluded_apps": st.call_detect_excluded_apps.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         "call_detect_cooldown_secs": *st.call_detect_cooldown_secs.lock().unwrap_or_else(|e| e.into_inner()),
         "call_detect_min_active_secs": *st.call_detect_min_active_secs.lock().unwrap_or_else(|e| e.into_inner()),
@@ -2192,6 +2195,9 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
     }
     if let Ok(n) = st.history_audio_max_mb.lock() {
         json["history_audio_max_mb"] = serde_json::Value::from(*n);
+    }
+    if let Ok(b) = st.meeting_generate_recap.lock() {
+        json["meeting_generate_recap"] = serde_json::Value::from(*b);
     }
     if let Ok(n) = st.auto_recap_threshold_secs.lock() {
         json["auto_recap_threshold_secs"] = serde_json::Value::from(*n);
@@ -2623,6 +2629,7 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
         }
     }
     if let Some(s) = v["local_model"].as_str() {
+        let mut model_changed = false;
         if let Ok(mut m) = st.local_model.lock() {
             if *m != s {
                 log(&format!(
@@ -2630,8 +2637,19 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
                     *m, s
                 ));
                 crate::local_stt::clear_model_cache();
+                model_changed = true;
             }
             *m = s.to_string();
+        }
+        // Prepare the new model's Core ML encoder NOW. The only other
+        // triggers are app launch and a bundle download, so picking a model
+        // whose bundle was already on disk started nothing at all: the
+        // encoder stayed unprepared until the next launch while the Settings
+        // row showed a spinner and said macOS was preparing it. Reported
+        // 2026-09-22 on large-v3 q8 — bundle present since 2026-09-11, no
+        // preparation ever ran. No-op when there is nothing to prepare.
+        if model_changed {
+            crate::coreml_encoder::prepare_in_background(s);
         }
     }
     if let Some(s) = v["local_stt_backend"].as_str() {
@@ -2688,6 +2706,23 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
             *f = b;
         }
     }
+    if let Some(b) = v["call_detect_auto_record"].as_bool() {
+        if let Ok(mut f) = st.call_detect_auto_record.lock() {
+            *f = b;
+        }
+    }
+    // Turning detection off turns auto-record off with it, in the saved
+    // config and not just in the UI: a dead switch left on would start
+    // recording calls by itself the day detection came back.
+    {
+        let detect = *st
+            .call_detect_enabled
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Ok(mut f) = st.call_detect_auto_record.lock() {
+            *f = crate::call_detector::auto_record_effective(detect, *f);
+        }
+    }
     if let Some(arr) = v["call_detect_excluded_apps"].as_array() {
         let parsed: Vec<String> = arr
             .iter()
@@ -2730,6 +2765,11 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
     if let Some(n) = v["auto_recap_threshold_secs"].as_u64() {
         if let Ok(mut f) = st.auto_recap_threshold_secs.lock() {
             *f = n as u32;
+        }
+    }
+    if let Some(b) = v["meeting_generate_recap"].as_bool() {
+        if let Ok(mut f) = st.meeting_generate_recap.lock() {
+            *f = b;
         }
     }
     if let Some(b) = v["filler_removal_enabled"].as_bool() {
@@ -4112,6 +4152,9 @@ pub unsafe extern "C" fn dimmy_meeting_start(out_buf: *mut c_char, buf_len: c_in
     if let Ok(mut sr) = st.audio_sample_rate.lock() {
         *sr = device_sr;
     }
+    // Claim the shared audio state: any meeting still stopping in the
+    // background must not tear it down under us from here on.
+    MEETING_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     // Clear any stale buffers from a previous recording so the meeting
     // worker starts at offset 0 on both primary and secondary streams.
     if let Ok(mut b) = st.audio_buffer.lock() {
@@ -4266,16 +4309,29 @@ pub unsafe extern "C" fn dimmy_meeting_stop(out_buf: *mut c_char, buf_len: c_int
         g.meeting_stopped();
     }
 
+    // The generation this stop belongs to. A meeting started while we drain
+    // takes ownership of the shared audio state, and everything below that
+    // touches it is then skipped — see `stop_owns_shared_audio`.
+    let my_generation = MEETING_GENERATION.load(std::sync::atomic::Ordering::SeqCst);
+    let still_ours = || {
+        stop_owns_shared_audio(
+            my_generation,
+            MEETING_GENERATION.load(std::sync::atomic::Ordering::SeqCst),
+        )
+    };
+
     // Stop audio capture in parallel with the worker drain — the
     // worker's stop() blocks for up to one chunk's transcribe time
     // (a few hundred ms), so we issue the cpal Stop first.
     let st = state();
-    let _ = st
-        .audio_tx
-        .lock()
-        .map(|tx| tx.send(crate::audio::AudioCommand::Stop));
-    if let Ok(mut r) = st.recording.lock() {
-        *r = false;
+    if still_ours() {
+        let _ = st
+            .audio_tx
+            .lock()
+            .map(|tx| tx.send(crate::audio::AudioCommand::Stop));
+        if let Ok(mut r) = st.recording.lock() {
+            *r = false;
+        }
     }
 
     let result = session.stop();
@@ -4285,7 +4341,11 @@ pub unsafe extern "C" fn dimmy_meeting_stop(out_buf: *mut c_char, buf_len: c_int
     // never clears, and the next Start clears-then-fills). Leaving them
     // kept ~0.6-1.3 GB resident after every long meeting AND left a
     // stale giant buffer for anything that inspects buffer length.
-    clear_capture_buffers(st);
+    if still_ours() {
+        clear_capture_buffers(st);
+    } else {
+        log("[Meeting] stop finished after the NEXT meeting started — leaving the shared audio state to it");
+    }
     let json = serde_json::json!({
         "id": result.id,
         "dir": result.dir.to_string_lossy(),
@@ -6828,6 +6888,14 @@ pub unsafe extern "C" fn dimmy_download_model(filename_ptr: *const c_char) -> c_
         }
     };
 
+    let slot = model_download_slot(&filename);
+    let _busy = slot.lock().unwrap_or_else(|e| e.into_inner());
+    // The wait may well have BEEN the download we wanted: whoever held the
+    // slot just finished. Don't fetch the same gigabyte twice.
+    if crate::local_stt::model_exists(&filename) {
+        return 0;
+    }
+
     let fname_clone = filename.clone();
     let rt = tokio::runtime::Runtime::new().unwrap();
     let result = rt.block_on(crate::local_stt::download_model(
@@ -6855,6 +6923,35 @@ pub unsafe extern "C" fn dimmy_download_model(filename_ptr: *const c_char) -> c_
             -1
         }
     }
+}
+
+/// One download at a time per model file.
+///
+/// Every screen offering a model keeps its own "downloading" flag, so nothing
+/// stopped two of them — or the same one re-entered after the user left and
+/// came back — from calling `dimmy_download_model` for the SAME file.
+/// `download::download_resumable` takes its resume offset from the current
+/// `.part` length, so two workers append from different offsets: the part
+/// grows and shrinks, the progress bar jumps backwards and the bytes are
+/// wrong. Burned 2026-09-22 on the 1.5 GB large-v3 q8 — three overlapping
+/// downloads, progress back to 0 twice, and two `download_completed` events
+/// for one file.
+///
+/// The second caller waits for the first and then finds the file already
+/// there, so it returns the same success the first one got: no new return
+/// code for the hosts to learn, and the UI's progress keeps coming from the
+/// single downloader that is really running.
+static MODEL_DOWNLOAD_SLOTS: OnceLock<Mutex<std::collections::HashMap<String, Arc<Mutex<()>>>>> =
+    OnceLock::new();
+
+fn model_download_slot(filename: &str) -> Arc<Mutex<()>> {
+    let map = MODEL_DOWNLOAD_SLOTS.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    let mut guard = map.lock().unwrap_or_else(|e| e.into_inner());
+    Arc::clone(
+        guard
+            .entry(filename.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(()))),
+    )
 }
 
 /// Check if a specific model is downloaded. Returns 1 if yes, 0 if no.
@@ -6906,9 +7003,40 @@ pub unsafe extern "C" fn dimmy_coreml_encoder_status(
         "present": supported && crate::coreml_encoder::bundle_present(&filename),
         "prepared": supported && crate::coreml_encoder::bundle_prepared(&filename),
         "preparing": supported && crate::coreml_encoder::is_preparing(),
+        // The encoder is shared by every quantisation of an architecture, and
+        // `coreml_prepare` events are reported under whichever model kicked
+        // the work off. A host that knows its own model's bundle can match
+        // those events instead of missing a preparation that finished under a
+        // sibling quant's name.
+        "bundle": crate::coreml_encoder::bundle_name(&filename),
     })
     .to_string();
     write_to_buf(&payload, buf, buf_len)
+}
+
+/// Start preparing the Core ML encoder for a whisper model, on demand.
+///
+/// Preparation otherwise starts at app launch, when the model changes, or
+/// right after the bundle is downloaded. None of those covers the case the
+/// user actually hits: a bundle that is on disk but was never compiled (the
+/// app quit mid-compile, or it failed), where the Settings row could only
+/// sit there. Returns 1 when a preparation is now running, 0 when there is
+/// nothing to do (no bundle, already prepared, or one is already running),
+/// and -2 when this build has no Core ML support.
+///
+/// # Safety
+/// `filename_ptr` must be a valid null-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_coreml_prepare(filename_ptr: *const c_char) -> c_int {
+    if !cfg!(feature = "local-stt-coreml") {
+        return -2;
+    }
+    let filename = cstr_or_empty(filename_ptr);
+    if filename.is_empty() {
+        return 0;
+    }
+    crate::coreml_encoder::prepare_in_background(&filename);
+    c_int::from(crate::coreml_encoder::is_preparing())
 }
 
 /// Download + unpack the Core ML encoder for a whisper model.
@@ -10202,6 +10330,25 @@ pub unsafe extern "C" fn dimmy_inject_pcm_for_test(
 /// Configured from AppState's `call_detect_*` fields each time the host
 /// pushes a signal — that way the detector always reflects the latest
 /// saved config without a separate apply step on init / set_config_json.
+/// Bumped by every meeting start. `dimmy_meeting_stop` hands the shared
+/// audio state back only if it is still the meeting that owns it.
+static MEETING_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Whether a stopping meeting may still tear down the SHARED audio state
+/// (stream Stop, `recording` flag, capture buffers).
+///
+/// Stop takes the meeting out of `MEETING` immediately, so the next one can
+/// start while this one is still draining its transcriber — which is the
+/// point: people go from one call straight into the next. But the teardown
+/// that follows the drain touches state the NEW meeting now owns, and
+/// `clear_capture_buffers` would wipe audio already recorded for it. Seconds
+/// of a real meeting, gone, which is the one thing that can never be redone
+/// (CLAUDE.md, THE AUDIO RULE). So a stop whose generation has been
+/// superseded finalizes its own files and touches nothing shared.
+fn stop_owns_shared_audio(stop_generation: u64, current_generation: u64) -> bool {
+    stop_generation == current_generation
+}
+
 static CALL_DETECTOR: OnceLock<Mutex<crate::call_detector::CallDetectorState>> = OnceLock::new();
 
 fn call_detector_lock() -> std::sync::MutexGuard<'static, crate::call_detector::CallDetectorState> {
@@ -10675,6 +10822,31 @@ mod tests {
     use super::*;
     use serial_test::serial;
     use std::ffi::c_char;
+
+    // ── back-to-back meetings ────────────────────────────────────
+
+    #[test]
+    fn a_superseded_stop_keeps_its_hands_off_the_shared_audio() {
+        // Nobody started anything while we drained: ours to tear down.
+        assert!(stop_owns_shared_audio(7, 7));
+        // The next call already started recording: its audio is not ours
+        // to clear, and clearing it would lose real recorded speech.
+        assert!(!stop_owns_shared_audio(7, 8));
+    }
+
+    // ── model downloads ──────────────────────────────────────────
+
+    #[test]
+    fn one_download_slot_per_model_file() {
+        let a = model_download_slot("ggml-large-v3-q8_0.bin");
+        let b = model_download_slot("ggml-large-v3-q8_0.bin");
+        assert!(Arc::ptr_eq(&a, &b), "same file must share one slot");
+        let other = model_download_slot("ggml-tiny-q8_0.bin");
+        assert!(
+            !Arc::ptr_eq(&a, &other),
+            "different files must not block each other"
+        );
+    }
 
     // ── meeting track resolution ─────────────────────────────────
 
@@ -11311,6 +11483,7 @@ mod tests {
                 qwen_asr_model: Mutex::new(crate::qwen_asr::DEFAULT_MODEL.to_string()),
                 live_captions_enabled: Mutex::new(true),
                 call_detect_enabled: Mutex::new(true),
+                call_detect_auto_record: Mutex::new(false),
                 call_detect_excluded_apps: Mutex::new(vec!["discord".to_string()]),
                 call_detect_cooldown_secs: Mutex::new(1800),
                 call_detect_min_active_secs: Mutex::new(5),
@@ -11319,6 +11492,7 @@ mod tests {
                 history_audio_keep_days: Mutex::new(30),
                 history_audio_max_mb: Mutex::new(5_000),
                 auto_recap_threshold_secs: Mutex::new(60),
+                meeting_generate_recap: Mutex::new(true),
                 filler_removal_enabled: Mutex::new(true),
                 llm_mode: Mutex::new("cloud".to_string()),
                 local_llm_model: Mutex::new(crate::local_llm::DEFAULT_LLM_MODEL.to_string()),

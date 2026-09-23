@@ -37,6 +37,29 @@ public static class ConsentFlow
     // Dialog content column width, in DIPs.
     private const double ContentWidth = 440;
 
+    /// Announce without asking, for the auto-record path: the user
+    /// answered the question once in Settings, and a dialog at call time
+    /// would defeat "start recording immediately". Participants still get
+    /// the spoken notice and the pasteable text, and the audit log still
+    /// records that they were told. Mac mirror:
+    /// MeetingConsentFlow.announceOnly.
+    public static void AnnounceOnly(string lang)
+    {
+        var announcement = DimmyNative.ConsentText("announcement", lang)
+            ?? "Quick note: this meeting is being recorded and transcribed for note-taking.";
+        try
+        {
+            var dp = new global::Windows.ApplicationModel.DataTransfer.DataPackage();
+            dp.SetText(announcement);
+            global::Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dp);
+            DimmyNative.ConsentLogEvent("chat_copied", lang);
+        }
+        catch { /* clipboard failure must not block the meeting */ }
+
+        _ = SpeakAsync(announcement, lang);
+        DimmyNative.ConsentLogEvent("announced", lang);
+    }
+
     public static async Task<bool> ConfirmAndAnnounceAsync(XamlRoot? xamlRoot, string lang)
     {
         string T(string kind, string fallback) => DimmyNative.ConsentText(kind, lang) ?? fallback;

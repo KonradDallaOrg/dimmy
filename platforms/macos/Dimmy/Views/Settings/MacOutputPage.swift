@@ -438,6 +438,25 @@ struct MacOutputPage: View {
         Group {
             MacGroupLabel(text: "Meeting recap model")
             MacTile {
+                // Default for the meeting window's recap tick. The tick
+                // stays per-meeting: this is only what it starts as, instead
+                // of being hardcoded on and forgotten at every launch.
+                // Mirror of Win SettingsWindow.xaml "Recap every meeting".
+                MacRow(
+                    "Recap every meeting",
+                    hint: "Ticks \"Generate recap + action items on stop\" for you on each new meeting. You can still untick it for a single meeting before starting it.",
+                    showsDivider: true
+                ) {
+                    Toggle("", isOn: Binding(
+                        get: { appState.meetingGenerateRecapDefault },
+                        set: { newValue in
+                            appState.meetingGenerateRecapDefault = newValue
+                            persistConfig()
+                        }
+                    ))
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                }
                 MacRow(
                     "Recap model",
                     description: recapPickerDescription,

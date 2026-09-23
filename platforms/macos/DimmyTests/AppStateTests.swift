@@ -363,4 +363,35 @@ final class AppStateTests: XCTestCase {
         XCTAssertFalse(VM.followsExternalRecap(phase: .processing, recapsRunning: 1))
         XCTAssertFalse(VM.followsExternalRecap(phase: .idle, recapsRunning: 0))
     }
+
+    func testAutoRecordNeedsDetection() {
+        XCTAssertTrue(AppState.autoRecordEffective(detectEnabled: true, autoRecord: true))
+        // Detection off wins: the switch is dead, not merely hidden.
+        XCTAssertFalse(AppState.autoRecordEffective(detectEnabled: false, autoRecord: true))
+        XCTAssertFalse(AppState.autoRecordEffective(detectEnabled: true, autoRecord: false))
+    }
+
+    func testBackToBackCallCanStartWhileThePreviousRecapRuns() {
+        typealias VM = MeetingViewModel
+        // Call 1's recap is still running, nothing is recording: call 2 starts.
+        XCTAssertTrue(VM.canStart(phase: .processing, meetingActive: false))
+        XCTAssertTrue(VM.canStart(phase: .idle, meetingActive: false))
+        XCTAssertTrue(VM.canStart(phase: .done, meetingActive: false))
+        // A recording in flight is the one real blocker.
+        XCTAssertFalse(VM.canStart(phase: .recording, meetingActive: false))
+        XCTAssertFalse(VM.canStart(phase: .idle, meetingActive: true))
+    }
+
+    func testPreparationOfOneQuantCountsForItsSibling() {
+        // q5 ran the compile; q8 shares the same encoder bundle.
+        let states = ["ggml-large-v3-q5_0.bin": "ready",
+                      "ggml-large-v3-encoder.mlmodelc": "ready",
+                      "ggml-large-v3-q8_0.bin": "preparing"]
+        XCTAssertEqual(AppState.coremlState(states,
+                                            model: "ggml-large-v3-q8_0.bin",
+                                            bundle: "ggml-large-v3-encoder.mlmodelc"), "ready")
+        // With no shared entry, the model's own state still answers.
+        XCTAssertEqual(AppState.coremlState(["m.bin": "failed"], model: "m.bin", bundle: ""), "failed")
+        XCTAssertNil(AppState.coremlState([:], model: "m.bin", bundle: "b.mlmodelc"))
+    }
 }

@@ -32,7 +32,10 @@ final class MeetingViewModel: ObservableObject {
 
     // ── Top-level state ────────────────────────────────────────────
     @Published var phase: Phase = .idle
-    @Published var generateRecap: Bool = true
+    /// Per-meeting, seeded from the saved preference rather than hardcoded
+    /// on: untick it and only this meeting goes without a recap. Mirror of
+    /// Win MeetingWindow.ReadMeetingGenerateRecapDefault().
+    @Published var generateRecap: Bool = AppState.shared.meetingGenerateRecapDefault
     @Published var statusLabel: String = "Ready"
     @Published var subStatusLabel: String = "Click Start to begin a meeting recording"
     @Published var titlebarTitle: String = "New meeting"
@@ -136,6 +139,7 @@ final class MeetingViewModel: ObservableObject {
     /// actually act on it (the 2.5 s toast vanished before they could).
     /// Cleared on stop / next start / once system audio starts flowing.
     @Published var systemAudioPermissionNeeded: Bool = false
+
 
     /// Determinate progress (0–100) for meeting re-transcription, mirrored
     /// from AppState.fileTranscribeProgress (the core emits
@@ -450,13 +454,38 @@ final class MeetingViewModel: ObservableObject {
 
     // MARK: - Start
 
-    func start() {
-        guard !isWorking, phase == .idle || phase == .done else { return }
+    /// How the consent gate behaves for this start. `.modal` asks first
+    /// (every manual start); `.announceOnly` announces without asking, for
+    /// the auto-record path where the user already agreed in Settings.
+    enum ConsentMode {
+        case modal
+        case announceOnly
+    }
+
+    /// Whether a start may proceed. The recap of the PREVIOUS meeting leaves
+    /// this window in `.processing` while nothing is being recorded, and
+    /// people go straight from one call into the next: refusing there meant
+    /// auto-record silently dropped the second call. A recording already in
+    /// flight is the only real blocker — the core refuses a second meeting
+    /// anyway (`dimmy_meeting_start` returns -1 while one is active).
+    nonisolated static func canStart(phase: Phase, meetingActive: Bool) -> Bool {
+        !meetingActive && phase != .recording
+    }
+
+    func start(consent: ConsentMode = .modal) {
+        guard !isWorking,
+              Self.canStart(phase: phase, meetingActive: DimmyCore.shared.meetingIsActive)
+        else { return }
         // Recording-consent gate (mandatory). A meeting captures system audio
         // = other people, so we confirm consent and announce before recording.
         // Cancelling aborts the start. Mirror of Win MeetingWindow.Start_Click.
         let lang = Locale.current.language.languageCode?.identifier ?? "en"
-        guard MeetingConsentFlow.confirmAndAnnounce(lang: lang) else { return }
+        switch consent {
+        case .modal:
+            guard MeetingConsentFlow.confirmAndAnnounce(lang: lang) else { return }
+        case .announceOnly:
+            MeetingConsentFlow.announceOnly(lang: lang)
+        }
         // Flush any unsaved notes from the previous Done view before
         // we wipe the buffer, matches the LostFocus save on Win.
         saveNotes()
@@ -1142,7 +1171,10 @@ final class MeetingViewModel: ObservableObject {
         doneAudioSystemURL = systemAudioURL(for: dir)
         doneNotes = Self.readNotes(dir: dir)
         doneSelectedTab = .recap
-        if !browsingPastMeeting {
+        // A recap finishing must never pull the window off a recording that
+        // has already started — back-to-back calls put exactly that in
+        // flight: call 2 recording while call 1's recap lands.
+        if !browsingPastMeeting, phase != .recording {
             phase = .done
             titlebarTitle = doneTitle
         }
@@ -1411,6 +1443,26 @@ enum MeetingConsentFlow {
 
     /// Shows the confirmation modal; on accept speaks + copies the announcement
     /// and logs each step. Returns true if the meeting may start. Main thread.
+    /// Announce without asking, for the auto-record path: the user
+    /// answered the question once in Settings, and a modal at call time
+    /// would defeat "start recording immediately". Participants still get
+    /// the spoken notice and the pasteable text, and the audit log still
+    /// records that they were told.
+    static func announceOnly(lang: String) {
+        let announcement = DimmyCore.shared.consentText(kind: "announcement", lang: lang)
+            ?? "Quick note: this meeting is being recorded and transcribed for note-taking."
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(announcement, forType: .string)
+        DimmyCore.shared.consentLogEvent(kind: "chat_copied", lang: lang)
+        let utterance = AVSpeechUtterance(string: announcement)
+        if let voice = AVSpeechSynthesisVoice(language: lang) {
+            utterance.voice = voice
+        }
+        synthesizer.speak(utterance)
+        DimmyCore.shared.consentLogEvent(kind: "announced", lang: lang)
+    }
+
     static func confirmAndAnnounce(lang: String) -> Bool {
         let modal = DimmyCore.shared.consentText(kind: "modal", lang: lang)
             ?? "You are about to record audio that may include other people. Confirm you have informed all participants and obtained their consent."

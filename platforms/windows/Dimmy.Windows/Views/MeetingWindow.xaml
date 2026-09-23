@@ -250,7 +250,7 @@
                 <TextBlock Text="Start meeting" FontSize="14" FontWeight="SemiBold"/>
               </StackPanel>
             </Button>
-            <CheckBox x:Name="GenerateRecapCheck" IsChecked="True"
+            <CheckBox x:Name="GenerateRecapCheck"
                       HorizontalAlignment="Center"
                       Content="Generate recap + action items on stop"/>
           </StackPanel>

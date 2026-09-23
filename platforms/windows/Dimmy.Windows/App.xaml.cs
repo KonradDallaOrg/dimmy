@@ -117,8 +117,9 @@ public partial class App : Application
             // only lives in the meeting window), so the stop path reads
             // AppViewModel.MeetingGenerateRecap — if we don't set it here it
             // keeps a STALE value from an earlier window-started meeting and
-            // the recap is silently skipped at stop. Default to recap on.
-            _appViewModel.MeetingGenerateRecap = true;
+            // the recap is silently skipped at stop. Follows the saved
+            // preference, which is the only answer available with no window.
+            _appViewModel.MeetingGenerateRecap = Views.MeetingWindow.MeetingGenerateRecapDefault();
             try { DimmyNative.dimmy_track_meeting_action(source); } catch { }
             // Pill + taskbar flip to recording via the meeting_state event.
         }
@@ -1711,6 +1712,10 @@ public partial class App : Application
             // Rust yet).
             _appViewModel.CallDetectEnabled =
                 !r.TryGetProperty("call_detect_enabled", out var cde) || cde.GetBoolean();
+            _appViewModel.CallDetectAutoRecord =
+                _appViewModel.CallDetectEnabled
+                && r.TryGetProperty("call_detect_auto_record", out var cdar)
+                && cdar.GetBoolean();
             if (r.TryGetProperty("call_detect_excluded_apps", out var cdex)
                 && cdex.ValueKind == System.Text.Json.JsonValueKind.Array)
             {
@@ -2317,6 +2322,18 @@ public partial class App : Application
                 // round-trip and the in-flight tick), swallow silently.
                 if (!_appViewModel.CallDetectEnabled) return;
 
+                // Auto-record answers the popup's question in Settings
+                // instead of at call time: start now, and let the meeting
+                // window plus the spoken notice be the feedback.
+                if (_appViewModel.CallDetectAutoRecord)
+                {
+                    Log($"call_detected: app={appId ?? "<none>"} since={sinceSeconds}s -> auto-record", "CallDetect");
+                    try { DimmyNative.dimmy_call_signal_response(appId, "record_now"); }
+                    catch (Exception ex) { Log($"auto-record response EXC: {ex.Message}", "CallDetect"); }
+                    StartMeetingFromCallDetect(auto: true);
+                    return;
+                }
+
                 EnsureCallNudgeWindow();
                 Log($"call_detected: app={appId ?? "<none>"} since={sinceSeconds}s", "CallDetect");
                 _callNudgeWindow!.ShowFor(appId);
@@ -2411,8 +2428,19 @@ public partial class App : Application
                 // Conditions (recording is ours, meeting is active, mic
                 // has been silent past the threshold) are enforced by
                 // call_detector::handle_inactive — here we just paint.
-                EnsureCallNudgeWindow();
                 Log($"meeting.stop_suggested: app={appId ?? "<none>"} inactive_for={inactiveForSecs}s", "CallDetect");
+                // Auto-record answers this question too. Starting by itself
+                // and then waiting to be told to stop is half a feature: the
+                // call is over, the recording should be too. The core sees
+                // this as OUR stop, not the user's, so the next call is free
+                // to start by itself.
+                if (_appViewModel.CallDetectAutoRecord)
+                {
+                    Log("auto-record: call ended, stopping by itself", "CallDetect");
+                    OnNudgeStopAndRecap(appId);
+                    return;
+                }
+                EnsureCallNudgeWindow();
                 _callNudgeWindow!.ShowStopSuggestion(appId);
             }
             catch (Exception ex)
@@ -2464,7 +2492,7 @@ public partial class App : Application
     /// Mirrors MeetingWindow.Start_Click's happy path but doesn't
     /// require the window to be open already — closes the loop
     /// between detection and recording with a single user click.
-    private async void StartMeetingFromCallDetect()
+    private async void StartMeetingFromCallDetect(bool auto = false)
     {
         try
         {
@@ -2491,7 +2519,7 @@ public partial class App : Application
                 return;
             }
             await _meetingWindow.EnsureDialogRootAsync();
-            bool started = await _meetingWindow.StartFromCallDetectAsync();
+            bool started = await _meetingWindow.StartFromCallDetectAsync(auto);
             if (!started)
             {
                 Log("StartMeetingFromCallDetect: not started (declined or failed)", "CallDetect");

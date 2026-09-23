@@ -97,6 +97,12 @@ public partial class AppViewModel : ObservableObject
     /// in-flight tick after the user disables).
     [ObservableProperty] private bool _callDetectEnabled = true;
 
+    /// Mirror of Rust `Config::call_detect_auto_record`. When on,
+    /// OnCallDetected starts the meeting instead of showing the nudge.
+    /// Only ever acts together with CallDetectEnabled — see
+    /// `call_detector::auto_record_effective`.
+    [ObservableProperty] private bool _callDetectAutoRecord;
+
     /// Excluded apps for the call-detect nudge. Read from config on
     /// load + after every "never" response so the Settings UI list
     /// stays in sync without polling. Stored as lowercase canonical

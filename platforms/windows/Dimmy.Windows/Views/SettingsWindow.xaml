@@ -970,6 +970,14 @@
                   <ToggleSwitch IsOn="{Binding CallDetectEnabled, Mode=TwoWay}"
                                 Style="{StaticResource CompactToggleSwitch}" />
                 </controls:SettingCard>
+                <controls:SettingCard Glyph="&#xE7C8;"
+                                      Label="Start recording automatically"
+                                      InfoTip="Skips the prompt: the meeting starts the moment a call is detected, the window opens and the recording notice is read aloud to the participants. Needs call detection on."
+                                      IsEnabled="{Binding CallDetectEnabled}"
+                                      HelpUrl="https://dimmy.app/help/use-meeting-recaps">
+                  <ToggleSwitch IsOn="{Binding CallDetectAutoRecord, Mode=TwoWay}"
+                                Style="{StaticResource CompactToggleSwitch}" />
+                </controls:SettingCard>
                 <controls:SettingCard Glyph="&#xE71F;"
                                       Label="Excluded apps"
                                       InfoTip="Choosing 'Don't ask' on a prompt adds that app here. Discord is excluded by default."
@@ -1114,6 +1122,15 @@
                          Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                          CharacterSpacing="40" Margin="2,20,0,8" />
               <StackPanel x:Name="RecapPanel" Spacing="4">
+                <!-- The default for the tick in the meeting window. That tick
+                     stays: this decides what it starts as, instead of being
+                     hardcoded on and forgotten at every launch. -->
+                <controls:SettingCard Glyph="&#xE8A5;"
+                                      Label="Recap every meeting"
+                                      InfoTip="Ticks 'Generate recap + action items on stop' for you on each new meeting. You can still untick it for a single meeting before starting it.">
+                  <ToggleSwitch IsOn="{Binding MeetingGenerateRecap, Mode=TwoWay}"
+                                Style="{StaticResource CompactToggleSwitch}" />
+                </controls:SettingCard>
                 <controls:SettingCard Glyph="&#xE8B5;"
                                       Label="Meeting recap model"
                                       InfoTip="Runs when a meeting ends to produce the summary and action items. Auto picks a good model for your provider."

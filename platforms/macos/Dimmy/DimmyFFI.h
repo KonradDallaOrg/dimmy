@@ -601,6 +601,13 @@ int32_t dimmy_confluence_send_recap(const char * _Nonnull meeting_dir_ptr,
 int32_t dimmy_coreml_encoder_status(const char * _Nonnull filename_ptr,
                                     char * _Nonnull out_buf, int32_t buf_len);
 
+/// Start preparing the Core ML encoder for a whisper model, on demand.
+/// Returns 1 when a preparation is now running, 0 when there is nothing
+/// to do (no bundle, already prepared, or one is already running), -2
+/// when this build has no Core ML support. Non-blocking: the compile
+/// itself runs on a background thread and reports via `coreml_prepare`.
+int32_t dimmy_coreml_prepare(const char * _Nonnull filename_ptr);
+
 /// Download + unpack the Core ML encoder for a whisper model. Blocking,
 /// and reports through the same `model_download_progress` event as the
 /// .bin download. Returns 0 on success, -1 on failure, -2 when this
