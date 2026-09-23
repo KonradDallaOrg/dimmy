@@ -4305,8 +4305,9 @@ pub unsafe extern "C" fn dimmy_meeting_stop(out_buf: *mut c_char, buf_len: c_int
     // Re-arm the call-detector stop-suggestion path so a NEXT meeting
     // started from another detection isn't sitting on stale flags.
     {
+        let now = now_epoch_secs();
         let mut g = call_detector_lock();
-        g.meeting_stopped();
+        g.meeting_stopped_at(now);
     }
 
     // The generation this stop belongs to. A meeting started while we drain
@@ -10422,8 +10423,17 @@ pub unsafe extern "C" fn dimmy_call_signal(mic_active: c_int, app_id: *const c_c
     let is_meeting_active = MEETING.lock().map(|g| g.is_some()).unwrap_or(false);
     let now = now_epoch_secs();
 
+    // Both hosts send mic_active = 0 on every tick while Dimmy itself is
+    // capturing, so the pill cannot trigger on its own microphone. That zero
+    // says nothing about whether somebody else's call ended, and reading it
+    // as such let a ten-second dictation lift the hold on a live call.
+    let we_are_capturing = try_state()
+        .and_then(|st| st.recording.lock().ok().map(|r| *r))
+        .unwrap_or(false);
+
     let outcome = {
         let mut g = call_detector_lock();
+        g.set_mic_free_is_evidence(!we_are_capturing);
         g.signal(mic_active != 0, app, is_meeting_active, now)
     };
 
@@ -10456,9 +10466,31 @@ pub unsafe extern "C" fn dimmy_call_signal(mic_active: c_int, app_id: *const c_c
             emit_event("meeting.stop_suggested", &payload);
             3
         }
-        CallSignalOutcome::Suppressed(_) | CallSignalOutcome::NoChange => 0,
+        // Said once per hold, not once per 250 ms tick. Everything else
+        // about a hold is silent by design — no event, no popup — and
+        // silent state nobody can see is how "why didn't it record?"
+        // becomes an afternoon of guessing.
+        CallSignalOutcome::Suppressed(crate::call_detector::SuppressionReason::StoppedByUser(
+            app,
+        )) => {
+            if !HELD_LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                let who = if app.is_empty() { "this call" } else { &app };
+                log(&format!(
+                    "[CallDetect] auto-start held for {who}: you stopped this recording by hand — \
+                     waiting for the call to end"
+                ));
+            }
+            0
+        }
+        CallSignalOutcome::Suppressed(_) | CallSignalOutcome::NoChange => {
+            HELD_LOGGED.store(false, std::sync::atomic::Ordering::Relaxed);
+            0
+        }
     }
 }
+
+/// One log line per hold, not one per tick.
+static HELD_LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Push one system-audio activity observation. `sys_active` = 1 iff
 /// the call's render-side audio is currently emitting (WASAPI render

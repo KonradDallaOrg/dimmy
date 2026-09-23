@@ -53,6 +53,12 @@ pub enum SuppressionReason {
     /// starting the meeting (which can take seconds while a consent modal
     /// is up). Suppress re-detection in that gap. Cleared by meeting_stopped().
     RecordingAccepted,
+    /// The user pressed Stop by hand while this call was still running.
+    /// Nothing is emitted — no recording, and no nudge either: having been
+    /// told "not this call", asking again every time the host re-signals the
+    /// same live session is the same loop wearing a popup. Lifted when the
+    /// call actually ends.
+    StoppedByUser(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -104,6 +110,44 @@ pub struct CallDetectorState {
     detection_emitted: bool,
     current_app: Option<String>,
     cooldown_until: HashMap<String, i64>,
+
+    /// The app whose call we are recording, captured when recording starts
+    /// so `meeting_stopped` knows whose call it was. `None` when no app
+    /// could be inferred — which is why the hold falls back to a global key.
+    recorded_app: Option<String>,
+    /// The key held back from auto-starting again, because the user pressed
+    /// Stop by hand while that call was still running. Keyed like
+    /// `cooldown_until` (GLOBAL_COOLDOWN_KEY when no app was inferred), so
+    /// an app-less call is held too — that was the hole that let the loop
+    /// survive wherever a call infers no app, which on macOS is often.
+    barred: Option<String>,
+    /// Backstop deadline for `barred`. The hold is meant to be lifted by
+    /// evidence — the mic going free — and this exists only so a missing
+    /// signal can never make auto-record dead for ever.
+    barred_until: i64,
+    /// When the mic was last seen free, outside a meeting. Stamped on the
+    /// inactive edge and judged on the NEXT active edge: the hosts signal
+    /// "free" once, as an edge, not continuously, so waiting for further
+    /// inactive ticks to accumulate would wait for ever.
+    mic_free_since: Option<i64>,
+    /// How long the mic must have been free for the previous call to count
+    /// as over. Measured 2026-09-23 on a real Teams call: its capture
+    /// session vanished and came back under the same id four seconds later,
+    /// mid-call. Ten seconds gives that room.
+    release_confirm_secs: u32,
+    /// How long a hold can survive with no evidence either way.
+    bar_backstop_secs: u32,
+    /// Whether a `mic_active = false` signal actually means "nobody holds
+    /// the microphone". The hosts also send that zero while Dimmy itself is
+    /// capturing, so the pill cannot self-trigger — and reading a ten-second
+    /// dictation as "the call ended" would lift a hold on a call that was
+    /// still running.
+    mic_free_is_evidence: bool,
+    /// Set by the StopAndRecap response, consumed by `meeting_stopped`: it
+    /// marks the stop that follows as ours, not the user's. Armed only while
+    /// we are actually recording, so a nudge answered after the meeting has
+    /// already ended cannot disarm the NEXT hand-pressed Stop.
+    stop_is_automatic: bool,
 
     /// True between RecordNow accept and meeting_stopped() call. Marks
     /// "this meeting was started by the detector" — only meetings we
@@ -166,6 +210,14 @@ impl CallDetectorState {
             detection_emitted: false,
             current_app: None,
             cooldown_until: HashMap::new(),
+            recorded_app: None,
+            barred: None,
+            barred_until: 0,
+            mic_free_since: None,
+            release_confirm_secs: 10,
+            bar_backstop_secs: 1800,
+            mic_free_is_evidence: true,
+            stop_is_automatic: false,
             recording_active_from_us: false,
             mic_inactive_since: None,
             sys_inactive_since: None,
@@ -355,6 +407,14 @@ impl CallDetectorState {
         self.last_mic_active = false;
         self.mic_active_since = None;
 
+        // Stamp when the mic became free, to be judged on the next active
+        // edge. Only outside a meeting, and only when the zero means what it
+        // says: the hosts also send it while Dimmy itself is capturing, and
+        // a dictation is not evidence that somebody else's call ended.
+        if !is_meeting_active && self.mic_free_is_evidence && self.mic_free_since.is_none() {
+            self.mic_free_since = Some(now);
+        }
+
         // Stop-suggestion path: only if WE started this meeting and the
         // user hasn't already deferred via KeepRecording. Mic-silence
         // ≥ threshold while the meeting is still recording → propose
@@ -414,6 +474,26 @@ impl CallDetectorState {
     ) -> CallSignalOutcome {
         self.last_mic_active = true;
 
+        // Somebody is holding the mic again. If it had been free long enough
+        // for the previous call to be over, the hold from a hand-pressed Stop
+        // is done: this is a new call, not the one that was stopped.
+        //
+        // Judged HERE, on the active edge, and not while inactive: the hosts
+        // signal "mic free" once, as an edge, and then go quiet. Accumulating
+        // the interval inside the inactive path would have waited for ticks
+        // that never come, and the hold would never have lifted on Windows.
+        if let Some(free_since) = self.mic_free_since.take() {
+            if now.saturating_sub(free_since) >= self.release_confirm_secs as i64 {
+                self.barred = None;
+            }
+        }
+        // Backstop: evidence is the normal way out, a deadline is the
+        // guarantee. Auto-record must never be dead for ever because one
+        // signal went missing.
+        if self.barred.is_some() && now >= self.barred_until {
+            self.barred = None;
+        }
+
         // App may be inferred late in the session (whitelist process
         // launched after mic activation). Take the first non-None we
         // see; don't overwrite once set so cooldown keys stay stable.
@@ -436,6 +516,13 @@ impl CallDetectorState {
         // by meeting_stopped(), re-arming detection for the next call.
         if self.recording_active_from_us {
             return CallSignalOutcome::Suppressed(SuppressionReason::RecordingAccepted);
+        }
+        // Stopped by hand, call still going. The host keeps signalling this
+        // same live session every 250 ms — that is how one call restarted
+        // itself six times in twenty-five seconds — so the refusal has to
+        // hold against a signal that never stops arriving.
+        if self.barred.as_deref() == Some(app_for_lookup.as_str()) {
+            return CallSignalOutcome::Suppressed(SuppressionReason::StoppedByUser(app_for_lookup));
         }
         if let Some(real) = &self.current_app {
             if self.excluded.contains(real) {
@@ -479,7 +566,9 @@ impl CallDetectorState {
             NudgeResponse::RecordNow => {
                 self.detection_emitted = false;
                 self.mic_active_since = None;
-                self.current_app = None;
+                // Remember whose call this is BEFORE current_app is dropped:
+                // `meeting_stopped` needs it to hold the right app back.
+                self.recorded_app = self.current_app.take().or(app.clone());
                 // From this moment on, the meeting is "ours" → stop-
                 // suggestion path is armed. Cleared by meeting_stopped().
                 self.recording_active_from_us = true;
@@ -510,7 +599,12 @@ impl CallDetectorState {
             NudgeResponse::StopAndRecap => {
                 // Caller will invoke meeting_stopped() right after this
                 // (when dimmy_meeting_stop returns); we keep flags as-is
-                // here and let that hook do the reset.
+                // here and let that hook do the reset. The one thing we
+                // record is whose decision the stop was — and only while a
+                // recording of ours is actually running, so a nudge answered
+                // after the meeting already ended cannot disarm the NEXT
+                // hand-pressed Stop.
+                self.stop_is_automatic = self.recording_active_from_us;
             }
             NudgeResponse::KeepRecording => {
                 // Push out re-asking by `stop_keep_cooldown_secs` and
@@ -538,6 +632,29 @@ impl CallDetectorState {
     /// path completed). Resets the recording-active flags so the next
     /// detection starts clean.
     pub fn meeting_stopped(&mut self) {
+        self.meeting_stopped_at(0);
+    }
+
+    /// `meeting_stopped` with the clock, so the hold's backstop has a
+    /// deadline. The FFI passes the real time; the zero-argument form above
+    /// is kept for callers that have no clock and never bar anything.
+    pub fn meeting_stopped_at(&mut self, now: i64) {
+        let recorded = self.recorded_app.take();
+        let was_ours = self.recording_active_from_us;
+        if self.stop_is_automatic {
+            // We stopped it because the call ended. Nothing is held: the
+            // next call — the one the user hung up for — records by itself.
+            self.stop_is_automatic = false;
+        } else if was_ours {
+            // Pressed by hand, while that call is in all likelihood still
+            // running. Hold it until the call is really over. An app-less
+            // call is held under the global key rather than not at all.
+            self.barred = Some(recorded.unwrap_or_else(|| GLOBAL_COOLDOWN_KEY.to_string()));
+            self.barred_until = now + self.bar_backstop_secs as i64;
+            // The release clock starts at the stop. A silent stretch DURING
+            // the meeting is not evidence that the call ended.
+            self.mic_free_since = None;
+        }
         self.recording_active_from_us = false;
         self.mic_inactive_since = None;
         self.sys_inactive_since = None;
@@ -556,6 +673,15 @@ impl CallDetectorState {
         self.has_tracked_origin = tracked;
     }
 
+    /// Tell the state machine whether the next `mic_active = false` means
+    /// "nobody is holding the microphone". The hosts send that zero while
+    /// Dimmy itself is capturing — deliberately, so the pill cannot
+    /// self-trigger — and a dictation is not evidence that somebody else's
+    /// call has ended. Defaults to true; the FFI sets it per signal.
+    pub fn set_mic_free_is_evidence(&mut self, evidence: bool) {
+        self.mic_free_is_evidence = evidence;
+    }
+
     /// A meeting was started OUTSIDE the "Record now" nudge — i.e. manually
     /// from the meeting window / pill — while a call was detected. Arm the
     /// stop-suggestion path exactly as `record_response(RecordNow)` does so
@@ -565,6 +691,12 @@ impl CallDetectorState {
     /// Idempotent. Cleared by `meeting_stopped()`.
     pub fn meeting_started_external(&mut self) {
         self.recording_active_from_us = true;
+        // Started by hand, but ON a detected call: stopping it by hand has
+        // to close the same door, or the loop walks back in through the
+        // manual entrance.
+        if self.recorded_app.is_none() {
+            self.recorded_app = self.current_app.clone();
+        }
         self.mic_inactive_since = None;
         self.sys_inactive_since = None;
         self.stop_suggestion_emitted = false;
@@ -1058,6 +1190,237 @@ mod tests {
         assert_eq!(
             s.signal_call_session_ended(true, 1000),
             CallSignalOutcome::NoChange
+        );
+    }
+
+    // ── The hand-pressed Stop hold ───────────────────────────────
+    //
+    // One test per defect an adversarial review found in the first
+    // attempt at this rule, plus the incident that started it.
+
+    /// The incident, 2026-09-23: auto-record started a Teams call, the user
+    /// pressed Stop, and the host kept signalling the same live session
+    /// every 250 ms — six meetings and five recap calls in twenty-five
+    /// seconds, with no session transition between them. Refusing has to
+    /// hold against a signal that never stops arriving.
+    #[test]
+    fn a_hand_pressed_stop_holds_the_same_live_call() {
+        let mut s = fresh();
+        s.signal(true, Some("teams".into()), false, 1000);
+        let first = s.signal(true, Some("teams".into()), false, 1005);
+        assert!(matches!(first, CallSignalOutcome::Detected { .. }));
+        s.record_response(Some("teams".into()), NudgeResponse::RecordNow, 1006);
+        s.meeting_stopped_at(1100);
+
+        for t in 1101..1131 {
+            let out = s.signal(true, Some("teams".into()), false, t);
+            assert_eq!(
+                out,
+                CallSignalOutcome::Suppressed(SuppressionReason::StoppedByUser("teams".into())),
+                "tick {t} must not start anything"
+            );
+        }
+    }
+
+    /// The scenario the user lives: one call ends BECAUSE another is
+    /// arriving. We stopped it ourselves, so nothing is held.
+    #[test]
+    fn an_automatic_stop_holds_nothing_back() {
+        let mut s = fresh();
+        s.signal(true, Some("teams".into()), false, 1000);
+        let _ = s.signal(true, Some("teams".into()), false, 1005);
+        s.record_response(Some("teams".into()), NudgeResponse::RecordNow, 1006);
+        s.record_response(Some("teams".into()), NudgeResponse::StopAndRecap, 1100);
+        s.meeting_stopped_at(1101);
+
+        s.signal(true, Some("teams".into()), false, 1105);
+        let out = s.signal(true, Some("teams".into()), false, 1110);
+        assert!(
+            matches!(out, CallSignalOutcome::Detected { .. }),
+            "the next call must record by itself, got {out:?}"
+        );
+    }
+
+    /// DEFECT 1 — the hold never lifted on Windows, because the host signals
+    /// "mic free" once as an edge and then goes quiet. The interval must be
+    /// judged when the mic comes BACK, not by waiting for inactive ticks.
+    #[test]
+    fn the_hold_lifts_from_a_single_free_edge() {
+        let mut s = fresh();
+        s.signal(true, Some("teams".into()), false, 1000);
+        let _ = s.signal(true, Some("teams".into()), false, 1005);
+        s.record_response(Some("teams".into()), NudgeResponse::RecordNow, 1006);
+        s.meeting_stopped_at(1100);
+
+        // ONE inactive signal — the whole cadence Windows guarantees.
+        let _ = s.signal(false, None, false, 1200);
+
+        // Next call, 30 s later.
+        s.signal(true, Some("teams".into()), false, 1230);
+        let out = s.signal(true, Some("teams".into()), false, 1235);
+        assert!(
+            matches!(out, CallSignalOutcome::Detected { .. }),
+            "a single free edge is all the host sends — it must be enough, got {out:?}"
+        );
+    }
+
+    /// DEFECT 2 — while Dimmy dictates, both hosts send mic_active = 0 every
+    /// tick so the pill cannot self-trigger. That zero is not evidence that
+    /// somebody else's call ended.
+    #[test]
+    fn a_dictation_does_not_lift_the_hold() {
+        let mut s = fresh();
+        s.signal(true, Some("teams".into()), false, 1000);
+        let _ = s.signal(true, Some("teams".into()), false, 1005);
+        s.record_response(Some("teams".into()), NudgeResponse::RecordNow, 1006);
+        s.meeting_stopped_at(1100);
+
+        // Twenty seconds of dictation: the mic is ours, not free.
+        s.set_mic_free_is_evidence(false);
+        for t in 1101..1121 {
+            let _ = s.signal(false, None, false, t);
+        }
+        s.set_mic_free_is_evidence(true);
+
+        let out = s.signal(true, Some("teams".into()), false, 1122);
+        assert_eq!(
+            out,
+            CallSignalOutcome::Suppressed(SuppressionReason::StoppedByUser("teams".into())),
+            "our own microphone is not proof that their call ended"
+        );
+    }
+
+    /// DEFECT 3 — silence DURING the meeting must not pre-charge the release
+    /// clock, or the hold is over the instant it is applied.
+    #[test]
+    fn silence_during_the_meeting_does_not_pre_charge_the_release() {
+        let mut s = fresh();
+        s.signal(true, Some("teams".into()), false, 1000);
+        let _ = s.signal(true, Some("teams".into()), false, 1005);
+        s.record_response(Some("teams".into()), NudgeResponse::RecordNow, 1006);
+
+        // A long quiet stretch while the meeting runs (everyone listening).
+        for t in 1010..1080 {
+            let _ = s.signal(false, None, true, t);
+        }
+        s.meeting_stopped_at(1081);
+
+        let out = s.signal(true, Some("teams".into()), false, 1082);
+        assert_eq!(
+            out,
+            CallSignalOutcome::Suppressed(SuppressionReason::StoppedByUser("teams".into())),
+            "the release clock starts at the stop, not at a mid-meeting silence"
+        );
+    }
+
+    /// DEFECT 4 — StopAndRecap answered when no recording of ours is running
+    /// must not disarm the NEXT hand-pressed Stop.
+    #[test]
+    fn a_stale_stop_response_cannot_disarm_the_next_hand_stop() {
+        let mut s = fresh();
+        // A stray response with nothing running.
+        s.record_response(Some("teams".into()), NudgeResponse::StopAndRecap, 900);
+
+        s.signal(true, Some("teams".into()), false, 1000);
+        let _ = s.signal(true, Some("teams".into()), false, 1005);
+        s.record_response(Some("teams".into()), NudgeResponse::RecordNow, 1006);
+        s.meeting_stopped_at(1100);
+
+        let out = s.signal(true, Some("teams".into()), false, 1102);
+        assert_eq!(
+            out,
+            CallSignalOutcome::Suppressed(SuppressionReason::StoppedByUser("teams".into())),
+            "the hand-pressed Stop still holds"
+        );
+    }
+
+    /// DEFECT 5 — a call with no app inferred (common on macOS) was held by
+    /// nothing at all, so the loop survived there.
+    #[test]
+    fn a_call_with_no_app_is_held_under_the_global_key() {
+        let mut s = fresh();
+        s.signal(true, None, false, 1000);
+        let first = s.signal(true, None, false, 1005);
+        assert!(matches!(first, CallSignalOutcome::Detected { .. }));
+        s.record_response(None, NudgeResponse::RecordNow, 1006);
+        s.meeting_stopped_at(1100);
+
+        let out = s.signal(true, None, false, 1102);
+        assert_eq!(
+            out,
+            CallSignalOutcome::Suppressed(SuppressionReason::StoppedByUser(
+                GLOBAL_COOLDOWN_KEY.to_string()
+            ))
+        );
+    }
+
+    /// A plain meeting with no call behind it holds nothing: there is no
+    /// call to protect, and barring the global key would have switched
+    /// auto-record off machine-wide.
+    #[test]
+    fn a_meeting_with_no_detected_call_holds_nothing() {
+        let mut s = fresh();
+        s.meeting_stopped_at(1000);
+        s.signal(true, Some("teams".into()), false, 1001);
+        let out = s.signal(true, Some("teams".into()), false, 1006);
+        assert!(
+            matches!(out, CallSignalOutcome::Detected { .. }),
+            "got {out:?}"
+        );
+    }
+
+    /// The hold is one app's, not the machine's.
+    #[test]
+    fn holding_one_app_leaves_the_others_alone() {
+        let mut s = fresh();
+        s.signal(true, Some("teams".into()), false, 1000);
+        let _ = s.signal(true, Some("teams".into()), false, 1005);
+        s.record_response(Some("teams".into()), NudgeResponse::RecordNow, 1006);
+        s.meeting_stopped_at(1100);
+
+        s.signal(true, Some("zoom".into()), false, 1102);
+        let out = s.signal(true, Some("zoom".into()), false, 1110);
+        assert!(
+            matches!(out, CallSignalOutcome::Detected { .. }),
+            "another app must be detected at once, got {out:?}"
+        );
+    }
+
+    /// The measured flicker — session gone at 00:01:29, back under the same
+    /// id at 00:01:33 — is four seconds. It must not pass for a hangup.
+    #[test]
+    fn a_four_second_gap_does_not_lift_the_hold() {
+        let mut s = fresh();
+        s.signal(true, Some("teams".into()), false, 1000);
+        let _ = s.signal(true, Some("teams".into()), false, 1005);
+        s.record_response(Some("teams".into()), NudgeResponse::RecordNow, 1006);
+        s.meeting_stopped_at(1100);
+
+        let _ = s.signal(false, None, false, 1200);
+        let out = s.signal(true, Some("teams".into()), false, 1204);
+        assert_eq!(
+            out,
+            CallSignalOutcome::Suppressed(SuppressionReason::StoppedByUser("teams".into())),
+            "four seconds is a flicker, not a hangup"
+        );
+    }
+
+    /// Evidence is the way out; the deadline is only the guarantee that a
+    /// missing signal can never leave auto-record dead for ever.
+    #[test]
+    fn the_backstop_lifts_a_hold_that_never_got_its_evidence() {
+        let mut s = fresh();
+        s.signal(true, Some("teams".into()), false, 1000);
+        let _ = s.signal(true, Some("teams".into()), false, 1005);
+        s.record_response(Some("teams".into()), NudgeResponse::RecordNow, 1006);
+        s.meeting_stopped_at(1100);
+
+        // Not one free tick ever arrives. bar_backstop_secs = 1800.
+        s.signal(true, Some("teams".into()), false, 2901);
+        let out = s.signal(true, Some("teams".into()), false, 2906);
+        assert!(
+            matches!(out, CallSignalOutcome::Detected { .. }),
+            "the hold must expire rather than become permanent, got {out:?}"
         );
     }
 }
