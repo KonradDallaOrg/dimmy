@@ -4305,9 +4305,8 @@ pub unsafe extern "C" fn dimmy_meeting_stop(out_buf: *mut c_char, buf_len: c_int
     // Re-arm the call-detector stop-suggestion path so a NEXT meeting
     // started from another detection isn't sitting on stale flags.
     {
-        let now = now_epoch_secs();
         let mut g = call_detector_lock();
-        g.meeting_stopped(now);
+        g.meeting_stopped();
     }
 
     // The generation this stop belongs to. A meeting started while we drain

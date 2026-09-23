@@ -105,17 +105,6 @@ pub struct CallDetectorState {
     current_app: Option<String>,
     cooldown_until: HashMap<String, i64>,
 
-    /// The app whose call we are currently recording, remembered from the
-    /// moment recording started so that `meeting_stopped` knows who to put
-    /// on cooldown. `None` when the meeting was not started off a detected
-    /// call.
-    recorded_app: Option<String>,
-    /// How long a just-recorded app is barred from starting another
-    /// meeting by itself. Long enough to outlast a capture session that
-    /// flickers mid-call (seconds), short enough that a genuinely new
-    /// call later in the same app still gets picked up.
-    restart_cooldown_secs: u32,
-
     /// True between RecordNow accept and meeting_stopped() call. Marks
     /// "this meeting was started by the detector" — only meetings we
     /// started get the auto-stop suggestion.
@@ -177,8 +166,6 @@ impl CallDetectorState {
             detection_emitted: false,
             current_app: None,
             cooldown_until: HashMap::new(),
-            recorded_app: None,
-            restart_cooldown_secs: 300,
             recording_active_from_us: false,
             mic_inactive_since: None,
             sys_inactive_since: None,
@@ -492,10 +479,7 @@ impl CallDetectorState {
             NudgeResponse::RecordNow => {
                 self.detection_emitted = false;
                 self.mic_active_since = None;
-                // Remember who we are recording BEFORE current_app is
-                // dropped: `meeting_stopped` needs it to keep this same
-                // call from restarting itself the instant we stop.
-                self.recorded_app = self.current_app.take().or(app.clone());
+                self.current_app = None;
                 // From this moment on, the meeting is "ours" → stop-
                 // suggestion path is armed. Cleared by meeting_stopped().
                 self.recording_active_from_us = true;
@@ -553,28 +537,7 @@ impl CallDetectorState {
     /// stopped from the pill / meeting window, or our stop-suggestion
     /// path completed). Resets the recording-active flags so the next
     /// detection starts clean.
-    ///
-    /// Stopping does NOT mean the call ended: the app usually still holds
-    /// the microphone. Re-arming detection bare therefore re-detects the
-    /// SAME call within the debounce window, and with auto-record that is
-    /// an endless loop — measured 2026-09-23 on a Teams call: six meetings
-    /// and five recap calls in twenty-five seconds, and no way to stop
-    /// recording without quitting the app. Teams' capture session even
-    /// disappears and comes back under the same id mid-call, so "the
-    /// session ended" is not trustworthy on its own.
-    ///
-    /// So the app that was being recorded goes on the normal per-app
-    /// cooldown. It only gates the automatic START; a manual meeting is
-    /// never affected, and the nudge for a genuinely different app still
-    /// fires immediately.
-    pub fn meeting_stopped(&mut self, now: i64) {
-        if let Some(app) = self.recorded_app.take() {
-            let until = now + self.restart_cooldown_secs as i64;
-            let slot = self.cooldown_until.entry(app).or_insert(until);
-            if *slot < until {
-                *slot = until;
-            }
-        }
+    pub fn meeting_stopped(&mut self) {
         self.recording_active_from_us = false;
         self.mic_inactive_since = None;
         self.sys_inactive_since = None;
@@ -602,12 +565,6 @@ impl CallDetectorState {
     /// Idempotent. Cleared by `meeting_stopped()`.
     pub fn meeting_started_external(&mut self) {
         self.recording_active_from_us = true;
-        // Started by hand, but still ON a detected call, so stopping it
-        // has to bar the same call from auto-starting the next one —
-        // otherwise the loop comes back through the manual door.
-        if self.recorded_app.is_none() {
-            self.recorded_app = self.current_app.clone();
-        }
         self.mic_inactive_since = None;
         self.sys_inactive_since = None;
         self.stop_suggestion_emitted = false;
@@ -795,7 +752,7 @@ mod tests {
         );
         // After the meeting ends, detection re-arms for a fresh call
         // (min_active_secs = 5, so a full debounce window must elapse again).
-        s.meeting_stopped(1200);
+        s.meeting_stopped();
         s.signal(true, Some("teams".into()), false, 2000);
         let out2 = s.signal(true, Some("teams".into()), false, 2010);
         assert!(
@@ -1002,7 +959,7 @@ mod tests {
         let first = s.signal(false, None, true, 1006);
         assert!(matches!(first, CallSignalOutcome::StopSuggested { .. }));
         // Meeting ends — state machine should re-arm clean.
-        s.meeting_stopped(1500);
+        s.meeting_stopped();
         // New detection cycle.
         arm_recording(&mut s, 2000);
         let _ = s.signal_sys(false, true, 2000);
@@ -1090,87 +1047,6 @@ mod tests {
         );
     }
 
-    /// The loop measured on 2026-09-23: auto-record started a Teams call,
-    /// the user stopped it, and because the call was still holding the
-    /// microphone the detector re-detected it at once and started again —
-    /// six meetings and five recap calls in twenty-five seconds, with no
-    /// way to stop recording short of quitting the app.
-    #[test]
-    fn stopping_does_not_let_the_same_call_restart_itself() {
-        let mut s = fresh();
-        s.signal(true, Some("teams".into()), false, 1000);
-        let first = s.signal(true, Some("teams".into()), false, 1005);
-        assert!(matches!(first, CallSignalOutcome::Detected { .. }));
-        s.record_response(Some("teams".into()), NudgeResponse::RecordNow, 1006);
-        s.meeting_stopped(1100);
-
-        // The call never ended — Teams still holds the mic, and its capture
-        // session can even vanish and come back under the same id. None of
-        // that may start a second meeting.
-        s.signal(true, Some("teams".into()), false, 1102);
-        let again = s.signal(true, Some("teams".into()), false, 1110);
-        assert_eq!(
-            again,
-            CallSignalOutcome::Suppressed(SuppressionReason::Cooldown("teams".into())),
-            "the same call must not restart itself right after a stop"
-        );
-    }
-
-    /// The bar is per app and time-boxed: stopping a Teams call says
-    /// nothing about a Zoom call starting a second later.
-    #[test]
-    fn stopping_one_call_does_not_mute_a_different_app() {
-        let mut s = fresh();
-        s.signal(true, Some("teams".into()), false, 1000);
-        let _ = s.signal(true, Some("teams".into()), false, 1005);
-        s.record_response(Some("teams".into()), NudgeResponse::RecordNow, 1006);
-        s.meeting_stopped(1100);
-
-        s.signal(true, Some("zoom".into()), false, 1102);
-        let out = s.signal(true, Some("zoom".into()), false, 1110);
-        assert!(
-            matches!(out, CallSignalOutcome::Detected { .. }),
-            "another app must still be detected, got {out:?}"
-        );
-    }
-
-    /// And it lifts: a genuinely new call in the same app, later, is a
-    /// call like any other.
-    #[test]
-    fn the_same_app_is_detected_again_once_the_bar_expires() {
-        let mut s = fresh();
-        s.signal(true, Some("teams".into()), false, 1000);
-        let _ = s.signal(true, Some("teams".into()), false, 1005);
-        s.record_response(Some("teams".into()), NudgeResponse::RecordNow, 1006);
-        s.meeting_stopped(1100);
-
-        // restart_cooldown_secs = 300.
-        s.signal(true, Some("teams".into()), false, 1500);
-        let out = s.signal(true, Some("teams".into()), false, 1510);
-        assert!(
-            matches!(out, CallSignalOutcome::Detected { .. }),
-            "a later call in the same app must be detected, got {out:?}"
-        );
-    }
-
-    /// A meeting started by hand during a detected call closes the same
-    /// door: the loop must not come back through the manual path.
-    #[test]
-    fn a_manually_started_meeting_also_bars_the_restart() {
-        let mut s = fresh();
-        s.signal(true, Some("teams".into()), false, 1000);
-        let _ = s.signal(true, Some("teams".into()), false, 1005);
-        s.meeting_started_external();
-        s.meeting_stopped(1100);
-
-        s.signal(true, Some("teams".into()), false, 1102);
-        let again = s.signal(true, Some("teams".into()), false, 1110);
-        assert_eq!(
-            again,
-            CallSignalOutcome::Suppressed(SuppressionReason::Cooldown("teams".into()))
-        );
-    }
-
     #[test]
     fn meeting_stopped_clears_external_arm() {
         // After the meeting ends the external arm must be cleared so a
@@ -1178,7 +1054,7 @@ mod tests {
         // no longer recording (recording_active_from_us is the gate).
         let mut s = fresh();
         s.meeting_started_external();
-        s.meeting_stopped(1000);
+        s.meeting_stopped();
         assert_eq!(
             s.signal_call_session_ended(true, 1000),
             CallSignalOutcome::NoChange
