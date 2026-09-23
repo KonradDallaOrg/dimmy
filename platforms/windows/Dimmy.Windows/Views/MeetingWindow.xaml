@@ -259,6 +259,7 @@
           <Grid x:Name="RecordingPanel" Visibility="Collapsed" RowSpacing="12">
             <Grid.RowDefinitions>
               <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
               <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
 
@@ -289,11 +290,49 @@
               </Grid>
             </Border>
 
+            <!-- Calendar context. Collapsed unless the feature is on AND a
+                 candidate came back, so the normal recording view is
+                 unchanged for everyone else. Never modal and never
+                 auto-applied: this roster ends up in a document the user
+                 forwards, so a wrong name is worse than no name. -->
+            <Border x:Name="CalendarBar" Grid.Row="1" Visibility="Collapsed"
+                    Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                    BorderThickness="1" CornerRadius="8" Padding="14,10">
+              <Grid ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <FontIcon Grid.Column="0" Glyph="&#xE787;" FontSize="16"
+                          VerticalAlignment="Center"
+                          Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                  <TextBlock x:Name="CalendarHeadline" FontSize="13"
+                             TextTrimming="CharacterEllipsis"/>
+                  <TextBlock x:Name="CalendarSubline" FontSize="11"
+                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                             TextTrimming="CharacterEllipsis"/>
+                </StackPanel>
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8"
+                            VerticalAlignment="Center">
+                  <Button x:Name="CalendarConfirmBtn" Content="Confirm"
+                          Style="{ThemeResource AccentButtonStyle}"
+                          Click="CalendarConfirm_Click"/>
+                  <Button x:Name="CalendarChangeBtn" Content="Change"
+                          Click="CalendarChange_Click"/>
+                  <Button x:Name="CalendarNoneBtn" Content="None"
+                          Click="CalendarNone_Click"/>
+                </StackPanel>
+              </Grid>
+            </Border>
+
             <!-- Live transcript + Notes, as alternating tabs (no Recap tab
                  during recording — the recap only exists after Stop). The
                  Notes tab is the SAME notes.md the Done view's Notes tab
                  edits and the recap reads as the listener's emphasis. -->
-            <Border Grid.Row="1"
+            <Border Grid.Row="2"
                     Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
                     BorderThickness="1" CornerRadius="8" Padding="0">

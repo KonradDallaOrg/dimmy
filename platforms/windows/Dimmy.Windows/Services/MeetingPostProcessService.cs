@@ -70,7 +70,8 @@ public static class MeetingPostProcessService
             var spokenLanguage = await DetectSpokenLanguageAsync(dir, modelOverride);
 
             var prompt = Helpers.MeetingRecapHelpers.BuildStructuredRecapPrompt(
-                transcript, notes, meetingType, spokenLanguage, DictionaryService.List());
+                transcript, notes, meetingType, spokenLanguage, DictionaryService.List(),
+                Views.MeetingWindow.CalendarRosterLine(dir));
             App.Log($"recap (shared) model='{modelOverride}' prompt {prompt.Length} chars dir='{dir}'",
                 "MeetingRecap");
 
