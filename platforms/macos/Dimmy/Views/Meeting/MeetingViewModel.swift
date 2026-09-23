@@ -484,7 +484,9 @@ final class MeetingViewModel: ObservableObject {
         case .modal:
             guard MeetingConsentFlow.confirmAndAnnounce(lang: lang) else { return }
         case .announceOnly:
-            MeetingConsentFlow.announceOnly(lang: lang)
+            // Armed, not spoken. The notice follows the recording; it never
+            // leads it. See the announce-after-it-survives block below.
+            break
         }
         // Flush any unsaved notes from the previous Done view before
         // we wipe the buffer, matches the LostFocus save on Win.
@@ -542,6 +544,20 @@ final class MeetingViewModel: ObservableObject {
                 self.titlebarTitle = "Recording..."
                 self.startRecordingPolling()
                 self.loadHistory()  // surfaces the new dir in the sidebar
+                if consent == .announceOnly {
+                    // Tell the room only once the recording has proved it is
+                    // alive. An auto-start that collapses in the first second
+                    // captured nothing, and announcing it left the user
+                    // hearing the notice over and over with no recording to
+                    // show for it (2026-09-23, six loops, all duration=1.0s
+                    // chunks=0). Mirror of Win MeetingWindow.ArmAutoAnnounce.
+                    Task {
+                        try? await Task.sleep(nanoseconds: 2_500_000_000)
+                        guard self.sessionId == id,
+                              DimmyCore.shared.meetingIsActive else { return }
+                        MeetingConsentFlow.announceOnly(lang: lang)
+                    }
+                }
                 Task {
                     let ok = await SystemAudioCaptureService.shared.start()
                     if !ok {
@@ -1446,15 +1462,13 @@ enum MeetingConsentFlow {
     /// Announce without asking, for the auto-record path: the user
     /// answered the question once in Settings, and a modal at call time
     /// would defeat "start recording immediately". Participants still get
-    /// the spoken notice and the pasteable text, and the audit log still
-    /// records that they were told.
+    /// the spoken notice, and the audit log still records that they were
+    /// told. The pasteboard is left alone, unlike the manual path: nobody
+    /// asked for this recording, so nothing the user was holding to paste
+    /// may be thrown away for it. Mirror of Win ConsentFlow.AnnounceOnly.
     static func announceOnly(lang: String) {
         let announcement = DimmyCore.shared.consentText(kind: "announcement", lang: lang)
             ?? "Quick note: this meeting is being recorded and transcribed for note-taking."
-        let pb = NSPasteboard.general
-        pb.clearContents()
-        pb.setString(announcement, forType: .string)
-        DimmyCore.shared.consentLogEvent(kind: "chat_copied", lang: lang)
         let utterance = AVSpeechUtterance(string: announcement)
         if let voice = AVSpeechSynthesisVoice(language: lang) {
             utterance.voice = voice

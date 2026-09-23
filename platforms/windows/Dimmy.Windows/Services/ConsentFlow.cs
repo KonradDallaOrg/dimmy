@@ -47,17 +47,15 @@ public static class ConsentFlow
     {
         var announcement = DimmyNative.ConsentText("announcement", lang)
             ?? "Quick note: this meeting is being recorded and transcribed for note-taking.";
-        try
-        {
-            var dp = new global::Windows.ApplicationModel.DataTransfer.DataPackage();
-            dp.SetText(announcement);
-            global::Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dp);
-            DimmyNative.ConsentLogEvent("chat_copied", lang);
-        }
-        catch { /* clipboard failure must not block the meeting */ }
-
+        // The clipboard is NOT touched here, unlike the manual path. Nobody
+        // asked for this recording, so nothing the user was holding to paste
+        // may be thrown away for it. The manual flow still copies, because
+        // there the user pressed Start and the pasteable text is the point.
+        //
+        // SpeakAsync writes the "announced" audit entry once the notice has
+        // actually been spoken. Logging it here as well recorded every
+        // announcement twice.
         _ = SpeakAsync(announcement, lang);
-        DimmyNative.ConsentLogEvent("announced", lang);
     }
 
     public static async Task<bool> ConfirmAndAnnounceAsync(XamlRoot? xamlRoot, string lang)
