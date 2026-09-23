@@ -33,10 +33,6 @@ struct MeetingView: View {
             if vm.systemAudioPermissionNeeded {
                 systemAudioPermissionBanner
             }
-            if MeetingViewModel.showsAutoRecordNotice(phase: vm.phase,
-                                                     noticeVisible: vm.autoRecordNoticeVisible) {
-                autoRecordBanner
-            }
             HStack(spacing: 0) {
                 MeetingSidebar(vm: vm)
                 mainPanel
@@ -143,47 +139,6 @@ struct MeetingView: View {
     /// permission. Stays up (no auto-dismiss) with an Open-Settings CTA so
     /// the user can actually grant it, then restart the meeting. Replaces
     /// the old 2.5 s toast that vanished before the user could react.
-    /// Auto-record started this meeting on its own. Non-blocking by design —
-    /// the recording is already running — but it says so plainly and offers
-    /// the way out.
-    private var autoRecordBanner: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "record.circle.fill")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Color.red)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Recording started automatically")
-                    .font(.system(size: 12, weight: .semibold))
-                Text("A call was detected, so Dimmy is recording and has read the recording notice aloud to the participants.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Color.macTextSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer()
-            Button(action: { vm.stopAndProcess() }) {
-                HStack(spacing: 6) {
-                    Image(systemName: "stop.fill")
-                        .font(.system(size: 12, weight: .semibold))
-                    Text("Stop recording")
-                        .font(.system(size: 12, weight: .semibold))
-                }
-                .padding(.horizontal, 4)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.red)
-            .help("Stop this meeting and run the recap")
-            Button(action: { vm.dismissAutoRecordNotice() }) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .semibold))
-            }
-            .buttonStyle(.plain)
-            .help("Hide this notice; the recording continues")
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(Color.red.opacity(0.10))
-    }
-
     private var systemAudioPermissionBanner: some View {
         HStack(spacing: 10) {
             Image(systemName: "speaker.slash.fill")

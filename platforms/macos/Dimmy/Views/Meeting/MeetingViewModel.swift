@@ -32,7 +32,10 @@ final class MeetingViewModel: ObservableObject {
 
     // ── Top-level state ────────────────────────────────────────────
     @Published var phase: Phase = .idle
-    @Published var generateRecap: Bool = true
+    /// Per-meeting, seeded from the saved preference rather than hardcoded
+    /// on: untick it and only this meeting goes without a recap. Mirror of
+    /// Win MeetingWindow.ReadMeetingGenerateRecapDefault().
+    @Published var generateRecap: Bool = AppState.shared.meetingGenerateRecapDefault
     @Published var statusLabel: String = "Ready"
     @Published var subStatusLabel: String = "Click Start to begin a meeting recording"
     @Published var titlebarTitle: String = "New meeting"
@@ -137,11 +140,6 @@ final class MeetingViewModel: ObservableObject {
     /// Cleared on stop / next start / once system audio starts flowing.
     @Published var systemAudioPermissionNeeded: Bool = false
 
-    /// Auto-record started this meeting without asking. The notice says so and
-    /// offers Stop: it never blocks, because blocking is exactly what the
-    /// feature exists to avoid, but the user must not discover a recording
-    /// by accident either.
-    @Published var autoRecordNoticeVisible: Bool = false
 
     /// Determinate progress (0–100) for meeting re-transcription, mirrored
     /// from AppState.fileTranscribeProgress (the core emits
@@ -470,17 +468,6 @@ final class MeetingViewModel: ObservableObject {
     /// auto-record silently dropped the second call. A recording already in
     /// flight is the only real blocker — the core refuses a second meeting
     /// anyway (`dimmy_meeting_start` returns -1 while one is active).
-    /// The auto-record notice belongs to the recording it announced: it goes
-    /// when the recording does, so it can never hang over an idle window or a
-    /// past meeting the user is reading.
-    nonisolated static func showsAutoRecordNotice(phase: Phase, noticeVisible: Bool) -> Bool {
-        noticeVisible && phase == .recording
-    }
-
-    func dismissAutoRecordNotice() {
-        autoRecordNoticeVisible = false
-    }
-
     nonisolated static func canStart(phase: Phase, meetingActive: Bool) -> Bool {
         !meetingActive && phase != .recording
     }
@@ -498,7 +485,6 @@ final class MeetingViewModel: ObservableObject {
             guard MeetingConsentFlow.confirmAndAnnounce(lang: lang) else { return }
         case .announceOnly:
             MeetingConsentFlow.announceOnly(lang: lang)
-            autoRecordNoticeVisible = true
         }
         // Flush any unsaved notes from the previous Done view before
         // we wipe the buffer, matches the LostFocus save on Win.
@@ -607,7 +593,6 @@ final class MeetingViewModel: ObservableObject {
     // MARK: - Stop
 
     func stopAndProcess() {
-        autoRecordNoticeVisible = false
         guard phase == .recording, !isWorking else { return }
         isWorking = true
         phase = .processing

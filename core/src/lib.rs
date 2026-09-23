@@ -902,6 +902,12 @@ pub struct AppConfig {
     /// it shares the same dimmy_llm_call_raw FFI that the meeting
     /// window already uses).
     pub auto_recap_threshold_secs: u32,
+    /// Default for the "generate a recap when this meeting stops" tick in
+    /// the meeting window. Until now that tick was hardcoded on and reset
+    /// every launch, so someone who never wants a recap had to untick it
+    /// at the start of every single meeting. The per-meeting tick stays —
+    /// this is only what it starts as.
+    pub meeting_generate_recap: bool,
     pub filler_removal_enabled: bool,
     // Local LLM fields
     pub llm_mode: String,        // "cloud" or "local"
@@ -1102,6 +1108,7 @@ impl Default for AppConfig {
             history_audio_keep_days: 30,
             history_audio_max_mb: 5_000,
             auto_recap_threshold_secs: 60,
+            meeting_generate_recap: true,
             filler_removal_enabled: true,
             llm_mode: "cloud".to_string(),
             local_llm_model: local_llm::DEFAULT_LLM_MODEL.to_string(),
@@ -1219,6 +1226,7 @@ pub fn save_config_file(cfg: &AppConfig) {
             "history_audio_keep_days": cfg.history_audio_keep_days,
             "history_audio_max_mb": cfg.history_audio_max_mb,
             "auto_recap_threshold_secs": cfg.auto_recap_threshold_secs,
+            "meeting_generate_recap": cfg.meeting_generate_recap,
             "filler_removal_enabled": cfg.filler_removal_enabled,
             "llm_mode": cfg.llm_mode,
             "local_llm_model": cfg.local_llm_model,
@@ -1432,6 +1440,9 @@ pub fn load_config_file() -> AppConfig {
                         .as_u64()
                         .map(|n| n as u32)
                         .unwrap_or(defaults.auto_recap_threshold_secs),
+                    meeting_generate_recap: v["meeting_generate_recap"]
+                        .as_bool()
+                        .unwrap_or(defaults.meeting_generate_recap),
                     filler_removal_enabled: v["filler_removal_enabled"]
                         .as_bool()
                         .unwrap_or(defaults.filler_removal_enabled),
@@ -1871,6 +1882,7 @@ pub struct AppState {
     pub history_audio_keep_days: Mutex<u32>,
     pub history_audio_max_mb: Mutex<u32>,
     pub auto_recap_threshold_secs: Mutex<u32>,
+    pub meeting_generate_recap: Mutex<bool>,
     pub filler_removal_enabled: Mutex<bool>,
     // Local LLM state
     pub llm_mode: Mutex<String>,
@@ -2030,6 +2042,7 @@ impl AppState {
             history_audio_keep_days: Mutex::new(file_cfg.history_audio_keep_days),
             history_audio_max_mb: Mutex::new(file_cfg.history_audio_max_mb),
             auto_recap_threshold_secs: Mutex::new(file_cfg.auto_recap_threshold_secs),
+            meeting_generate_recap: Mutex::new(file_cfg.meeting_generate_recap),
             filler_removal_enabled: Mutex::new(file_cfg.filler_removal_enabled),
             llm_mode: Mutex::new(file_cfg.llm_mode),
             local_llm_model: Mutex::new(file_cfg.local_llm_model),
@@ -2223,6 +2236,10 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         .auto_recap_threshold_secs
         .lock()
         .map_err(|e| e.to_string())?;
+    let meeting_generate_recap = *state
+        .meeting_generate_recap
+        .lock()
+        .map_err(|e| e.to_string())?;
     let filler_removal_enabled = *state
         .filler_removal_enabled
         .lock()
@@ -2275,6 +2292,7 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         history_audio_keep_days,
         history_audio_max_mb,
         auto_recap_threshold_secs,
+        meeting_generate_recap,
         filler_removal_enabled,
         llm_mode: state.llm_mode.lock().map_err(|e| e.to_string())?.clone(),
         local_llm_model: state
@@ -3092,6 +3110,51 @@ mod tests {
         assert!(loaded.keep_in_clipboard);
 
         // Restore default
+        save_config_file(&AppConfig::default());
+    }
+
+    /// The recap tick in the meeting window used to be hardcoded on and
+    /// reset every launch, so "I never want a recap" had to be re-stated at
+    /// the start of every meeting. It is a saved preference now, and a
+    /// preference nobody can save is worse than no preference at all.
+    #[test]
+    fn meeting_generate_recap_survives_a_save_and_load() {
+        assert!(
+            AppConfig::default().meeting_generate_recap,
+            "a recap on stop stays the default — this only makes it changeable"
+        );
+
+        let mut cfg = AppConfig::default();
+        cfg.meeting_generate_recap = false;
+        save_config_file(&cfg);
+        assert!(
+            !load_config_file().meeting_generate_recap,
+            "turning the recap off must outlive the app"
+        );
+
+        cfg.meeting_generate_recap = true;
+        save_config_file(&cfg);
+        assert!(load_config_file().meeting_generate_recap);
+
+        save_config_file(&AppConfig::default());
+    }
+
+    /// A config written before this field existed must read as "on", not as
+    /// a silent "off" that stops producing recaps after an update.
+    #[test]
+    fn a_config_without_the_field_keeps_recapping() {
+        let path = config_path().expect("config path");
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let older = serde_json::json!({ "api_url": "https://example.test" }).to_string();
+        std::fs::write(&path, older).expect("write a pre-field config");
+
+        assert!(
+            load_config_file().meeting_generate_recap,
+            "an upgrade must not silently stop producing recaps"
+        );
+
         save_config_file(&AppConfig::default());
     }
 

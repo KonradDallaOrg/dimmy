@@ -250,7 +250,7 @@
                 <TextBlock Text="Start meeting" FontSize="14" FontWeight="SemiBold"/>
               </StackPanel>
             </Button>
-            <CheckBox x:Name="GenerateRecapCheck" IsChecked="True"
+            <CheckBox x:Name="GenerateRecapCheck"
                       HorizontalAlignment="Center"
                       Content="Generate recap + action items on stop"/>
           </StackPanel>
@@ -975,26 +975,6 @@
         </Grid>
       </Grid>
     </Grid>
-
-    <!-- Auto-record started this meeting on its own: non-blocking notice,
-         with the way out. Mac mirror: MeetingView.autoRecordBanner. -->
-    <Border x:Name="AutoRecordBar" Grid.Row="1" Visibility="Collapsed"
-            HorizontalAlignment="Stretch" VerticalAlignment="Top"
-            Background="#33D13438" BorderBrush="#66D13438" BorderThickness="0,0,0,1"
-            Padding="16,10">
-      <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="10">
-        <StackPanel Grid.Column="0" Spacing="2">
-          <TextBlock Text="Recording started automatically" FontSize="12" FontWeight="SemiBold"/>
-          <TextBlock FontSize="11" Opacity="0.8" TextWrapping="Wrap"
-                     Text="A call was detected, so Dimmy is recording and has read the recording notice aloud to the participants."/>
-        </StackPanel>
-        <Button Grid.Column="1" x:Name="AutoRecordStopBtn" Click="AutoRecordStop_Click"
-                Content="Stop recording" Style="{StaticResource AccentButtonStyle}"/>
-        <Button Grid.Column="2" x:Name="AutoRecordDismissBtn" Click="AutoRecordDismiss_Click"
-                Content="&#xE711;" FontFamily="Segoe MDL2 Assets"
-                ToolTipService.ToolTip="Hide this notice; the recording continues"/>
-      </Grid>
-    </Border>
 
     <!-- Toast for blocked-history-during-recording -->
     <Border x:Name="ToastBar" Grid.Row="1" Visibility="Collapsed"

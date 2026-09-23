@@ -382,16 +382,6 @@ final class AppStateTests: XCTestCase {
         XCTAssertFalse(VM.canStart(phase: .idle, meetingActive: true))
     }
 
-    func testAutoRecordNoticeLivesOnlyWithItsRecording() {
-        typealias VM = MeetingViewModel
-        XCTAssertTrue(VM.showsAutoRecordNotice(phase: .recording, noticeVisible: true))
-        // Dismissed by the user, or a manual start that asked first.
-        XCTAssertFalse(VM.showsAutoRecordNotice(phase: .recording, noticeVisible: false))
-        // The recording is over: the notice must not outlive it.
-        XCTAssertFalse(VM.showsAutoRecordNotice(phase: .processing, noticeVisible: true))
-        XCTAssertFalse(VM.showsAutoRecordNotice(phase: .done, noticeVisible: true))
-    }
-
     func testPreparationOfOneQuantCountsForItsSibling() {
         // q5 ran the compile; q8 shares the same encoder bundle.
         let states = ["ggml-large-v3-q5_0.bin": "ready",

@@ -117,8 +117,9 @@ public partial class App : Application
             // only lives in the meeting window), so the stop path reads
             // AppViewModel.MeetingGenerateRecap — if we don't set it here it
             // keeps a STALE value from an earlier window-started meeting and
-            // the recap is silently skipped at stop. Default to recap on.
-            _appViewModel.MeetingGenerateRecap = true;
+            // the recap is silently skipped at stop. Follows the saved
+            // preference, which is the only answer available with no window.
+            _appViewModel.MeetingGenerateRecap = Views.MeetingWindow.MeetingGenerateRecapDefault();
             try { DimmyNative.dimmy_track_meeting_action(source); } catch { }
             // Pill + taskbar flip to recording via the meeting_state event.
         }
@@ -2427,8 +2428,19 @@ public partial class App : Application
                 // Conditions (recording is ours, meeting is active, mic
                 // has been silent past the threshold) are enforced by
                 // call_detector::handle_inactive — here we just paint.
-                EnsureCallNudgeWindow();
                 Log($"meeting.stop_suggested: app={appId ?? "<none>"} inactive_for={inactiveForSecs}s", "CallDetect");
+                // Auto-record answers this question too. Starting by itself
+                // and then waiting to be told to stop is half a feature: the
+                // call is over, the recording should be too. The core sees
+                // this as OUR stop, not the user's, so the next call is free
+                // to start by itself.
+                if (_appViewModel.CallDetectAutoRecord)
+                {
+                    Log("auto-record: call ended, stopping by itself", "CallDetect");
+                    OnNudgeStopAndRecap(appId);
+                    return;
+                }
+                EnsureCallNudgeWindow();
                 _callNudgeWindow!.ShowStopSuggestion(appId);
             }
             catch (Exception ex)

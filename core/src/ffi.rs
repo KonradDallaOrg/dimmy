@@ -554,6 +554,7 @@ fn dimmy_init_inner() -> c_int {
         history_audio_keep_days: Mutex::new(file_cfg.history_audio_keep_days),
         history_audio_max_mb: Mutex::new(file_cfg.history_audio_max_mb),
         auto_recap_threshold_secs: Mutex::new(file_cfg.auto_recap_threshold_secs),
+        meeting_generate_recap: Mutex::new(file_cfg.meeting_generate_recap),
         filler_removal_enabled: Mutex::new(file_cfg.filler_removal_enabled),
         llm_mode: Mutex::new(file_cfg.llm_mode),
         local_llm_model: Mutex::new(file_cfg.local_llm_model),
@@ -2195,6 +2196,9 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
     if let Ok(n) = st.history_audio_max_mb.lock() {
         json["history_audio_max_mb"] = serde_json::Value::from(*n);
     }
+    if let Ok(b) = st.meeting_generate_recap.lock() {
+        json["meeting_generate_recap"] = serde_json::Value::from(*b);
+    }
     if let Ok(n) = st.auto_recap_threshold_secs.lock() {
         json["auto_recap_threshold_secs"] = serde_json::Value::from(*n);
     }
@@ -2761,6 +2765,11 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
     if let Some(n) = v["auto_recap_threshold_secs"].as_u64() {
         if let Ok(mut f) = st.auto_recap_threshold_secs.lock() {
             *f = n as u32;
+        }
+    }
+    if let Some(b) = v["meeting_generate_recap"].as_bool() {
+        if let Ok(mut f) = st.meeting_generate_recap.lock() {
+            *f = b;
         }
     }
     if let Some(b) = v["filler_removal_enabled"].as_bool() {
@@ -11484,6 +11493,7 @@ mod tests {
                 history_audio_keep_days: Mutex::new(30),
                 history_audio_max_mb: Mutex::new(5_000),
                 auto_recap_threshold_secs: Mutex::new(60),
+                meeting_generate_recap: Mutex::new(true),
                 filler_removal_enabled: Mutex::new(true),
                 llm_mode: Mutex::new("cloud".to_string()),
                 local_llm_model: Mutex::new(crate::local_llm::DEFAULT_LLM_MODEL.to_string()),

@@ -146,6 +146,9 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool _chunkStreamingEnabled;
     [ObservableProperty] private bool _streamingDictation;
     [ObservableProperty] private bool _liveCaptionsEnabled = true;
+    /// Default for the meeting window's recap tick. Mirror of Rust
+    /// Config::meeting_generate_recap.
+    [ObservableProperty] private bool _meetingGenerateRecap = true;
     [ObservableProperty] private bool _telegramEnabled;
     [ObservableProperty] private bool _telegramAutoProcess;
     [ObservableProperty] private bool _callDetectEnabled = true;
@@ -583,6 +586,9 @@ public partial class SettingsViewModel : ObservableObject
             ChunkStreamingEnabled = r.TryGetProperty("chunk_streaming_enabled", out var cs) && cs.GetBoolean();
             StreamingDictation = r.TryGetProperty("streaming_dictation", out var sd) && sd.GetBoolean();
             LiveCaptionsEnabled = !r.TryGetProperty("live_captions_enabled", out var lce) || lce.GetBoolean();
+            // Absent key ⇒ on. An older config must not silently stop
+            // producing recaps after an update.
+            MeetingGenerateRecap = !r.TryGetProperty("meeting_generate_recap", out var mgr) || mgr.GetBoolean();
             TelegramEnabled = r.TryGetProperty("telegram_enabled", out var tge) && tge.GetBoolean();
             TelegramAutoProcess = r.TryGetProperty("telegram_auto_process", out var tgap) && tgap.GetBoolean();
             CallDetectEnabled = !r.TryGetProperty("call_detect_enabled", out var cde) || cde.GetBoolean();
@@ -790,6 +796,7 @@ public partial class SettingsViewModel : ObservableObject
             ["chunk_streaming_enabled"] = ChunkStreamingEnabled,
             ["streaming_dictation"] = StreamingDictation,
             ["live_captions_enabled"] = LiveCaptionsEnabled,
+            ["meeting_generate_recap"] = MeetingGenerateRecap,
             ["telegram_enabled"] = TelegramEnabled,
             ["telegram_auto_process"] = TelegramAutoProcess,
             ["call_detect_enabled"] = CallDetectEnabled,
