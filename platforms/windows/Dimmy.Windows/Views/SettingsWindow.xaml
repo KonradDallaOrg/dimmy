@@ -1978,7 +1978,9 @@
                                  Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                     </StackPanel>
                     <ToggleSwitch Grid.Column="2" x:Name="CalendarContextToggle"
+                                  IsOn="{Binding CalendarContextEnabled, Mode=TwoWay}"
                                   OnContent="On" OffContent="Off"
+                                  Loaded="CalendarContextToggle_Loaded"
                                   Toggled="CalendarContextToggle_Toggled"/>
                   </Grid>
 

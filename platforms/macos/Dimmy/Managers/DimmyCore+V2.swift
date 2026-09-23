@@ -772,6 +772,21 @@ extension DimmyCore {
         }
     }
 
+    /// Candidates a previous lookup parked on disk, without touching the
+    /// CLI. Empty once the question has been answered. Fast, so it is safe
+    /// to call every time the meeting window appears.
+    func calendarPending(meetingDir: String) -> String? {
+        guard isInitialized else { return nil }
+        return meetingDir.withCString { dptr -> String? in
+            var buffer = [CChar](repeating: 0, count: 262_144)
+            let len = buffer.withUnsafeMutableBufferPointer { ptr -> Int32 in
+                dimmy_calendar_pending(dptr, ptr.baseAddress!, Int32(ptr.count))
+            }
+            guard len > 0 else { return nil }
+            return String(cString: buffer)
+        }
+    }
+
     /// Open an interactive `claude` session on /mcp. Dimmy cannot perform
     /// the authorisation itself: the handshake needs a terminal the user
     /// answers, and the CLI keeps a credential store that authorising on

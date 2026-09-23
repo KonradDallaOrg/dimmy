@@ -31,12 +31,30 @@ public sealed partial class SettingsWindow
 
     private bool _calendarStatusInFlight;
 
+    /// <summary>
+    /// Show the real connector state when the card first appears, instead
+    /// of the "Off" placeholder sitting under a switch that is already on.
+    /// </summary>
+    private void CalendarContextToggle_Loaded(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.CalendarContextEnabled) _ = RefreshCalendarStatusAsync();
+        else CalendarStatusText.Text = "Off";
+    }
+
     private void CalendarContextToggle_Toggled(object sender, RoutedEventArgs e)
     {
         if (!_loaded) return;
         var on = CalendarContextToggle.IsOn;
         ViewModel.CalendarContextEnabled = on;
-        ScheduleAutoSaveConfig();
+        // Pushed NOW, not through the 400 ms debounce. dimmy_calendar_status
+        // answers "disabled" while the core still has the old value, so a
+        // debounced save meant flipping the switch on and being told the
+        // feature was off — with the setup button hidden, because that
+        // branch never ran. The core is still the only writer of
+        // config.json; this just stops asking it a question before telling
+        // it the answer.
+        DimmyNative.dimmy_set_config_json(ViewModel.ToJson());
+        App.Instance?.ReloadConfig();
         if (on) _ = RefreshCalendarStatusAsync();
         else
         {

@@ -407,6 +407,11 @@ final class MeetingViewModel: ObservableObject {
         }
         if DimmyCore.shared.meetingIsActive {
             attachToInflightMeeting()
+            // A lookup that finished while this window was shut parked its
+            // candidates on disk. Now there is somewhere to show them.
+            if let dir = freshestMeetingDir() {
+                resumeCalendarPrompt(meetingDir: dir.path)
+            }
         } else if phase == .idle {
             // Nothing to attach to, keep current state. If we just
             // came back from a Done (selected past meeting), don't
@@ -1093,8 +1098,37 @@ final class MeetingViewModel: ObservableObject {
                 guard self.calendarMeetingDir == dir else { return }
                 self.calendarCandidates = reply.candidates
                 self.calendarIndex = 0
+                // The window's lifecycle is decoupled from the recording,
+                // so it may be shut while we still record. The core parked
+                // the candidates on disk, so reopening picks them up; all
+                // this decides is whether anyone can see the row now.
+                if !MeetingWindowController.shared.isWindowVisible {
+                    DictToastWindow.show(
+                        kind: .workflowHint,
+                        title: "Which meeting is this?",
+                        body: reply.candidates.count == 1
+                            ? "A calendar event matches this recording. Open the meeting window to link it."
+                            : "\(reply.candidates.count) calendar events match this recording. Open the meeting window to link it."
+                    )
+                }
             }
         }
+    }
+
+    /// Offer the choice again when the window comes back, from the
+    /// candidates the core parked on disk. One file read, not another
+    /// 25-second trip through the CLI. Mirror of Win
+    /// MeetingWindow.ResumeCalendarPrompt.
+    func resumeCalendarPrompt(meetingDir: String) {
+        guard !meetingDir.isEmpty else { return }
+        calendarMeetingDir = meetingDir
+        guard let raw = DimmyCore.shared.calendarPending(meetingDir: meetingDir),
+              let data = raw.data(using: .utf8),
+              let reply = try? JSONDecoder().decode(CalendarCandidatesReply.self, from: data),
+              !reply.candidates.isEmpty
+        else { return }
+        calendarCandidates = reply.candidates
+        calendarIndex = 0
     }
 
     /// Link this meeting to the candidate on screen.

@@ -125,7 +125,15 @@ public sealed partial class MeetingWindow
                     return;
                 }
 
-                DispatcherQueue.TryEnqueue(() =>
+                // The window may already be gone: its lifecycle is
+                // decoupled from the recording, so the user can close it
+                // and keep talking. TryEnqueue on a dead dispatcher
+                // silently does nothing, which is how the first live run
+                // found a candidate and told nobody. The core has parked
+                // the candidates on disk, so the reopened window will
+                // pick them up either way; all we decide here is whether
+                // anyone can see the row right now.
+                var delivered = DispatcherQueue.TryEnqueue(() =>
                 {
                     // The meeting may have been stopped, or another one
                     // started, while the lookup was out.
@@ -133,14 +141,49 @@ public sealed partial class MeetingWindow
                     _calCandidates = reply.Candidates;
                     _calIndex = 0;
                     ShowCalendarCandidate();
-                    if (!_recordingActive) NotifyCalendarPending();
                 });
+                if (!delivered || !IsWindowOnScreen())
+                    NotifyCalendarPending(reply.Candidates.Count);
             }
             catch (Exception ex)
             {
                 App.Log($"calendar lookup failed: {ex.Message}", "Calendar");
             }
         });
+    }
+
+    /// <summary>
+    /// Is this window actually on screen? A closed MeetingWindow can leave
+    /// a live C# object behind (its lifecycle is decoupled from the
+    /// recording), so "the object exists" proves nothing about whether the
+    /// user can see the row.
+    /// </summary>
+    private bool IsWindowOnScreen()
+    {
+        try { return AppWindow is not null && AppWindow.IsVisible; }
+        catch (Exception) { return false; }
+    }
+
+    /// <summary>
+    /// Offer the choice again when the window comes back, using the
+    /// candidates the core parked on disk. Costs one small file read, not
+    /// another 25-second trip through the CLI.
+    /// </summary>
+    internal void ResumeCalendarPrompt(string meetingDir)
+    {
+        if (string.IsNullOrWhiteSpace(meetingDir)) return;
+        _calMeetingDir = meetingDir;
+        var raw = DimmyNative.CalendarPending(meetingDir);
+        if (string.IsNullOrWhiteSpace(raw)) return;
+        try
+        {
+            var reply = JsonSerializer.Deserialize<CalCandidatesReply>(raw, CalJson);
+            if (reply is null || reply.Candidates.Count == 0) return;
+            _calCandidates = reply.Candidates;
+            _calIndex = 0;
+            ShowCalendarCandidate();
+        }
+        catch (JsonException) { }
     }
 
     private static CalAssignmentReply? ReadAssignment(string meetingDir)
@@ -228,11 +271,11 @@ public sealed partial class MeetingWindow
     /// and no way to correct a mis-tap — so it only offers to open the
     /// window where the real choice lives.
     /// </summary>
-    private void NotifyCalendarPending()
+    private void NotifyCalendarPending(int count)
     {
         try
         {
-            Services.DictNotificationService.ShowCalendarMatch(_calCandidates.Count);
+            Services.DictNotificationService.ShowCalendarMatch(count);
         }
         catch (Exception ex)
         {

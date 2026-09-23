@@ -19,6 +19,12 @@ final class MeetingWindowController {
     static let shared = MeetingWindowController()
 
     private var window: NSWindow?
+
+    /// Is the meeting window actually on screen? The window's lifecycle is
+    /// decoupled from the recording, so "the controller exists" proves
+    /// nothing about whether the user can see anything. Mirror of Win
+    /// MeetingWindow.IsWindowOnScreen.
+    var isWindowVisible: Bool { window?.isVisible ?? false }
     let viewModel = MeetingViewModel()
     private var recapSavedObserver: NSObjectProtocol?
 

@@ -12967,15 +12967,25 @@ pub unsafe extern "C" fn dimmy_calendar_candidates(
     // runs past midnight still finds its invite, because the invite
     // started on the same day the recording did.
     let (day_iso, tz_offset_mins) = crate::calendar::local_day_and_offset(started);
-    let json = match crate::calendar::fetch_day(&day_iso, tz_offset_mins) {
+    let now = calendar_now_unix();
+    let window = Some((started, ended.unwrap_or(now).max(started)));
+    let json = match crate::calendar::fetch_day(&day_iso, tz_offset_mins, window) {
         Ok(events) => {
-            let ranked =
-                crate::calendar::rank_for_meeting(started, ended, calendar_now_unix(), &events);
+            let ranked = crate::calendar::rank_for_meeting(started, ended, now, &events);
+            let people: usize = ranked.iter().map(|c| c.event.attendees.len()).sum();
             log(&format!(
-                "[Calendar] {} event(s) that day, {} candidate(s) for this meeting",
+                "[Calendar] {} event(s) that day, {} candidate(s), {} attendee(s) on them",
                 events.len(),
-                ranked.len()
+                ranked.len(),
+                people
             ));
+            // Parked on disk so the answer survives the meeting window
+            // being closed — the window's lifecycle is decoupled from the
+            // recording, and a lookup living only in its memory is lost
+            // the moment it shuts.
+            if !ranked.is_empty() {
+                let _ = crate::calendar::save_candidates(&dir, &ranked);
+            }
             serde_json::json!({ "ok": true, "candidates": ranked }).to_string()
         }
         Err(e) => {
@@ -12983,6 +12993,42 @@ pub unsafe extern "C" fn dimmy_calendar_candidates(
             serde_json::json!({ "ok": false, "error": format!("{}", e) }).to_string()
         }
     };
+    write_to_buf(&json, out_buf, buf_len)
+}
+
+/// Candidates parked by an earlier lookup, without going near the CLI.
+///
+/// This is what lets a reopened meeting window ask the question a closed
+/// one could not: `{"ok":true,"candidates":[...]}`, empty when there is
+/// nothing pending or the question was already answered. Fast — one small
+/// file read — so a host may call it whenever the window appears.
+///
+/// # Safety
+/// `meeting_dir_ptr` must be a valid NUL-terminated string; `out_buf` must
+/// point to at least `buf_len` writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_calendar_pending(
+    meeting_dir_ptr: *const c_char,
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if meeting_dir_ptr.is_null() || out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let dir_str = match unsafe { CStr::from_ptr(meeting_dir_ptr) }.to_str() {
+        Ok(s) if !s.is_empty() => s,
+        _ => return -1,
+    };
+    let dir = std::path::PathBuf::from(dir_str);
+    let answered = crate::calendar::load_assignment(&dir)
+        .map(|a| a.answered())
+        .unwrap_or(false);
+    let candidates = if answered {
+        Vec::new()
+    } else {
+        crate::calendar::load_candidates(&dir)
+    };
+    let json = serde_json::json!({ "ok": true, "candidates": candidates }).to_string();
     write_to_buf(&json, out_buf, buf_len)
 }
 

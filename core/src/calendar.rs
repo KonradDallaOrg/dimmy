@@ -238,6 +238,18 @@ pub fn local_day_and_offset(unix_secs: i64) -> (String, i32) {
     }
 }
 
+/// Local wall-clock HH:MM for a unix timestamp, for putting a recording's
+/// own window in front of the model.
+fn local_hhmm(unix_secs: i64) -> String {
+    use chrono::{Local, TimeZone};
+    match Local.timestamp_opt(unix_secs, 0) {
+        chrono::LocalResult::Single(dt) | chrono::LocalResult::Ambiguous(dt, _) => {
+            dt.format("%H:%M").to_string()
+        }
+        chrono::LocalResult::None => "?".to_string(),
+    }
+}
+
 /// How far ahead an invite may start and still be offered to a
 /// recording already in progress. People join a call before the invite
 /// begins and start recording then; fifteen minutes is the widest gap
@@ -336,12 +348,17 @@ pub fn roster_for_prompt(event: &CalendarEvent) -> String {
 ///
 /// Strict JSON and nothing else, because the answer is parsed and any
 /// prose around it is a parse failure rather than a partial success.
-fn fetch_prompt(day_iso: &str, tz_note: &str) -> String {
+fn fetch_prompt(day_iso: &str, tz_note: &str, window_note: &str) -> String {
     format!(
         "Use the Microsoft 365 (Outlook) connector, or the Google Calendar connector \
 if Microsoft 365 is unavailable, to read my calendar for {day_iso}{tz_note}.\n\n\
-For every event that day, also resolve the attendees' display names (the search \
-tool returns addresses only; reading the event itself fills attendees[].name).\n\n\
+{window_note}\
+STEP 2 — this step is REQUIRED and is the point of the request. The calendar \
+SEARCH tool returns events with an EMPTY or address-only attendee list. For each \
+event you listed in step 1, you MUST then READ that event itself (read_resource, \
+or the equivalent get-event call) to fill `attendees`, with both `name` and \
+`email` for every person. An event returned with an empty `attendees` array is a \
+FAILED answer, not an event with nobody in it.\n\n\
 Answer with ONE JSON object and nothing else, no prose, no code fence:\n\
 {{\"ok\":true,\"events\":[{{\"id\":\"<opaque id>\",\"title\":\"<subject>\",\
 \"start_unix\":<unix seconds>,\"end_unix\":<unix seconds>,\
@@ -551,8 +568,24 @@ else. If you have none, answer exactly: NONE";
 pub fn fetch_day(
     day_iso: &str,
     tz_offset_mins: i32,
+    window: Option<(i64, i64)>,
 ) -> Result<Vec<CalendarEvent>, TranscribeError> {
     assert!(!day_iso.is_empty(), "day must not be empty");
+    // Naming the recording's own window turns "enrich six events" into
+    // "enrich one", which is the difference between a model that makes
+    // the second call and one that quietly economises on it. The first
+    // live run came back with a title and ZERO attendees for exactly
+    // that reason, so the recap had nobody to name.
+    let window_note = match window {
+        Some((from, to)) => format!(
+            "STEP 1 - list that day's events. I am only interested in the ones \
+running anywhere near {}-{} local time, so you may leave out anything far \
+from that window.\n\n",
+            local_hhmm(from),
+            local_hhmm(to)
+        ),
+        None => "STEP 1 - list that day's events.\n\n".to_string(),
+    };
     let tz_note = if tz_offset_mins == 0 {
         String::new()
     } else {
@@ -565,7 +598,7 @@ pub fn fetch_day(
         )
     };
     let raw = run_cli(
-        &fetch_prompt(day_iso, &tz_note),
+        &fetch_prompt(day_iso, &tz_note, &window_note),
         Duration::from_secs(FETCH_TIMEOUT_SECS),
     )?;
     parse_events(&raw)
@@ -598,6 +631,46 @@ fn assignment_path(meeting_dir: &std::path::Path) -> std::path::PathBuf {
     meeting_dir.join("calendar.json")
 }
 
+fn candidates_path(meeting_dir: &std::path::Path) -> std::path::PathBuf {
+    meeting_dir.join("calendar_candidates.json")
+}
+
+/// Park the ranked candidates next to the audio.
+///
+/// Without this the whole feature dies with the meeting window. The
+/// window's lifecycle is decoupled from the recording on purpose — you
+/// can close it and keep recording — so a lookup that only lives in that
+/// window's memory is lost the moment it is closed, and the user is never
+/// asked. Measured on 2026-09-23 23:46: the core found a candidate, the
+/// window was shut, and nothing reached the user.
+///
+/// Parking them also means reopening the window costs a file read instead
+/// of another 25-second round trip through the CLI.
+pub fn save_candidates(
+    meeting_dir: &std::path::Path,
+    candidates: &[Candidate],
+) -> Result<(), TranscribeError> {
+    let json = serde_json::to_string(candidates)
+        .map_err(|e| TranscribeError::Network(format!("calendar: serialise ({e})")))?;
+    std::fs::write(candidates_path(meeting_dir), json)
+        .map_err(|e| TranscribeError::Network(format!("calendar: write ({e})")))?;
+    Ok(())
+}
+
+/// Candidates parked earlier, if any. Corrupt or missing reads as none.
+pub fn load_candidates(meeting_dir: &std::path::Path) -> Vec<Candidate> {
+    std::fs::read_to_string(candidates_path(meeting_dir))
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+/// Drop the parked candidates once the question has been answered, so a
+/// reopened meeting does not ask again about something already settled.
+pub fn clear_candidates(meeting_dir: &std::path::Path) {
+    let _ = std::fs::remove_file(candidates_path(meeting_dir));
+}
+
 /// Record the user's choice. `None` means "none of these".
 pub fn save_assignment(
     meeting_dir: &std::path::Path,
@@ -615,6 +688,10 @@ pub fn save_assignment(
         .map_err(|e| TranscribeError::Network(format!("calendar: serialise ({e})")))?;
     std::fs::write(assignment_path(meeting_dir), json)
         .map_err(|e| TranscribeError::Network(format!("calendar: write ({e})")))?;
+    // Answered means answered: the parked candidates have no reader left,
+    // and leaving them would make a reopened meeting offer a choice the
+    // user already made.
+    clear_candidates(meeting_dir);
     Ok(())
 }
 
@@ -943,6 +1020,36 @@ mod tests {
         assert!(a.answered());
         assert!(!a.dismissed);
         assert_eq!(a.event.expect("event").id, "evt");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn candidates_outlive_the_window_that_asked_for_them() {
+        // The meeting window can be closed while the recording continues,
+        // so a lookup that lives only in its memory is lost and the user
+        // is never asked. Measured 2026-09-23 23:46: the core found a
+        // candidate, the window was shut, nothing reached anyone.
+        let dir = std::env::temp_dir().join(format!("dimmy-cal-park-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let _ = std::fs::remove_file(dir.join("calendar_candidates.json"));
+        assert!(load_candidates(&dir).is_empty(), "nothing parked yet");
+
+        let ranked = rank_candidates(
+            14 * H + 2 * 60,
+            14 * H + 34 * 60,
+            &[ev("this", 14 * H, 14 * H + 30 * 60)],
+        );
+        save_candidates(&dir, &ranked).expect("parks");
+        let back = load_candidates(&dir);
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].event.id, "this");
+        assert_eq!(back[0].overlap_mins, 28);
+
+        // Answering clears them: a reopened meeting must not offer a
+        // choice that has already been made.
+        save_assignment(&dir, Some(&ranked[0].event)).expect("saves");
+        assert!(load_candidates(&dir).is_empty(), "cleared on answer");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

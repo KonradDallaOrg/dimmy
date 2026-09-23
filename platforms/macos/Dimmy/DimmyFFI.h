@@ -624,6 +624,14 @@ int32_t dimmy_calendar_assign(const char * _Nonnull meeting_dir_ptr,
 int32_t dimmy_calendar_assignment(const char * _Nonnull meeting_dir_ptr,
                                   char * _Nonnull out_buf, int32_t buf_len);
 
+/// Candidates parked by an earlier lookup, without going near the CLI.
+/// This is what lets a reopened meeting window ask a question a closed one
+/// could not. Writes `{"ok":true,"candidates":[...]}`, empty when nothing
+/// is pending or the question was already answered. Fast.
+/// Returns the JSON length, -1 on invalid args.
+int32_t dimmy_calendar_pending(const char * _Nonnull meeting_dir_ptr,
+                               char * _Nonnull out_buf, int32_t buf_len);
+
 /// Open an interactive `claude` session on /mcp so the user can authorise
 /// the connector. Dimmy cannot perform that handshake itself. Returns 1 on
 /// spawn, -1 otherwise.

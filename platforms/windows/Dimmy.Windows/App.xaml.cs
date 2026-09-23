@@ -2599,10 +2599,42 @@ public partial class App : Application
                 SetForegroundWindow(hwnd);
             }
             Log($"OpenMeetingWindow activated + foregrounded, hwnd={hwnd}", "Meeting");
+            // A calendar lookup that finished while this window was shut
+            // parked its candidates on disk. Now that there is somewhere
+            // to show them, ask the question. Costs one file read.
+            TryResumeCalendarPrompt();
         }
         catch (Exception ex)
         {
             Log($"OpenMeetingWindow EXC: {ex}", "Meeting");
+        }
+    }
+
+    /// <summary>
+    /// Re-offer a pending calendar choice for the live recording, if there
+    /// is one. Safe to call on every window open: it is a file read, and
+    /// it returns nothing once the question has been answered.
+    /// </summary>
+    private void TryResumeCalendarPrompt()
+    {
+        try
+        {
+            if (DimmyNative.dimmy_meeting_is_active() != 1) return;
+            // The live meeting is the most recently written directory —
+            // the worker is appending to it right now. Same rule the Mac
+            // side already uses (MeetingViewModel.freshestMeetingDir).
+            var root = Services.BuildInfo.MeetingsDirPath;
+            if (!System.IO.Directory.Exists(root)) return;
+            var dir = new System.IO.DirectoryInfo(root)
+                .GetDirectories()
+                .OrderByDescending(d => d.LastWriteTimeUtc)
+                .FirstOrDefault()?.FullName;
+            if (string.IsNullOrWhiteSpace(dir)) return;
+            _meetingWindow?.ResumeCalendarPrompt(dir);
+        }
+        catch (Exception ex)
+        {
+            Log($"resume calendar prompt failed: {ex.Message}", "Calendar");
         }
     }
 

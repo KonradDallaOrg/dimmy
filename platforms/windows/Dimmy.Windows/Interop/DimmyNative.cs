@@ -154,6 +154,11 @@ public static class DimmyNative
         byte[] outBuf, int bufLen);
 
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_calendar_pending(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string meetingDir,
+        byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_calendar_spawn_setup();
 
     /// <summary>
@@ -177,6 +182,14 @@ public static class DimmyNative
     /// </summary>
     public static string? CalendarAssignment(string meetingDir) =>
         SafeRead((buf, len) => dimmy_calendar_assignment(meetingDir, buf, len), 64 * 1024);
+
+    /// <summary>
+    /// Candidates a previous lookup parked on disk, without touching the
+    /// CLI. Empty once the question has been answered. Fast, so it is safe
+    /// to call every time the meeting window appears.
+    /// </summary>
+    public static string? CalendarPending(string meetingDir) =>
+        SafeRead((buf, len) => dimmy_calendar_pending(meetingDir, buf, len), 256 * 1024);
 
     /// <summary>
     /// Every calendar entry point degrades to "no context" instead of
