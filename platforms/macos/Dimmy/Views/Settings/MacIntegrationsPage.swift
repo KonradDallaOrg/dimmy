@@ -23,6 +23,8 @@ struct MacIntegrationsPage: View {
     @State private var showMcpDisconnectConfirm: Bool = false
     @State private var claudeIconPath: String? = nil
     @State private var showConfluenceSheet: Bool = false
+    @State private var calendarStatusText: String = "Off"
+    @State private var calendarNeedsSetup: Bool = false
     @State private var confluenceSheetStep: Int = 1
     @State private var confluenceConnected: Bool = false
     @State private var showTelegramSheet: Bool = false
@@ -71,6 +73,55 @@ struct MacIntegrationsPage: View {
                 onWizardRequested: { showGeminiWizard = true }
             )
             MacGroupFooter(text: "Runs the `gemini` CLI locally with the login it stored. Dimmy never reads your credentials.")
+
+            Spacer().frame(height: 24)
+            MacGroupLabel(text: "Calendar")
+
+            // The one integration Dimmy cannot connect for you. Notion and
+            // Confluence take a token you paste; this borrows the OAuth
+            // already inside your `claude` CLI, and that handshake only
+            // happens in an interactive session. Verified 2026-09-23:
+            // authorising on claude.ai left the CLI reporting zero
+            // connector tools; only /mcp locally fixed it. So the card
+            // reports the real state and opens the session where it can be
+            // fixed, and never pretends to own the handshake.
+            MacTile {
+                MacRow(
+                    "Link meetings to your calendar",
+                    hint: "When a meeting starts, Dimmy asks which appointment it is and offers to link it, so the recap can name who was invited. It uses the calendar connector in your own Claude subscription, so there is no separate login to Dimmy. Your appointments for that day are read through it."
+                ) {
+                    Toggle("", isOn: Binding(
+                        get: { appState.calendarContextEnabled },
+                        set: { newValue in
+                            appState.calendarContextEnabled = newValue
+                            DimmyCore.shared.setConfig(appState.toRustConfig())
+                            if newValue { refreshCalendarStatus() }
+                            else { calendarStatusText = "Off" }
+                        }
+                    ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                }
+                MacRow(calendarStatusText, showsDivider: false) {
+                    HStack(spacing: 8) {
+                        if calendarNeedsSetup {
+                            Button("Connect the calendar") {
+                                let ok = DimmyCore.shared.calendarSpawnSetup()
+                                calendarStatusText = ok
+                                    // Naming the command matters: if the
+                                    // session does not open on the connector
+                                    // list, this sentence is the difference
+                                    // between a working feature and a dead
+                                    // button.
+                                    ? "A Claude window is open. Type /mcp, pick your calendar, then Check again."
+                                    : "Could not open Claude. Is the CLI installed?"
+                            }
+                        }
+                        Button("Check again") { refreshCalendarStatus() }
+                            .disabled(!appState.calendarContextEnabled)
+                    }
+                }
+            }
 
             Spacer().frame(height: 24)
             MacGroupLabel(text: "Notion")
@@ -661,5 +712,48 @@ struct MacIntegrationsPage: View {
 
     private func refreshMcpStatus() {
         mcpStatus = DimmyCore.shared.claudeDesktopStatus()
+    }
+
+    /// Ask the core whether the calendar connector is usable.
+    ///
+    /// Off the main thread without exception: the probe spawns a CLI turn
+    /// and takes seconds. Mirror of Win
+    /// SettingsWindow.Calendar.cs::RefreshCalendarStatusAsync.
+    private func refreshCalendarStatus() {
+        calendarStatusText = "Checking..."
+        DispatchQueue.global(qos: .userInitiated).async {
+            let raw = DimmyCore.shared.calendarStatus()
+            let status: CalendarConnectorStatus? = raw
+                .flatMap { $0.data(using: .utf8) }
+                .flatMap { try? JSONDecoder().decode(CalendarConnectorStatus.self, from: $0) }
+
+            DispatchQueue.main.async {
+                if status?.available == true {
+                    calendarStatusText = "Connected"
+                    calendarNeedsSetup = false
+                    return
+                }
+                // Each cause gets its own sentence because each has a
+                // different fix; "not available" would send the user after
+                // the wrong one.
+                switch status?.reason ?? "probe_failed" {
+                case "disabled":
+                    calendarStatusText = "Off"
+                    calendarNeedsSetup = false
+                case "cli_missing":
+                    calendarStatusText = "Needs the Claude Code CLI, which is not installed."
+                    calendarNeedsSetup = false
+                case "not_logged_in":
+                    calendarStatusText = "Sign in to your Claude subscription first, under Output."
+                    calendarNeedsSetup = false
+                case "connector_not_authorised":
+                    calendarStatusText = "Almost there: the calendar connector still has to be authorised."
+                    calendarNeedsSetup = true
+                default:
+                    calendarStatusText = "Could not check right now."
+                    calendarNeedsSetup = true
+                }
+            }
+        }
     }
 }

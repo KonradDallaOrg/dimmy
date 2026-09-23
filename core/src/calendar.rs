@@ -604,7 +604,7 @@ pub fn save_assignment(
     event: Option<&CalendarEvent>,
 ) -> Result<(), TranscribeError> {
     assert!(
-        meeting_dir.as_os_str().len() > 0,
+        !meeting_dir.as_os_str().is_empty(),
         "meeting dir must not be empty"
     );
     let a = Assignment {

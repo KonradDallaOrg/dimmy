@@ -591,6 +591,44 @@ int32_t dimmy_confluence_spaces(const char * _Nonnull site_ptr,
 int32_t dimmy_confluence_send_recap(const char * _Nonnull meeting_dir_ptr,
                                     char * _Nonnull out_buf, int32_t buf_len);
 
+// ── Calendar context ────────────────────────────
+//
+// Ties a recording to the invite it came from, so the recap can name who
+// was invited. Borrows the calendar connector inside the user's own
+// `claude` CLI rather than owning an OAuth; see core/src/calendar.rs.
+// Every entry degrades to "no context" instead of failing the meeting.
+
+/// Whether calendar context is usable. Writes
+/// `{"available":bool,"reason":"ok|disabled|cli_missing|not_logged_in|connector_not_authorised|probe_failed"}`.
+/// SLOW — spawns a CLI turn, so never call it on the main thread.
+/// Returns the JSON length, -1 on invalid args.
+int32_t dimmy_calendar_status(char * _Nonnull out_buf, int32_t buf_len);
+
+/// Invites that could be this recording, best first. Writes
+/// `{"ok":true,"candidates":[…]}` or `{"ok":false,"error":"…"}`.
+/// SLOW (19-29 s measured): reads the day's calendar through the CLI.
+/// Returns the JSON length, -1 on invalid args.
+int32_t dimmy_calendar_candidates(const char * _Nonnull meeting_dir_ptr,
+                                  char * _Nonnull out_buf, int32_t buf_len);
+
+/// Record the choice. `event_json_ptr` is one candidate's `event` object;
+/// NULL or empty means "none of these", which is remembered so the picker
+/// does not come back. Returns 1 on success, -1 bad args, -2 write failed.
+int32_t dimmy_calendar_assign(const char * _Nonnull meeting_dir_ptr,
+                              const char * _Nullable event_json_ptr);
+
+/// What was decided for this meeting, plus the roster line for the recap
+/// prompt. Writes
+/// `{"answered":bool,"dismissed":bool,"event":{…}|null,"roster_line":"…"}`.
+/// Returns the JSON length, -1 on invalid args.
+int32_t dimmy_calendar_assignment(const char * _Nonnull meeting_dir_ptr,
+                                  char * _Nonnull out_buf, int32_t buf_len);
+
+/// Open an interactive `claude` session on /mcp so the user can authorise
+/// the connector. Dimmy cannot perform that handshake itself. Returns 1 on
+/// spawn, -1 otherwise.
+int32_t dimmy_calendar_spawn_setup(void);
+
 // ── whisper Core ML encoder (macOS) ──────────────────────
 
 /// Where the Core ML encoder stands for a whisper model. Writes

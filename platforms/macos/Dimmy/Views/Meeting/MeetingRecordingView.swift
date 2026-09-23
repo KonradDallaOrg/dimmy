@@ -23,8 +23,65 @@ struct MeetingRecordingView: View {
         VStack(spacing: 12) {
             recordingBar
             waveformCard
+            if vm.calendarCurrent != nil { calendarCard }
             transcriptCard
         }
+    }
+
+    // MARK: Calendar context
+    //
+    // Mirror of the Win CalendarBar. Collapsed unless something came
+    // back, never modal, never auto-applied. The roster it produces ends
+    // up in a recap the user forwards, so a wrong name is worse than no
+    // name and the confirmation is always the user's.
+
+    @ViewBuilder
+    private var calendarCard: some View {
+        if let c = vm.calendarCurrent {
+            HStack(spacing: 12) {
+                Image(systemName: "calendar")
+                    .foregroundStyle(Color.macTextSecondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Looks like \u{201C}\(c.event.title.isEmpty ? "(no subject)" : c.event.title)\u{201D}")
+                        .font(.system(size: 13))
+                        .lineLimit(1)
+                    Text(calendarSubline(c))
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.macTextSecondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                Button("Confirm") { vm.calendarConfirm() }
+                if vm.calendarCandidates.count > 1 {
+                    Button("Change") { vm.calendarNext() }
+                }
+                Button("None") { vm.calendarDismiss() }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(panelBackground)
+        }
+    }
+
+    /// The wording follows `match_kind` rather than dressing one number up
+    /// as three different meanings.
+    private func calendarSubline(_ c: CalendarCandidate) -> String {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "HH:mm"
+        let start = fmt.string(from: Date(timeIntervalSince1970: TimeInterval(c.event.startUnix)))
+        let end = fmt.string(from: Date(timeIntervalSince1970: TimeInterval(c.event.endUnix)))
+        let n = c.event.attendees.count
+        let people = n == 1 ? "1 person" : "\(n) people"
+        let why: String
+        switch c.matchKind {
+        case "current": why = "happening now"
+        case "nearby": why = "starts shortly"
+        default: why = "\(c.overlapMins) min overlap"
+        }
+        let more = vm.calendarCandidates.count > 1
+            ? "  \u{00B7}  \(vm.calendarIndex + 1) of \(vm.calendarCandidates.count)"
+            : ""
+        return "\(start)-\(end)  \u{00B7}  \(people)  \u{00B7}  \(why)\(more)"
     }
 
     // MARK: Recording bar

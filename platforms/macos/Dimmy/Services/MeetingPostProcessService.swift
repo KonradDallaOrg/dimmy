@@ -146,7 +146,8 @@ enum MeetingPostProcessService {
                                                 notes: notes,
                                                 meetingType: meetingType,
                                                 spokenLanguage: spokenLanguage,
-                                                vocabulary: DimmyCore.shared.userDictList())
+                                                vocabulary: DimmyCore.shared.userDictList(),
+                                                rosterLine: DimmyCore.shared.calendarRosterLine(meetingDir: dir))
         // 32K tokens — same ceiling Win uses to give Opus 4.7 / Gemini
         // 3.1 Pro headroom for adaptive-thinking budgets. The provider
         // dispatch in core/src/llm.rs auto-picks the right thinking
@@ -431,6 +432,30 @@ enum MeetingPostProcessService {
     /// rule then kept the wrong spelling even when the notes had the right
     /// one. Empty when there is nothing to correct against. Verbatim port of
     /// Win MeetingRecapHelpers.BuildNamesBlock.
+    /// Who was invited, from the calendar entry linked to this meeting.
+    /// Empty when nothing is linked, which is the normal case.
+    ///
+    /// The sentence comes from the Rust core (`calendar::roster_for_prompt`)
+    /// so Windows and macOS word it identically, and it says in words not
+    /// to assume everyone spoke: the invite proves invitation, never
+    /// attendance, and half the list routinely does not join.
+    ///
+    /// Sits next to the spelling block because it doubles as one: these
+    /// are the exact spellings speech recognition is most likely to have
+    /// mangled. Mirror of Win MeetingRecapHelpers.BuildRosterBlock.
+    static func buildRosterBlock(_ rosterLine: String) -> String {
+        let line = rosterLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        if line.isEmpty { return "" }
+        return "## Who was in the meeting
+" + line + "
+"
+            + "Use these spellings for their names. Attribute a decision or an action to "
+            + "someone ONLY where the transcript actually says so; never split the list up "
+            + "to fill the sections.
+
+"
+    }
+
     static func buildNamesBlock(notes: String, vocabulary: [String]) -> String {
         var seen = Set<String>()
         var terms: [String] = []
@@ -459,7 +484,8 @@ enum MeetingPostProcessService {
                                            notes: String = "",
                                            meetingType: String = "",
                                            spokenLanguage: String = "",
-                                           vocabulary: [String] = []) -> String {
+                                           vocabulary: [String] = [],
+                                           rosterLine: String = "") -> String {
         // Verbatim port of MeetingWindow.xaml.cs::BuildStructuredRecapPrompt.
         // Notion-style recap targeting reasoning-tier models (Opus 4.7
         // adaptive thinking, Gemini 3.1 Pro thinkingLevel=high, GPT-5).
@@ -508,6 +534,7 @@ enum MeetingPostProcessService {
                 + trimmedNotes
         }
         let namesBlock = buildNamesBlock(notes: notes, vocabulary: vocabulary)
+        let rosterBlock = buildRosterBlock(rosterLine)
         return """
         You are a senior meeting analyst writing a polished, Notion-style summary of an audio recording. Output ONLY markdown with the EXACT marker headings shown — a downstream parser splits on them.
 
@@ -587,7 +614,7 @@ enum MeetingPostProcessService {
         NOT a blank line, NOT an apology. JUST `# <title>` on line one.
         ═══════════════════════════════════════════════════════════════════
 
-        \(namesBlock)## Transcript
+        \(namesBlock)\(rosterBlock)## Transcript
         \(transcript)\(notesSection)
         """
     }
