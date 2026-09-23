@@ -29,6 +29,7 @@ public sealed partial class MeetingWindow : Window
     private DispatcherQueueTimer? _pollTimer;
     private DispatcherQueueTimer? _ampTimer;
     private DispatcherQueueTimer? _toastTimer;
+    private DispatcherQueueTimer? _announceTimer;
     private DateTime _startedAt;
     private string? _activeMeetingDir;       // dir of the LIVE recording (set on Start)
     private string? _recordingNotesDir;      // meeting dir for live note writes (known at Start, before the first chunk)
@@ -395,9 +396,9 @@ public sealed partial class MeetingWindow : Window
             {
                 // Auto-record cannot show the blocking dialog: the whole
                 // point is that recording starts without a click. The
-                // announcement (spoken + pasteable) still goes out and is
-                // still written to the consent audit log.
-                ConsentFlow.AnnounceOnly(lang);
+                // announcement still goes out, but NOT here — it is armed
+                // now and spoken only once the recording has proved it is
+                // alive. See ArmAutoAnnounce.
             }
             else if (!await ConsentFlow.ConfirmAndAnnounceAsync(this.Content?.XamlRoot, lang))
             {
@@ -488,6 +489,7 @@ public sealed partial class MeetingWindow : Window
             TranscriptText.Text = "🎙️ Listening… first transcript appears in ~15 s.";
             StartPolling();
             StartAmplitudePoll();
+            if (autoConsent) ArmAutoAnnounce(lang);
             App.Log($"meeting started: {id}", "Meeting");
             return true;
         }
@@ -1047,6 +1049,52 @@ public sealed partial class MeetingWindow : Window
         });
     }
 
+    // How long a freshly started auto-recording must survive before we tell
+    // the room it is being recorded. Not a guess: the capture stream takes
+    // about 1.3 s to come up (cpal opens the primary device, then the
+    // loopback device, then the AEC ref ring), so anything that dies sooner
+    // never recorded a sample. Measured on the 2026-09-23 00:01 incident,
+    // where six auto-starts in a row ended at duration=1.0s chunks=0 while
+    // "Primary stream built and playing" was still being logged AFTER the
+    // stop. The announcement was the only thing that survived those loops,
+    // so the user heard the notice six times and got no recording at all.
+    private const double AUTO_ANNOUNCE_SETTLE_MS = 2500.0;
+
+    /// Arm the auto-record consent announcement instead of speaking it.
+    ///
+    /// The announcement is irreversible in the only way that matters: it
+    /// comes out of the speakers, into the room, in front of the other
+    /// participants. So it must follow the recording, never lead it — a
+    /// start that collapses before it captures anything has to stay silent.
+    private void ArmAutoAnnounce(string lang)
+    {
+        CancelAutoAnnounce();
+        var dq = DispatcherQueue;
+        if (dq == null) return;
+        _announceTimer = dq.CreateTimer();
+        _announceTimer.Interval = TimeSpan.FromMilliseconds(AUTO_ANNOUNCE_SETTLE_MS);
+        _announceTimer.IsRepeating = false;
+        _announceTimer.Tick += (s, e) =>
+        {
+            CancelAutoAnnounce();
+            // One read, not a poll: this fires once per auto-start.
+            if (!_recordingActive || DimmyNative.dimmy_meeting_is_active() != 1)
+            {
+                App.Log("auto-announce skipped — recording did not survive", "Meeting");
+                return;
+            }
+            ConsentFlow.AnnounceOnly(lang);
+        };
+        _announceTimer.Start();
+    }
+
+    private void CancelAutoAnnounce()
+    {
+        if (_announceTimer == null) return;
+        _announceTimer.Stop();
+        _announceTimer = null;
+    }
+
     private void StartAmplitudePoll()
     {
         var dq = DispatcherQueue.GetForCurrentThread();
@@ -1084,6 +1132,10 @@ public sealed partial class MeetingWindow : Window
 
     private void StopAmplitudePoll()
     {
+        // Every path that stops the capture comes through here, including
+        // the auto-stop that killed those one-second meetings. A pending
+        // announcement dies with the recording it was going to describe.
+        CancelAutoAnnounce();
         if (_ampTimer == null) return;
         _ampTimer.Stop();
         _ampTimer.Tick -= OnAmpTick;
