@@ -23,6 +23,24 @@ public static class DictNotificationService
              $"“{word}” will boost recognition on future transcriptions.");
     }
 
+    /// <summary>
+    /// A calendar invite matches the recording, and the meeting window is
+    /// not open to show the row.
+    ///
+    /// Deliberately does NOT ask the question. There can be several
+    /// candidates and a toast has no way to show them or to take back a
+    /// mis-tap, so it says what happened and leaves the choice where the
+    /// choice can actually be made.
+    /// </summary>
+    public static void ShowCalendarMatch(int candidateCount)
+    {
+        var what = candidateCount == 1
+            ? "A calendar event matches this recording."
+            : $"{candidateCount} calendar events match this recording.";
+        Show("Which meeting is this?",
+             $"{what} Open the meeting window to link it.");
+    }
+
     /// <summary>Soft feedback when the user re-adds a word that's
     /// already on the list (dimmy_user_dict_add returns rc=1). Keeps
     /// the hotkey from feeling broken on accidental double-press.</summary>

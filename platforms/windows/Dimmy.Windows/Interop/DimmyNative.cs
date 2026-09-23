@@ -134,6 +134,62 @@ public static class DimmyNative
     public static string? ConsentText(string kind, string lang) =>
         ReadBuffer((buf, len) => dimmy_consent_text(kind, lang, buf, len), 4096);
 
+    // ── Calendar context ─────────────────────────────────────────────
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_calendar_status(byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_calendar_candidates(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string meetingDir,
+        byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_calendar_assign(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string meetingDir,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? eventJson);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_calendar_assignment(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string meetingDir,
+        byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_calendar_spawn_setup();
+
+    /// <summary>
+    /// Whether calendar context can be used right now:
+    /// <c>{"available":bool,"reason":"ok|disabled|cli_missing|not_logged_in|connector_not_authorised|probe_failed"}</c>.
+    /// SLOW — spawns a CLI turn, so never call this on the UI thread.
+    /// </summary>
+    public static string? CalendarStatus() =>
+        SafeRead((buf, len) => dimmy_calendar_status(buf, len), 512);
+
+    /// <summary>
+    /// Invites that could be this recording, best first. SLOW (19-29 s
+    /// measured): it reads the day's calendar through the user's own CLI.
+    /// </summary>
+    public static string? CalendarCandidates(string meetingDir) =>
+        SafeRead((buf, len) => dimmy_calendar_candidates(meetingDir, buf, len), 256 * 1024);
+
+    /// <summary>
+    /// What the user decided for this meeting, plus the roster line the
+    /// recap prompt should carry. Fast — reads one small file.
+    /// </summary>
+    public static string? CalendarAssignment(string meetingDir) =>
+        SafeRead((buf, len) => dimmy_calendar_assignment(meetingDir, buf, len), 64 * 1024);
+
+    /// <summary>
+    /// Every calendar entry point degrades to "no context" instead of
+    /// throwing: an older DLL with no calendar exports must not take the
+    /// meeting window down with it.
+    /// </summary>
+    private static string? SafeRead(Func<byte[], int, int> call, int size)
+    {
+        try { return ReadBuffer(call, size); }
+        catch (EntryPointNotFoundException) { return null; }
+        catch (DllNotFoundException) { return null; }
+    }
+
     // ── Spoken-language detection ────────────────────────────────────
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_detect_audio_language(

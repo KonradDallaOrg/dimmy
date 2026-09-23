@@ -5,6 +5,11 @@ dimmy_ai_notice_text
 dimmy_autostart_is_enabled
 dimmy_autostart_set_enabled
 dimmy_build_flavor
+dimmy_calendar_assign
+dimmy_calendar_assignment
+dimmy_calendar_candidates
+dimmy_calendar_spawn_setup
+dimmy_calendar_status
 dimmy_call_detector_state
 dimmy_call_meeting_started_external
 dimmy_call_set_tracked_origin

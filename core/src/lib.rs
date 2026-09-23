@@ -8,6 +8,7 @@ pub mod aec;
 pub mod app_rules;
 pub mod audio;
 pub mod autostart;
+pub mod calendar;
 pub mod call_detector;
 pub mod catalog;
 pub mod chunked_stt;
@@ -963,6 +964,13 @@ pub struct AppConfig {
     /// MeetingWindow Done view. Default false (opt-in by explicit
     /// click — same caution we apply to all data-egress features).
     pub notion_auto_send: bool,
+    /// Ask the user's own `claude` CLI to read their calendar, so a
+    /// meeting can be tied to the invite it came from and the recap can
+    /// name who was in the room. Off by default and opt-in: it hands the
+    /// day's appointments to a model, which is a data-egress decision the
+    /// user makes deliberately. See `crate::calendar` for why this
+    /// borrows an OAuth instead of owning one.
+    pub calendar_context_enabled: bool,
     /// Confluence site host, e.g. `acme.atlassian.net`. Stored normalised
     /// (see `confluence::normalize_site`) so the UI can echo it back.
     pub confluence_site: String,
@@ -1134,6 +1142,7 @@ impl Default for AppConfig {
             notion_target_kind: String::new(),
             notion_target_title: String::new(),
             notion_auto_send: false,
+            calendar_context_enabled: false,
             confluence_site: String::new(),
             confluence_email: String::new(),
             confluence_space_id: String::new(),
@@ -1242,6 +1251,7 @@ pub fn save_config_file(cfg: &AppConfig) {
             "notion_target_kind": cfg.notion_target_kind,
             "notion_target_title": cfg.notion_target_title,
             "notion_auto_send": cfg.notion_auto_send,
+            "calendar_context_enabled": cfg.calendar_context_enabled,
             "confluence_site": cfg.confluence_site,
             "confluence_email": cfg.confluence_email,
             "confluence_space_id": cfg.confluence_space_id,
@@ -1521,6 +1531,9 @@ pub fn load_config_file() -> AppConfig {
                     notion_auto_send: v["notion_auto_send"]
                         .as_bool()
                         .unwrap_or(defaults.notion_auto_send),
+                    calendar_context_enabled: v["calendar_context_enabled"]
+                        .as_bool()
+                        .unwrap_or(defaults.calendar_context_enabled),
                     audio_source: v["audio_source"]
                         .as_str()
                         .unwrap_or(&defaults.audio_source)
@@ -1903,6 +1916,7 @@ pub struct AppState {
     pub notion_target_kind: Mutex<String>,
     pub notion_target_title: Mutex<String>,
     pub notion_auto_send: Mutex<bool>,
+    pub calendar_context_enabled: Mutex<bool>,
     /// Confluence integration — see [`AppConfig::confluence_site`].
     pub confluence_site: Mutex<String>,
     pub confluence_email: Mutex<String>,
@@ -2058,6 +2072,7 @@ impl AppState {
             notion_target_kind: Mutex::new(file_cfg.notion_target_kind.clone()),
             notion_target_title: Mutex::new(file_cfg.notion_target_title.clone()),
             notion_auto_send: Mutex::new(file_cfg.notion_auto_send),
+            calendar_context_enabled: Mutex::new(file_cfg.calendar_context_enabled),
             confluence_site: Mutex::new(file_cfg.confluence_site),
             confluence_email: Mutex::new(file_cfg.confluence_email),
             confluence_space_id: Mutex::new(file_cfg.confluence_space_id),
@@ -2340,6 +2355,10 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
             .map_err(|e| e.to_string())?
             .clone(),
         notion_auto_send: *state.notion_auto_send.lock().map_err(|e| e.to_string())?,
+        calendar_context_enabled: *state
+            .calendar_context_enabled
+            .lock()
+            .map_err(|e| e.to_string())?,
         confluence_site: state
             .confluence_site
             .lock()

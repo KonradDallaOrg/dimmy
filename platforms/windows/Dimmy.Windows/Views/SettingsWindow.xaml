@@ -1949,6 +1949,53 @@
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
               </StackPanel>
 
+              <!-- Group: CALENDAR -->
+              <StackPanel Orientation="Horizontal" Spacing="6" Margin="2,16,0,8">
+                <TextBlock Text="CALENDAR"
+                           FontSize="12" FontWeight="SemiBold"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           CharacterSpacing="40" VerticalAlignment="Center" />
+              </StackPanel>
+
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="16">
+                <StackPanel Spacing="12">
+                  <Grid ColumnSpacing="14">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="Auto"/>
+                      <ColumnDefinition Width="*"/>
+                      <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <FontIcon Grid.Column="0" Glyph="&#xE787;" FontSize="22"
+                              VerticalAlignment="Center"
+                              Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                      <TextBlock Text="Outlook or Google Calendar" FontSize="16" FontWeight="SemiBold"/>
+                      <TextBlock x:Name="CalendarStatusText"
+                                 Text="Off"
+                                 FontSize="12"
+                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    </StackPanel>
+                    <ToggleSwitch Grid.Column="2" x:Name="CalendarContextToggle"
+                                  OnContent="On" OffContent="Off"
+                                  Toggled="CalendarContextToggle_Toggled"/>
+                  </Grid>
+
+                  <TextBlock TextWrapping="Wrap" FontSize="12"
+                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                             Text="When a meeting starts, Dimmy asks which appointment it is and offers to link it, so the recap can name who was invited. It uses the calendar connector in your own Claude subscription, so there is no separate login to Dimmy. Your appointments for that day are read through it." />
+
+                  <StackPanel x:Name="CalendarSetupRow" Orientation="Horizontal" Spacing="10"
+                              Visibility="Collapsed">
+                    <Button x:Name="CalendarSetupBtn" Content="Connect the calendar"
+                            Click="CalendarSetup_Click"/>
+                    <Button x:Name="CalendarRecheckBtn" Content="Check again"
+                            Click="CalendarRecheck_Click"/>
+                  </StackPanel>
+                </StackPanel>
+              </Border>
+
               <!-- Group: NOTION -->
               <StackPanel Orientation="Horizontal" Spacing="6" Margin="2,16,0,8">
                 <TextBlock Text="NOTION"

@@ -244,6 +244,10 @@ public partial class SettingsViewModel : ObservableObject
     /// Default false — opt-in via explicit click. Save path goes through
     /// dimmy_set_config_json so the Rust core sees the toggle.
     [ObservableProperty] private bool _notionAutoSend;
+    /// Ask the user's own `claude` CLI to read their calendar, so a meeting
+    /// can be tied to the invite it came from. Off by default: it hands the
+    /// day's appointments to a model, which is the user's call to make.
+    [ObservableProperty] private bool _calendarContextEnabled;
     /// "Has the user pasted a token?" — drives the Connected/Not
     /// Connected status indicator on the Notion settings page. Sourced
     /// from `has_notion_token` field of dimmy_get_config_json snapshot
@@ -677,6 +681,7 @@ public partial class SettingsViewModel : ObservableObject
             NotionTargetTitle = r.TryGetProperty("notion_target_title", out var ntt)
                 ? ntt.GetString() ?? "" : "";
             NotionAutoSend = r.TryGetProperty("notion_auto_send", out var nas) && nas.GetBoolean();
+            CalendarContextEnabled = r.TryGetProperty("calendar_context_enabled", out var cce) && cce.GetBoolean();
             HasNotionToken = r.TryGetProperty("has_notion_token", out var hnt) && hnt.GetBoolean();
             // Per-provider LLM key snapshot. JSON field names MUST match the
             // Rust emitter in ffi.rs:1341 — `has_<provider>_llm_key`, NOT the
@@ -811,6 +816,7 @@ public partial class SettingsViewModel : ObservableObject
             // notion_auto_send IS safe to round-trip (it's a bool
             // toggle, not a load-bearing identifier).
             ["notion_auto_send"] = NotionAutoSend,
+            ["calendar_context_enabled"] = CalendarContextEnabled,
             ["llm_custom_prompt"] = LlmCustomPrompt,
             ["llm_translate_to"] = LlmTranslateTo,
             ["llm_log_enabled"] = LlmLogEnabled,

@@ -490,6 +490,11 @@ public sealed partial class MeetingWindow : Window
             StartPolling();
             StartAmplitudePoll();
             if (autoConsent) ArmAutoAnnounce(lang);
+            // Background, never awaited: the lookup shells out to the
+            // user's claude CLI and blocks for tens of seconds. It must
+            // not make the window wait and must not touch capture.
+            if (!string.IsNullOrEmpty(_recordingNotesDir))
+                BeginCalendarLookup(_recordingNotesDir);
             App.Log($"meeting started: {id}", "Meeting");
             return true;
         }
@@ -1961,7 +1966,8 @@ public sealed partial class MeetingWindow : Window
             var notesPath = Path.Combine(dir, "notes.md");
             var notes = File.Exists(notesPath) ? (await File.ReadAllTextAsync(notesPath)).Trim() : "";
             var prompt = Helpers.MeetingRecapHelpers.BuildStructuredRecapPrompt(
-                transcript, notes, meetingType, spokenLanguage, Services.DictionaryService.List());
+                transcript, notes, meetingType, spokenLanguage, Services.DictionaryService.List(),
+                CalendarRosterLine(dir));
             App.Log($"recap with model='{modelOverride}', prompt {prompt.Length} chars", "Meeting");
             BeginLiveRecap();
             // This path reported NOTHING until 2026-09-03, so no regenerated

@@ -701,3 +701,163 @@ extension DimmyCore {
         return rc > 0
     }
 }
+
+// MARK: - Calendar context
+//
+// Mirror of the Windows surface in MeetingWindow.Calendar.cs. Ties a
+// recording to the invite it came from so the recap can name who was
+// invited. Borrows the connector inside the user's own `claude` CLI
+// instead of owning an OAuth — see core/src/calendar.rs for why, and for
+// the measurements behind the timings.
+//
+// Every call here returns the raw JSON envelope and the caller decodes,
+// which is the convention already used for Notion and Confluence.
+
+extension DimmyCore {
+
+    /// Whether calendar context is usable right now.
+    ///
+    /// SLOW: this spawns a CLI turn. Callers must be off the main thread
+    /// without exception, or the settings window freezes for seconds.
+    func calendarStatus() -> String? {
+        guard isInitialized else { return nil }
+        var buffer = [CChar](repeating: 0, count: 512)
+        let len = buffer.withUnsafeMutableBufferPointer { ptr -> Int32 in
+            dimmy_calendar_status(ptr.baseAddress!, Int32(ptr.count))
+        }
+        guard len > 0 else { return nil }
+        return String(cString: buffer)
+    }
+
+    /// Invites that could be this recording, best first. Slow for the same
+    /// reason (19-29 s measured against a live tenant).
+    func calendarCandidates(meetingDir: String) -> String? {
+        guard isInitialized else { return nil }
+        return meetingDir.withCString { dptr -> String? in
+            var buffer = [CChar](repeating: 0, count: 262_144)
+            let len = buffer.withUnsafeMutableBufferPointer { ptr -> Int32 in
+                dimmy_calendar_candidates(dptr, ptr.baseAddress!, Int32(ptr.count))
+            }
+            guard len > 0 else { return nil }
+            return String(cString: buffer)
+        }
+    }
+
+    /// Record the choice. `eventJson` nil means "none of these", which is
+    /// stored as an ANSWER so the picker does not reappear on every reopen.
+    @discardableResult
+    func calendarAssign(meetingDir: String, eventJson: String?) -> Bool {
+        guard isInitialized else { return false }
+        return meetingDir.withCString { dptr -> Bool in
+            guard let json = eventJson, !json.isEmpty else {
+                return dimmy_calendar_assign(dptr, nil) == 1
+            }
+            return json.withCString { eptr in
+                dimmy_calendar_assign(dptr, eptr) == 1
+            }
+        }
+    }
+
+    /// What was decided for this meeting, plus the roster line for the
+    /// recap prompt. Fast — reads one small file next to the audio.
+    func calendarAssignment(meetingDir: String) -> String? {
+        guard isInitialized else { return nil }
+        return meetingDir.withCString { dptr -> String? in
+            var buffer = [CChar](repeating: 0, count: 65536)
+            let len = buffer.withUnsafeMutableBufferPointer { ptr -> Int32 in
+                dimmy_calendar_assignment(dptr, ptr.baseAddress!, Int32(ptr.count))
+            }
+            guard len > 0 else { return nil }
+            return String(cString: buffer)
+        }
+    }
+
+    /// Open an interactive `claude` session on /mcp. Dimmy cannot perform
+    /// the authorisation itself: the handshake needs a terminal the user
+    /// answers, and the CLI keeps a credential store that authorising on
+    /// claude.ai does not reach.
+    @discardableResult
+    func calendarSpawnSetup() -> Bool {
+        guard isInitialized else { return false }
+        return dimmy_calendar_spawn_setup() == 1
+    }
+
+    /// The roster line for a meeting's recap prompt, or "" when no invite
+    /// is linked. Built in the core so both hosts word it identically.
+    func calendarRosterLine(meetingDir: String) -> String {
+        guard let raw = calendarAssignment(meetingDir: meetingDir),
+              let data = raw.data(using: .utf8),
+              let reply = try? JSONDecoder().decode(CalendarAssignmentReply.self, from: data)
+        else { return "" }
+        return reply.rosterLine
+    }
+}
+
+// MARK: - Decoded shapes
+
+/// One invited person. `name` is best-effort: the search tool returns
+/// addresses only and the display name costs a second call per event.
+struct CalendarAttendee: Decodable, Hashable {
+    var name: String = ""
+    var email: String = ""
+}
+
+/// A calendar entry as the connector reported it. Times are unix seconds.
+struct CalendarEvent: Decodable, Hashable, Encodable {
+    var id: String = ""
+    var title: String = ""
+    var startUnix: Int64 = 0
+    var endUnix: Int64 = 0
+    var attendees: [CalendarAttendee] = []
+    var organizer: String = ""
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, attendees, organizer
+        case startUnix = "start_unix"
+        case endUnix = "end_unix"
+    }
+}
+
+/// An event ranked against the recording.
+struct CalendarCandidate: Decodable, Hashable, Identifiable {
+    var event: CalendarEvent
+    var overlapMins: Int64 = 0
+    var coveragePct: Int64 = 0
+    /// `overlap` (recording finished, shared span), `current` (still
+    /// recording and this invite contains now), `nearby` (about to start).
+    /// Kept so the row can word itself honestly instead of dressing one
+    /// number up as three meanings.
+    var matchKind: String = ""
+
+    var id: String { event.id.isEmpty ? "\(event.startUnix)" : event.id }
+
+    enum CodingKeys: String, CodingKey {
+        case event, organizer
+        case overlapMins = "overlap_mins"
+        case coveragePct = "coverage_pct"
+        case matchKind = "match_kind"
+    }
+}
+
+struct CalendarCandidatesReply: Decodable {
+    var ok: Bool = false
+    var candidates: [CalendarCandidate] = []
+    var error: String = ""
+}
+
+struct CalendarAssignmentReply: Decodable {
+    var answered: Bool = false
+    var dismissed: Bool = false
+    var event: CalendarEvent?
+    var rosterLine: String = ""
+
+    enum CodingKeys: String, CodingKey {
+        case answered, dismissed, event
+        case rosterLine = "roster_line"
+    }
+}
+
+struct CalendarConnectorStatus: Decodable {
+    var available: Bool = false
+    var reason: String = ""
+}

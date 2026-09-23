@@ -570,6 +570,7 @@ fn dimmy_init_inner() -> c_int {
         notion_target_kind: Mutex::new(file_cfg.notion_target_kind),
         notion_target_title: Mutex::new(file_cfg.notion_target_title),
         notion_auto_send: Mutex::new(file_cfg.notion_auto_send),
+        calendar_context_enabled: Mutex::new(file_cfg.calendar_context_enabled),
         confluence_site: Mutex::new(file_cfg.confluence_site),
         confluence_email: Mutex::new(file_cfg.confluence_email),
         confluence_space_id: Mutex::new(file_cfg.confluence_space_id),
@@ -2266,6 +2267,12 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         .map(|b| *b)
         .unwrap_or(false)
         .into();
+    json["calendar_context_enabled"] = st
+        .calendar_context_enabled
+        .lock()
+        .map(|b| *b)
+        .unwrap_or(false)
+        .into();
     json["confluence_site"] = st
         .confluence_site
         .lock()
@@ -2939,6 +2946,12 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
             *slot = b;
         }
         log(&format!("[Config] notion_auto_send set to {}", b));
+    }
+    if let Some(b) = v["calendar_context_enabled"].as_bool() {
+        if let Ok(mut slot) = st.calendar_context_enabled.lock() {
+            *slot = b;
+        }
+        log(&format!("[Config] calendar_context_enabled set to {}", b));
     }
     if let Some(s) = v["audio_source"].as_str() {
         let normalised = match s.to_ascii_lowercase().as_str() {
@@ -11548,6 +11561,7 @@ mod tests {
                 notion_target_kind: Mutex::new(String::new()),
                 notion_target_title: Mutex::new(String::new()),
                 notion_auto_send: Mutex::new(false),
+                calendar_context_enabled: Mutex::new(false),
                 audio_buffer_secondary: Arc::new(Mutex::new(Vec::new())),
                 key_store: crate::keystore::KeyStore::new(),
                 audio_debug_session_dir: Mutex::new(None),
@@ -12850,4 +12864,238 @@ pub extern "C" fn dimmy_hardware_json(out_buf: *mut c_char, buf_len: c_int) -> c
     });
     let s = serde_json::to_string(&json).unwrap_or_else(|_| "{}".to_string());
     write_to_buf(&s, out_buf, buf_len)
+}
+
+// ── Calendar context ─────────────────────────────────────────────────
+//
+// Ties a recording to the invite it came from, so the recap can name who
+// was in the room. Every entry degrades to "no context" rather than to an
+// error: the calendar is an enrichment, and a recap that failed because a
+// connector was unauthorised would be a far worse product than one with no
+// attendee list. See `crate::calendar` for why this borrows the user's own
+// `claude` CLI instead of owning an OAuth.
+
+/// Read `started_at` / `ended_at` out of a meeting's `meta.json`.
+/// `ended_at` is absent while the recording is still running.
+fn meeting_window(dir: &std::path::Path) -> Option<(i64, Option<i64>)> {
+    let raw = std::fs::read_to_string(dir.join("meta.json")).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let started = v["started_at"].as_f64()? as i64;
+    let ended = v["ended_at"].as_f64().map(|f| f as i64).filter(|e| *e > 0);
+    Some((started, ended))
+}
+
+fn calendar_now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Is calendar context usable right now? `{"available":bool,"reason":str}`.
+///
+/// SLOW — the probe spawns a CLI turn, so hosts must call this off the UI
+/// thread. It is cheap in tokens (it asks only for tool names, never for
+/// calendar data) but it is not instant.
+///
+/// # Safety
+/// `out_buf` must point to at least `buf_len` writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_calendar_status(out_buf: *mut c_char, buf_len: c_int) -> c_int {
+    if out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let enabled = state()
+        .calendar_context_enabled
+        .lock()
+        .map(|b| *b)
+        .unwrap_or(false);
+    if !enabled {
+        let json = r#"{"available":false,"reason":"disabled"}"#;
+        return write_to_buf(json, out_buf, buf_len);
+    }
+    let status = crate::calendar::probe_connector();
+    let json = serde_json::to_string(&status)
+        .unwrap_or_else(|_| r#"{"available":false,"reason":"probe_failed"}"#.to_string());
+    write_to_buf(&json, out_buf, buf_len)
+}
+
+/// Candidate invites for a meeting, best first.
+///
+/// `{"ok":true,"candidates":[{event,overlap_mins,coverage_pct,match_kind}]}`
+/// or `{"ok":false,"error":"..."}`. An empty candidate list with `ok:true`
+/// means the day was read and nothing lined up — a different thing from a
+/// failure, and the host says something different for each.
+///
+/// # Safety
+/// `meeting_dir_ptr` must be a valid NUL-terminated string; `out_buf` must
+/// point to at least `buf_len` writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_calendar_candidates(
+    meeting_dir_ptr: *const c_char,
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if meeting_dir_ptr.is_null() || out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let dir_str = match unsafe { CStr::from_ptr(meeting_dir_ptr) }.to_str() {
+        Ok(s) if !s.is_empty() => s,
+        _ => return -1,
+    };
+    let dir = std::path::PathBuf::from(dir_str);
+
+    let enabled = state()
+        .calendar_context_enabled
+        .lock()
+        .map(|b| *b)
+        .unwrap_or(false);
+    if !enabled {
+        let json = r#"{"ok":false,"error":"calendar context is off"}"#;
+        return write_to_buf(json, out_buf, buf_len);
+    }
+
+    let (started, ended) = match meeting_window(&dir) {
+        Some(w) => w,
+        None => {
+            let json = r#"{"ok":false,"error":"meeting has no meta.json yet"}"#;
+            return write_to_buf(json, out_buf, buf_len);
+        }
+    };
+
+    // Ask for the day the recording STARTED, in local time. A call that
+    // runs past midnight still finds its invite, because the invite
+    // started on the same day the recording did.
+    let (day_iso, tz_offset_mins) = crate::calendar::local_day_and_offset(started);
+    let json = match crate::calendar::fetch_day(&day_iso, tz_offset_mins) {
+        Ok(events) => {
+            let ranked =
+                crate::calendar::rank_for_meeting(started, ended, calendar_now_unix(), &events);
+            log(&format!(
+                "[Calendar] {} event(s) that day, {} candidate(s) for this meeting",
+                events.len(),
+                ranked.len()
+            ));
+            serde_json::json!({ "ok": true, "candidates": ranked }).to_string()
+        }
+        Err(e) => {
+            log(&format!("[Calendar] fetch failed: {}", e));
+            serde_json::json!({ "ok": false, "error": format!("{}", e) }).to_string()
+        }
+    };
+    write_to_buf(&json, out_buf, buf_len)
+}
+
+/// Record the user's choice for a meeting. `event_json` is one candidate's
+/// `event` object; pass NULL or an empty string for "none of these", which
+/// is remembered so the picker does not come back on every reopen.
+///
+/// Returns 1 on success, -1 on a bad argument, -2 if the write failed.
+///
+/// # Safety
+/// Both pointers, when non-NULL, must be valid NUL-terminated strings.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_calendar_assign(
+    meeting_dir_ptr: *const c_char,
+    event_json_ptr: *const c_char,
+) -> c_int {
+    if meeting_dir_ptr.is_null() {
+        return -1;
+    }
+    let dir_str = match unsafe { CStr::from_ptr(meeting_dir_ptr) }.to_str() {
+        Ok(s) if !s.is_empty() => s,
+        _ => return -1,
+    };
+    let dir = std::path::PathBuf::from(dir_str);
+
+    let event = if event_json_ptr.is_null() {
+        None
+    } else {
+        match unsafe { CStr::from_ptr(event_json_ptr) }.to_str() {
+            Ok(s) if !s.trim().is_empty() => {
+                match serde_json::from_str::<crate::calendar::CalendarEvent>(s) {
+                    Ok(e) => Some(e),
+                    Err(_) => return -1,
+                }
+            }
+            _ => None,
+        }
+    };
+
+    match crate::calendar::save_assignment(&dir, event.as_ref()) {
+        Ok(()) => {
+            log(&format!(
+                "[Calendar] meeting assigned: {}",
+                if event.is_some() { "event" } else { "none" }
+            ));
+            1
+        }
+        Err(e) => {
+            log(&format!("[Calendar] assign failed: {}", e));
+            -2
+        }
+    }
+}
+
+/// What was decided for this meeting, plus the roster line the recap
+/// prompt should carry.
+///
+/// `{"answered":bool,"dismissed":bool,"event":{...}|null,"roster_line":"..."}`
+/// `answered:false` means the user has not been asked yet. Building the
+/// roster line HERE rather than in each host is what keeps the wording
+/// identical on Windows and macOS.
+///
+/// # Safety
+/// `meeting_dir_ptr` must be a valid NUL-terminated string; `out_buf` must
+/// point to at least `buf_len` writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_calendar_assignment(
+    meeting_dir_ptr: *const c_char,
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if meeting_dir_ptr.is_null() || out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let dir_str = match unsafe { CStr::from_ptr(meeting_dir_ptr) }.to_str() {
+        Ok(s) if !s.is_empty() => s,
+        _ => return -1,
+    };
+    let dir = std::path::PathBuf::from(dir_str);
+
+    let json = match crate::calendar::load_assignment(&dir) {
+        Some(a) => {
+            let roster = a
+                .event
+                .as_ref()
+                .map(crate::calendar::roster_for_prompt)
+                .unwrap_or_default();
+            serde_json::json!({
+                "answered": a.answered(),
+                "dismissed": a.dismissed,
+                "event": a.event,
+                "roster_line": roster,
+            })
+            .to_string()
+        }
+        None => r#"{"answered":false,"dismissed":false,"event":null,"roster_line":""}"#.to_string(),
+    };
+    write_to_buf(&json, out_buf, buf_len)
+}
+
+/// Open an interactive `claude` session on `/mcp` so the user can
+/// authorise the calendar connector. Returns 1 on spawn, -1 otherwise.
+///
+/// Dimmy cannot perform the authorisation itself — the handshake needs a
+/// terminal the user answers, and the CLI keeps a credential store that
+/// authorising on claude.ai does not reach.
+#[no_mangle]
+pub extern "C" fn dimmy_calendar_spawn_setup() -> c_int {
+    match crate::calendar::spawn_connector_setup() {
+        Ok(()) => 1,
+        Err(e) => {
+            log(&format!("[Calendar] setup spawn failed: {}", e));
+            -1
+        }
+    }
 }

@@ -1069,6 +1069,13 @@ final class AppState: ObservableObject {
     /// Config::meeting_generate_recap and of Win SettingsViewModel
     /// .MeetingGenerateRecap. The per-meeting toggle reads it at start.
     @Published var meetingGenerateRecapDefault: Bool = true
+    /// Ask the user's own `claude` CLI to read their calendar, so a meeting
+    /// can be tied to the invite it came from and the recap can name who was
+    /// invited. Off by default: it hands the day's appointments to a model,
+    /// which is a data-egress choice the user makes deliberately. Mirror of
+    /// Rust `Config::calendar_context_enabled` and Win
+    /// `SettingsViewModel.CalendarContextEnabled`.
+    @Published var calendarContextEnabled: Bool = false
     /// Per-chunk delta pushed by the Rust core via `stt_chunk` events.
     /// CaptionWindowController subscribes — UI publishers like a
     /// status pill could subscribe too.
@@ -1673,6 +1680,7 @@ final class AppState: ObservableObject {
         // Absent ⇒ stays true: an older config must not silently stop
         // producing recaps after an update.
         if let v = config["meeting_generate_recap"] as? Bool { meetingGenerateRecapDefault = v }
+        if let v = config["calendar_context_enabled"] as? Bool { calendarContextEnabled = v }
         if let v = config["filler_removal_enabled"] as? Bool { fillerRemovalEnabled = v }
         if let v = config["call_detect_enabled"] as? Bool { callDetectEnabled = v }
         if let v = config["call_detect_auto_record"] as? Bool { callDetectAutoRecord = v }
@@ -2149,6 +2157,7 @@ final class AppState: ObservableObject {
             "qwen_asr_model": qwenAsrModel,
             "live_captions_enabled": liveCaptionsEnabled,
             "meeting_generate_recap": meetingGenerateRecapDefault,
+            "calendar_context_enabled": calendarContextEnabled,
             "filler_removal_enabled": fillerRemovalEnabled,
             "call_detect_enabled": callDetectEnabled,
             "call_detect_auto_record": callDetectAutoRecord,

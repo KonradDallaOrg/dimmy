@@ -208,7 +208,7 @@ public static class MeetingRecapHelpers
     /// </summary>
     public static string BuildStructuredRecapPrompt(
         string transcript, string notes = "", string meetingType = "", string spokenLanguage = "",
-        IReadOnlyList<string>? vocabulary = null)
+        IReadOnlyList<string>? vocabulary = null, string rosterLine = "")
     {
         // Told "answer in the transcript's language", a 4B local model answers
         // in English on an Italian meeting; told "answer in Italian" it does
@@ -381,6 +381,7 @@ public static class MeetingRecapHelpers
             "═══════════════════════════════════════════════════════════════════\n\n" +
 
             BuildNamesBlock(notes, vocabulary) +
+            BuildRosterBlock(rosterLine) +
             "## Transcript\n" + transcript +
             (string.IsNullOrWhiteSpace(notes)
                 ? ""
@@ -425,6 +426,29 @@ public static class MeetingRecapHelpers
             "correction, not invention.\n" +
             (terms.Count > 0 ? "Vocabulary: " + string.Join(", ", terms) + "\n" : "") +
             "\n";
+    }
+
+    /// <summary>
+    /// Who was invited, from the calendar entry the user linked to this
+    /// meeting. Empty when no event is linked, which is the normal case.
+    ///
+    /// The sentence itself is built in the Rust core
+    /// (<c>calendar::roster_for_prompt</c>) so Windows and macOS word it
+    /// identically, and it says in words not to assume everyone spoke.
+    /// That caveat is the whole point: the invite proves invitation, not
+    /// attendance, and half the list routinely does not join.
+    ///
+    /// Placed right after the spelling block because it doubles as one:
+    /// these are the exact spellings of the names the transcript is most
+    /// likely to have misheard.
+    /// </summary>
+    public static string BuildRosterBlock(string rosterLine)
+    {
+        if (string.IsNullOrWhiteSpace(rosterLine)) return "";
+        return "## Who was in the meeting\n" + rosterLine.Trim() + "\n" +
+            "Use these spellings for their names. Attribute a decision or an action to " +
+            "someone ONLY where the transcript actually says so; never split the list up " +
+            "to fill the sections.\n\n";
     }
 
     /// <summary>

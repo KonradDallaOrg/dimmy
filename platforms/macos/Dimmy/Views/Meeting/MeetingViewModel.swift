@@ -140,6 +140,23 @@ final class MeetingViewModel: ObservableObject {
     /// Cleared on stop / next start / once system audio starts flowing.
     @Published var systemAudioPermissionNeeded: Bool = false
 
+    // MARK: Calendar context
+    //
+    // Mirror of Win MeetingWindow.Calendar.cs. Three rules, and they are
+    // the reason this is a row and not a dropdown: never modal (the
+    // lookup lands while the user is already talking), never auto-applied
+    // (the roster goes into a recap that gets forwarded, so a wrong name
+    // is worse than no name), and "none" is a remembered answer (asking
+    // again on every reopen is the nagging loop we already fixed once).
+    @Published var calendarCandidates: [CalendarCandidate] = []
+    @Published var calendarIndex: Int = 0
+    private var calendarMeetingDir: String = ""
+
+    var calendarCurrent: CalendarCandidate? {
+        guard calendarCandidates.indices.contains(calendarIndex) else { return nil }
+        return calendarCandidates[calendarIndex]
+    }
+
 
     /// Determinate progress (0–100) for meeting re-transcription, mirrored
     /// from AppState.fileTranscribeProgress (the core emits
@@ -544,6 +561,7 @@ final class MeetingViewModel: ObservableObject {
                 self.titlebarTitle = "Recording..."
                 self.startRecordingPolling()
                 self.loadHistory()  // surfaces the new dir in the sidebar
+                self.beginCalendarLookup(meetingID: id)
                 if consent == .announceOnly {
                     // Tell the room only once the recording has proved it is
                     // alive. An auto-start that collapses in the first second
@@ -1034,6 +1052,73 @@ final class MeetingViewModel: ObservableObject {
     }
 
     // MARK: - Disk helpers
+
+    // MARK: - Calendar context
+
+    /// Start the lookup for a meeting that has just begun.
+    ///
+    /// Fire and forget on a background queue: this shells out to the
+    /// user's `claude` CLI and blocks for tens of seconds. It must never
+    /// make the window wait, and it must never touch the capture path.
+    private func beginCalendarLookup(meetingID id: String) {
+        guard !id.isEmpty, let base = meetingsDir() else { return }
+        let dir = base.appendingPathComponent(id).path
+        calendarMeetingDir = dir
+        calendarCandidates = []
+        calendarIndex = 0
+
+        DispatchQueue.global(qos: .utility).async {
+            // Already answered for this meeting? Then the user has spoken
+            // and we do not ask a second time.
+            if let raw = DimmyCore.shared.calendarAssignment(meetingDir: dir),
+               let data = raw.data(using: .utf8),
+               let existing = try? JSONDecoder().decode(CalendarAssignmentReply.self, from: data),
+               existing.answered {
+                return
+            }
+
+            guard let raw = DimmyCore.shared.calendarCandidates(meetingDir: dir),
+                  let data = raw.data(using: .utf8),
+                  let reply = try? JSONDecoder().decode(CalendarCandidatesReply.self, from: data),
+                  reply.ok, !reply.candidates.isEmpty
+            else {
+                // Off, unauthorised or unreachable. Silence is correct: the
+                // user asked to record a meeting, and that worked.
+                return
+            }
+
+            DispatchQueue.main.async {
+                // The meeting may have been stopped, or another started,
+                // while the lookup was out.
+                guard self.calendarMeetingDir == dir else { return }
+                self.calendarCandidates = reply.candidates
+                self.calendarIndex = 0
+            }
+        }
+    }
+
+    /// Link this meeting to the candidate on screen.
+    func calendarConfirm() {
+        guard !calendarMeetingDir.isEmpty, let c = calendarCurrent else { return }
+        let json = (try? JSONEncoder().encode(c.event)).flatMap { String(data: $0, encoding: .utf8) }
+        DimmyCore.shared.calendarAssign(meetingDir: calendarMeetingDir, eventJson: json)
+        calendarCandidates = []
+    }
+
+    /// Cycle to the next candidate. One row at a time rather than a list
+    /// the user has to parse mid-call.
+    func calendarNext() {
+        guard !calendarCandidates.isEmpty else { return }
+        calendarIndex = (calendarIndex + 1) % calendarCandidates.count
+    }
+
+    /// "None of these" — persisted as an ANSWER, which is what stops the
+    /// row coming back every time this meeting is reopened.
+    func calendarDismiss() {
+        guard !calendarMeetingDir.isEmpty else { return }
+        DimmyCore.shared.calendarAssign(meetingDir: calendarMeetingDir, eventJson: nil)
+        calendarCandidates = []
+    }
 
     private func meetingsDir() -> URL? {
         // Effective meetings dir from the Rust core, honours the user's
