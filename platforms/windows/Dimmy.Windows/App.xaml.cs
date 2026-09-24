@@ -1462,7 +1462,7 @@ public partial class App : Application
             if (name == nameof(AppViewModel.CurrentState)
                 || name == nameof(AppViewModel.RecapsRunning))
                 _taskbarService?.UpdateState(state, recapRunning);
-            _trayService?.UpdateState(state, mActive, mPaused);
+            _trayService?.UpdateState(state, mActive, mPaused, recapRunning);
         });
     }
 

@@ -597,7 +597,8 @@ public class TrayService : IDisposable
     /// blue transcribing, purple processing, green done, orange meeting paused).
     /// Meeting state takes precedence over dictation state because meetings can
     /// last for minutes/hours while the dictation state stays Idle the whole time.</summary>
-    public void UpdateState(AppState state, bool meetingActive, bool meetingPaused, string? tooltip = null)
+    public void UpdateState(AppState state, bool meetingActive, bool meetingPaused,
+        bool recapRunning = false, string? tooltip = null)
     {
         if (!_iconAdded) return;
 
@@ -605,6 +606,12 @@ public class TrayService : IDisposable
         string tip;
         if (meetingActive && meetingPaused) { stateSlug = "paused";       tip = "Dimmy — Meeting paused"; }
         else if (meetingActive)             { stateSlug = "recording";    tip = "Dimmy — Meeting recording"; }
+        // A recap outlives the meeting that produced it: the recording has
+        // stopped, so meetingActive is false and CurrentState is back to
+        // Idle, while the model is still writing for a minute or more. The
+        // taskbar was told about this and the tray was not, so the one
+        // indicator always on screen sat at rest through the whole thing.
+        else if (recapRunning)              { stateSlug = "processing";   tip = "Dimmy — Writing the recap…"; }
         else
         {
             switch (state)
