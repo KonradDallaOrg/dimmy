@@ -109,7 +109,13 @@ public sealed partial class MeetingWindow
                 }
 
                 var raw = DimmyNative.CalendarCandidates(meetingDir);
-                if (string.IsNullOrWhiteSpace(raw)) return;
+                if (string.IsNullOrWhiteSpace(raw))
+                {
+                    // Was a silent return, which is how a meeting with no
+                    // calendar row left no trace at all to diagnose from.
+                    App.Log("calendar: no answer from the core", "Calendar");
+                    return;
+                }
                 var reply = JsonSerializer.Deserialize<CalCandidatesReply>(raw, CalJson);
                 if (reply is null || !reply.Ok)
                 {

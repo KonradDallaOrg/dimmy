@@ -120,6 +120,14 @@ public partial class App : Application
             // the recap is silently skipped at stop. Follows the saved
             // preference, which is the only answer available with no window.
             _appViewModel.MeetingGenerateRecap = Views.MeetingWindow.MeetingGenerateRecapDefault();
+            // A meeting started from the hotkey or the pill never touches
+            // MeetingWindow.BeginStartAsync, so the calendar lookup that
+            // hangs off it never ran and this meeting silently had no
+            // context at all. The lookup parks its result on disk, so
+            // there does not have to be a window for it to be useful:
+            // opening one later picks the question up.
+            var meetingId = System.Text.Encoding.UTF8.GetString(buf, 0, rc);
+            BeginBackgroundCalendarLookup(meetingId);
             try { DimmyNative.dimmy_track_meeting_action(source); } catch { }
             // Pill + taskbar flip to recording via the meeting_state event.
         }
@@ -2608,6 +2616,60 @@ public partial class App : Application
         {
             Log($"OpenMeetingWindow EXC: {ex}", "Meeting");
         }
+    }
+
+    /// <summary>
+    /// Run the calendar lookup for a meeting that has no window behind it.
+    ///
+    /// Fire and forget: it shells out to the user's `claude` CLI for tens
+    /// of seconds. The result is parked next to the audio by the core, so
+    /// a window opened afterwards finds the question waiting; when none is
+    /// open by the time it lands, the toast says so.
+    /// </summary>
+    private void BeginBackgroundCalendarLookup(string meetingId)
+    {
+        if (string.IsNullOrWhiteSpace(meetingId)) return;
+        var dir = System.IO.Path.Combine(Services.BuildInfo.MeetingsDirPath, meetingId);
+        _ = System.Threading.Tasks.Task.Run(() =>
+        {
+            try
+            {
+                var raw = DimmyNative.CalendarCandidates(dir);
+                if (string.IsNullOrWhiteSpace(raw))
+                {
+                    Log("calendar: no answer from the core", "Calendar");
+                    return;
+                }
+                using var doc = System.Text.Json.JsonDocument.Parse(raw);
+                var root = doc.RootElement;
+                if (!root.TryGetProperty("ok", out var ok) || !ok.GetBoolean())
+                {
+                    var why = root.TryGetProperty("error", out var e) ? e.GetString() : "unknown";
+                    Log($"calendar: no context ({why})", "Calendar");
+                    return;
+                }
+                var n = root.TryGetProperty("candidates", out var c) ? c.GetArrayLength() : 0;
+                if (n == 0)
+                {
+                    Log("calendar: day read, nothing lines up", "Calendar");
+                    return;
+                }
+                RunOnUI(() =>
+                {
+                    // A window may have been opened while we were out.
+                    if (_meetingWindow is not null)
+                    {
+                        _meetingWindow.ResumeCalendarPrompt(dir);
+                        return;
+                    }
+                    Services.DictNotificationService.ShowCalendarMatch(n);
+                });
+            }
+            catch (Exception ex)
+            {
+                Log($"background calendar lookup failed: {ex.Message}", "Calendar");
+            }
+        });
     }
 
     /// <summary>

@@ -1187,10 +1187,21 @@ enum MeetingShortcut {
             NSLog("[MeetingShortcut] consent declined")
             return
         }
-        if DimmyCore.shared.meetingStart() == nil {
+        let startedMeetingId = DimmyCore.shared.meetingStart()
+        if startedMeetingId == nil {
             NSLog("[MeetingShortcut] meeting start failed")
             appState.lastError = "Meeting start failed"
         } else {
+            // A meeting started from the shortcut never touches
+            // MeetingViewModel.start, so the calendar lookup that hangs
+            // off it never ran and this meeting silently had no context.
+            // The core parks the result next to the audio, so no window
+            // has to exist for it to be useful: opening one later finds
+            // the question waiting. Mirror of Win
+            // App.BeginBackgroundCalendarLookup.
+            if let id = startedMeetingId {
+                beginBackgroundCalendarLookup(meetingId: id)
+            }
             // Pin the recap intent for THIS meeting. A background/shortcut
             // meeting has no per-meeting "Generate recap" toggle (that UI
             // only exists in the meeting window's idle view), so every stop
@@ -1215,6 +1226,40 @@ enum MeetingShortcut {
                 if await SystemAudioCaptureService.shared.start() == false {
                     dimmyHostLog("[SystemAudio] background meeting: capture unavailable (permission?) — recording mic-only")
                 }
+            }
+        }
+    }
+
+    /// Run the calendar lookup for a meeting with no window behind it.
+    ///
+    /// Fire and forget: it shells out to the user's `claude` CLI for tens
+    /// of seconds. The core parks the result next to the audio, so a
+    /// window opened later finds the question waiting; if none is open by
+    /// the time it lands, the toast says so.
+    private func beginBackgroundCalendarLookup(meetingId: String) {
+        guard !meetingId.isEmpty,
+              let base = DimmyCore.shared.meetingsDirURL else { return }
+        let dir = base.appendingPathComponent(meetingId).path
+        DispatchQueue.global(qos: .utility).async {
+            guard let raw = DimmyCore.shared.calendarCandidates(meetingDir: dir),
+                  let data = raw.data(using: .utf8),
+                  let reply = try? JSONDecoder().decode(CalendarCandidatesReply.self, from: data),
+                  reply.ok, !reply.candidates.isEmpty
+            else { return }
+            DispatchQueue.main.async {
+                // A window may have been opened while we were out.
+                if MeetingWindowController.shared.isWindowVisible {
+                    MeetingWindowController.shared.viewModel
+                        .resumeCalendarPrompt(meetingDir: dir)
+                    return
+                }
+                DictToastWindow.show(
+                    kind: .workflowHint,
+                    title: "Which meeting is this?",
+                    body: reply.candidates.count == 1
+                        ? "A calendar event matches this recording. Open the meeting window to link it."
+                        : "\(reply.candidates.count) calendar events match this recording. Open the meeting window to link it."
+                )
             }
         }
     }
