@@ -1200,7 +1200,7 @@ enum MeetingShortcut {
             // the question waiting. Mirror of Win
             // App.BeginBackgroundCalendarLookup.
             if let id = startedMeetingId {
-                beginBackgroundCalendarLookup(meetingId: id)
+                Self.beginBackgroundCalendarLookup(meetingId: id)
             }
             // Pin the recap intent for THIS meeting. A background/shortcut
             // meeting has no per-meeting "Generate recap" toggle (that UI
@@ -1236,7 +1236,7 @@ enum MeetingShortcut {
     /// of seconds. The core parks the result next to the audio, so a
     /// window opened later finds the question waiting; if none is open by
     /// the time it lands, the toast says so.
-    private func beginBackgroundCalendarLookup(meetingId: String) {
+    private static func beginBackgroundCalendarLookup(meetingId: String) {
         guard !meetingId.isEmpty,
               let base = DimmyCore.shared.meetingsDirURL else { return }
         let dir = base.appendingPathComponent(meetingId).path

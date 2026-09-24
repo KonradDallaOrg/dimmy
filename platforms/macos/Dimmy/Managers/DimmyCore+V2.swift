@@ -812,13 +812,13 @@ extension DimmyCore {
 
 /// One invited person. `name` is best-effort: the search tool returns
 /// addresses only and the display name costs a second call per event.
-struct CalendarAttendee: Decodable, Hashable {
+struct CalendarAttendee: Codable, Hashable {
     var name: String = ""
     var email: String = ""
 }
 
 /// A calendar entry as the connector reported it. Times are unix seconds.
-struct CalendarEvent: Decodable, Hashable, Encodable {
+struct CalendarEvent: Codable, Hashable {
     var id: String = ""
     var title: String = ""
     var startUnix: Int64 = 0
@@ -857,7 +857,7 @@ struct CalendarCandidate: Decodable, Hashable, Identifiable {
     var id: String { event.id.isEmpty ? "\(event.startUnix)" : event.id }
 
     enum CodingKeys: String, CodingKey {
-        case event, organizer
+        case event
         case overlapMins = "overlap_mins"
         case coveragePct = "coverage_pct"
         case matchKind = "match_kind"
