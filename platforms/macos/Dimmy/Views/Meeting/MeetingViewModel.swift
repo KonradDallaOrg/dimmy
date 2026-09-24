@@ -57,6 +57,9 @@ final class MeetingViewModel: ObservableObject {
     // ── Done state ─────────────────────────────────────────────────
     @Published var doneTitle: String = "Meeting"
     @Published var doneMeta: String = ""
+    /// One line describing the invite this meeting is linked to, or nil.
+    /// The only place the event is visible without a recap.
+    @Published var doneCalendarLine: String?
     @Published var doneSections: [String: String] = [:] {
         didSet {
             // Reflect the resolved meeting type into the override picker so the
@@ -668,6 +671,7 @@ final class MeetingViewModel: ObservableObject {
                 self.doneMeta = String(
                     format: "%.0fs · %d chunks", result.durationSecs, result.chunkCount
                 )
+                self.refreshDoneCalendarLine(meetingDir: result.dir)
                 // Surface a finalize failure (disk-full → incomplete audio on
                 // disk). The core has always serialized `error`; silently
                 // ignoring it meant the user learned about the damage only
@@ -1131,12 +1135,37 @@ final class MeetingViewModel: ObservableObject {
         calendarIndex = 0
     }
 
+    /// Rebuild the Done-header line from the saved assignment.
+    func refreshDoneCalendarLine(meetingDir: String) {
+        guard !meetingDir.isEmpty,
+              let raw = DimmyCore.shared.calendarAssignment(meetingDir: meetingDir),
+              let data = raw.data(using: .utf8),
+              let reply = try? JSONDecoder().decode(CalendarAssignmentReply.self, from: data),
+              let ev = reply.event
+        else {
+            doneCalendarLine = nil
+            return
+        }
+        let fmt = DateFormatter()
+        fmt.dateFormat = "HH:mm"
+        let start = fmt.string(from: Date(timeIntervalSince1970: TimeInterval(ev.startUnix)))
+        let end = fmt.string(from: Date(timeIntervalSince1970: TimeInterval(ev.endUnix)))
+        let title = ev.title.isEmpty ? "(no subject)" : ev.title
+        // "invited", not "attended": the invite proves invitation and
+        // nothing else, and half a list routinely does not join.
+        let who = ev.attendees.isEmpty ? "" : "  \u{00B7}  \(ev.attendees.count) invited"
+        doneCalendarLine = "\(title)  \u{00B7}  \(start)-\(end)\(who)"
+    }
+
     /// Link this meeting to the candidate on screen.
     func calendarConfirm() {
         guard !calendarMeetingDir.isEmpty, let c = calendarCurrent else { return }
         let json = (try? JSONEncoder().encode(c.event)).flatMap { String(data: $0, encoding: .utf8) }
         DimmyCore.shared.calendarAssign(meetingDir: calendarMeetingDir, eventJson: json)
         calendarCandidates = []
+        // Confirming from the Done view must update the header it sits in,
+        // not wait for the next reopen.
+        refreshDoneCalendarLine(meetingDir: calendarMeetingDir)
     }
 
     /// Cycle to the next candidate. One row at a time rather than a list
@@ -1292,6 +1321,7 @@ final class MeetingViewModel: ObservableObject {
         // Meeting date from meta.json `started_at` (stable across title
         // edits), not the dir mtime, see MeetingHistoryRow.dateFor.
         doneMeta = MeetingHistoryRow.subtitleFor(date: MeetingHistoryRow.dateFor(dirURL: url))
+        refreshDoneCalendarLine(meetingDir: url.path)
 
         let recapURL = url.appendingPathComponent("recap.md")
         if let recapMd = try? String(contentsOf: recapURL, encoding: .utf8), !recapMd.isEmpty {

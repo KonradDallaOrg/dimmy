@@ -513,6 +513,21 @@
                 <TextBlock x:Name="DoneMeta" FontSize="12"
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                            Text=""/>
+                <!-- The linked calendar invite. Without this the event we
+                     went and fetched only ever reached the recap prompt,
+                     so a meeting with no recap kept the information on
+                     disk and showed it to nobody. -->
+                <StackPanel x:Name="DoneCalendarRow" Orientation="Horizontal"
+                            Spacing="6" Visibility="Collapsed" Margin="0,2,0,0">
+                  <FontIcon Glyph="&#xE787;" FontSize="12"
+                            VerticalAlignment="Center"
+                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                  <TextBlock x:Name="DoneCalendarText" FontSize="12"
+                             VerticalAlignment="Center"
+                             TextTrimming="CharacterEllipsis"
+                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                </StackPanel>
+
                 <!-- Meeting-type chip: the auto-detected (or chosen) meeting
                      type, Notion-style. Hidden when the type is unresolved. -->
                 <Border x:Name="DoneTypeChip" Visibility="Collapsed"

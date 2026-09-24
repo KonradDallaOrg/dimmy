@@ -168,6 +168,21 @@ struct MeetingDoneView: View {
             Text(vm.doneMeta)
                 .font(.system(size: 11))
                 .foregroundStyle(Color.macTextSecondary)
+            // The linked calendar invite. Without this the event we went
+            // and fetched only ever reached the recap prompt, so a meeting
+            // with no recap kept the information on disk and showed it to
+            // nobody. Mirror of Win DoneCalendarRow.
+            if let line = vm.doneCalendarLine {
+                HStack(spacing: 6) {
+                    Image(systemName: "calendar")
+                        .font(.system(size: 10))
+                    Text(line)
+                        .font(.system(size: 11))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                .foregroundStyle(Color.macTextSecondary)
+            }
             // Meeting-type chip (Notion-style): the auto-detected (or
             // chosen) type. Hidden when unresolved (auto/unknown).
             if let typeLabel = MeetingPostProcessService.friendlyTypeLabel(vm.doneSections["__TYPE__"]) {

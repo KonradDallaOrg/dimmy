@@ -2083,6 +2083,20 @@ pub fn parse_recap_title(recap_md: &str) -> Option<String> {
 /// preserving every other field already in the file. Best-effort —
 /// silent on errors because the title is metadata polish, not load-
 /// bearing data.
+/// Does this meeting already carry a name?
+///
+/// The caller that matters is the calendar link: it names a meeting after
+/// the invite, but only while nothing better exists. A recap heading is
+/// derived from what was actually said, so it outranks the invite subject
+/// and must not be overwritten by confirming an event afterwards.
+pub fn meeting_has_title(meeting_dir: &std::path::Path) -> bool {
+    std::fs::read_to_string(meeting_dir.join("meta.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v["title"].as_str().map(|t| !t.trim().is_empty()))
+        .unwrap_or(false)
+}
+
 pub fn update_meeting_meta_title(meeting_dir: &std::path::Path, title: &str) {
     let path = meeting_dir.join("meta.json");
     let mut obj: serde_json::Map<String, serde_json::Value> = std::fs::read_to_string(&path)
@@ -2566,6 +2580,32 @@ mod audio_never_blocked {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_meeting_named_by_its_recap_is_not_renamed_by_an_invite() {
+        // The calendar link names a meeting after the invite, which is the
+        // only way a meeting with no recap gets a name at all. But a recap
+        // heading is derived from what was actually said and outranks the
+        // invite subject, so confirming an event afterwards must not
+        // clobber it.
+        let dir = std::env::temp_dir().join(format!("dimmy-title-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+
+        let meta = dir.join("meta.json");
+        let _ = std::fs::remove_file(&meta);
+        assert!(!super::meeting_has_title(&dir), "no meta.json at all");
+
+        std::fs::write(&meta, r#"{"id":"x"}"#).expect("write");
+        assert!(!super::meeting_has_title(&dir), "meta.json with no title");
+
+        std::fs::write(&meta, r#"{"id":"x","title":"   "}"#).expect("write");
+        assert!(!super::meeting_has_title(&dir), "whitespace is not a title");
+
+        super::update_meeting_meta_title(&dir, "Migrazione tag NFC");
+        assert!(super::meeting_has_title(&dir), "named now");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     use super::*;
 
     // ── Bounded join: stop() must NEVER hang on a wedged worker ──────

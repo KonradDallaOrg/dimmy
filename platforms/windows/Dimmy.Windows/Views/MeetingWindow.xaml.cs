@@ -581,6 +581,7 @@ public sealed partial class MeetingWindow : Window
             DoneTitle.Text = ResolveDoneTitle(dir);
             DoneMeta.Text = $"{FormatDuration(dur)} · {chunks} chunks · {DateTime.Now:yyyy-MM-dd HH:mm}"
                 + (string.IsNullOrWhiteSpace(stopError) ? "" : " · ⚠ audio incomplete");
+            RefreshDoneCalendarRow(dir);
             _doneTurnAnchors = Helpers.TranscriptRenderer.Render(RawTranscriptText,
                 string.IsNullOrEmpty(transcript)
                     ? "(no transcript: VAD may have removed all audio)"
@@ -2766,6 +2767,7 @@ public sealed partial class MeetingWindow : Window
             // already falls back to the meeting id.
             DoneTitle.Text = ResolveDoneTitle(row.Dir, fallback: row.Title);
             DoneMeta.Text = row.Subtitle;
+            RefreshDoneCalendarRow(row.Dir);
             ClearDoneCards();
 
             var recapPath = Path.Combine(row.Dir, "recap.md");

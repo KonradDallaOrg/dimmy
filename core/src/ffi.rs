@@ -13070,6 +13070,23 @@ pub unsafe extern "C" fn dimmy_calendar_assign(
 
     match crate::calendar::save_assignment(&dir, event.as_ref()) {
         Ok(()) => {
+            // Name the meeting after the invite, but only while it has no
+            // name of its own. Without this the calendar knew exactly what
+            // the meeting was called and threw it away: today a title only
+            // ever comes from the recap's first heading, so a meeting with
+            // no recap stayed nameless.
+            //
+            // The guard is what keeps the existing rule intact. A recap
+            // heading is derived from what was actually said and beats
+            // "Weekly sync #47", so it must win — and confirming an invite
+            // AFTER the recap has run must not overwrite it.
+            if let Some(ev) = event.as_ref() {
+                let title = ev.title.trim();
+                if !title.is_empty() && !crate::meeting::meeting_has_title(&dir) {
+                    crate::meeting::update_meeting_meta_title(&dir, title);
+                    log("[Calendar] meeting named after the invite");
+                }
+            }
             log(&format!(
                 "[Calendar] meeting assigned: {}",
                 if event.is_some() { "event" } else { "none" }

@@ -186,6 +186,47 @@ public sealed partial class MeetingWindow
         catch (JsonException) { }
     }
 
+    /// <summary>
+    /// Show the linked invite in the Done header, or hide the row when
+    /// there is none.
+    ///
+    /// This is the only place the event is visible without a recap. Until
+    /// it existed, Dimmy fetched the invite, saved it next to the audio,
+    /// and then showed it to nobody unless a recap happened to run.
+    /// </summary>
+    private void RefreshDoneCalendarRow(string? meetingDir)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(meetingDir))
+            {
+                DoneCalendarRow.Visibility = Visibility.Collapsed;
+                return;
+            }
+            var a = ReadAssignment(meetingDir);
+            if (a?.Event is null)
+            {
+                DoneCalendarRow.Visibility = Visibility.Collapsed;
+                return;
+            }
+            var ev = a.Event;
+            var start = DateTimeOffset.FromUnixTimeSeconds(ev.StartUnix).ToLocalTime();
+            var end = DateTimeOffset.FromUnixTimeSeconds(ev.EndUnix).ToLocalTime();
+            var n = ev.Attendees.Count;
+            // "invited", not "attended": the invite proves invitation and
+            // nothing else, and half a list routinely does not join.
+            var who = n == 0 ? "" : $"  ·  {n} invited";
+            var title = string.IsNullOrWhiteSpace(ev.Title) ? "(no subject)" : ev.Title;
+            DoneCalendarText.Text = $"{title}  ·  {start:HH:mm}-{end:HH:mm}{who}";
+            DoneCalendarRow.Visibility = Visibility.Visible;
+        }
+        catch (Exception ex)
+        {
+            App.Log($"calendar done row failed: {ex.Message}", "Calendar");
+            DoneCalendarRow.Visibility = Visibility.Collapsed;
+        }
+    }
+
     private static CalAssignmentReply? ReadAssignment(string meetingDir)
     {
         var raw = DimmyNative.CalendarAssignment(meetingDir);
@@ -242,6 +283,9 @@ public sealed partial class MeetingWindow
         var rc = DimmyNative.dimmy_calendar_assign(_calMeetingDir, json);
         App.Log($"calendar assign rc={rc}", "Calendar");
         HideCalendarBar();
+        // Confirming from the Done view must update the header it is
+        // sitting in, not wait for the next reopen.
+        RefreshDoneCalendarRow(_calMeetingDir);
         ShowToast(rc == 1 ? "Meeting linked to the calendar event." : "Could not save the link.");
     }
 
