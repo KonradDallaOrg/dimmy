@@ -53,6 +53,16 @@ pub enum SuppressionReason {
     /// starting the meeting (which can take seconds while a consent modal
     /// is up). Suppress re-detection in that gap. Cleared by meeting_stopped().
     RecordingAccepted,
+    /// This call was ALREADY running the first time we looked.
+    ///
+    /// Dimmy can be launched, or restarted, or started at login, in the
+    /// middle of a call. The detector wakes with no memory, sees a live
+    /// session and has no way to tell it apart from one that just began
+    /// — so on 2026-09-24 11:33 a restart mid-call recorded a meeting the
+    /// user was already sitting in. A start we did not witness is not
+    /// evidence of a start, so we adopt the session and stay quiet.
+    /// Cleared when the session finally goes away.
+    AlreadyRunning(String),
     /// The user pressed Stop by hand while this call was still running.
     /// Nothing is emitted — no recording, and no nudge either: having been
     /// told "not this call", asking again every time the host re-signals the
@@ -121,10 +131,17 @@ pub struct CallDetectorState {
     /// an app-less call is held too — that was the hole that let the loop
     /// survive wherever a call infers no app, which on macOS is often.
     barred: Option<String>,
-    /// Backstop deadline for `barred`. The hold is meant to be lifted by
-    /// evidence — the mic going free — and this exists only so a missing
-    /// signal can never make auto-record dead for ever.
-    barred_until: i64,
+    /// Sessions that were already live the first time we saw them.
+    ///
+    /// Held back from auto-record for as long as they last, because we
+    /// never witnessed them start. A key leaves this set when the session
+    /// actually ends, at which point the next one IS a start we watched.
+    preexisting: HashSet<String>,
+    /// Have we ever seen the microphone idle? Until we have, every active
+    /// signal describes something that was already going when we arrived.
+    /// One flag rather than per-key bookkeeping: the moment we observe
+    /// idle once, everything after it is a transition we witnessed.
+    observed_idle: bool,
     /// When the mic was last seen free, outside a meeting. Stamped on the
     /// inactive edge and judged on the NEXT active edge: the hosts signal
     /// "free" once, as an edge, not continuously, so waiting for further
@@ -135,8 +152,6 @@ pub struct CallDetectorState {
     /// session vanished and came back under the same id four seconds later,
     /// mid-call. Ten seconds gives that room.
     release_confirm_secs: u32,
-    /// How long a hold can survive with no evidence either way.
-    bar_backstop_secs: u32,
     /// Whether a `mic_active = false` signal actually means "nobody holds
     /// the microphone". The hosts also send that zero while Dimmy itself is
     /// capturing, so the pill cannot self-trigger — and reading a ten-second
@@ -212,10 +227,10 @@ impl CallDetectorState {
             cooldown_until: HashMap::new(),
             recorded_app: None,
             barred: None,
-            barred_until: 0,
+            preexisting: HashSet::new(),
+            observed_idle: false,
             mic_free_since: None,
             release_confirm_secs: 10,
-            bar_backstop_secs: 1800,
             mic_free_is_evidence: true,
             stop_is_automatic: false,
             recording_active_from_us: false,
@@ -411,6 +426,15 @@ impl CallDetectorState {
         // edge. Only outside a meeting, and only when the zero means what it
         // says: the hosts also send it while Dimmy itself is capturing, and
         // a dictation is not evidence that somebody else's call ended.
+        // The first honest idle we see ends the bootstrap: from here on, a
+        // session going active is a transition we watched, not something
+        // that was already under way before we existed.
+        if self.mic_free_is_evidence {
+            self.observed_idle = true;
+            // Whatever was live when we arrived is over, so it can start
+            // a real call next time.
+            self.preexisting.clear();
+        }
         if !is_meeting_active && self.mic_free_is_evidence && self.mic_free_since.is_none() {
             self.mic_free_since = Some(now);
         }
@@ -487,12 +511,13 @@ impl CallDetectorState {
                 self.barred = None;
             }
         }
-        // Backstop: evidence is the normal way out, a deadline is the
-        // guarantee. Auto-record must never be dead for ever because one
-        // signal went missing.
-        if self.barred.is_some() && now >= self.barred_until {
-            self.barred = None;
-        }
+        // There is deliberately NO deadline here. A hold used to expire
+        // blind after half an hour, which meant a long call the user had
+        // stopped by hand started recording itself again partway through
+        // — the one outcome the hold exists to prevent. Between "misses an
+        // auto-record the user can start by hand" and "records a call they
+        // explicitly stopped", the first is the cheaper mistake, so the
+        // hold now waits for evidence however long that takes.
 
         // App may be inferred late in the session (whitelist process
         // launched after mic activation). Take the first non-None we
@@ -505,8 +530,21 @@ impl CallDetectorState {
             .clone()
             .unwrap_or_else(|| GLOBAL_COOLDOWN_KEY.to_string());
 
+        // Already going when we arrived. Recorded BEFORE the meeting-active
+        // check so that a restart during a meeting we are recording still
+        // marks the session, and stopping that meeting by hand does not
+        // then hand the same live call straight back to auto-record.
+        if !self.observed_idle {
+            self.preexisting.insert(app_for_lookup.clone());
+        }
+
         if is_meeting_active {
             return CallSignalOutcome::Suppressed(SuppressionReason::MeetingActive);
+        }
+        if self.preexisting.contains(&app_for_lookup) {
+            return CallSignalOutcome::Suppressed(SuppressionReason::AlreadyRunning(
+                app_for_lookup,
+            ));
         }
         // Already accepted "record now": the host is bringing up the meeting
         // (consent modal, window open) — that can take several seconds during
@@ -632,25 +670,37 @@ impl CallDetectorState {
     /// path completed). Resets the recording-active flags so the next
     /// detection starts clean.
     pub fn meeting_stopped(&mut self) {
-        self.meeting_stopped_at(0);
+        self.meeting_stopped_at_inner(false);
     }
 
-    /// `meeting_stopped` with the clock, so the hold's backstop has a
-    /// deadline. The FFI passes the real time; the zero-argument form above
-    /// is kept for callers that have no clock and never bar anything.
-    pub fn meeting_stopped_at(&mut self, now: i64) {
+    /// `meeting_stopped` for callers that know the stop really happened
+    /// now. Only this form can place a hold.
+    ///
+    /// The clock argument is gone: the hold has no deadline any more, so
+    /// there is nothing left to measure against. It used to expire blind
+    /// after half an hour, which meant a long call stopped by hand handed
+    /// itself back to auto-record partway through.
+    ///
+    /// The zero-argument form above genuinely bars nothing, as its comment
+    /// always claimed. It used to pass `now = 0`, which DID place a hold
+    /// and then relied on the backstop to undo it — so removing the
+    /// backstop would have left those callers holding for ever.
+    pub fn meeting_stopped_at(&mut self, _now: i64) {
+        self.meeting_stopped_at_inner(true);
+    }
+
+    fn meeting_stopped_at_inner(&mut self, may_hold: bool) {
         let recorded = self.recorded_app.take();
         let was_ours = self.recording_active_from_us;
         if self.stop_is_automatic {
             // We stopped it because the call ended. Nothing is held: the
             // next call — the one the user hung up for — records by itself.
             self.stop_is_automatic = false;
-        } else if was_ours {
+        } else if was_ours && may_hold {
             // Pressed by hand, while that call is in all likelihood still
             // running. Hold it until the call is really over. An app-less
             // call is held under the global key rather than not at all.
             self.barred = Some(recorded.unwrap_or_else(|| GLOBAL_COOLDOWN_KEY.to_string()));
-            self.barred_until = now + self.bar_backstop_secs as i64;
             // The release clock starts at the stop. A silent stretch DURING
             // the meeting is not evidence that the call ended.
             self.mic_free_since = None;
@@ -758,7 +808,22 @@ mod tests {
     }
     use super::*;
 
+    /// A detector in the state it is in almost all the time: Dimmy has
+    /// been running with nothing happening, so it has seen the microphone
+    /// idle and the next call going active is a transition it watched.
     fn fresh() -> CallDetectorState {
+        let mut s = cold();
+        // One idle tick, which is what the hosts send while nothing holds
+        // the mic. Without it every test would be describing the rarer
+        // case below.
+        s.signal(false, None, false, 1);
+        s
+    }
+
+    /// A detector that has just been constructed and has never seen the
+    /// microphone idle — Dimmy launched, restarted, or started at login
+    /// in the middle of a call.
+    fn cold() -> CallDetectorState {
         let mut s = CallDetectorState::new();
         s.configure(true, 5, 1800, 300, HashSet::new());
         s
@@ -1405,22 +1470,87 @@ mod tests {
         );
     }
 
-    /// Evidence is the way out; the deadline is only the guarantee that a
-    /// missing signal can never leave auto-record dead for ever.
+    /// Evidence is the ONLY way out. A deadline used to lift the hold
+    /// blind after half an hour, which is how a long call the user had
+    /// stopped by hand started recording itself again partway through.
     #[test]
-    fn the_backstop_lifts_a_hold_that_never_got_its_evidence() {
+    fn a_hold_with_no_evidence_never_lifts_on_its_own() {
         let mut s = fresh();
         s.signal(true, Some("teams".into()), false, 1000);
         let _ = s.signal(true, Some("teams".into()), false, 1005);
         s.record_response(Some("teams".into()), NudgeResponse::RecordNow, 1006);
         s.meeting_stopped_at(1100);
 
-        // Not one free tick ever arrives. bar_backstop_secs = 1800.
-        s.signal(true, Some("teams".into()), false, 2901);
-        let out = s.signal(true, Some("teams".into()), false, 2906);
+        // Two hours of the same live session, not one free tick. The old
+        // backstop was 1800 s, so every one of these would have recorded.
+        for t in [2901, 2906, 4000, 8500] {
+            let out = s.signal(true, Some("teams".into()), false, t);
+            assert_eq!(
+                out,
+                CallSignalOutcome::Suppressed(SuppressionReason::StoppedByUser("teams".into())),
+                "tick {t}: a call stopped by hand must not restart itself"
+            );
+        }
+
+        // The call really ends. THAT is what lifts it.
+        s.signal(false, None, false, 8600);
+        s.signal(true, Some("teams".into()), false, 8700);
+        let out = s.signal(true, Some("teams".into()), false, 8705);
         assert!(
             matches!(out, CallSignalOutcome::Detected { .. }),
-            "the hold must expire rather than become permanent, got {out:?}"
+            "a genuinely new call must record, got {out:?}"
+        );
+    }
+
+    /// The 2026-09-24 11:33 incident: Dimmy was restarted mid-call and
+    /// started recording the meeting the user was already sitting in.
+    #[test]
+    fn a_call_already_running_at_startup_is_not_a_call_starting() {
+        let mut s = cold();
+        // Teams has been live for an hour; we have only just woken up.
+        s.signal(true, Some("teams".into()), false, 1000);
+        for t in [1005, 1010, 1200, 3000] {
+            let out = s.signal(true, Some("teams".into()), false, t);
+            assert_eq!(
+                out,
+                CallSignalOutcome::Suppressed(SuppressionReason::AlreadyRunning("teams".into())),
+                "tick {t}: we never saw this call start"
+            );
+        }
+    }
+
+    /// ...but only that call. Once it ends, we have watched a full
+    /// transition and the next one is ours to offer.
+    #[test]
+    fn the_call_after_the_one_we_walked_in_on_records_normally() {
+        let mut s = cold();
+        s.signal(true, Some("teams".into()), false, 1000);
+        let _ = s.signal(true, Some("teams".into()), false, 1010);
+        // It ends.
+        s.signal(false, None, false, 2000);
+        // A new one begins, and this time we watched it begin.
+        s.signal(true, Some("teams".into()), false, 3000);
+        let out = s.signal(true, Some("teams".into()), false, 3010);
+        assert!(
+            matches!(out, CallSignalOutcome::Detected { .. }),
+            "the next call is a start we witnessed, got {out:?}"
+        );
+    }
+
+    /// A clockless stop must not create a hold that can never be lifted.
+    /// It used to pass now = 0 and lean on the backstop to undo it.
+    #[test]
+    fn the_clockless_stop_holds_nothing() {
+        let mut s = fresh();
+        s.signal(true, Some("teams".into()), false, 1000);
+        let _ = s.signal(true, Some("teams".into()), false, 1005);
+        s.record_response(Some("teams".into()), NudgeResponse::RecordNow, 1006);
+        s.meeting_stopped();
+        s.signal(true, Some("teams".into()), false, 2000);
+        let out = s.signal(true, Some("teams".into()), false, 2010);
+        assert!(
+            matches!(out, CallSignalOutcome::Detected { .. }),
+            "no clock means no hold, got {out:?}"
         );
     }
 }
