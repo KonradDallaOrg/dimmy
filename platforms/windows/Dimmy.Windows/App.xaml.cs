@@ -886,7 +886,7 @@ public partial class App : Application
                     Log("extension refresh: no dimmy-mcp next to the exe", "ClaudeDesktop");
                     return;
                 }
-                var version = typeof(App).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
+                var version = DimmyNative.CoreVersion();
                 // Logged either way. Silence on the negative branch is how
                 // the MCP bridge sat four months stale with nothing in the
                 // log to say why.

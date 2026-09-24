@@ -282,7 +282,7 @@ struct ClaudeDesktopConnectSheet: View {
         // Claude Connectors UI shows "Dimmy x.y.z" next to the icon.
         // Bundle CFBundleShortVersionString is the canonical Mac
         // source.
-        let version = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0.0.0"
+        let version = DimmyCore.shared.coreVersion
         DispatchQueue.global(qos: .userInitiated).async {
             let ok = DimmyCore.shared.installClaudeDesktopExtension(
                 binaryPath: binary, version: version)

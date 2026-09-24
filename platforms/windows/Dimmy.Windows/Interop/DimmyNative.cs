@@ -668,6 +668,25 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_get_version(byte[] outBuf, int bufLen);
 
+    /// <summary>
+    /// Dimmy's real version, from core/Cargo.toml — the source of truth
+    /// CLAUDE.md names, and the only one that is right on every build.
+    ///
+    /// Not the .NET assembly version: nothing sets that, so it reads
+    /// 1.0.0 on a dev build and stamped the Claude Desktop extension with
+    /// 1.0.0 for months. Anything that has to name a version should come
+    /// through here.
+    /// </summary>
+    public static string CoreVersion()
+    {
+        try
+        {
+            var v = ReadBuffer((buf, len) => dimmy_get_version(buf, len), 64);
+            return string.IsNullOrWhiteSpace(v) ? "0.0.0" : v.Trim();
+        }
+        catch { return "0.0.0"; }
+    }
+
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_build_flavor(byte[] outBuf, int bufLen);
 

@@ -220,7 +220,7 @@ public sealed partial class ClaudeDesktopConnectDialog : ContentDialog
         // the Claude Connectors UI ("Dimmy x.y.z"). Source from the
         // host's actual assembly version so a contributor bumping
         // Cargo.toml doesn't drift visibly here.
-        var version = typeof(App).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
+        var version = Interop.DimmyNative.CoreVersion();
         App.Log($"MCP wizard: calling install binary='{binary}' version='{version}'", "ClaudeDesktop");
         (bool ok, int rc) result;
         try

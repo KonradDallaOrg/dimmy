@@ -1,6 +1,9 @@
 [package]
 name = "dimmy-mcp"
-version = "0.6.52"
+# Crate version only, and deliberately not what the bridge reports. The
+# number Claude Desktop sees comes from core/Cargo.toml via build.rs, so
+# there is exactly one version to bump. See build.rs for why.
+version = "0.0.0"
 edition = "2021"
 description = "Dimmy ↔ Claude Desktop bridge via Model Context Protocol"
 license = "AGPL-3.0-only"

@@ -164,7 +164,7 @@ async fn handle_request(
                 "serverInfo": {
                     "name": "dimmy",
                     "title": "Dimmy",
-                    "version": env!("CARGO_PKG_VERSION"),
+                    "version": env!("DIMMY_VERSION"),
                 }
             }))
         }
@@ -264,7 +264,7 @@ async fn heartbeat_loop(path: PathBuf) {
             .unwrap_or(0);
         let payload = HeartbeatPayload {
             timestamp: now,
-            version: env!("CARGO_PKG_VERSION").to_string(),
+            version: env!("DIMMY_VERSION").to_string(),
         };
         let json = serde_json::to_string(&payload).unwrap_or_default();
         if let Err(e) = tokio::fs::write(&path, json).await {

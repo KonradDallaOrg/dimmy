@@ -48,7 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         DispatchQueue.global(qos: .utility).async {
             let bin = Bundle.main.bundlePath + "/Contents/Resources/dimmy-mcp"
             guard FileManager.default.fileExists(atPath: bin) else { return }
-            let version = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0.0.0"
+            let version = DimmyCore.shared.coreVersion
             if DimmyCore.shared.refreshClaudeDesktopExtension(binaryPath: bin, version: version) {
                 hkLog("[AppDelegate] Claude Desktop extension refreshed to v\(version)")
             }
