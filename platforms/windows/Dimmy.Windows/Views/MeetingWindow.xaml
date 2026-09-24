@@ -599,13 +599,16 @@
                                       AutoPlay="False"
                                       MinHeight="64">
                     <MediaPlayerElement.TransportControls>
-                      <!-- The waveform above IS the scrubber (click or drag),
-                           and the position / duration are spelled out under it,
-                           so the transport's own seek bar was a second control
-                           for the same thing. Mac has only the waveform too. -->
+                      <!-- The seek bar stays. It IS a second control for the
+                           same position as the waveform above, which is why
+                           it was removed once — but both are bound to the
+                           same player, so the two move together and neither
+                           can disagree with the other. What removing it
+                           actually cost was the familiar shape of a player:
+                           a transport with no bar reads as unfinished, and
+                           the row looked empty next to the waveform. -->
                       <MediaTransportControls IsCompact="True"
-                                              IsZoomButtonVisible="False"
-                                              IsSeekBarVisible="False"/>
+                                              IsZoomButtonVisible="False"/>
                     </MediaPlayerElement.TransportControls>
                   </MediaPlayerElement>
                 </Grid>
