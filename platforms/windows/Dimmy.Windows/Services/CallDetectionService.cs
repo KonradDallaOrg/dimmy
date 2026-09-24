@@ -158,8 +158,9 @@ internal sealed class CallDetectionService : IDisposable
             .FirstOrDefault(kv => kv.Value == _lastEmittedExe);
         if (string.IsNullOrEmpty(origin.Key)) return false;
         _meetingOriginSessionId = origin.Key;
-        _meetingOriginEndpointId = _tickSessions
-            .FirstOrDefault(x => x.sessionId == origin.Key).endpointId;
+        var originRow = _tickSessions.FirstOrDefault(x => x.sessionId == origin.Key);
+        _meetingOriginEndpointId = originRow.endpointId;
+        _meetingOriginPid = originRow.pid;
         _originEndpointAwayLogged = false;
         _meetingDrivenByCallDetect = true;
         App.Log($"meeting origin bound: exe={_lastEmittedExe} id=…{TailOf(origin.Key)}", "CallDetect");
@@ -177,9 +178,11 @@ internal sealed class CallDetectionService : IDisposable
     {
         try
         {
-            var live = _tickSessions;
+            // Discovery only ever cares about sessions that are actually
+            // capturing right now.
+            var live = _tickSessions.Where(x => x.state == (int)AudioSessionState.Active).ToList();
             int ownPid = Environment.ProcessId;
-            foreach (var (sessionId, pid, endpointId) in live)
+            foreach (var (sessionId, pid, endpointId, _) in live)
             {
                 if (pid == ownPid) continue; // Dimmy's own meeting mic capture
                 var exe = ResolveProcessExeName(pid);
@@ -188,6 +191,7 @@ internal sealed class CallDetectionService : IDisposable
                 _lastEmittedExe = exe;
                 _meetingOriginSessionId = sessionId;
                 _meetingOriginEndpointId = endpointId;
+                _meetingOriginPid = pid;
                 _originEndpointAwayLogged = false;
                 _meetingDrivenByCallDetect = true;
                 try { DimmyNative.dimmy_call_meeting_started_external(); } catch { }
@@ -253,6 +257,7 @@ internal sealed class CallDetectionService : IDisposable
         {
             _meetingOriginSessionId = null;
             _meetingOriginEndpointId = null;
+            _meetingOriginPid = 0;
             _originMissingSince = null;
             _meetingDrivenByCallDetect = false;
         }
@@ -296,56 +301,50 @@ internal sealed class CallDetectionService : IDisposable
                     // amplitude check — silence-during-call is NOT
                     // a stop signal in this branch (a user might be
                     // listening intently for minutes).
-                    bool originAlive = _tickSessions.Any(s => s.sessionId == _meetingOriginSessionId);
-                    // Did its endpoint go with it? Asked against the ENDPOINT
-                    // SET, not the sessions on it: a call really ending leaves
-                    // its endpoint alive and empty, and "is any session still
-                    // on it" would read every genuine hangup as device churn
-                    // and stop stopping.
-                    bool endpointAlive = _meetingOriginEndpointId == null
-                        || _lastEndpointIds.Contains(_meetingOriginEndpointId);
-                    if (originAlive)
+                    // Is the call still up? Asked of the PROCESS, not of one
+                    // session id: changing the audio device inside Teams moves
+                    // its capture to a different endpoint under a new session,
+                    // and the call never paused. Any active capture from that
+                    // process, anywhere, means the call is running.
+                    bool originActive = _tickSessions.Any(
+                        x => x.pid == _meetingOriginPid && x.state == (int)AudioSessionState.Active);
+                    // Released the microphone but kept its session object:
+                    // that is a call that ENDED, and it is immediate — no
+                    // waiting, no guessing.
+                    bool originIdle = !originActive && _tickSessions.Any(
+                        x => x.pid == _meetingOriginPid && x.state != (int)AudioSessionState.Active);
+                    bool processGone = _meetingOriginPid != 0 && !ProcessAlive(_meetingOriginPid);
+
+                    if (originActive)
                     {
-                        // Back, or never left. Whatever absence we were
-                        // counting was a move between devices.
                         if (_originMissingSince != null)
                             App.Log("origin session back — it had moved, not ended", "CallDetect");
                         _originMissingSince = null;
-                        _originEndpointAwayLogged = false;
                     }
-                    else if (!endpointAlive)
+                    else if (processGone || originIdle)
                     {
-                        // Its endpoint went with it: a Bluetooth profile
-                        // switch, nothing to conclude from.
-                        _originMissingSince = null;
-                        if (!_originEndpointAwayLogged)
-                        {
-                            App.Log("origin session away WITH its endpoint — device, not hangup", "CallDetect");
-                            _originEndpointAwayLogged = true;
-                        }
+                        // Teams closed, or let go of the mic. Either way this
+                        // is an answer, not an absence, so it needs no clock.
+                        App.Log(processGone
+                            ? "origin process gone — call over"
+                            : "origin released the microphone — call over", "CallDetect");
+                        FireSessionEnded();
                     }
                     else if (_originMissingSince == null)
                     {
-                        // First tick without it. Start counting; do NOT
-                        // conclude anything yet.
+                        // No session at all from that process: mid-move, or the
+                        // endpoint churning. Start counting, conclude nothing.
                         _originMissingSince = DateTime.UtcNow;
                     }
                     else if (DateTime.UtcNow - _originMissingSince.Value >= OriginGoneConfirm)
                     {
-                        try
-                        {
-                            int rc = DimmyNative.dimmy_call_signal_session_ended();
-                            App.Log($"origin session gone (id=…{TailOf(_meetingOriginSessionId)}) → signal_session_ended rc={rc}", "CallDetect");
-                        }
-                        catch (Exception ex)
-                        {
-                            App.Log($"signal_session_ended failed: {ex.Message}", "CallDetect");
-                        }
-                        // One-shot — clear so we don't keep yelling
-                        // at the Rust state machine. The active→
-                        // inactive edge above will reset _meetingDrivenByCallDetect
-                        // when the user actually stops the meeting.
-                        _meetingOriginSessionId = null;
+                        // Backstop only. Every ordinary ending is answered
+                        // above without a clock; this covers a process we
+                        // cannot see and a session object that never
+                        // reappears, so a recording can never run for ever
+                        // on a signal that went missing.
+                        App.Log("origin absent past the backstop — call over", "CallDetect");
+                        FireSessionEnded();
                     }
                 }
                 else
@@ -373,7 +372,7 @@ internal sealed class CallDetectionService : IDisposable
         // then apply one-shot logic.
         try
         {
-            var live = _tickSessions;
+            var live = _tickSessions.Where(x => x.state == (int)AudioSessionState.Active).ToList();
             var liveIds = new HashSet<string>(live.Select(s => s.sessionId), StringComparer.Ordinal);
 
             // 1. Cleanup: any emitted session that's no longer alive
@@ -403,7 +402,7 @@ internal sealed class CallDetectionService : IDisposable
             // semantics during meeting mode. Edge-triggered
             // (one-and-done) would make detection_emitted fire only
             // through luck and leave the meeting branch starved.
-            foreach (var (sessionId, _, _) in live)
+            foreach (var (sessionId, _, _, _) in live)
             {
                 if (_emittedSessions.TryGetValue(sessionId, out var emittedExe)
                     && !string.IsNullOrEmpty(emittedExe)
@@ -418,7 +417,7 @@ internal sealed class CallDetectionService : IDisposable
             // Emit ONE per tick (Rust state machine + nudge UI are
             // single-session — multiple parallel calls aren't a
             // supported scenario yet).
-            foreach (var (sessionId, pid, endpointId) in live)
+            foreach (var (sessionId, pid, endpointId, _) in live)
             {
                 if (_emittedSessions.ContainsKey(sessionId)) continue;
                 if (!_pendingSessions.TryGetValue(sessionId, out var ticksSeen))
@@ -494,7 +493,7 @@ internal sealed class CallDetectionService : IDisposable
     /// re-enumerating: three enumerations per tick could disagree with
     /// each other mid-profile-switch, which is precisely the state this
     /// whole guard exists to survive.
-    private List<(string sessionId, uint pid, string endpointId)> _tickSessions = new();
+    private List<(string sessionId, uint pid, string endpointId, int state)> _tickSessions = new();
 
     /// The capture endpoint the origin session was found on.
     ///
@@ -513,6 +512,11 @@ internal sealed class CallDetectionService : IDisposable
     /// When the origin session was first missing. Null while it is there.
     private DateTime? _originMissingSince;
 
+    /// The process whose call we are recording. The call is up while THIS
+    /// process is capturing, wherever it captures from — which is what
+    /// makes an in-app device change a non-event instead of a hangup.
+    private uint _meetingOriginPid;
+
     /// How long the origin session must stay missing before we call the
     /// call over.
     ///
@@ -528,6 +532,15 @@ internal sealed class CallDetectionService : IDisposable
     /// costs what the user actually hit: the stop fires, the session comes
     /// back a quarter of a second later, detection is no longer suppressed
     /// by an active meeting, and a new recording starts — five times over.
+    /// Backstop for an absence nothing else explains.
+    ///
+    /// Not the normal path any more: a process that exits, and a process
+    /// that releases the microphone while keeping its session, are both
+    /// answered immediately above. This only covers a session that
+    /// vanishes and never comes back from a process we cannot inspect, so
+    /// that a recording can never run for ever on a missing signal.
+    /// Sixty seconds is double the longest absence ever observed that
+    /// turned out to be a device move (31.12 s, measured 2026-09-24).
     private static readonly TimeSpan OriginGoneConfirm = TimeSpan.FromSeconds(60);
 
     /// `endpointsChanged` is true when the set of active capture endpoints
@@ -535,7 +548,37 @@ internal sealed class CallDetectionService : IDisposable
     /// vanished or appeared in the same breath are the device churning,
     /// not calls starting and stopping, and the caller must not read them
     /// as transitions.
-    private static List<(string sessionId, uint pid, string endpointId)> SampleActiveCaptureSessions(
+    /// Is that process still running? A closed Teams is an answer that
+    /// needs no confirmation window at all.
+    private static bool ProcessAlive(uint pid)
+    {
+        try
+        {
+            using var p = System.Diagnostics.Process.GetProcessById((int)pid);
+            return !p.HasExited;
+        }
+        catch (ArgumentException) { return false; }   // no such process
+        catch (InvalidOperationException) { return false; }
+        catch (Exception) { return true; }            // unknown: do not stop on a guess
+    }
+
+    /// Tell the core the call is over, once.
+    private void FireSessionEnded()
+    {
+        try
+        {
+            int rc = DimmyNative.dimmy_call_signal_session_ended();
+            App.Log($"origin gone (id=…{TailOf(_meetingOriginSessionId)}) → signal_session_ended rc={rc}", "CallDetect");
+        }
+        catch (Exception ex)
+        {
+            App.Log($"signal_session_ended failed: {ex.Message}", "CallDetect");
+        }
+        _meetingOriginSessionId = null;
+        _originMissingSince = null;
+    }
+
+    private static List<(string sessionId, uint pid, string endpointId, int state)> SampleActiveCaptureSessions(
         out bool endpointsChanged)
     {
         var endpointIds = new HashSet<string>(StringComparer.Ordinal);
@@ -548,10 +591,10 @@ internal sealed class CallDetectionService : IDisposable
         return result;
     }
 
-    private static List<(string sessionId, uint pid, string endpointId)> SampleActiveCaptureSessionsInner(
+    private static List<(string sessionId, uint pid, string endpointId, int state)> SampleActiveCaptureSessionsInner(
         HashSet<string> endpointIds)
     {
-        var result = new List<(string, uint, string)>();
+        var result = new List<(string, uint, string, int)>();
         IMMDeviceEnumerator? enumerator = null;
         IMMDeviceCollection? devices = null;
         try
@@ -594,12 +637,17 @@ internal sealed class CallDetectionService : IDisposable
                         {
                             if (sessionEnum.GetSession(i, out control) != 0 || control == null) continue;
                             if (control.GetState(out int stateRaw) != 0) continue;
-                            if (stateRaw != (int)AudioSessionState.Active) continue;
+                            // Non-active sessions are KEPT. A process that
+                            // has released the microphone still owns its
+                            // session object, in Inactive state — that is the
+                            // difference between "the call ended" and "the
+                            // session moved to another endpoint", and
+                            // discarding it left only the stopwatch.
                             try { control2 = (IAudioSessionControl2)control; } catch { continue; }
                             if (control2.GetSessionInstanceIdentifier(out string? sessionId) != 0
                                 || string.IsNullOrEmpty(sessionId)) continue;
                             if (control2.GetProcessId(out int pid) != 0 || pid <= 0) continue;
-                            result.Add((sessionId!, (uint)pid, currentEndpointId));
+                            result.Add((sessionId!, (uint)pid, currentEndpointId, stateRaw));
                         }
                         finally
                         {
