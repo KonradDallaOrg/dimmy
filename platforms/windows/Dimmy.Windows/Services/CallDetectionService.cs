@@ -253,6 +253,7 @@ internal sealed class CallDetectionService : IDisposable
         {
             _meetingOriginSessionId = null;
             _meetingOriginEndpointId = null;
+            _originMissingSince = null;
             _meetingDrivenByCallDetect = false;
         }
         // Meeting just started WITHOUT a bound origin — i.e. a manual start
@@ -296,26 +297,40 @@ internal sealed class CallDetectionService : IDisposable
                     // a stop signal in this branch (a user might be
                     // listening intently for minutes).
                     bool originAlive = _tickSessions.Any(s => s.sessionId == _meetingOriginSessionId);
-                    // Its endpoint may have gone with it. Skipping the churn
-                    // tick is not enough on its own: the set goes quiet again
-                    // while the endpoint is still away, and that steady state
-                    // reads exactly like a call that ended.
-                    // Against the ENDPOINT set, not the sessions on it. A
-                    // call really ending leaves its endpoint alive and empty,
-                    // so asking "is any session still on it" would call that
-                    // device churn and never stop the recording — breaking the
-                    // one behaviour this branch exists for.
+                    // Did its endpoint go with it? Asked against the ENDPOINT
+                    // SET, not the sessions on it: a call really ending leaves
+                    // its endpoint alive and empty, and "is any session still
+                    // on it" would read every genuine hangup as device churn
+                    // and stop stopping.
                     bool endpointAlive = _meetingOriginEndpointId == null
                         || _lastEndpointIds.Contains(_meetingOriginEndpointId);
-                    if (!originAlive && !endpointAlive)
+                    if (originAlive)
                     {
+                        // Back, or never left. Whatever absence we were
+                        // counting was a move between devices.
+                        if (_originMissingSince != null)
+                            App.Log("origin session back — it had moved, not ended", "CallDetect");
+                        _originMissingSince = null;
+                        _originEndpointAwayLogged = false;
+                    }
+                    else if (!endpointAlive)
+                    {
+                        // Its endpoint went with it: a Bluetooth profile
+                        // switch, nothing to conclude from.
+                        _originMissingSince = null;
                         if (!_originEndpointAwayLogged)
                         {
                             App.Log("origin session away WITH its endpoint — device, not hangup", "CallDetect");
                             _originEndpointAwayLogged = true;
                         }
                     }
-                    else if (!originAlive)
+                    else if (_originMissingSince == null)
+                    {
+                        // First tick without it. Start counting; do NOT
+                        // conclude anything yet.
+                        _originMissingSince = DateTime.UtcNow;
+                    }
+                    else if (DateTime.UtcNow - _originMissingSince.Value >= OriginGoneConfirm)
                     {
                         try
                         {
@@ -494,6 +509,26 @@ internal sealed class CallDetectionService : IDisposable
     /// Log the "endpoint away" verdict once per absence, not four times
     /// a second for as long as the headset takes to switch profile.
     private bool _originEndpointAwayLogged;
+
+    /// When the origin session was first missing. Null while it is there.
+    private DateTime? _originMissingSince;
+
+    /// How long the origin session must stay missing before we call the
+    /// call over.
+    ///
+    /// NOT a guess. Changing the audio device inside Teams moves its
+    /// capture session between endpoints, and for that moment the session
+    /// is simply gone — every endpoint stays alive, so nothing else marks
+    /// it as a device event. Measured over the whole log on 2026-09-24:
+    /// 23 absences that turned out to be a move, from 0.23 s to 31.12 s.
+    /// Sixty seconds is double the longest.
+    ///
+    /// The asymmetry is the argument. Waiting too long costs a recording
+    /// that runs a minute past the end of the call. Waiting too little
+    /// costs what the user actually hit: the stop fires, the session comes
+    /// back a quarter of a second later, detection is no longer suppressed
+    /// by an active meeting, and a new recording starts — five times over.
+    private static readonly TimeSpan OriginGoneConfirm = TimeSpan.FromSeconds(60);
 
     /// `endpointsChanged` is true when the set of active capture endpoints
     /// differs from the previous sample. When it does, sessions that
