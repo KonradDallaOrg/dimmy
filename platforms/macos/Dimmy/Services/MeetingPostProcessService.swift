@@ -744,14 +744,30 @@ enum MeetingPostProcessService {
             }
         }
         let capturedType = extractTypeTag(markdown)
+        // The H1, same as parseStructuredRecap does. Reopening a saved
+        // meeting went through HERE and not through that one, so the
+        // title was dropped on the floor and the clipboard copy came out
+        // headless. Win captures it on both paths; this side did not.
+        var capturedTitle: String?
+        for line in markdown.split(separator: "
+", omittingEmptySubsequences: false) {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if t.hasPrefix("# ") {
+                let title = String(t.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+                if !title.isEmpty, title.count <= 200 { capturedTitle = title }
+                break
+            }
+        }
         if indices.isEmpty {
             var fallback = ["TLDR": markdown.trimmingCharacters(in: .whitespacesAndNewlines)]
             if let capturedType { fallback["__TYPE__"] = capturedType }
+            if let capturedTitle { fallback["__TITLE__"] = capturedTitle }
             return fallback
         }
         indices.sort { $0.0 < $1.0 }
         var result: [String: String] = [:]
         if let capturedType { result["__TYPE__"] = capturedType }
+        if let capturedTitle { result["__TITLE__"] = capturedTitle }
         for (i, (start, key)) in indices.enumerated() {
             let lo = markdown.index(markdown.startIndex, offsetBy: start)
             let endOfHeader = markdown[lo...].firstIndex(of: "\n") ?? markdown.endIndex

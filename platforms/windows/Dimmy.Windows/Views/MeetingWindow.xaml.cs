@@ -3300,6 +3300,27 @@ public sealed partial class MeetingWindow : Window
             {
                 md = "";
             }
+            bool copiedTranscript = false;
+            if (string.IsNullOrWhiteSpace(md))
+            {
+                // No recap — not every meeting gets one, and a failed one
+                // leaves nothing behind either. The transcript is what the
+                // user is looking at, so copy that and SAY so, rather than
+                // refusing and leaving them to guess what the button does.
+                // Read from disk rather than from the view: RichTextBlock
+                // has no flat .Text, and transcripts.txt is the same thing
+                // the renderer was given.
+                var dir = _viewingMeetingDir ?? _activeMeetingDir;
+                if (!string.IsNullOrEmpty(dir))
+                {
+                    var tPath = Path.Combine(dir, "transcripts.txt");
+                    if (File.Exists(tPath))
+                    {
+                        try { md = File.ReadAllText(tPath); } catch (IOException) { }
+                    }
+                }
+                copiedTranscript = !string.IsNullOrWhiteSpace(md);
+            }
             if (string.IsNullOrWhiteSpace(md))
             {
                 ShowToast("Nothing to copy yet.");
@@ -3329,7 +3350,9 @@ public sealed partial class MeetingWindow : Window
                 App.Log($"copy recap html exc: {ex.Message}", "Meeting");
             }
             global::Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dp);
-            ShowToast("Recap copied - paste as text or formatted.");
+            ShowToast(copiedTranscript
+                ? "No recap yet - copied the transcript instead."
+                : "Recap copied - paste as text or formatted.");
         }
         catch (Exception ex)
         {

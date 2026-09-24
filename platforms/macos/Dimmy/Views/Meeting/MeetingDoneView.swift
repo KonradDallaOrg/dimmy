@@ -706,8 +706,16 @@ struct MeetingDoneView: View {
     }
 
     private func copyRecap() {
-        let md = MeetingPostProcessService.buildMarkdownFromSections(vm.doneSections)
-        guard !md.isEmpty else { return }
+        var md = MeetingPostProcessService.buildMarkdownFromSections(vm.doneSections)
+        // No recap — not every meeting gets one, and one that failed
+        // leaves nothing behind either. Copying the transcript is the
+        // useful answer; copying nothing at all, silently, was not an
+        // answer at all. Mirror of Win CopyRecap_Click.
+        if md.isEmpty {
+            let transcript = vm.doneRawTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !transcript.isEmpty else { return }
+            md = transcript
+        }
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.setString(md, forType: .string)
