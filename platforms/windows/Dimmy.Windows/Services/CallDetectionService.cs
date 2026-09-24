@@ -316,7 +316,18 @@ internal sealed class CallDetectionService : IDisposable
         // then apply one-shot logic.
         try
         {
-            var live = SampleActiveCaptureSessions();
+            var live = SampleActiveCaptureSessions(out bool endpointsChanged);
+            if (endpointsChanged)
+            {
+                // The set of capture endpoints just changed under us. Every
+                // session on an endpoint that left is invisible now, and
+                // every session on one that arrived looks brand new — but
+                // nothing started or stopped, the device did. Carry the
+                // previous picture forward and re-read it next tick, by
+                // which point the profile switch has settled.
+                App.Log("endpoint set changed — skipping this sample", "CallDetect");
+                return;
+            }
             var liveIds = new HashSet<string>(live.Select(s => s.sessionId), StringComparer.Ordinal);
 
             // 1. Cleanup: any emitted session that's no longer alive
@@ -420,7 +431,48 @@ internal sealed class CallDetectionService : IDisposable
     /// for BT-HFP rigs: when the user switches to a Bluetooth
     /// headset, Teams moves its session to that endpoint and the
     /// previous default goes quiet.
+    /// The capture endpoints the last sample was taken from.
+    ///
+    /// Load-bearing, not diagnostics. We enumerate DEVICE_STATE_ACTIVE
+    /// endpoints only, so an endpoint that leaves that state takes every
+    /// session on it out of our view at once — and a Bluetooth headset
+    /// leaves it every time it flips between A2DP and HFP, which with a
+    /// phone paired to the same headset happens constantly. Teams never
+    /// dropped anything; we simply stopped being able to see it. Measured
+    /// 2026-09-24: 28 disappear/reappear cycles for the same PID and the
+    /// same session id, from 0.26 s to 13 s apart, several of which
+    /// started a recording of a call that had never stopped.
+    private static HashSet<string> _lastEndpointIds = new(StringComparer.Ordinal);
+
+    /// Sample without taking part in the churn comparison. The other
+    /// callers sample opportunistically; if they updated the baseline the
+    /// poll would find it already consumed and read a real device change
+    /// as no change at all.
     private static List<(string sessionId, uint pid)> SampleActiveCaptureSessions()
+    {
+        return SampleActiveCaptureSessionsInner(new HashSet<string>(StringComparer.Ordinal));
+    }
+
+    /// `endpointsChanged` is true when the set of active capture endpoints
+    /// differs from the previous sample. When it does, sessions that
+    /// vanished or appeared in the same breath are the device churning,
+    /// not calls starting and stopping, and the caller must not read them
+    /// as transitions.
+    private static List<(string sessionId, uint pid)> SampleActiveCaptureSessions(
+        out bool endpointsChanged)
+    {
+        var endpointIds = new HashSet<string>(StringComparer.Ordinal);
+        var result = SampleActiveCaptureSessionsInner(endpointIds);
+        // The first sample has no baseline to differ from. Calling that a
+        // change would throw away the poll that discovers what is already
+        // running, which is the one the pre-existing rule depends on.
+        endpointsChanged = _lastEndpointIds.Count > 0 && !endpointIds.SetEquals(_lastEndpointIds);
+        _lastEndpointIds = endpointIds;
+        return result;
+    }
+
+    private static List<(string sessionId, uint pid)> SampleActiveCaptureSessionsInner(
+        HashSet<string> endpointIds)
     {
         var result = new List<(string, uint)>();
         IMMDeviceEnumerator? enumerator = null;
@@ -444,6 +496,8 @@ internal sealed class CallDetectionService : IDisposable
                 try
                 {
                     if (devices.Item(d, out device) != 0 || device == null) continue;
+                    if (device.GetId(out string? endpointId) == 0 && !string.IsNullOrEmpty(endpointId))
+                        endpointIds.Add(endpointId!);
                     var iid = IID_IAudioSessionManager2;
                     if (device.Activate(ref iid, CLSCTX_ALL, IntPtr.Zero, out object pManager) != 0
                         || pManager == null) continue;
