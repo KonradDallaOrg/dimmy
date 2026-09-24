@@ -611,13 +611,17 @@ public class TrayService : IDisposable
         // Idle, while the model is still writing for a minute or more. The
         // taskbar was told about this and the tray was not, so the one
         // indicator always on screen sat at rest through the whole thing.
-        // The sparkle, the mark everyone now reads as "a model is working
-        // on this". Only this state uses it: every other one keeps the
-        // Dimmy silhouette, because in a tray the first job of an icon is
-        // to say WHICH app it belongs to. If the file is ever missing,
-        // ResolveIconPath falls back through the untinted variant to
-        // dimmy.ico, so a bad asset cannot leave an empty tray slot.
-        else if (recapRunning)              { stateSlug = "recap";       tip = "Dimmy — Writing the recap…"; }
+        // The Dimmy silhouette, same as every other state, because in a
+        // tray of fifteen icons the first question an icon answers is
+        // WHICH APP this is — and a sparkle answers "something with AI",
+        // which in 2026 distinguishes nothing. The purple dot already
+        // says "working on it" from inside our own mark.
+        //
+        // The sparkle was tried here and looked better in isolation; it
+        // stays in Assets as dimmy-tray-{dark,light}-recap.ico, one slug
+        // away from being used again, and is a better fit somewhere with
+        // room for it than in a 16-pixel slot.
+        else if (recapRunning)              { stateSlug = "processing";  tip = "Dimmy — Writing the recap…"; }
         else
         {
             switch (state)
