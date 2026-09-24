@@ -446,14 +446,10 @@ enum MeetingPostProcessService {
     static func buildRosterBlock(_ rosterLine: String) -> String {
         let line = rosterLine.trimmingCharacters(in: .whitespacesAndNewlines)
         if line.isEmpty { return "" }
-        return "## Who was in the meeting
-" + line + "
-"
+        return "## Who was in the meeting\n" + line + "\n"
             + "Use these spellings for their names. Attribute a decision or an action to "
             + "someone ONLY where the transcript actually says so; never split the list up "
-            + "to fill the sections.
-
-"
+            + "to fill the sections.\n\n"
     }
 
     static func buildNamesBlock(notes: String, vocabulary: [String]) -> String {
