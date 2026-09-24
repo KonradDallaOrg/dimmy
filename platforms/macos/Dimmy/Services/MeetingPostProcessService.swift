@@ -749,8 +749,7 @@ enum MeetingPostProcessService {
         // title was dropped on the floor and the clipboard copy came out
         // headless. Win captures it on both paths; this side did not.
         var capturedTitle: String?
-        for line in markdown.split(separator: "
-", omittingEmptySubsequences: false) {
+        for line in markdown.split(separator: "\n", omittingEmptySubsequences: false) {
             let t = line.trimmingCharacters(in: .whitespaces)
             if t.hasPrefix("# ") {
                 let title = String(t.dropFirst(2)).trimmingCharacters(in: .whitespaces)
