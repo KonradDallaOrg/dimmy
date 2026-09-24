@@ -98,8 +98,30 @@ pub struct CalendarEvent {
     pub end_unix: i64,
     #[serde(default)]
     pub attendees: Vec<Attendee>,
+    /// How many people were invited, when the names themselves could not
+    /// be returned.
+    ///
+    /// A head count is not personal data, and an organisation that
+    /// forbids handing out employees' names and addresses has no reason
+    /// to withhold it. Keeping the two apart is what lets this still work
+    /// under that policy instead of failing whole: "this meeting, 10
+    /// invited" beats nothing at all. Measured 2026-09-24, where the CLI
+    /// refused the names and the entire lookup was thrown away with them.
+    #[serde(default)]
+    pub attendee_count: Option<i64>,
     #[serde(default)]
     pub organizer: String,
+}
+
+impl CalendarEvent {
+    /// How many people were invited, from whichever source we have. The
+    /// named list wins when it exists, because it is the thing we counted.
+    pub fn invited_count(&self) -> i64 {
+        if !self.attendees.is_empty() {
+            return self.attendees.len() as i64;
+        }
+        self.attendee_count.unwrap_or(0).max(0)
+    }
 }
 
 /// An event ranked against a recording window.
@@ -353,15 +375,19 @@ fn fetch_prompt(day_iso: &str, tz_note: &str, window_note: &str) -> String {
         "Use the Microsoft 365 (Outlook) connector, or the Google Calendar connector \
 if Microsoft 365 is unavailable, to read my calendar for {day_iso}{tz_note}.\n\n\
 {window_note}\
-STEP 2 — this step is REQUIRED and is the point of the request. The calendar \
-SEARCH tool returns events with an EMPTY or address-only attendee list. For each \
-event you listed in step 1, you MUST then READ that event itself (read_resource, \
-or the equivalent get-event call) to fill `attendees`, with both `name` and \
-`email` for every person. An event returned with an empty `attendees` array is a \
-FAILED answer, not an event with nobody in it.\n\n\
+STEP 2 — for each event you listed, also READ the event itself \
+(read_resource, or the equivalent get-event call): the SEARCH tool returns an \
+empty or address-only attendee list, and reading the event fills in who was \
+invited.\n\n\
+Always set `attendee_count` to how many people were invited. Fill `attendees` \
+with their `name` and `email` as well WHERE YOU ARE PERMITTED TO. Where you \
+are not — an organisation policy on personal data, for instance — leave \
+`attendees` empty, still give `attendee_count`, and still answer with ok \
+true. A head count is not a failure; refusing the whole answer is.\n\n\
 Answer with ONE JSON object and nothing else, no prose, no code fence:\n\
 {{\"ok\":true,\"events\":[{{\"id\":\"<opaque id>\",\"title\":\"<subject>\",\
 \"start_unix\":<unix seconds>,\"end_unix\":<unix seconds>,\
+\"attendee_count\":<how many were invited>,\
 \"attendees\":[{{\"name\":\"<display name or empty>\",\"email\":\"<address>\"}}],\
 \"organizer\":\"<display name or empty>\"}}]}}\n\n\
 If no connector is authorised, or it returns nothing, answer exactly:\n\
@@ -764,6 +790,7 @@ mod tests {
             start_unix: start,
             end_unix: end,
             attendees: vec![],
+            attendee_count: None,
             organizer: String::new(),
         }
     }
@@ -875,6 +902,40 @@ mod tests {
         // The invite is evidence of invitation, never of attendance.
         assert!(line.contains("do not assume all of them spoke"));
         assert!(!line.contains("a@example.com"));
+    }
+
+    #[test]
+    fn a_withheld_roster_still_leaves_a_usable_event() {
+        // The organisation's policy forbade handing out employees' names
+        // and addresses, the CLI complied, and the first version threw the
+        // whole lookup away with them — so the user got no event, no row
+        // and no notification for a meeting we had correctly identified.
+        // A head count is not personal data and keeps the feature alive.
+        let raw = r#"{"ok":true,"events":[{"id":"a","title":"Meeting",
+            "start_unix":100,"end_unix":200,"attendee_count":10,
+            "attendees":[],"organizer":""}]}"#;
+        let events = parse_events(raw).expect("parses");
+        assert_eq!(events.len(), 1, "a withheld roster is not a failure");
+        assert_eq!(events[0].invited_count(), 10);
+        // No names means no roster line: we will not invent one from a count.
+        assert_eq!(roster_for_prompt(&events[0]), "");
+    }
+
+    #[test]
+    fn a_named_roster_is_counted_from_the_names_themselves() {
+        let mut e = ev("x", 0, H);
+        e.attendee_count = Some(99); // stale or wrong: the list is the truth
+        e.attendees = vec![
+            Attendee {
+                name: "Anna Rossi".into(),
+                email: "a@example.com".into(),
+            },
+            Attendee {
+                name: "Marco Bianchi".into(),
+                email: "m@example.com".into(),
+            },
+        ];
+        assert_eq!(e.invited_count(), 2);
     }
 
     #[test]

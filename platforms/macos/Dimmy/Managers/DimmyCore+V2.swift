@@ -824,12 +824,22 @@ struct CalendarEvent: Decodable, Hashable, Encodable {
     var startUnix: Int64 = 0
     var endUnix: Int64 = 0
     var attendees: [CalendarAttendee] = []
+    /// How many were invited, when the names could not be returned. An
+    /// organisation policy can forbid handing out employees names and
+    /// addresses while leaving a head count perfectly fine.
+    var attendeeCount: Int?
     var organizer: String = ""
+
+    /// How many were invited, from whichever source we have.
+    var invitedCount: Int {
+        attendees.isEmpty ? max(0, attendeeCount ?? 0) : attendees.count
+    }
 
     enum CodingKeys: String, CodingKey {
         case id, title, attendees, organizer
         case startUnix = "start_unix"
         case endUnix = "end_unix"
+        case attendeeCount = "attendee_count"
     }
 }
 

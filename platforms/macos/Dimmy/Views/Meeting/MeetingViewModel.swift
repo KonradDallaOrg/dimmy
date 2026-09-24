@@ -1153,7 +1153,7 @@ final class MeetingViewModel: ObservableObject {
         let title = ev.title.isEmpty ? "(no subject)" : ev.title
         // "invited", not "attended": the invite proves invitation and
         // nothing else, and half a list routinely does not join.
-        let who = ev.attendees.isEmpty ? "" : "  \u{00B7}  \(ev.attendees.count) invited"
+        let who = ev.invitedCount == 0 ? "" : "  \u{00B7}  \(ev.invitedCount) invited"
         doneCalendarLine = "\(title)  \u{00B7}  \(start)-\(end)\(who)"
     }
 

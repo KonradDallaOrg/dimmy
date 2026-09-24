@@ -70,8 +70,8 @@ struct MeetingRecordingView: View {
         fmt.dateFormat = "HH:mm"
         let start = fmt.string(from: Date(timeIntervalSince1970: TimeInterval(c.event.startUnix)))
         let end = fmt.string(from: Date(timeIntervalSince1970: TimeInterval(c.event.endUnix)))
-        let n = c.event.attendees.count
-        let people = n == 1 ? "1 person" : "\(n) people"
+        let n = c.event.invitedCount
+        let people = n == 1 ? "1 invited" : "\(n) invited"
         let why: String
         switch c.matchKind {
         case "current": why = "happening now"

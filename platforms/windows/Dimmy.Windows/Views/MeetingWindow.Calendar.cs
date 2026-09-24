@@ -40,6 +40,13 @@ public sealed partial class MeetingWindow
         [JsonPropertyName("start_unix")] public long StartUnix { get; set; }
         [JsonPropertyName("end_unix")] public long EndUnix { get; set; }
         [JsonPropertyName("attendees")] public List<CalAttendee> Attendees { get; set; } = new();
+        [JsonPropertyName("attendee_count")] public long? AttendeeCount { get; set; }
+
+        /// How many were invited, from whichever source we have. An org
+        /// policy can forbid the names while leaving the head count fine,
+        /// and a count is still worth showing.
+        public long InvitedCount =>
+            Attendees.Count > 0 ? Attendees.Count : Math.Max(0, AttendeeCount ?? 0);
         [JsonPropertyName("organizer")] public string Organizer { get; set; } = "";
     }
 
@@ -218,7 +225,7 @@ public sealed partial class MeetingWindow
             var ev = a.Event;
             var start = DateTimeOffset.FromUnixTimeSeconds(ev.StartUnix).ToLocalTime();
             var end = DateTimeOffset.FromUnixTimeSeconds(ev.EndUnix).ToLocalTime();
-            var n = ev.Attendees.Count;
+            var n = ev.InvitedCount;
             // "invited", not "attended": the invite proves invitation and
             // nothing else, and half a list routinely does not join.
             var who = n == 0 ? "" : $"  ·  {n} invited";
@@ -263,7 +270,8 @@ public sealed partial class MeetingWindow
 
         var start = DateTimeOffset.FromUnixTimeSeconds(c.Event.StartUnix).ToLocalTime();
         var end = DateTimeOffset.FromUnixTimeSeconds(c.Event.EndUnix).ToLocalTime();
-        var people = c.Event.Attendees.Count == 1 ? "1 person" : $"{c.Event.Attendees.Count} people";
+        var n = c.Event.InvitedCount;
+        var people = n == 1 ? "1 invited" : $"{n} invited";
         // The wording follows match_kind rather than dressing one number
         // up as three different meanings.
         var why = c.MatchKind switch
