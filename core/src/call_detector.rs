@@ -429,11 +429,12 @@ impl CallDetectorState {
         // The first honest idle we see ends the bootstrap: from here on, a
         // session going active is a transition we watched, not something
         // that was already under way before we existed.
+        // Seeing the machine quiet once is enough to know we are no longer
+        // in the dark about what was already running. It is NOT enough to
+        // declare a call over — that needs a confirmed gap, judged on the
+        // next active edge.
         if self.mic_free_is_evidence {
             self.observed_idle = true;
-            // Whatever was live when we arrived is over, so it can start
-            // a real call next time.
-            self.preexisting.clear();
         }
         if !is_meeting_active && self.mic_free_is_evidence && self.mic_free_since.is_none() {
             self.mic_free_since = Some(now);
@@ -509,6 +510,13 @@ impl CallDetectorState {
         if let Some(free_since) = self.mic_free_since.take() {
             if now.saturating_sub(free_since) >= self.release_confirm_secs as i64 {
                 self.barred = None;
+                // Same standard for the call we walked in on. Teams drops
+                // its capture session and reopens it under the same id
+                // mid-call — half a second on 2026-09-24 11:57, four
+                // seconds the day before — and clearing on the first quiet
+                // tick read that flicker as a hangup, so the call the user
+                // was still sitting in started recording itself.
+                self.preexisting.clear();
             }
         }
         // There is deliberately NO deadline here. A hold used to expire
@@ -1519,14 +1527,36 @@ mod tests {
         }
     }
 
-    /// ...but only that call. Once it ends, we have watched a full
+    /// The flicker that got past the first version of rule A: Teams drops
+    /// its capture session and reopens it under the same id, mid-call.
+    /// Measured at half a second on 2026-09-24 11:57, four seconds the day
+    /// before. Clearing on the first quiet tick read that as a hangup and
+    /// recorded the call the user was still in.
+    #[test]
+    fn a_flicker_does_not_turn_the_call_we_walked_in_on_into_a_new_one() {
+        let mut s = cold();
+        s.signal(true, Some("teams".into()), false, 1000);
+        let _ = s.signal(true, Some("teams".into()), false, 1010);
+
+        // The session vanishes and comes straight back, still the same call.
+        s.signal(false, None, false, 1240);
+        s.signal(true, Some("teams".into()), false, 1241);
+        let out = s.signal(true, Some("teams".into()), false, 1246);
+        assert_eq!(
+            out,
+            CallSignalOutcome::Suppressed(SuppressionReason::AlreadyRunning("teams".into())),
+            "one second of silence is a flicker, not a hangup, got {out:?}"
+        );
+    }
+
+    /// ...but only that call. Once it really ends, we have watched a full
     /// transition and the next one is ours to offer.
     #[test]
     fn the_call_after_the_one_we_walked_in_on_records_normally() {
         let mut s = cold();
         s.signal(true, Some("teams".into()), false, 1000);
         let _ = s.signal(true, Some("teams".into()), false, 1010);
-        // It ends.
+        // It ends, and stays ended past the confirmation window.
         s.signal(false, None, false, 2000);
         // A new one begins, and this time we watched it begin.
         s.signal(true, Some("teams".into()), false, 3000);
