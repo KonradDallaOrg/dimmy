@@ -76,12 +76,16 @@ def save_ico(img: Image.Image, name: str) -> None:
 def main() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     print(f"writing to {OUT_DIR}")
-    # Coloured, for wherever the accent is wanted.
+    # The tray pair, named to the existing convention so the csproj
+    # wildcard (Assets/dimmy-tray-*.ico) picks them up and ResolveIconPath
+    # finds them with no special case: white on a dark taskbar, dark on a
+    # light one, exactly like every other state in the set.
+    save_ico(render(WHITE), "dimmy-tray-dark-recap.ico")
+    save_ico(render(DARK), "dimmy-tray-light-recap.ico")
+    # Coloured, for use inside the app where there is room for an accent.
+    # Deliberately NOT a tray icon: on a light taskbar the purple loses
+    # too much contrast against the background.
     save_ico(render(PURPLE), "dimmy-sparkle-colour.ico")
-    # Monochrome pair, the shape the tray actually needs: white on a dark
-    # taskbar, dark on a light one. Same rule as the rest of the set.
-    save_ico(render(WHITE), "dimmy-sparkle-dark.ico")
-    save_ico(render(DARK), "dimmy-sparkle-light.ico")
     # A PNG too, for looking at it outside a tray.
     png = OUT_DIR / "dimmy-sparkle-colour.png"
     render(PURPLE).save(png)
