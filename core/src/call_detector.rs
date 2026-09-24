@@ -63,6 +63,17 @@ pub enum SuppressionReason {
     /// evidence of a start, so we adopt the session and stay quiet.
     /// Cleared when the session finally goes away.
     AlreadyRunning(String),
+    /// The call we were recording released the microphone, we stopped,
+    /// and the same app took it straight back.
+    ///
+    /// Apps do not let go cleanly: seen on macOS on 2026-09-24, where
+    /// every auto-stopped meeting left a four-second one behind it in the
+    /// list. From the microphone signal alone that reacquisition is
+    /// indistinguishable from the next call arriving, so the two are told
+    /// apart the only way they can be — by whether the microphone was
+    /// ever genuinely free in between. A human placing another call takes
+    /// tens of seconds; a tail takes one.
+    TailOfLastCall(String),
     /// The user pressed Stop by hand while this call was still running.
     /// Nothing is emitted — no recording, and no nudge either: having been
     /// told "not this call", asking again every time the host re-signals the
@@ -131,6 +142,11 @@ pub struct CallDetectorState {
     /// an app-less call is held too — that was the hole that let the loop
     /// survive wherever a call infers no app, which on macOS is often.
     barred: Option<String>,
+    /// The key held back because we stopped it ourselves a moment ago and
+    /// the app may not have finished with the microphone. Same release as
+    ///  — confirmed idle — but a separate field so the two reasons
+    /// stay distinguishable in a log.
+    tail_of: Option<String>,
     /// Sessions that were already live the first time we saw them.
     ///
     /// Held back from auto-record for as long as they last, because we
@@ -227,6 +243,7 @@ impl CallDetectorState {
             cooldown_until: HashMap::new(),
             recorded_app: None,
             barred: None,
+            tail_of: None,
             preexisting: HashSet::new(),
             observed_idle: false,
             mic_free_since: None,
@@ -510,6 +527,7 @@ impl CallDetectorState {
         if let Some(free_since) = self.mic_free_since.take() {
             if now.saturating_sub(free_since) >= self.release_confirm_secs as i64 {
                 self.barred = None;
+                self.tail_of = None;
                 // Same standard for the call we walked in on. Teams drops
                 // its capture session and reopens it under the same id
                 // mid-call — half a second on 2026-09-24 11:57, four
@@ -567,6 +585,11 @@ impl CallDetectorState {
         // same live session every 250 ms — that is how one call restarted
         // itself six times in twenty-five seconds — so the refusal has to
         // hold against a signal that never stops arriving.
+        if self.tail_of.as_deref() == Some(app_for_lookup.as_str()) {
+            return CallSignalOutcome::Suppressed(SuppressionReason::TailOfLastCall(
+                app_for_lookup,
+            ));
+        }
         if self.barred.as_deref() == Some(app_for_lookup.as_str()) {
             return CallSignalOutcome::Suppressed(SuppressionReason::StoppedByUser(app_for_lookup));
         }
@@ -700,9 +723,19 @@ impl CallDetectorState {
     fn meeting_stopped_at_inner(&mut self, may_hold: bool) {
         let recorded = self.recorded_app.take();
         let was_ours = self.recording_active_from_us;
-        if self.stop_is_automatic {
-            // We stopped it because the call ended. Nothing is held: the
-            // next call — the one the user hung up for — records by itself.
+        if self.stop_is_automatic && may_hold {
+            // We stopped because the call ended — so the next call, the one
+            // the user hung up for, must record by itself. It still does:
+            // this hold is lifted by the microphone being genuinely free,
+            // which by definition it is once a call has really ended.
+            //
+            // What it stops is the same app taking the microphone straight
+            // back, which is not the next call but the tail of the one we
+            // just recorded.
+            self.stop_is_automatic = false;
+            self.tail_of = Some(recorded.unwrap_or_else(|| GLOBAL_COOLDOWN_KEY.to_string()));
+            self.mic_free_since = None;
+        } else if self.stop_is_automatic {
             self.stop_is_automatic = false;
         } else if was_ours && may_hold {
             // Pressed by hand, while that call is in all likelihood still
@@ -1295,8 +1328,12 @@ mod tests {
         }
     }
 
-    /// The scenario the user lives: one call ends BECAUSE another is
-    /// arriving. We stopped it ourselves, so nothing is held.
+    /// One call ends and the user places another. That one records by
+    /// itself — the requirement this must never break.
+    ///
+    /// It survives the tail hold because the hold is lifted by evidence,
+    /// not by a clock: once a call has really ended the microphone IS
+    /// free, and placing another takes a human tens of seconds.
     #[test]
     fn an_automatic_stop_holds_nothing_back() {
         let mut s = fresh();
@@ -1306,11 +1343,55 @@ mod tests {
         s.record_response(Some("teams".into()), NudgeResponse::StopAndRecap, 1100);
         s.meeting_stopped_at(1101);
 
-        s.signal(true, Some("teams".into()), false, 1105);
-        let out = s.signal(true, Some("teams".into()), false, 1110);
+        // The microphone really is free, because the call really ended.
+        s.signal(false, None, false, 1102);
+        // The next call, placed by a human.
+        s.signal(true, Some("teams".into()), false, 1140);
+        let out = s.signal(true, Some("teams".into()), false, 1145);
         assert!(
             matches!(out, CallSignalOutcome::Detected { .. }),
             "the next call must record by itself, got {out:?}"
+        );
+    }
+
+    /// Reported from macOS on 2026-09-24: every auto-stopped meeting left
+    /// a second one of a few seconds behind it in the list. The app took
+    /// its microphone straight back and that read as the next call.
+    #[test]
+    fn the_tail_of_a_call_we_just_stopped_is_not_the_next_call() {
+        let mut s = fresh();
+        s.signal(true, Some("teams".into()), false, 1000);
+        let _ = s.signal(true, Some("teams".into()), false, 1005);
+        s.record_response(Some("teams".into()), NudgeResponse::RecordNow, 1006);
+        s.record_response(Some("teams".into()), NudgeResponse::StopAndRecap, 1200);
+        s.meeting_stopped_at(1201);
+
+        // Two seconds later the same app is holding the microphone again.
+        for t in [1203, 1204, 1208] {
+            let out = s.signal(true, Some("teams".into()), false, t);
+            assert_eq!(
+                out,
+                CallSignalOutcome::Suppressed(SuppressionReason::TailOfLastCall("teams".into())),
+                "tick {t}: no four-second meeting behind the real one"
+            );
+        }
+    }
+
+    /// A different app is a different call, whatever we just stopped.
+    #[test]
+    fn the_tail_hold_is_keyed_to_the_app_it_came_from() {
+        let mut s = fresh();
+        s.signal(true, Some("teams".into()), false, 1000);
+        let _ = s.signal(true, Some("teams".into()), false, 1005);
+        s.record_response(Some("teams".into()), NudgeResponse::RecordNow, 1006);
+        s.record_response(Some("teams".into()), NudgeResponse::StopAndRecap, 1200);
+        s.meeting_stopped_at(1201);
+
+        s.signal(true, Some("zoom".into()), false, 1203);
+        let out = s.signal(true, Some("zoom".into()), false, 1208);
+        assert!(
+            matches!(out, CallSignalOutcome::Detected { .. }),
+            "another app is another call, got {out:?}"
         );
     }
 
