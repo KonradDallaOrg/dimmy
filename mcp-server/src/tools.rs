@@ -146,9 +146,35 @@ pub async fn dispatch(params: serde_json::Value, cfg: &Config) -> Result<serde_j
 struct MeetingSummary {
     id: String,
     title: String,
+    /// Local-time ISO 8601, e.g. `2026-09-24T09:30:45+02:00`.
+    ///
+    /// Was always the empty string until 2026-09-24: `meta.json` stores
+    /// this as a NUMBER (unix seconds) and the reader asked for a string,
+    /// so every meeting reached the model dateless and it reasonably
+    /// concluded Dimmy does not record dates at all.
     started_at: String,
+    /// Local-time ISO 8601 of the end. Present on disk all along, never
+    /// offered until now, so "how long ago" could only be guessed.
+    ended_at: String,
     duration_secs: f64,
     has_recap: bool,
+    /// The calendar invite this meeting was linked to, when one was.
+    /// Absent for every meeting nobody linked, which is most of them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    calendar: Option<CalendarBrief>,
+}
+
+/// The linked invite, reduced to what a summariser can use.
+///
+/// Attendee NAMES and addresses are deliberately not here, only how many
+/// were invited. A head count answers "was this a one-to-one or a room of
+/// ten" without moving anyone's personal data into a second place.
+#[derive(Serialize, Deserialize)]
+struct CalendarBrief {
+    title: String,
+    starts_at: String,
+    ends_at: String,
+    invited_count: i64,
 }
 
 async fn get_recent_meetings(
@@ -204,16 +230,14 @@ async fn get_recent_meetings(
                 .and_then(|v| v.as_str())
                 .unwrap_or("Meeting")
                 .to_string(),
-            started_at: meta
-                .get("started_at")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
+            started_at: meta_time(&meta, "started_at"),
+            ended_at: meta_time(&meta, "ended_at"),
             duration_secs: meta
                 .get("duration_secs")
                 .and_then(|v| v.as_f64())
                 .unwrap_or(0.0),
             has_recap,
+            calendar: read_calendar_brief(&path).await,
         });
     }
 
@@ -282,8 +306,10 @@ async fn get_meeting(args: serde_json::Value, cfg: &Config) -> Result<serde_json
     let payload = json!({
         "id": id,
         "title": meta.get("title").and_then(|v| v.as_str()).unwrap_or("Meeting"),
-        "started_at": meta.get("started_at").and_then(|v| v.as_str()).unwrap_or(""),
+        "started_at": meta_time(&meta, "started_at"),
+        "ended_at": meta_time(&meta, "ended_at"),
         "duration_secs": meta.get("duration_secs").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        "calendar": read_calendar_brief(&dir).await,
         "transcript": transcript,
         "existing_recap": recap,
         "user_notes": notes,
@@ -473,6 +499,95 @@ fn validate_meeting_id(id: &str) -> Result<(), Error> {
         ));
     }
     Ok(())
+}
+
+/// A `meta.json` timestamp as local-time ISO 8601, or "" when absent.
+///
+/// Reads BOTH shapes on purpose. The field is written as a number (unix
+/// seconds, fractional), and asking only for a string is the bug this
+/// replaces — but a meeting written by some future version, or hand-
+/// edited, may carry a formatted string, and dropping those would trade
+/// one silent blank for another.
+///
+/// ISO rather than the raw number because the caller is a language model:
+/// "meetings from this week" is a string comparison against a date and
+/// arithmetic against an epoch, and only one of those is reliable. The
+/// offset is the local one, so a 00:30 meeting stays on the day the user
+/// had it rather than sliding into yesterday via UTC.
+fn meta_time(meta: &serde_json::Value, key: &str) -> String {
+    use chrono::{Local, TimeZone};
+    match meta.get(key) {
+        Some(v) if v.is_number() => {
+            let secs = v.as_f64().unwrap_or(0.0);
+            if secs <= 0.0 {
+                return String::new();
+            }
+            match Local.timestamp_opt(secs as i64, 0) {
+                chrono::LocalResult::Single(dt) | chrono::LocalResult::Ambiguous(dt, _) => {
+                    dt.to_rfc3339()
+                }
+                chrono::LocalResult::None => String::new(),
+            }
+        }
+        Some(v) => v.as_str().unwrap_or("").to_string(),
+        None => String::new(),
+    }
+}
+
+/// The invite a meeting was linked to, or `None`.
+///
+/// `None` is the normal answer: the file only exists once the user has
+/// confirmed an event, and a meeting they never linked has no invite to
+/// report. A dismissed one ("none of these") is also `None` — they told
+/// us there was no matching event, and repeating that as a field would be
+/// noise.
+async fn read_calendar_brief(dir: &std::path::Path) -> Option<CalendarBrief> {
+    use chrono::{Local, TimeZone};
+    let raw = tokio::fs::read_to_string(dir.join("calendar.json"))
+        .await
+        .ok()?;
+    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let ev = v.get("event")?;
+    if ev.is_null() {
+        return None;
+    }
+    let iso = |key: &str| -> String {
+        let secs = ev.get(key).and_then(|x| x.as_i64()).unwrap_or(0);
+        if secs <= 0 {
+            return String::new();
+        }
+        match Local.timestamp_opt(secs, 0) {
+            chrono::LocalResult::Single(dt) | chrono::LocalResult::Ambiguous(dt, _) => {
+                dt.to_rfc3339()
+            }
+            chrono::LocalResult::None => String::new(),
+        }
+    };
+    // Prefer the named list's length when we have one; fall back to the
+    // head count the fetch records when an organisation policy withheld
+    // the names themselves.
+    let named = ev
+        .get("attendees")
+        .and_then(|a| a.as_array())
+        .map(|a| a.len() as i64)
+        .unwrap_or(0);
+    let invited_count = if named > 0 {
+        named
+    } else {
+        ev.get("attendee_count")
+            .and_then(|c| c.as_i64())
+            .unwrap_or(0)
+    };
+    Some(CalendarBrief {
+        title: ev
+            .get("title")
+            .and_then(|t| t.as_str())
+            .unwrap_or("")
+            .to_string(),
+        starts_at: iso("start_unix"),
+        ends_at: iso("end_unix"),
+        invited_count,
+    })
 }
 
 async fn read_meta_json(dir: &std::path::Path) -> serde_json::Value {

@@ -28,6 +28,10 @@ dirs = "5"
 # Defensive logging to stderr — Claude Desktop captures it into
 # `~/Library/Logs/Claude/mcp-server-dimmy.log` (Mac) / equivalent
 # on Win. Filtered via RUST_LOG env var.
+# Local-time formatting for the meeting dates. default-features off keeps
+# this to the clock + std pieces: the binary is deliberately small (see the
+# release profile below) and we need no parsing, no serde, no locales.
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 

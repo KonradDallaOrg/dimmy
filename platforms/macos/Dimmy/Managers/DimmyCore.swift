@@ -759,6 +759,21 @@ final class DimmyCore {
 
     /// Remove the Dimmy Claude Desktop extension dir + its settings
     /// file. Returns true iff something was actually removed.
+    /// Bring an already-installed Claude Desktop extension up to this
+    /// version. True only when it actually replaced something.
+    ///
+    /// The extension is a COPY of dimmy-mcp inside Claude Desktop own
+    /// folder, written once by the connect wizard, so without this an
+    /// update left Claude spawning the previous binary for ever.
+    /// Installs nothing for a user who never connected.
+    func refreshClaudeDesktopExtension(binaryPath: String, version: String) -> Bool {
+        return binaryPath.withCString { binPtr in
+            version.withCString { verPtr in
+                dimmy_claude_desktop_refresh(binPtr, verPtr) == 1
+            }
+        }
+    }
+
     func uninstallClaudeDesktopExtension() -> Bool {
         return dimmy_claude_desktop_uninstall() == 1
     }

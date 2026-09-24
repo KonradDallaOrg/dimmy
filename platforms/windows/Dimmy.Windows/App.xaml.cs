@@ -866,6 +866,32 @@ public partial class App : Application
             Log($"UpdateService start failed: {ex.Message}", "Update");
         }
 
+        // Keep an already-connected Claude Desktop extension current.
+        //
+        // The extension is a COPY of dimmy-mcp inside Claude Desktop's own
+        // folder, written exactly once by the connect wizard. So updating
+        // Dimmy left Claude Desktop spawning the previous binary for ever,
+        // and a fix in the bridge reached nobody who had already connected
+        // — which is precisely how the empty meeting dates would have
+        // survived this release. Nothing is installed for a user who never
+        // connected; a locked file (Claude running) just waits for the
+        // next launch.
+        _ = System.Threading.Tasks.Task.Run(() =>
+        {
+            try
+            {
+                var binary = Views.ClaudeDesktopConnectDialog.ResolveMcpBinaryPath();
+                if (string.IsNullOrEmpty(binary)) return;
+                var version = typeof(App).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
+                if (DimmyNative.RefreshClaudeDesktopExtension(binary, version))
+                    Log($"Claude Desktop extension refreshed to v{version}", "ClaudeDesktop");
+            }
+            catch (Exception ex)
+            {
+                Log($"extension refresh failed: {ex.Message}", "ClaudeDesktop");
+            }
+        });
+
         // Custom-dictionary hotkey — a SECOND global hotkey via Win32
         // RegisterHotKey, independent of the Rust low-level hook that
         // owns the main dictation combo. Default Ctrl+Shift+D, user-

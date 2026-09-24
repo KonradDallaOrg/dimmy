@@ -5380,6 +5380,48 @@ pub unsafe extern "C" fn dimmy_claude_desktop_install(
     }
 }
 
+/// Update the installed Claude Desktop extension when it is older than
+/// this app. Returns 1 if it was refreshed, 0 if there was nothing to do,
+/// -1 on a bad argument.
+///
+/// Hosts call this once at startup, off the UI thread. It does NOT
+/// install anything for a user who never connected: the extension is a
+/// copy Claude Desktop owns, and connecting on someone's behalf is not
+/// ours to decide. It only keeps an existing copy from rotting, which is
+/// how a fix in the bridge could ship and reach nobody.
+///
+/// # Safety
+/// Both pointers must be valid null-terminated UTF-8 C strings.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_claude_desktop_refresh(
+    binary_path: *const c_char,
+    version_ptr: *const c_char,
+) -> c_int {
+    if binary_path.is_null() || version_ptr.is_null() {
+        return -1;
+    }
+    let path_str = match unsafe { CStr::from_ptr(binary_path) }.to_str() {
+        Ok(s) if !s.is_empty() => s,
+        _ => return -1,
+    };
+    let version_str = match unsafe { CStr::from_ptr(version_ptr) }.to_str() {
+        Ok(s) if !s.is_empty() => s,
+        _ => return -1,
+    };
+    // Same compile-time namespace the install path uses; a runtime env
+    // read is wrong here for the reason documented on dimmy_claude_desktop_install.
+    let namespace = crate::config_dir_name();
+    if crate::claude_desktop::refresh_extension_if_stale(
+        std::path::Path::new(path_str),
+        version_str,
+        namespace,
+    ) {
+        1
+    } else {
+        0
+    }
+}
+
 /// Remove the Dimmy Claude Desktop extension (the dir + its
 /// per-extension settings file). Idempotent — returns 1 if a real
 /// directory was removed, 0 if there was nothing to remove (no

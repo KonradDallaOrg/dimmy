@@ -37,6 +37,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // sauce is just routing the trace through our existing log.
         Self.installCrashHandlers()
 
+        // Keep an already-connected Claude Desktop extension current.
+        //
+        // The extension is a COPY of dimmy-mcp inside Claude Desktop own
+        // folder, written once by the connect wizard, so updating Dimmy
+        // left Claude spawning the previous binary for ever and a fix in
+        // the bridge reached nobody who had already connected. Installs
+        // nothing for a user who never connected; a locked file just
+        // waits for the next launch. Mirror of Win App.OnLaunched.
+        DispatchQueue.global(qos: .utility).async {
+            let bin = Bundle.main.bundlePath + "/Contents/Resources/dimmy-mcp"
+            guard FileManager.default.fileExists(atPath: bin) else { return }
+            let version = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0.0.0"
+            if DimmyCore.shared.refreshClaudeDesktopExtension(binaryPath: bin, version: version) {
+                hkLog("[AppDelegate] Claude Desktop extension refreshed to v\(version)")
+            }
+        }
+
         // Single-instance guard. macOS deduplicates by bundle path, not
         // bundle ID — so a Release in /Applications and a Debug build in
         // ~/Library/Developer/Xcode/DerivedData with the same

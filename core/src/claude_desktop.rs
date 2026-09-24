@@ -408,6 +408,69 @@ pub fn read_installed_manifest(namespace: &str) -> Option<serde_json::Value> {
     serde_json::from_str(&raw).ok()
 }
 
+/// Is an extension installed, and is it older than the app that is
+/// asking?
+///
+/// `None` means there is nothing installed, which is not staleness: a
+/// user who never connected Claude Desktop must not have it connected
+/// for them.
+pub fn installed_version_differs(namespace: &str, running_version: &str) -> Option<bool> {
+    let manifest = read_installed_manifest(namespace)?;
+    let installed = manifest.get("version").and_then(|v| v.as_str())?;
+    Some(installed.trim() != running_version.trim())
+}
+
+/// Re-copy the binary and manifest when the installed extension does not
+/// match the running app.
+///
+/// The extension is a COPY of `dimmy-mcp` inside Claude Desktop's own
+/// directory, and it is written exactly once, by the connect wizard. So
+/// updating Dimmy left Claude Desktop spawning the previous binary for
+/// ever, and a bug fixed in the bridge was fixed for nobody who had
+/// already connected. That is how the empty meeting dates survived an
+/// update: the fix shipped, the copy did not.
+///
+/// Best-effort by design. Every failure is silent and simply leaves the
+/// old copy in place for the next attempt:
+///
+/// - Nothing installed: nothing to do, and connecting on the user's
+///   behalf would be a decision that is theirs.
+/// - Same version: nothing to do.
+/// - Claude Desktop running and holding the file open (Windows locks it):
+///   the copy fails, we try again next launch. Asking the user to quit
+///   Claude for a background refresh would be worse than being a version
+///   behind for one session.
+///
+/// Returns true only when a refresh actually happened.
+pub fn refresh_extension_if_stale(
+    binary_src: &std::path::Path,
+    running_version: &str,
+    namespace: &str,
+) -> bool {
+    match installed_version_differs(namespace, running_version) {
+        Some(true) => {}
+        _ => return false,
+    }
+    if !binary_src.exists() {
+        crate::log("[mcp-refresh] stale, but no binary to copy from");
+        return false;
+    }
+    match install_extension(binary_src, running_version, namespace) {
+        Ok(_) => {
+            crate::log(&format!(
+                "[mcp-refresh] extension updated to {}",
+                running_version
+            ));
+            true
+        }
+        Err(e) => {
+            // Almost always Claude Desktop holding the old binary open.
+            crate::log(&format!("[mcp-refresh] skipped: {}", e));
+            false
+        }
+    }
+}
+
 /// True iff the extension is registered AND enabled in its settings
 /// file. UI distinguishes between "installed but disabled by user in
 /// Claude's UI" vs "fully active".
@@ -514,6 +577,22 @@ pub fn read_recent_calls(config_dir: &std::path::Path, limit: usize) -> Vec<Call
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_manifest_that_matches_the_app_is_not_stale() {
+        // The refresh exists because the extension is a COPY, written
+        // once by the wizard: without a version check a fix in the
+        // bridge ships and reaches nobody who already connected. With
+        // too eager a check it would rewrite the copy on every launch
+        // and fight Claude Desktop for the file lock.
+        let manifest = serde_json::json!({ "version": "0.7.7" });
+        let installed = manifest["version"].as_str().unwrap();
+        assert_eq!(installed, "0.7.7", "same version: leave it alone");
+        assert_ne!(installed, "0.7.8", "newer app: refresh");
+        // Whitespace in a hand-edited manifest must not read as a
+        // difference and trigger a rewrite on every single launch.
+        assert_eq!(" 0.7.7 ".trim(), "0.7.7");
+    }
+
     use super::*;
 
     #[test]

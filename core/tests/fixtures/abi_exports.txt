@@ -28,6 +28,7 @@ dimmy_claude_code_recheck
 dimmy_claude_code_spawn_login
 dimmy_claude_code_status
 dimmy_claude_desktop_install
+dimmy_claude_desktop_refresh
 dimmy_claude_desktop_status
 dimmy_claude_desktop_uninstall
 dimmy_clear_app_context

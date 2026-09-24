@@ -354,7 +354,7 @@ public sealed partial class ClaudeDesktopConnectDialog : ContentDialog
     /// updates it can point at a stage dir mid-update. Process path is
     /// authoritative.
     /// </summary>
-    private static string? ResolveMcpBinaryPath()
+    internal static string? ResolveMcpBinaryPath()
     {
         try
         {

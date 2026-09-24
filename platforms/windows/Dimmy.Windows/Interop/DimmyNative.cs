@@ -1112,6 +1112,9 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
     public static extern int dimmy_claude_desktop_install(string binaryPath, string versionPtr);
 
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
+    public static extern int dimmy_claude_desktop_refresh(string binaryPath, string versionPtr);
+
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_claude_desktop_uninstall();
 
@@ -1192,6 +1195,23 @@ public static class DimmyNative
             return (rc == 0, rc);
         }
         catch { return (false, int.MinValue); }
+    }
+
+    /// <summary>
+    /// Bring an already-installed Claude Desktop extension up to this
+    /// version. True only when it actually replaced something.
+    ///
+    /// Never installs for a user who has not connected, and never throws.
+    /// The usual reason it does nothing is Claude Desktop holding the old
+    /// binary open, which is worth one more session on the old copy, not
+    /// an error in the user face.
+    /// </summary>
+    public static bool RefreshClaudeDesktopExtension(string binaryPath, string version)
+    {
+        try { return dimmy_claude_desktop_refresh(binaryPath, version) == 1; }
+        catch (EntryPointNotFoundException) { return false; }
+        catch (DllNotFoundException) { return false; }
+        catch { return false; }
     }
 
     public static (bool removed, int rc) UninstallClaudeDesktopExtension()

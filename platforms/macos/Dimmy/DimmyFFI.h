@@ -778,6 +778,13 @@ int32_t dimmy_claude_desktop_status(char * _Nonnull out_buf, int32_t buf_len);
 int32_t dimmy_claude_desktop_install(const char * _Nonnull binary_path,
                                      const char * _Nonnull version);
 
+/// Bring an already-installed extension up to this version. rc 1 =
+/// refreshed, 0 = nothing to do (not installed, already current, or the
+/// old binary is locked by a running Claude Desktop), -1 = bad args.
+/// Never installs for a user who has not connected.
+int32_t dimmy_claude_desktop_refresh(const char * _Nonnull binary_path,
+                                     const char * _Nonnull version);
+
 /// Remove the Dimmy Claude Desktop extension. rc 1 = removed, 0 =
 /// nothing to remove (idempotent), negative on error.
 int32_t dimmy_claude_desktop_uninstall(void);
