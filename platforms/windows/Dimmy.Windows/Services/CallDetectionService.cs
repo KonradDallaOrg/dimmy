@@ -158,6 +158,9 @@ internal sealed class CallDetectionService : IDisposable
             .FirstOrDefault(kv => kv.Value == _lastEmittedExe);
         if (string.IsNullOrEmpty(origin.Key)) return false;
         _meetingOriginSessionId = origin.Key;
+        _meetingOriginEndpointId = _tickSessions
+            .FirstOrDefault(x => x.sessionId == origin.Key).endpointId;
+        _originEndpointAwayLogged = false;
         _meetingDrivenByCallDetect = true;
         App.Log($"meeting origin bound: exe={_lastEmittedExe} id=…{TailOf(origin.Key)}", "CallDetect");
         return true;
@@ -174,9 +177,9 @@ internal sealed class CallDetectionService : IDisposable
     {
         try
         {
-            var live = SampleActiveCaptureSessions();
+            var live = _tickSessions;
             int ownPid = Environment.ProcessId;
-            foreach (var (sessionId, pid) in live)
+            foreach (var (sessionId, pid, endpointId) in live)
             {
                 if (pid == ownPid) continue; // Dimmy's own meeting mic capture
                 var exe = ResolveProcessExeName(pid);
@@ -184,6 +187,8 @@ internal sealed class CallDetectionService : IDisposable
                 _emittedSessions[sessionId] = exe;
                 _lastEmittedExe = exe;
                 _meetingOriginSessionId = sessionId;
+                _meetingOriginEndpointId = endpointId;
+                _originEndpointAwayLogged = false;
                 _meetingDrivenByCallDetect = true;
                 try { DimmyNative.dimmy_call_meeting_started_external(); } catch { }
                 App.Log($"adopted call origin mid-meeting: exe={exe} pid={pid} id=…{TailOf(sessionId)}", "CallDetect");
@@ -221,6 +226,24 @@ internal sealed class CallDetectionService : IDisposable
             return;
         }
 
+        // Did the set of capture endpoints just change under us?
+        //
+        // Computed ONCE here, for the whole tick, because every branch
+        // below draws a conclusion from which sessions it can see and
+        // every one of them is wrong while the device is churning. The
+        // first version of this guard sat inside the discovery branch
+        // only, so a Bluetooth profile flip still reached the STOP path:
+        // the origin session vanished with its endpoint, the meeting was
+        // stopped as though the call had ended, and the reappearance two
+        // seconds later started a new one. That is the "opens several
+        // recordings, stops and starts at random" the user hit at 12:40.
+        _tickSessions = SampleActiveCaptureSessions(out bool endpointsChanged);
+        if (endpointsChanged)
+        {
+            App.Log("endpoint set changed — skipping this sample", "CallDetect");
+            return;
+        }
+
         // Detect meeting active→inactive transition and reset
         // origin tracking. Belt-and-braces: meeting-stop can be
         // triggered by the stop-suggestion popup, the pill, the
@@ -229,6 +252,7 @@ internal sealed class CallDetectionService : IDisposable
         if (_prevMeetingActive && !meetingActive)
         {
             _meetingOriginSessionId = null;
+            _meetingOriginEndpointId = null;
             _meetingDrivenByCallDetect = false;
         }
         // Meeting just started WITHOUT a bound origin — i.e. a manual start
@@ -271,9 +295,27 @@ internal sealed class CallDetectionService : IDisposable
                     // amplitude check — silence-during-call is NOT
                     // a stop signal in this branch (a user might be
                     // listening intently for minutes).
-                    var live = SampleActiveCaptureSessions();
-                    bool originAlive = live.Any(s => s.sessionId == _meetingOriginSessionId);
-                    if (!originAlive)
+                    bool originAlive = _tickSessions.Any(s => s.sessionId == _meetingOriginSessionId);
+                    // Its endpoint may have gone with it. Skipping the churn
+                    // tick is not enough on its own: the set goes quiet again
+                    // while the endpoint is still away, and that steady state
+                    // reads exactly like a call that ended.
+                    // Against the ENDPOINT set, not the sessions on it. A
+                    // call really ending leaves its endpoint alive and empty,
+                    // so asking "is any session still on it" would call that
+                    // device churn and never stop the recording — breaking the
+                    // one behaviour this branch exists for.
+                    bool endpointAlive = _meetingOriginEndpointId == null
+                        || _lastEndpointIds.Contains(_meetingOriginEndpointId);
+                    if (!originAlive && !endpointAlive)
+                    {
+                        if (!_originEndpointAwayLogged)
+                        {
+                            App.Log("origin session away WITH its endpoint — device, not hangup", "CallDetect");
+                            _originEndpointAwayLogged = true;
+                        }
+                    }
+                    else if (!originAlive)
                     {
                         try
                         {
@@ -316,18 +358,7 @@ internal sealed class CallDetectionService : IDisposable
         // then apply one-shot logic.
         try
         {
-            var live = SampleActiveCaptureSessions(out bool endpointsChanged);
-            if (endpointsChanged)
-            {
-                // The set of capture endpoints just changed under us. Every
-                // session on an endpoint that left is invisible now, and
-                // every session on one that arrived looks brand new — but
-                // nothing started or stopped, the device did. Carry the
-                // previous picture forward and re-read it next tick, by
-                // which point the profile switch has settled.
-                App.Log("endpoint set changed — skipping this sample", "CallDetect");
-                return;
-            }
+            var live = _tickSessions;
             var liveIds = new HashSet<string>(live.Select(s => s.sessionId), StringComparer.Ordinal);
 
             // 1. Cleanup: any emitted session that's no longer alive
@@ -357,7 +388,7 @@ internal sealed class CallDetectionService : IDisposable
             // semantics during meeting mode. Edge-triggered
             // (one-and-done) would make detection_emitted fire only
             // through luck and leave the meeting branch starved.
-            foreach (var (sessionId, _) in live)
+            foreach (var (sessionId, _, _) in live)
             {
                 if (_emittedSessions.TryGetValue(sessionId, out var emittedExe)
                     && !string.IsNullOrEmpty(emittedExe)
@@ -372,7 +403,7 @@ internal sealed class CallDetectionService : IDisposable
             // Emit ONE per tick (Rust state machine + nudge UI are
             // single-session — multiple parallel calls aren't a
             // supported scenario yet).
-            foreach (var (sessionId, pid) in live)
+            foreach (var (sessionId, pid, endpointId) in live)
             {
                 if (_emittedSessions.ContainsKey(sessionId)) continue;
                 if (!_pendingSessions.TryGetValue(sessionId, out var ticksSeen))
@@ -444,21 +475,32 @@ internal sealed class CallDetectionService : IDisposable
     /// started a recording of a call that had never stopped.
     private static HashSet<string> _lastEndpointIds = new(StringComparer.Ordinal);
 
-    /// Sample without taking part in the churn comparison. The other
-    /// callers sample opportunistically; if they updated the baseline the
-    /// poll would find it already consumed and read a real device change
-    /// as no change at all.
-    private static List<(string sessionId, uint pid)> SampleActiveCaptureSessions()
-    {
-        return SampleActiveCaptureSessionsInner(new HashSet<string>(StringComparer.Ordinal));
-    }
+    /// The one sample taken this tick. Every branch reads it instead of
+    /// re-enumerating: three enumerations per tick could disagree with
+    /// each other mid-profile-switch, which is precisely the state this
+    /// whole guard exists to survive.
+    private List<(string sessionId, uint pid, string endpointId)> _tickSessions = new();
+
+    /// The capture endpoint the origin session was found on.
+    ///
+    /// The stop path asks "is the origin session still there?" and a
+    /// Bluetooth profile switch answers no — not because the call ended
+    /// but because the endpoint left DEVICE_STATE_ACTIVE and took every
+    /// session on it out of view. Remembering the endpoint turns that
+    /// into a question we can actually answer: a session missing while
+    /// its endpoint is ALSO missing is unexplained, not over.
+    private string? _meetingOriginEndpointId;
+
+    /// Log the "endpoint away" verdict once per absence, not four times
+    /// a second for as long as the headset takes to switch profile.
+    private bool _originEndpointAwayLogged;
 
     /// `endpointsChanged` is true when the set of active capture endpoints
     /// differs from the previous sample. When it does, sessions that
     /// vanished or appeared in the same breath are the device churning,
     /// not calls starting and stopping, and the caller must not read them
     /// as transitions.
-    private static List<(string sessionId, uint pid)> SampleActiveCaptureSessions(
+    private static List<(string sessionId, uint pid, string endpointId)> SampleActiveCaptureSessions(
         out bool endpointsChanged)
     {
         var endpointIds = new HashSet<string>(StringComparer.Ordinal);
@@ -471,10 +513,10 @@ internal sealed class CallDetectionService : IDisposable
         return result;
     }
 
-    private static List<(string sessionId, uint pid)> SampleActiveCaptureSessionsInner(
+    private static List<(string sessionId, uint pid, string endpointId)> SampleActiveCaptureSessionsInner(
         HashSet<string> endpointIds)
     {
-        var result = new List<(string, uint)>();
+        var result = new List<(string, uint, string)>();
         IMMDeviceEnumerator? enumerator = null;
         IMMDeviceCollection? devices = null;
         try
@@ -496,8 +538,12 @@ internal sealed class CallDetectionService : IDisposable
                 try
                 {
                     if (devices.Item(d, out device) != 0 || device == null) continue;
+                    string currentEndpointId = "";
                     if (device.GetId(out string? endpointId) == 0 && !string.IsNullOrEmpty(endpointId))
-                        endpointIds.Add(endpointId!);
+                    {
+                        currentEndpointId = endpointId!;
+                        endpointIds.Add(currentEndpointId);
+                    }
                     var iid = IID_IAudioSessionManager2;
                     if (device.Activate(ref iid, CLSCTX_ALL, IntPtr.Zero, out object pManager) != 0
                         || pManager == null) continue;
@@ -518,7 +564,7 @@ internal sealed class CallDetectionService : IDisposable
                             if (control2.GetSessionInstanceIdentifier(out string? sessionId) != 0
                                 || string.IsNullOrEmpty(sessionId)) continue;
                             if (control2.GetProcessId(out int pid) != 0 || pid <= 0) continue;
-                            result.Add((sessionId!, (uint)pid));
+                            result.Add((sessionId!, (uint)pid, currentEndpointId));
                         }
                         finally
                         {
