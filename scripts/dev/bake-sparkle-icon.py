@@ -76,15 +76,17 @@ def save_ico(img: Image.Image, name: str) -> None:
 def main() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     print(f"writing to {OUT_DIR}")
-    # The tray pair, named to the existing convention so the csproj
-    # wildcard (Assets/dimmy-tray-*.ico) picks them up and ResolveIconPath
-    # finds them with no special case: white on a dark taskbar, dark on a
-    # light one, exactly like every other state in the set.
-    save_ico(render(WHITE), "dimmy-tray-dark-recap.ico")
-    save_ico(render(DARK), "dimmy-tray-light-recap.ico")
-    # Coloured, for use inside the app where there is room for an accent.
-    # Deliberately NOT a tray icon: on a light taskbar the purple loses
-    # too much contrast against the background.
+    # Purple on BOTH taskbar tones. The rest of the set is monochrome and
+    # follows the theme, and this one deliberately does not: the accent IS
+    # the message, "a model is working on this", and a mark that changes
+    # colour with the taskbar says nothing extra.
+    #
+    # Checked rather than assumed, because the first version made it
+    # monochrome out of a caution that turned out to be unfounded:
+    # #8A60E8 gives 3.80:1 on the dark taskbar and 3.85:1 on the light
+    # one. Equal, and comfortable for a glyph at this size.
+    save_ico(render(PURPLE), "dimmy-tray-dark-recap.ico")
+    save_ico(render(PURPLE), "dimmy-tray-light-recap.ico")
     save_ico(render(PURPLE), "dimmy-sparkle-colour.ico")
     # A PNG too, for looking at it outside a tray.
     png = OUT_DIR / "dimmy-sparkle-colour.png"
