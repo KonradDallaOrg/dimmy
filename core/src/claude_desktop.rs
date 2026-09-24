@@ -405,7 +405,12 @@ pub fn read_installed_manifest(namespace: &str) -> Option<serde_json::Value> {
     let dir = extensions_root()?.join(extension_id(namespace));
     let manifest = dir.join("manifest.json");
     let raw = std::fs::read_to_string(&manifest).ok()?;
-    serde_json::from_str(&raw).ok()
+    // Strip a UTF-8 BOM. serde_json refuses one, and anything that has
+    // rewritten this file on Windows is likely to have left one behind —
+    // PowerShell's `Set-Content -Encoding utf8` does. An unreadable
+    // manifest reads as "not installed", which silently switches the
+    // staleness check off for good.
+    serde_json::from_str(raw.trim_start_matches('\u{feff}')).ok()
 }
 
 /// Is an extension installed, and is it older than the app that is

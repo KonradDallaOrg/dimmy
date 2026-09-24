@@ -881,10 +881,17 @@ public partial class App : Application
             try
             {
                 var binary = Views.ClaudeDesktopConnectDialog.ResolveMcpBinaryPath();
-                if (string.IsNullOrEmpty(binary)) return;
+                if (string.IsNullOrEmpty(binary))
+                {
+                    Log("extension refresh: no dimmy-mcp next to the exe", "ClaudeDesktop");
+                    return;
+                }
                 var version = typeof(App).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
-                if (DimmyNative.RefreshClaudeDesktopExtension(binary, version))
-                    Log($"Claude Desktop extension refreshed to v{version}", "ClaudeDesktop");
+                // Logged either way. Silence on the negative branch is how
+                // the MCP bridge sat four months stale with nothing in the
+                // log to say why.
+                var refreshed = DimmyNative.RefreshClaudeDesktopExtension(binary, version);
+                Log($"extension refresh v{version}: {(refreshed ? "updated" : "nothing to do")}", "ClaudeDesktop");
             }
             catch (Exception ex)
             {
