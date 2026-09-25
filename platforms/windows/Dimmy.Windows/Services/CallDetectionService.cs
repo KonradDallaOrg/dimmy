@@ -140,8 +140,15 @@ internal sealed class CallDetectionService : IDisposable
         {
             // Somebody may already be on a call when Dimmy starts. One read,
             // not a timer.
-            if (MicUsageWatcher.AnyoneUsingMic()) StartSampling("a call is already in progress");
-            else App.Log("started — idle, waiting for the microphone to be picked up", "CallDetect");
+            if (MicUsageWatcher.AnyoneUsingMic())
+            {
+                StartSampling("a call is already in progress");
+            }
+            else
+            {
+                SignalMicFree("nobody is holding the microphone at startup");
+                App.Log("started — idle, waiting for the microphone to be picked up", "CallDetect");
+            }
         }
         else
         {
@@ -172,8 +179,37 @@ internal sealed class CallDetectionService : IDisposable
                 // by no longer seeing the origin, which takes samples it has
                 // not taken yet.
                 _micFreeSince = DateTime.UtcNow;
+                SignalMicFree("microphone released");
             }
         });
+    }
+
+    /// Tell the core the machine is quiet.
+    ///
+    /// This is load-bearing, not housekeeping. The detector refuses to hand
+    /// auto-record a call it never saw START — a call already under way when
+    /// Dimmy arrived is somebody else's, not ours to grab — and it decides
+    /// that from having seen the microphone free at least once. The old
+    /// unconditional 4 Hz poll delivered that as a side effect, by watching
+    /// sessions disappear. Gating the poll removed the side effect, and the
+    /// first real call of a session was then suppressed as "already running":
+    /// measured 2026-09-25, a Teams meeting produced `new session: ms-teams`
+    /// and no nudge at all.
+    ///
+    /// The registry is better evidence than the poll ever was. It says the
+    /// microphone is free; the poll only ever inferred it from an enumeration
+    /// that came back empty.
+    private static void SignalMicFree(string why)
+    {
+        try
+        {
+            DimmyNative.dimmy_call_signal(0, null);
+            App.Log($"microphone free — {why}", "CallDetect");
+        }
+        catch (Exception ex)
+        {
+            App.Log($"idle signal failed: {ex.Message}", "CallDetect");
+        }
     }
 
     private void StartSampling(string why)
