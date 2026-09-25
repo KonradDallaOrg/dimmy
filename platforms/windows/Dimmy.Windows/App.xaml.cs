@@ -2326,6 +2326,7 @@ public partial class App : Application
             _callDetection.Start();
             _appViewModel.CallDetected += OnCallDetected;
             _appViewModel.CallDetectedPreexisting += OnCallDetectedPreexisting;
+            _appViewModel.AudioDevicesMoved += t => _callDetection?.NoteAudioDeviceChanged(t);
             _appViewModel.CallEnded += OnCallEnded;
             _appViewModel.CallStopSuggested += OnCallStopSuggested;
             Log("Call detection initialised", "CallDetect");

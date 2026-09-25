@@ -424,6 +424,10 @@ public partial class AppViewModel : ObservableObject
     /// Fires when the Rust call-detector decides the user is in a
     /// meeting (mic-active past the debounce, not suppressed). Args:
     /// (appIdOrNull, sinceSeconds). Host shows the CallNudgeWindow.
+    /// The audio devices moved under us. Raised so the call detector can
+    /// stop reading an idle session as a hangup while that is happening.
+    public event Action<string>? AudioDevicesMoved;
+
     public event Action<string?, long>? CallDetected;
 
     /// A call that was ALREADY under way when Dimmy started. Offered, never
@@ -758,6 +762,7 @@ public partial class AppViewModel : ObservableObject
                     {
                         var trigger = payload.TryGetProperty("trigger", out var tEl) ? tEl.GetString() : "?";
                         Log?.Invoke($"AUDIO DEVICE-CHANGE RECOVERY (trigger={trigger}) — reopening streams on new default", "Audio");
+                        AudioDevicesMoved?.Invoke(trigger ?? "?");
                     }
                     break;
                 case "call_detected":

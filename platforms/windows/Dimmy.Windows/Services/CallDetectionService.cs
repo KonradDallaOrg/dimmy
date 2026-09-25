@@ -162,6 +162,23 @@ internal sealed class CallDetectionService : IDisposable
         }
     }
 
+    /// Dimmy's own audio engine reports the devices moved. It watches the
+    /// default input and output for its OWN capture, so it is the same fact
+    /// arriving from a different door - and it arrives about a second and a
+    /// half before the call's session goes idle, measured three times over
+    /// on 2026-09-25 (21:57:31 then 21:57:33, 22:11:45 then 22:11:46,
+    /// 22:37:33 then 22:37:35).
+    public void NoteAudioDeviceChanged(string trigger)
+    {
+        _dispatcher.TryEnqueue(() =>
+        {
+            if (_disposed) return;
+            _originTracker.NoteDeviceChange();
+            App.Log($"audio devices moved ({trigger}) — an idle session means nothing until it lands",
+                "CallDetect");
+        });
+    }
+
     private void OnMicUsageChanged(bool anyoneUsing)
     {
         // Raised on the watcher thread; everything below touches state the
@@ -294,6 +311,7 @@ internal sealed class CallDetectionService : IDisposable
         _meetingOriginSessionId = origin.Key;
         var originRow = _tickSessions.FirstOrDefault(x => x.sessionId == origin.Key);
         _meetingOriginEndpointId = originRow.endpointId;
+        _originTracker.Reset();
         _meetingOriginPid = originRow.pid;
         _originEndpointAwayLogged = false;
         _meetingDrivenByCallDetect = true;
@@ -325,6 +343,7 @@ internal sealed class CallDetectionService : IDisposable
                 _lastEmittedExe = exe;
                 _meetingOriginSessionId = sessionId;
                 _meetingOriginEndpointId = endpointId;
+                _originTracker.Reset();
                 _meetingOriginPid = pid;
                 _originEndpointAwayLogged = false;
                 _meetingDrivenByCallDetect = true;
@@ -448,6 +467,11 @@ internal sealed class CallDetectionService : IDisposable
         _tickSessions = sampled;
         if (endpointsChanged)
         {
+            // This is the only place that knows a device just came or went.
+            // Tell the tracker, because the reading that follows - the call's
+            // session going idle on the device it is leaving - is
+            // indistinguishable from a hangup without it.
+            _originTracker.NoteDeviceChange();
             App.Log("endpoint set changed — skipping this sample", "CallDetect");
             return;
         }
@@ -461,6 +485,7 @@ internal sealed class CallDetectionService : IDisposable
         {
             _meetingOriginSessionId = null;
             _meetingOriginEndpointId = null;
+            _originTracker.Reset();
             _meetingOriginPid = 0;
             _originMissingSince = null;
             _meetingDrivenByCallDetect = false;
@@ -510,28 +535,55 @@ internal sealed class CallDetectionService : IDisposable
                     // its capture to a different endpoint under a new session,
                     // and the call never paused. Any active capture from that
                     // process, anywhere, means the call is running.
-                    bool originActive = _tickSessions.Any(
-                        x => x.pid == _meetingOriginPid && x.state == (int)AudioSessionState.Active);
-                    // Released the microphone but kept its session object:
-                    // that is a call that ENDED, and it is immediate — no
-                    // waiting, no guessing.
-                    bool originIdle = !originActive && _tickSessions.Any(
-                        x => x.pid == _meetingOriginPid && x.state != (int)AudioSessionState.Active);
-                    bool processGone = _meetingOriginPid != 0 && !ProcessAlive(_meetingOriginPid);
+                    // MEASUREMENT (2026-09-25): a session is Active,
+                    // Inactive or Expired, and we have been collapsing the
+                    // last two into "not Active". The docs say Inactive means
+                    // the client stopped its stream - a hangup - while
+                    // Expired means the session was invalidated, typically
+                    // because the device went away. If that holds, the device
+                    // case needs no correlation with anything: the state says
+                    // it. Logged until we know.
+                    var picture = string.Join(" ", _tickSessions
+                        .Where(x => x.pid == _meetingOriginPid)
+                        .Select(x => $"{StateName(x.state)}@{TailOf(x.endpointId)}"));
+                    if (picture != _lastOriginPicture)
+                    {
+                        // MEASUREMENT: the sessions look the same whether the
+                        // call moved device or hung up - both read Inactive,
+                        // and only what happens next tells them apart, which
+                        // is a clock. Windows answers the question directly
+                        // and per app: does that app still hold the
+                        // microphone? A call switching device is still
+                        // capturing, on the other endpoint. A call that hung
+                        // up is not. Printing the whole holder list rather
+                        // than matching a name, because the registry names a
+                        // package family for packaged apps and an exe path
+                        // for the rest, and guessing that mapping is how this
+                        // would go wrong quietly.
+                        var holders = string.Join(", ", MicUsageWatcher.UsersOfMic());
+                        App.Log($"origin sessions: [{picture}] alive={ProcessAlive(_meetingOriginPid)} "
+                            + $"deviceChanging={_originTracker.DeviceChanging} endpoints={_lastEndpointIds.Count} "
+                            + $"micHeldBy=[{holders}]",
+                            "CallDetect");
+                        _lastOriginPicture = picture;
+                    }
 
-                    if (originActive)
+                    var verdict = _originTracker.Observe(
+                        _meetingOriginPid,
+                        _tickSessions,
+                        ProcessAlive(_meetingOriginPid),
+                        MicUsageWatcher.SomeoneElseUsingMic());
+
+                    if (verdict == CallOriginState.OnTheCall)
                     {
                         if (_originMissingSince != null)
                             App.Log("origin session back — it had moved, not ended", "CallDetect");
                         _originMissingSince = null;
                     }
-                    else if (processGone || originIdle)
+                    else if (verdict == CallOriginState.Ended)
                     {
-                        // Teams closed, or let go of the mic. Either way this
-                        // is an answer, not an absence, so it needs no clock.
-                        App.Log(processGone
-                            ? "origin process gone — call over"
-                            : "origin released the microphone — call over", "CallDetect");
+                        App.Log("the call let go of the microphone and nothing else explains it — call over",
+                            "CallDetect");
                         FireSessionEnded();
                     }
                     else if (_originMissingSince == null)
@@ -722,6 +774,24 @@ internal sealed class CallDetectionService : IDisposable
     /// into a question we can actually answer: a session missing while
     /// its endpoint is ALSO missing is unexplained, not over.
     private string? _meetingOriginEndpointId;
+    /// The capture devices that existed when this call was bound. An idle
+    /// session only means "hung up" while this still matches: a device coming
+    /// or going makes the same reading mean "moved".
+    /// AudioSessionState: Inactive = 0, Active = 1, Expired = 2. Measured
+    /// 2026-09-25 - a headset switch reads Inactive, not Expired, so the
+    /// state alone does not tell a device move from a hangup.
+    private static string StateName(int state) => state switch
+    {
+        0 => "Inactive",
+        1 => "Active",
+        2 => "Expired",
+        _ => $"state{state}",
+    };
+
+    private readonly CallOriginTracker _originTracker = new();
+    /// What the origin's sessions looked like last tick, so the log records
+    /// state CHANGES and not four lines a second.
+    private string _lastOriginPicture = "";
 
     /// Log the "endpoint away" verdict once per absence, not four times
     /// a second for as long as the headset takes to switch profile.

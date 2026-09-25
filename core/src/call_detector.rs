@@ -162,6 +162,15 @@ pub struct CallDetectorState {
     /// never witnessed them start. A key leaves this set when the session
     /// actually ends, at which point the next one IS a start we watched.
     preexisting: HashSet<String>,
+    /// Which already-under-way calls we have ALREADY offered.
+    ///
+    /// Separate from `detection_emitted`, which is cleared on every inactive
+    /// reading so the NEXT call can be detected - right there, wrong here.
+    /// An offer for a call we walked in on is made once and not repeated:
+    /// measured 2026-09-25 23:39, two popups 21 s apart, and the second
+    /// answered a question the user had already answered by accepting the
+    /// first. Row 7 of the notification matrix.
+    preexisting_offered: HashSet<String>,
     /// Have we ever seen the microphone idle? Until we have, every active
     /// signal describes something that was already going when we arrived.
     /// One flag rather than per-key bookkeeping: the moment we observe
@@ -260,6 +269,7 @@ impl CallDetectorState {
             barred: None,
             tail_of: None,
             preexisting: HashSet::new(),
+            preexisting_offered: HashSet::new(),
             observed_idle: false,
             mic_free_since: None,
             release_confirm_secs: 10,
@@ -563,6 +573,8 @@ impl CallDetectorState {
                 // tick read that flicker as a hangup, so the call the user
                 // was still sitting in started recording itself.
                 self.preexisting.clear();
+                // Row 8: it really ended, so the next one is a fresh offer.
+                self.preexisting_offered.clear();
             }
         }
         // There is deliberately NO deadline here. A hold used to expire
@@ -600,7 +612,7 @@ impl CallDetectorState {
             // take it - that is the host's job, keyed off the variant - but
             // silence was the wrong answer: the user opens Dimmy mid-meeting
             // precisely because they want it recorded from here on.
-            if self.detection_emitted {
+            if !self.preexisting_offered.insert(app_for_lookup.clone()) {
                 return CallSignalOutcome::Suppressed(SuppressionReason::AlreadyRunning(
                     app_for_lookup,
                 ));
@@ -1769,5 +1781,144 @@ mod tests {
         s.signal(false, None, false, 0);
         let _ = s.signal(true, Some("teams".into()), false, 1);
         assert!(!s.mic_confirmed_free, "the fact must be consumed, not kept");
+    }
+
+    /// Reported 2026-09-25 23:39: starting Dimmy inside a call offered it
+    /// twice, 21 s apart. The user accepted the first, and the second popup
+    /// then did nothing at all - a button that answers a question already
+    /// answered.
+    ///
+    /// The offer rode on `detection_emitted`, which is cleared every time the
+    /// microphone reads inactive - correctly, because after a call ends the
+    /// next one has to be offerable. A call already under way is not that: it
+    /// is offered once, and not again until it has really ended.
+    #[test]
+    fn a_call_already_under_way_is_offered_once_and_not_again() {
+        let mut s = cold(); // never saw the machine idle: we walked in on it
+        s.enabled = true;
+        s.min_active_secs = 0;
+
+        let first = s.signal(true, Some("teams".into()), false, 1000);
+        assert!(
+            matches!(first, CallSignalOutcome::DetectedPreexisting { .. }),
+            "got {first:?}"
+        );
+
+        // The flicker that cleared the flag in the field.
+        s.signal(false, None, false, 1001);
+        let again = s.signal(true, Some("teams".into()), false, 1002);
+        assert!(
+            matches!(again, CallSignalOutcome::Suppressed(_)),
+            "offered twice: {again:?}"
+        );
+
+        // Many more looks change nothing.
+        for t in 1003..1010 {
+            let out = s.signal(true, Some("teams".into()), false, t);
+            assert!(
+                matches!(out, CallSignalOutcome::Suppressed(_)),
+                "at {t}: {out:?}"
+            );
+        }
+    }
+
+    // ── The notification matrix, one test per row ───────────────────
+    // docs/dev/call-detection-matrix.md. Rows 4 and 5 differ only in what
+    // the HOST does with a Detected outcome (record straight away, or ask),
+    // so the core's side of both is the same event.
+
+    /// Row 1: detection off.
+    #[test]
+    fn nudge_row1_detection_off_says_nothing() {
+        let mut s = fresh();
+        s.enabled = false;
+        let out = s.signal(true, Some("teams".into()), false, 1000);
+        assert!(
+            matches!(
+                out,
+                CallSignalOutcome::Suppressed(_) | CallSignalOutcome::NoChange
+            ),
+            "got {out:?}"
+        );
+    }
+
+    /// Row 2: we are already recording.
+    #[test]
+    fn nudge_row2_a_meeting_already_running_says_nothing() {
+        let mut s = fresh();
+        s.signal(true, Some("teams".into()), true, 1000);
+        let out = s.signal(true, Some("teams".into()), true, 1006);
+        assert!(
+            matches!(
+                out,
+                CallSignalOutcome::Suppressed(SuppressionReason::MeetingActive)
+            ),
+            "got {out:?}"
+        );
+    }
+
+    /// Row 3: the user said "never" for this app.
+    #[test]
+    fn nudge_row3_an_excluded_app_says_nothing() {
+        let mut s = fresh();
+        s.record_response(Some("teams".into()), NudgeResponse::Never, 900);
+        let out = s.signal(true, Some("teams".into()), false, 1000);
+        assert!(
+            matches!(
+                out,
+                CallSignalOutcome::Suppressed(SuppressionReason::Excluded(_))
+            ),
+            "got {out:?}"
+        );
+    }
+
+    /// Rows 4 and 5: a call we watched start is offered to the host, which
+    /// decides between recording at once and asking.
+    #[test]
+    fn nudge_rows4and5_a_call_we_saw_start_is_detected() {
+        let mut s = fresh();
+        s.signal(true, Some("teams".into()), false, 1000);
+        let out = s.signal(true, Some("teams".into()), false, 1006);
+        assert!(
+            matches!(out, CallSignalOutcome::Detected { .. }),
+            "got {out:?}"
+        );
+    }
+
+    /// Row 6: a call already under way gets its OWN outcome, so no host can
+    /// mistake it for one to record by itself.
+    #[test]
+    fn nudge_row6_a_call_already_under_way_is_offered_not_taken() {
+        let mut s = cold();
+        s.enabled = true;
+        s.min_active_secs = 0;
+        let out = s.signal(true, Some("teams".into()), false, 1000);
+        assert!(
+            matches!(out, CallSignalOutcome::DetectedPreexisting { .. }),
+            "got {out:?}"
+        );
+    }
+
+    /// Row 8: once it has really ended, the next one starts clean.
+    #[test]
+    fn nudge_row8_after_it_ends_the_next_call_is_offered_again() {
+        let mut s = cold();
+        s.enabled = true;
+        s.min_active_secs = 0;
+        assert!(matches!(
+            s.signal(true, Some("teams".into()), false, 1000),
+            CallSignalOutcome::DetectedPreexisting { .. }
+        ));
+
+        // The call ends for real: microphone free, confirmed, long enough for
+        // the hold to lift.
+        s.signal(false, None, false, 1001);
+        s.note_mic_confirmed_free();
+
+        let out = s.signal(true, Some("teams".into()), false, 1050);
+        assert!(
+            matches!(out, CallSignalOutcome::Detected { .. }),
+            "a new call after it ended must be a normal detection, got {out:?}"
+        );
     }
 }

@@ -108,6 +108,39 @@ internal sealed class MicUsageWatcher : IDisposable
         return inUse;
     }
 
+    /// Is anybody OTHER THAN US holding the microphone?
+    ///
+    /// Dimmy is always in that list while it records, because it is recording
+    /// - asking "is the microphone free" would answer its own question. What
+    /// the call detector needs to know is whether the app on the call still
+    /// has it, and the cheapest correct way to ask that is "is there anyone
+    /// but me", which needs no mapping from a process to a registry name.
+    /// Those names are a package family for packaged apps
+    /// (MSTeams_8wekyb3d8bbwe) and an exe path for the rest
+    /// (C:#Program Files#Google#Chrome#Application#chrome.exe), and guessing
+    /// that mapping is how this would go wrong quietly.
+    public static bool SomeoneElseUsingMic()
+    {
+        var mine = OwnRegistryName();
+        foreach (var name in UsersOfMic())
+        {
+            if (!string.Equals(name, mine, StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        return false;
+    }
+
+    /// Our own exe as the privacy key spells it: the full path with the
+    /// separators replaced by '#'.
+    private static string OwnRegistryName()
+    {
+        try
+        {
+            var path = Environment.ProcessPath;
+            return string.IsNullOrEmpty(path) ? "" : path.Replace('\\', '#');
+        }
+        catch { return ""; }
+    }
+
     public bool Start()
     {
         if (_thread != null) return true;
