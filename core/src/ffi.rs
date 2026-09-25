@@ -10683,19 +10683,6 @@ pub extern "C" fn dimmy_call_set_tracked_origin(tracked: c_int) -> c_int {
     0
 }
 
-/// The host saw the audio devices change: a headset connected or dropped,
-/// the default input/output switched, a Bluetooth headset renegotiated.
-/// While devices churn, captures vanish and come back without any call
-/// starting or ending, so the detector does not read a free microphone
-/// around that moment as a call being over. Returns 0.
-#[no_mangle]
-pub extern "C" fn dimmy_call_signal_device_change() -> c_int {
-    let now = now_epoch_secs();
-    let mut g = call_detector_lock();
-    g.device_changed(now);
-    0
-}
-
 /// Authoritative "call ended" signal — host has positive evidence
 /// the originating WASAPI session disappeared from the active
 /// capture-session set. Bypasses the amplitude-based silence

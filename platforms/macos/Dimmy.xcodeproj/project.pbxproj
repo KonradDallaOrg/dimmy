@@ -57,7 +57,7 @@
 		AA000708 /* MeetingStampTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000708 /* MeetingStampTests.swift */; };
 		AA000709 /* MeetingAudioResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000709 /* MeetingAudioResolverTests.swift */; };
 		AA000710 /* SystemAudioProcessTapDecisionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000710 /* SystemAudioProcessTapDecisionTests.swift */; };
-		AA000740 /* CallOriginJudgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000740 /* CallOriginJudgeTests.swift */; };
+		AA000740 /* CallAudioWatchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000740 /* CallAudioWatchTests.swift */; };
 		AA000711 /* UpdateGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000711 /* UpdateGateTests.swift */; };
 		AA000712 /* HardwareInfoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000712 /* HardwareInfoTests.swift */; };
 		AA000006 /* HotkeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000006 /* HotkeyManager.swift */; };
@@ -216,7 +216,7 @@
 		AB000708 /* MeetingStampTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingStampTests.swift; sourceTree = "<group>"; };
 		AB000709 /* MeetingAudioResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAudioResolverTests.swift; sourceTree = "<group>"; };
 		AB000710 /* SystemAudioProcessTapDecisionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemAudioProcessTapDecisionTests.swift; sourceTree = "<group>"; };
-		AB000740 /* CallOriginJudgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallOriginJudgeTests.swift; sourceTree = "<group>"; };
+		AB000740 /* CallAudioWatchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallAudioWatchTests.swift; sourceTree = "<group>"; };
 		AB000711 /* UpdateGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateGateTests.swift; sourceTree = "<group>"; };
 		AB000712 /* HardwareInfoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HardwareInfoTests.swift; sourceTree = "<group>"; };
 		AB000006 /* HotkeyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyManager.swift; sourceTree = "<group>"; };
@@ -353,7 +353,7 @@
 				AB000708 /* MeetingStampTests.swift */,
 				AB000709 /* MeetingAudioResolverTests.swift */,
 				AB000710 /* SystemAudioProcessTapDecisionTests.swift */,
-				AB000740 /* CallOriginJudgeTests.swift */,
+				AB000740 /* CallAudioWatchTests.swift */,
 				AB000711 /* UpdateGateTests.swift */,
 				AB000712 /* HardwareInfoTests.swift */,
 			);
@@ -943,7 +943,7 @@ echo \"[gtcrn] bundled $(basename \"$GTCRN_SRC\") into Resources\"
 				AA000708 /* MeetingStampTests.swift in Sources */,
 				AA000709 /* MeetingAudioResolverTests.swift in Sources */,
 				AA000710 /* SystemAudioProcessTapDecisionTests.swift in Sources */,
-				AA000740 /* CallOriginJudgeTests.swift in Sources */,
+				AA000740 /* CallAudioWatchTests.swift in Sources */,
 				AA000711 /* UpdateGateTests.swift in Sources */,
 				AA000712 /* HardwareInfoTests.swift in Sources */,
 			);

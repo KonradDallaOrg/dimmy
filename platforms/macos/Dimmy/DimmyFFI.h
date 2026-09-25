@@ -863,10 +863,6 @@ int32_t dimmy_call_meeting_started_external(void);
 /// 0 when clearing it. `dimmy_meeting_stop` also clears it. Returns 0.
 int32_t dimmy_call_set_tracked_origin(int32_t tracked);
 
-/// Audio devices changed (headset connected/dropped, default device switched).
-/// A free microphone around that moment is not taken as a call ending. Returns 0.
-int32_t dimmy_call_signal_device_change(void);
-
 /// Compute a peak-summary JSON `{peaks:[f32;bucket_count], duration_secs}`
 /// from any audio file the Rust loader can decode (WAV via hound, m4a
 /// / mp3 / aac / flac / ogg via Symphonia). Same role as the in-Swift

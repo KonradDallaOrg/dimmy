@@ -174,17 +174,6 @@ pub struct CallDetectorState {
     /// dictation as "the call ended" would lift a hold on a call that was
     /// still running.
     mic_free_is_evidence: bool,
-    /// When the host last saw the audio devices change: a headset
-    /// connected or dropped, the default device switched, a Bluetooth
-    /// headset renegotiating A2DP↔HFP. `None` until the first one.
-    last_device_change: Option<i64>,
-    /// How long after a device change a free microphone stops being
-    /// suspect. While a Bluetooth headset renegotiates, every capture on it
-    /// vanishes and comes back — up to 13 s apart in one Windows log, and
-    /// device moves up to 31.12 s (2026-09-24) — which is longer than
-    /// `release_confirm_secs`, so a gap that overlaps a device change is
-    /// not evidence that the call ended. Sixty is double the longest seen.
-    device_settle_secs: u32,
     /// Set by the StopAndRecap response, consumed by `meeting_stopped`: it
     /// marks the stop that follows as ours, not the user's. Armed only while
     /// we are actually recording, so a nudge answered after the meeting has
@@ -260,8 +249,6 @@ impl CallDetectorState {
             mic_free_since: None,
             release_confirm_secs: 10,
             mic_free_is_evidence: true,
-            last_device_change: None,
-            device_settle_secs: 60,
             stop_is_automatic: false,
             recording_active_from_us: false,
             mic_inactive_since: None,
@@ -538,9 +525,7 @@ impl CallDetectorState {
         // the interval inside the inactive path would have waited for ticks
         // that never come, and the hold would never have lifted on Windows.
         if let Some(free_since) = self.mic_free_since.take() {
-            if now.saturating_sub(free_since) >= self.release_confirm_secs as i64
-                && self.free_gap_is_clean(free_since, now)
-            {
+            if now.saturating_sub(free_since) >= self.release_confirm_secs as i64 {
                 self.barred = None;
                 self.tail_of = None;
                 // Same standard for the call we walked in on. Teams drops
@@ -775,28 +760,6 @@ impl CallDetectorState {
     /// process-gone signal) can stop-suggest — see `has_tracked_origin`. Set
     /// true when the host binds/adopts an origin pid, false when it clears it
     /// or the meeting ends. Idempotent.
-    /// The host saw the audio devices change. A free microphone around
-    /// that moment says nothing about whether a call ended: see
-    /// `device_settle_secs`.
-    pub fn device_changed(&mut self, now: i64) {
-        assert!(now >= 0, "device change time must be non-negative");
-        self.last_device_change = Some(now);
-    }
-
-    /// Whether a free-microphone gap from `free_since` to `now` can count
-    /// as the previous call being over. Not if the devices changed during
-    /// it (or just before, since the change is what makes the app let go),
-    /// unless they have been settled for `device_settle_secs` since.
-    fn free_gap_is_clean(&self, free_since: i64, now: i64) -> bool {
-        match self.last_device_change {
-            None => true,
-            Some(changed) => {
-                changed < free_since - 5
-                    || now.saturating_sub(changed) >= self.device_settle_secs as i64
-            }
-        }
-    }
-
     pub fn set_tracked_origin(&mut self, tracked: bool) {
         self.has_tracked_origin = tracked;
     }

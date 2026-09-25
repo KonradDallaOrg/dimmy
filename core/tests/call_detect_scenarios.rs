@@ -8,9 +8,10 @@
 //!
 //! What the host decides on its own (is the origin process still in the
 //! call?) is modelled as the host's verdict — `call_ended()` is sent when
-//! the call really ends. Whether the host reaches that verdict correctly
-//! through a headset switch is tested on the host side (Mac:
-//! `CallOriginJudgeTests`).
+//! the call really ends. A headset switch never reaches the core as a gap:
+//! the host recognises it from the device the call was using and keeps
+//! reporting the call. That half is tested on the host side (Mac:
+//! `CallAudioWatchTests`).
 
 use dimmy_lib::call_detector::{CallDetectorState, CallSignalOutcome, NudgeResponse};
 use std::collections::HashSet;
@@ -99,12 +100,6 @@ impl Sim {
             self.observe(false, None);
             self.now += 1;
         }
-    }
-
-    /// The audio device set or default device changed (headset connected,
-    /// dropped, switched A2DP↔HFP).
-    fn device_change(&mut self) {
-        self.d.device_changed(self.now);
     }
 
     /// The host has concluded the call it was recording is over.
@@ -230,90 +225,6 @@ fn a_call_stopped_by_hand_stays_stopped_through_flickers() {
     assert_eq!(s.total(), 1, "{:?}", s.recordings);
 }
 
-/// Bluetooth headsets drop out of the device list while they renegotiate
-/// A2DP↔HFP, and every capture on them vanishes with them — 28 cycles in
-/// one Windows log, up to 13 s apart; device moves up to 31 s. Longer than
-/// the ten seconds that otherwise count as "the mic was really free", so
-/// the gap has to be discounted because the devices were changing.
-#[test]
-fn a_headset_switch_does_not_resurrect_a_call_stopped_by_hand() {
-    for gap in [6, 13, 20, 31] {
-        let mut s = Sim::warm();
-        s.in_call("teams", 120);
-        s.user_stop();
-        s.in_call("teams", 60);
-        s.device_change();
-        s.idle(gap);
-        s.device_change();
-        s.in_call("teams", 600);
-        assert_eq!(
-            s.total(),
-            1,
-            "{gap}s headset switch restarted a stopped call: {:?}",
-            s.recordings
-        );
-        assert!(!s.recording_now());
-    }
-}
-
-/// Same thing after an automatic stop that was wrong only in timing: the
-/// app came back after a headset switch longer than the tail window.
-#[test]
-fn a_headset_switch_after_hangup_is_not_a_new_call() {
-    let mut s = Sim::warm();
-    s.in_call("teams", 600);
-    s.call_ended();
-    s.device_change();
-    s.idle(15);
-    s.device_change();
-    s.in_call("teams", 5);
-    s.idle(120);
-    assert_eq!(s.total(), 1, "{:?}", s.recordings);
-}
-
-/// Dimmy started in the middle of a call (login, update, crash restart):
-/// a start we did not witness is not a start, and a headset switch
-/// during that call does not make it one.
-#[test]
-fn launched_mid_call_records_nothing_even_across_a_headset_switch() {
-    let mut s = Sim::cold();
-    s.in_call("teams", 120);
-    s.device_change();
-    s.idle(13);
-    s.device_change();
-    s.in_call("teams", 600);
-    assert_eq!(s.total(), 0, "{:?} live={:?}", s.recordings, s.meeting);
-}
-
-/// Taking the headset off after the call is a device change too. It must
-/// not cost the next call once the devices have settled.
-#[test]
-fn unplugging_the_headset_after_a_call_does_not_block_the_next_one() {
-    let mut s = Sim::warm();
-    s.in_call("teams", 600);
-    s.call_ended();
-    s.idle(2);
-    s.device_change();
-    s.idle(88);
-    s.in_call("teams", 300);
-    assert!(s.recording_now(), "the next call must still record");
-    assert_eq!(s.recordings.len(), 1);
-}
-
-/// A device that changed long before the call is irrelevant to it.
-#[test]
-fn an_old_device_change_does_not_block_the_next_call() {
-    let mut s = Sim::warm();
-    s.device_change();
-    s.idle(300);
-    s.in_call("teams", 600);
-    s.call_ended();
-    s.idle(40);
-    s.in_call("teams", 60);
-    assert_eq!(s.recordings.len(), 1);
-    assert!(s.recording_now(), "second call must record");
-}
-
 /// A dictation during a call the user stopped: Dimmy's own capture makes
 /// the hosts report "mic free", which says nothing about the call.
 #[test]
@@ -358,8 +269,8 @@ impl Lcg {
     }
 }
 
-/// Hundreds of messy calls: random length, random flickers, random
-/// headset switches, a tail after hangup, sometimes a hand stop. Whatever
+/// Hundreds of messy calls: random length, random capture flickers, a
+/// tail after hangup, sometimes a hand stop. Whatever
 /// happens inside one call, it produces at most one recording, and the
 /// next call placed by a human still records.
 #[test]
@@ -387,12 +298,6 @@ fn fuzz_one_call_never_becomes_two_recordings() {
             match r.range(0, 5) {
                 // Capture session flicker, no device involved.
                 0 | 1 => s.idle(r.range(0, 4)),
-                // Headset switch.
-                2 => {
-                    s.device_change();
-                    s.idle(r.range(1, 35));
-                    s.device_change();
-                }
                 _ => {}
             }
         }
@@ -402,8 +307,7 @@ fn fuzz_one_call_never_becomes_two_recordings() {
         // The app lets go untidily.
         s.idle(r.range(0, 3));
         s.in_call("teams", r.range(1, 6));
-        // Long enough for a headset switch at the very end to have settled.
-        s.idle(r.range(60, 120));
+        s.idle(r.range(30, 90));
 
         assert!(
             s.total() <= 1,
@@ -430,24 +334,4 @@ fn fuzz_one_call_never_becomes_two_recordings() {
             "seed {seed}: the next call did not record"
         );
     }
-}
-
-/// The price of the rule above, pinned so it stays a decision and not an
-/// accident: a headset switch at the moment a call ends, then the next
-/// call in the same app within a minute, is not auto-recorded. The user can
-/// start it by hand. The alternative is recording a call they stopped.
-#[test]
-fn the_next_call_within_a_minute_of_a_headset_switch_waits_for_a_hand() {
-    let mut s = Sim::warm();
-    s.in_call("teams", 600);
-    s.idle(9);
-    s.device_change();
-    s.call_ended();
-    s.idle(45);
-    s.in_call("teams", 60);
-    assert_eq!(s.total(), 1, "{:?}", s.recordings);
-    // A different app is never held back by it.
-    s.idle(20);
-    s.in_call("zoom", 30);
-    assert!(s.recording_now(), "zoom must record");
 }
