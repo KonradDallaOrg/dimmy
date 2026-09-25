@@ -15,6 +15,7 @@ dimmy_call_detector_state
 dimmy_call_meeting_started_external
 dimmy_call_set_tracked_origin
 dimmy_call_signal
+dimmy_call_signal_device_change
 dimmy_call_signal_response
 dimmy_call_signal_session_ended
 dimmy_call_signal_sys
@@ -46,10 +47,13 @@ dimmy_confluence_send_recap
 dimmy_confluence_set_token
 dimmy_confluence_spaces
 dimmy_confluence_test_connection
+dimmy_consent_announcement
+dimmy_consent_audio
 dimmy_consent_log_event
 dimmy_consent_text
 dimmy_coreml_encoder_download
 dimmy_coreml_encoder_status
+dimmy_coreml_prepare
 dimmy_cycle_llm_style
 dimmy_cycle_llm_tone
 dimmy_decode_audio_to_wav

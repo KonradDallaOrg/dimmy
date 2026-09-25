@@ -124,12 +124,20 @@ final class CallDetectionManager {
     private var meetingOriginApp: String?
     private var sessionEndedSignaled: Bool = false
 
-    /// One-shot 2 s debounce that replaces the polling-era
-    /// `originMissingTicks >= 2` threshold. Scheduled the first time the
-    /// origin PID is found gone; if it comes back before the timer fires
-    /// the timer is canceled. If the timer fires and the origin is still
-    /// gone, `signal_session_ended` is pushed to Rust.
+    /// Re-asks the judge at the moment it said it would know. Canceled on
+    /// every fresh verdict, so there is at most one.
     private var sessionEndedConfirmTimer: DispatchSourceTimer?
+    private var originJudge = CallOriginJudge()
+    /// `systemUptime` of the last audio device change; see `noteDeviceChange`.
+    private var lastDeviceChange: TimeInterval?
+    /// System-object listeners (device list, default input/output) and the
+    /// per-device sample-rate listeners on the current defaults.
+    private var deviceListeners: [(AudioObjectID, AudioObjectPropertySelector, AudioObjectPropertyListenerBlock)] = []
+    private var rateListeners: [(AudioObjectID, AudioObjectPropertyListenerBlock)] = []
+    /// Non-aggregate devices at the last look. Dimmy's own system-audio tap
+    /// creates and destroys a private aggregate device with every meeting;
+    /// that is not the user's headset changing.
+    private var knownDevices: Set<String> = []
 
     /// Bundle-id prefix → canonical app id for the well-known callers, so
     /// the nudge reads "Microsoft Teams" instead of the raw bundle name.
@@ -209,6 +217,7 @@ final class CallDetectionManager {
         if #available(macOS 14.4, *) {
             startEventListeners()
         }
+        startDeviceListeners()
 
         // 30 s safety backstop on listenerQueue. Idempotent with the
         // listener path: same handleScanEvent body, the scan-inflight
@@ -240,6 +249,7 @@ final class CallDetectionManager {
         if #available(macOS 14.4, *) {
             stopEventListeners()
         }
+        stopDeviceListeners()
         cancellables.removeAll()
         _ = DimmyCore.shared.callSignalMic(active: false, appId: nil)
     }
@@ -272,6 +282,7 @@ final class CallDetectionManager {
     /// `AppState.callNudgeRespond` on "record_now". Mirror of Windows'
     /// `MarkMeetingOriginFromCurrentSession()`.
     func markMeetingOrigin() {
+        originJudge = CallOriginJudge()
         meetingOriginPid = lastCandidatePid
         meetingOriginApp = lastCandidateApp
         sessionEndedSignaled = false
@@ -285,6 +296,7 @@ final class CallDetectionManager {
     }
 
     private func clearMeetingOrigin() {
+        originJudge = CallOriginJudge()
         meetingOriginPid = 0
         meetingOriginApp = nil
         sessionEndedSignaled = false
@@ -380,76 +392,63 @@ final class CallDetectionManager {
         lastSysActive = sysActive
     }
 
-    /// Deterministic stop: is the meeting-origin process still alive on
-    /// EITHER side (mic input or audio output)? When it's been gone from
-    /// both for ~2 s (debounced via one-shot `sessionEndedConfirmTimer`),
-    /// signal session-ended. The one-shot guard + Rust state machine
-    /// prevent double stop-suggestions vs the silence backstop.
+    /// Deterministic stop: is the meeting-origin process still in the call?
+    /// Asked of the process on EITHER side (mic input or audio output) —
+    /// an origin bound via output-side detection ("joined Zoom muted")
+    /// never appears in `inputRunningPids` while the call is alive.
     ///
-    /// Event-driven: this runs every time a HAL listener fires (the
-    /// origin PID's mic-running or output-running flag flipped, or any
-    /// process appeared/disappeared from the system process list). The
-    /// 2 s debounce protects against transient device-handoff releases
-    /// (BT pairing switch, sample-rate renegotiation) where Zoom's mic
-    /// is briefly relinquished but recaptured almost immediately.
-    ///
-    /// Checking both sides matters because the origin may have been
-    /// bound via output-side detection ("joined Zoom muted" case). Such a
-    /// PID never appears in `inputRunningPids` even while the call is
-    /// alive — watching only input would fire a false session_ended the
-    /// first time the listener fires after origin bind.
+    /// The decision is `CallOriginJudge`'s; this only gathers what it needs
+    /// and acts on the verdict. Event-driven: runs whenever a HAL listener
+    /// fires, plus one recheck at the moment the judge said it would know.
     private func sessionEndedCheckTick() {
         if sessionCheckInFlight { return }
         guard meetingOriginPid != 0, !sessionEndedSignaled else { return }
         let originPid = meetingOriginPid
         sessionCheckInFlight = true
         Self.scanQueue.async { [weak self] in
-            var stillRunning = true
+            var usingAudio = true
             if #available(macOS 14.4, *) {
-                stillRunning = Self.inputRunningPids().contains(originPid)
+                usingAudio = Self.inputRunningPids().contains(originPid)
                     || SystemAudioProcessTap.outputRunningPids().contains(originPid)
             }
+            let alive = Self.processAlive(originPid)
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.sessionCheckInFlight = false
                 guard self.meetingOriginPid == originPid, !self.sessionEndedSignaled else { return }
-                if stillRunning {
-                    // Origin alive — cancel any pending confirmation.
-                    self.sessionEndedConfirmTimer?.cancel()
-                    self.sessionEndedConfirmTimer = nil
-                    return
-                }
-                // Origin gone. If we already have a pending 2 s
-                // confirmation timer, let it fire — repeated listener
-                // events confirming "still gone" don't restart the clock.
-                guard self.sessionEndedConfirmTimer == nil else { return }
-                let timer = DispatchSource.makeTimerSource(queue: .main)
-                timer.schedule(deadline: .now() + 2.0)
-                timer.setEventHandler { [weak self] in
-                    Task { @MainActor [weak self] in
-                        guard let self else { return }
-                        guard self.meetingOriginPid == originPid,
-                              !self.sessionEndedSignaled else {
-                            self.sessionEndedConfirmTimer = nil
-                            return
-                        }
-                        var stillGone = true
-                        if #available(macOS 14.4, *) {
-                            stillGone = !Self.inputRunningPids().contains(originPid)
-                                && !SystemAudioProcessTap.outputRunningPids().contains(originPid)
-                        }
-                        self.sessionEndedConfirmTimer = nil
-                        if stillGone {
-                            self.sessionEndedSignaled = true
-                            let rc = DimmyCore.shared.callSignalSessionEnded()
-                            print("[CallDetect] origin pid=\(originPid) released mic+output → session_ended rc=\(rc)")
+                let verdict = self.originJudge.judge(
+                    now: ProcessInfo.processInfo.systemUptime,
+                    processAlive: alive, usingAudio: usingAudio,
+                    lastDeviceChange: self.lastDeviceChange)
+                self.sessionEndedConfirmTimer?.cancel()
+                self.sessionEndedConfirmTimer = nil
+                switch verdict {
+                case .inCall:
+                    break
+                case .ended(let why):
+                    self.sessionEndedSignaled = true
+                    let rc = DimmyCore.shared.callSignalSessionEnded()
+                    print("[CallDetect] pid=\(originPid): \(why) → session_ended rc=\(rc)")
+                case .undecided(let after):
+                    let timer = DispatchSource.makeTimerSource(queue: .main)
+                    timer.schedule(deadline: .now() + after)
+                    timer.setEventHandler { [weak self] in
+                        Task { @MainActor [weak self] in
+                            self?.sessionEndedConfirmTimer = nil
+                            self?.sessionEndedCheckTick()
                         }
                     }
+                    timer.resume()
+                    self.sessionEndedConfirmTimer = timer
                 }
-                timer.resume()
-                self.sessionEndedConfirmTimer = timer
             }
         }
+    }
+
+    /// A closed call app is an answer that needs no confirmation window.
+    /// EPERM means the process exists but is not ours to signal.
+    nonisolated static func processAlive(_ pid: pid_t) -> Bool {
+        kill(pid, 0) == 0 || errno == EPERM
     }
 
     /// Adopt a call as the meeting origin WHILE a meeting is already
@@ -478,6 +477,7 @@ final class CallDetectionManager {
                       !self.sessionEndedSignaled
                 else { return }
                 if active, originPid != 0, let appId {
+                    self.originJudge = CallOriginJudge()
                     self.meetingOriginPid = originPid
                     self.meetingOriginApp = appId
                     self.sessionEndedConfirmTimer?.cancel()
@@ -490,6 +490,144 @@ final class CallDetectionManager {
                 }
             }
         }
+    }
+
+    // MARK: - Audio device changes
+
+    /// Headset connected or dropped, default device switched, a Bluetooth
+    /// headset flipping A2DP↔HFP (its sample rate changes). While devices
+    /// churn, captures vanish and return with no call starting or ending;
+    /// both the core (pre-meeting holds) and `CallOriginJudge` (the call
+    /// being recorded) need to know when that happened.
+    private func startDeviceListeners() {
+        guard deviceListeners.isEmpty else { return }
+        knownDevices = Self.nonAggregateDeviceUIDs()
+        let system = AudioObjectID(kAudioObjectSystemObject)
+        for selector in [kAudioHardwarePropertyDevices,
+                         kAudioHardwarePropertyDefaultInputDevice,
+                         kAudioHardwarePropertyDefaultOutputDevice] {
+            var addr = AudioObjectPropertyAddress(
+                mSelector: selector,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain)
+            let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+                let devices = selector == kAudioHardwarePropertyDevices
+                    ? Self.nonAggregateDeviceUIDs() : nil
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    if let devices {
+                        guard devices != self.knownDevices else { return }
+                        self.knownDevices = devices
+                    } else {
+                        self.watchDefaultDeviceRates()
+                    }
+                    self.noteDeviceChange()
+                }
+            }
+            if AudioObjectAddPropertyListenerBlock(system, &addr, Self.listenerQueue, block) == noErr {
+                deviceListeners.append((system, selector, block))
+            }
+        }
+        watchDefaultDeviceRates()
+    }
+
+    private func stopDeviceListeners() {
+        for (obj, selector, block) in deviceListeners {
+            var addr = AudioObjectPropertyAddress(
+                mSelector: selector,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain)
+            _ = AudioObjectRemovePropertyListenerBlock(obj, &addr, Self.listenerQueue, block)
+        }
+        deviceListeners.removeAll()
+        unwatchDeviceRates()
+    }
+
+    /// Follow the nominal sample rate of the current default input and
+    /// output — the one visible trace of a Bluetooth profile switch.
+    private func watchDefaultDeviceRates() {
+        unwatchDeviceRates()
+        let ids = Set([Self.defaultDevice(kAudioHardwarePropertyDefaultInputDevice),
+                       Self.defaultDevice(kAudioHardwarePropertyDefaultOutputDevice)]
+            .filter { $0 != kAudioObjectUnknown })
+        for id in ids {
+            var addr = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyNominalSampleRate,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain)
+            let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+                Task { @MainActor [weak self] in self?.noteDeviceChange() }
+            }
+            if AudioObjectAddPropertyListenerBlock(id, &addr, Self.listenerQueue, block) == noErr {
+                rateListeners.append((id, block))
+            }
+        }
+    }
+
+    private func unwatchDeviceRates() {
+        for (id, block) in rateListeners {
+            var addr = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyNominalSampleRate,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain)
+            _ = AudioObjectRemovePropertyListenerBlock(id, &addr, Self.listenerQueue, block)
+        }
+        rateListeners.removeAll()
+    }
+
+    private func noteDeviceChange() {
+        lastDeviceChange = ProcessInfo.processInfo.systemUptime
+        _ = dimmy_call_signal_device_change()
+        print("[CallDetect] audio devices changed")
+        handleScanEvent()
+    }
+
+    nonisolated private static func defaultDevice(_ selector: AudioObjectPropertySelector) -> AudioObjectID {
+        var id = AudioObjectID(kAudioObjectUnknown)
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
+        var addr = AudioObjectPropertyAddress(
+            mSelector: selector,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        let st = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &id)
+        return st == noErr ? id : AudioObjectID(kAudioObjectUnknown)
+    }
+
+    nonisolated private static func nonAggregateDeviceUIDs() -> Set<String> {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        let system = AudioObjectID(kAudioObjectSystemObject)
+        guard AudioObjectGetPropertyDataSize(system, &addr, 0, nil, &size) == noErr else { return [] }
+        var ids = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
+        guard AudioObjectGetPropertyData(system, &addr, 0, nil, &size, &ids) == noErr else { return [] }
+        var uids = Set<String>()
+        for id in ids {
+            var transport: UInt32 = 0
+            var tSize = UInt32(MemoryLayout<UInt32>.size)
+            var tAddr = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyTransportType,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain)
+            if AudioObjectGetPropertyData(id, &tAddr, 0, nil, &tSize, &transport) == noErr,
+               transport == kAudioDeviceTransportTypeAggregate {
+                continue
+            }
+            var uid: Unmanaged<CFString>?
+            var uSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+            var uAddr = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyDeviceUID,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain)
+            if AudioObjectGetPropertyData(id, &uAddr, 0, nil, &uSize, &uid) == noErr,
+               let uid {
+                uids.insert(uid.takeRetainedValue() as String)
+            }
+        }
+        return uids
     }
 
     // MARK: - HAL event listeners (macOS 14.4+)
@@ -830,5 +968,68 @@ final class CallDetectionManager {
             if running != 0 { return true }
         }
         return false
+    }
+}
+
+/// Is the call a meeting is recording still going? Pure, so the rules can
+/// be pinned in `CallOriginJudgeTests` without CoreAudio.
+///
+/// The host can see three things about the call's process: whether it is
+/// alive, whether it is using audio (mic input or output), and when the
+/// audio devices last changed. Only the first is an answer by itself — a
+/// closed Teams is a finished call. A live process that has gone quiet is
+/// either a call that ended or a call moving between devices: switching to
+/// a Jabra, a Bluetooth headset renegotiating A2DP↔HFP. Windows measured
+/// such moves at up to 31 s (2026-09-24). Getting that wrong is the worse
+/// mistake: the recording stops mid-call, and the hold against restarting
+/// the call we just stopped means the rest of it is never recorded.
+///
+/// So quiet is confirmed, not believed: `releaseConfirm` normally, and
+/// until `deviceSettle` after the last device change when the devices were
+/// changing as it went quiet. `backstop` bounds everything, so a recording
+/// can never run for ever on a signal that went missing.
+struct CallOriginJudge {
+    enum Verdict: Equatable {
+        case inCall
+        case ended(String)
+        case undecided(recheckAfter: TimeInterval)
+    }
+
+    /// Up from 2 s. Unmeasured on macOS; long enough to cover an in-app
+    /// device switch that changes no system device, short enough that the
+    /// recording ends a few seconds after the call.
+    static let releaseConfirm: TimeInterval = 15
+    /// Same figure as the core's `device_settle_secs`: double the longest
+    /// device move Windows has logged.
+    static let deviceSettle: TimeInterval = 60
+    static let backstop: TimeInterval = 180
+
+    private(set) var quietSince: TimeInterval?
+
+    mutating func judge(now: TimeInterval, processAlive: Bool, usingAudio: Bool,
+                        lastDeviceChange: TimeInterval?) -> Verdict {
+        if !processAlive {
+            return .ended("origin process gone")
+        }
+        if usingAudio {
+            quietSince = nil
+            return .inCall
+        }
+        let since = quietSince ?? now
+        quietSince = since
+        let quiet = now - since
+        if quiet >= Self.backstop {
+            return .ended("origin quiet past the backstop")
+        }
+        var need = Self.releaseConfirm
+        if let changed = lastDeviceChange, changed >= since - 5 {
+            need = max(need, changed + Self.deviceSettle - since)
+        }
+        need = min(need, Self.backstop)
+        if quiet >= need {
+            return .ended("origin released the audio")
+        }
+        precondition(need - quiet > 0, "undecided must recheck in the future")
+        return .undecided(recheckAfter: need - quiet)
     }
 }
