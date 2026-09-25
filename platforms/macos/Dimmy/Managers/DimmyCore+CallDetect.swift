@@ -15,6 +15,22 @@ extension DimmyCore {
     /// 3 meeting.stop_suggested, -1 bad UTF-8). Caller usually ignores
     /// the rc and consumes the events via the existing callback channel.
     @discardableResult
+    /// The OS says nobody is holding the microphone.
+    ///
+    /// Different in kind from `callSignalMic(active: false)`, which only says
+    /// this scan saw nobody: an app can drop the device and take it back
+    /// inside a second, and the hold after a stop exists precisely to doubt
+    /// that. This is the answer to the question the hold asks, so it releases
+    /// it with nothing to wait out.
+    ///
+    /// Only called where the watch has already ruled out a device move - a
+    /// headset switch is not a hangup - which makes this a stronger fact than
+    /// the Windows one, not a weaker one.
+    func callMicConfirmedFree() {
+        guard isInitialized else { return }
+        _ = dimmy_call_mic_confirmed_free()
+    }
+
     func callSignalMic(active: Bool, appId: String?) -> Int32 {
         guard isInitialized else { return 0 }
         let mic: Int32 = active ? 1 : 0

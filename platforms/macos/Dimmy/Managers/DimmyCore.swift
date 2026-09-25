@@ -1577,6 +1577,11 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
         let since = (payload["since_seconds"] as? Int) ?? 0
         appState.onCallDetected(app: app, sinceSecs: since)
 
+    case "call_detected_preexisting":
+        let app = payload["app"] as? String
+        let since = (payload["since_seconds"] as? Int) ?? 0
+        appState.onCallDetectedPreexisting(app: app, sinceSecs: since)
+
     case "call_ended":
         let app = payload["app"] as? String
         appState.onCallEnded(app: app)

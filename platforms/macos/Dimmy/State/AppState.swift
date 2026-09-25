@@ -2030,6 +2030,20 @@ final class AppState: ObservableObject {
         CallNudgeWindowController.shared.showDetected(app: app)
     }
 
+    /// A call that was ALREADY under way when Dimmy started.
+    ///
+    /// The popup appears exactly as it does for a call we watched start, but
+    /// auto-record is deliberately NOT honoured: recording by ourselves would
+    /// take a meeting whose first half is already gone and whose participants
+    /// were never told a recording had begun. Offering it costs one click and
+    /// keeps that decision with the user. Mirror of Win
+    /// App.xaml.cs::OnCallDetectedPreexisting.
+    func onCallDetectedPreexisting(app: String?, sinceSecs _: Int) {
+        guard callDetectEnabled else { return }
+        guard !meetingActive else { return }
+        CallNudgeWindowController.shared.showDetected(app: app)
+    }
+
     /// Handle a `call_ended` event. Hides any open nudge popup.
     func onCallEnded(app _: String?) {
         CallNudgeWindowController.shared.hide()

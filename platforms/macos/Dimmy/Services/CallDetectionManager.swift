@@ -375,6 +375,12 @@ final class CallDetectionManager {
                 } else {
                     self.candidateWatch = CallAudioWatch()
                 }
+                // Nobody is on the microphone, and the watch has already
+                // ruled out the call merely moving to another device. That is
+                // the fact the hold after a stop waits for, so hand it over
+                // and let the next call be judged a new call on evidence
+                // rather than on an interval having elapsed.
+                if !micActive { DimmyCore.shared.callMicConfirmedFree() }
                 _ = DimmyCore.shared.callSignalMic(active: micActive, appId: appId)
                 self.lastCandidatePid = micActive ? pid : 0
                 self.lastCandidateApp = micActive ? appId : nil
