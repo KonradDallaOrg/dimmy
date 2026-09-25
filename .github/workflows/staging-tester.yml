@@ -193,6 +193,27 @@ jobs:
           ls -lh core/target/aarch64-apple-darwin/release/libdimmy_lib.a
           rm -f core/target/aarch64-apple-darwin/release/libdimmy_lib.dylib
           rm -f core/target/aarch64-apple-darwin/release/deps/libdimmy_lib.dylib
+          # llama-cpp-sys drops its dylibs where DYLD_FALLBACK_LIBRARY_PATH
+          # points, which under `--target` is the HOST dir (target/release/),
+          # while Xcode searches target/aarch64-apple-darwin/release/. Same
+          # fix as release.yml + staging-auto-update.yml (cafaec8); this
+          # workflow was missed and failed with "ld: library 'llama' not found".
+          TGT="core/target/aarch64-apple-darwin/release"
+          for src in core/target/release/libllama*.dylib core/target/release/libggml*.dylib core/target/release/libmtmd*.dylib; do
+            [ -e "$src" ] || continue
+            cp -RLf "$src" "$TGT/" 2>/dev/null || true
+          done
+          missing=""
+          for lib in libllama libllama-common libggml libggml-base libggml-cpu libggml-metal libmtmd; do
+            path="$TGT/$lib.dylib"
+            [ -e "$path" ] || missing="$missing $lib(absent)"
+            [ -e "$path" ] && [ ! -r "$path" ] && missing="$missing $lib(dangling)"
+          done
+          if [ -n "$missing" ]; then
+            find core/target \( -name 'libllama*.dylib' -o -name 'libggml*.dylib' -o -name 'libmtmd*.dylib' \) 2>/dev/null | head -20
+            echo "::error::llama/ggml dylibs unusable:$missing"
+            exit 1
+          fi
 
       # ── Developer ID signing + notarization (graceful-skip) ──────────
       # When the MACOS_CERT_P12 secret is present, import the Developer ID

@@ -13,6 +13,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # One second here instead of a 20-minute macOS runner failing on an
+      # unterminated Swift literal (staging, 2026-09-24).
+      - name: Swift string literals
+        run: python3 scripts/dev/check-swift-strings.py
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:

@@ -1614,11 +1614,16 @@ enum MeetingConsentFlow {
     /// voice otherwise. The fallback is not decoration. A machine that cannot
     /// decode the MP3 still has to tell the room it is recording.
     private static func announce(_ text: String, lang: String, variant: Int32) {
+        // play() returning false means silence with no error, while the audit
+        // log would still say the room was told — fall back to the system
+        // voice instead. Mirror of Win ConsentFlow's detach fix (dcf16ef).
         if let mp3 = DimmyCore.shared.consentAudio(lang: lang, variant: variant),
-           let p = try? AVAudioPlayer(data: mp3) {
+           let p = try? AVAudioPlayer(data: mp3),
+           p.play() {
             player = p
-            p.play()
+            NSLog("[Consent] recorded take \(lang)/\(variant), \(mp3.count) bytes")
         } else {
+            NSLog("[Consent] no playable recorded take for \(lang)/\(variant), using the system voice")
             let utterance = AVSpeechUtterance(string: text)
             if let voice = AVSpeechSynthesisVoice(language: lang) {
                 utterance.voice = voice
