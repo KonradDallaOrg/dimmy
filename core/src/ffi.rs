@@ -10576,6 +10576,19 @@ pub unsafe extern "C" fn dimmy_call_signal(mic_active: c_int, app_id: *const c_c
             emit_event("call_detected", &payload);
             1
         }
+        CallSignalOutcome::DetectedPreexisting { app, since_seconds } => {
+            // A separate event name, not a flag on call_detected: a host that
+            // does not know about this case ignores an unknown event and
+            // keeps behaving as it did, whereas an unread flag would have it
+            // auto-record a call it must not touch.
+            let payload = serde_json::json!({
+                "app": app,
+                "since_seconds": since_seconds,
+            })
+            .to_string();
+            emit_event("call_detected_preexisting", &payload);
+            1
+        }
         CallSignalOutcome::Ended { app } => {
             let payload = serde_json::json!({ "app": app }).to_string();
             emit_event("call_ended", &payload);
@@ -10800,6 +10813,23 @@ pub unsafe extern "C" fn dimmy_call_signal_response(
     let now = now_epoch_secs();
     let mut g = call_detector_lock();
     g.record_response(app, resp, now);
+    0
+}
+
+/// The OPERATING SYSTEM says nobody is holding the microphone.
+///
+/// Different in kind from `dimmy_call_signal(0, ...)`, which means "I saw no
+/// capture sessions" - an inference, and one the detector was written to
+/// second-guess, because an app can drop and retake the device inside a
+/// second. This is a fact, and it answers the only question the hold after a
+/// stop ever asked: was the microphone genuinely free in between. A host that
+/// has no such fact simply never calls this and keeps the old interval.
+///
+/// Windows reads it from CapabilityAccessManager, the same source as the
+/// privacy indicator in the tray.
+#[no_mangle]
+pub extern "C" fn dimmy_call_mic_confirmed_free() -> c_int {
+    call_detector_lock().note_mic_confirmed_free();
     0
 }
 

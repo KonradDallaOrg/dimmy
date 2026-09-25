@@ -426,6 +426,11 @@ public partial class AppViewModel : ObservableObject
     /// (appIdOrNull, sinceSeconds). Host shows the CallNudgeWindow.
     public event Action<string?, long>? CallDetected;
 
+    /// A call that was ALREADY under way when Dimmy started. Offered, never
+    /// taken: auto-record must not grab a meeting whose beginning nobody
+    /// recorded and whose participants were never told. The user answers.
+    public event Action<string?, long>? CallDetectedPreexisting;
+
     /// Fires when the previously-detected mic session ends (mic_active
     /// went back to false). Host hides the CallNudgeWindow if it's
     /// still up. Args: (appIdOrNull).
@@ -764,6 +769,17 @@ public partial class AppViewModel : ObservableObject
                         long since = payload.TryGetProperty("since_seconds", out var ssEl)
                             ? ssEl.GetInt64() : 0;
                         CallDetected?.Invoke(app, since);
+                    }
+                    break;
+                case "call_detected_preexisting":
+                    {
+                        string? app = null;
+                        if (payload.TryGetProperty("app", out var appEl)
+                            && appEl.ValueKind == JsonValueKind.String)
+                            app = appEl.GetString();
+                        long since = payload.TryGetProperty("since_seconds", out var ssEl)
+                            ? ssEl.GetInt64() : 0;
+                        CallDetectedPreexisting?.Invoke(app, since);
                     }
                     break;
                 case "call_ended":

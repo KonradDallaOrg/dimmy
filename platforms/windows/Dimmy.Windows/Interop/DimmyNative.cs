@@ -96,6 +96,15 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_call_detector_state(byte[] outBuf, int bufLen);
 
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_call_mic_confirmed_free();
+
+    /// <summary>JSON snapshot of the call detector: cooldowns, exclusions,
+    /// and the three things that swallow a signal (observed_idle,
+    /// preexisting, tail_of).</summary>
+    public static string? CallDetectorState() =>
+        ReadBuffer((buf, len) => dimmy_call_detector_state(buf, len), 4096);
+
     // ── Recording ────────────────────────────────────────────────────
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_start_recording();

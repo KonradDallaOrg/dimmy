@@ -147,6 +147,7 @@ internal sealed class CallDetectionService : IDisposable
             else
             {
                 SignalMicFree("nobody is holding the microphone at startup");
+                try { DimmyNative.dimmy_call_mic_confirmed_free(); } catch { }
                 App.Log("started — idle, waiting for the microphone to be picked up", "CallDetect");
             }
         }
@@ -178,8 +179,28 @@ internal sealed class CallDetectionService : IDisposable
                 // Do NOT stop here. The stop path concludes the call is over
                 // by no longer seeing the origin, which takes samples it has
                 // not taken yet.
+                // Deliberately NOT signalling the core here. It already
+                // learns the microphone is free from the tick, which sends
+                // signal(0) when the sessions disappear - once per call, at
+                // the end of it.
+                //
+                // Signalling on this edge as well restarted the core's
+                // release clock, and that clock is what decides whether the
+                // next call is a new call or the tail of the one just
+                // stopped: it wants ten quiet seconds. The registry emits
+                // spurious free/busy edges - a browser probing permission,
+                // Teams reopening its session - and one of those landing
+                // shortly before a real call reset the count to zero and got
+                // the call thrown away. Measured 2026-09-25: free at
+                // 18:04:18, free AGAIN at 18:04:29.280, call at 18:04:29.965,
+                // suppressed 0.7 s into a window that had already run 11.7.
                 _micFreeSince = DateTime.UtcNow;
-                SignalMicFree("microphone released");
+                // The fact, not an inference: Windows says nobody holds the
+                // microphone. This RELEASES the hold taken after a stop
+                // instead of restarting a clock, so an extra edge is
+                // harmless and hanging up then dialling again two seconds
+                // later records.
+                try { DimmyNative.dimmy_call_mic_confirmed_free(); } catch { }
             }
         });
     }
@@ -339,25 +360,68 @@ internal sealed class CallDetectionService : IDisposable
     private long _tickCostMaxUs;
     private int _tickCostCount;
 
+    private volatile bool _sampleInFlight;
+
+    /// The timer no longer does the work; it asks for it.
+    ///
+    /// Enumerating the capture endpoints and their sessions costs 4-6 ms
+    /// typically and was measured at 50 ms, once at 228 ms, per sample. Four
+    /// times a second on the UI thread, that is three dropped frames in a bad
+    /// sample and a visibly stuttering overlay during the exact minutes a
+    /// call is running. COM enumeration has no business on the thread that
+    /// draws the pill.
+    ///
+    /// What crosses back is a plain list. Every decision still runs on the
+    /// dispatcher, in order, against dispatcher-owned state - the promote
+    /// counters, the emitted set, the meeting origin - so none of the
+    /// reasoning changed, only where the expensive part happens.
     private void OnTick(DispatcherQueueTimer sender, object args)
     {
+        if (!_isEnabled || _disposed) return;
+        // A sample that overruns its 250 ms slot must not have another one
+        // stacked behind it. Skipping is right: the next tick is 250 ms away
+        // and the state it would read is the state this one is already
+        // reading.
+        if (_sampleInFlight) return;
+        _sampleInFlight = true;
         var t0 = System.Diagnostics.Stopwatch.GetTimestamp();
-        try
+
+        System.Threading.Tasks.Task.Run(() =>
         {
-            OnTickCore(sender, args);
-        }
-        finally
-        {
-            StopSamplingIfIdle();
-            var us = (System.Diagnostics.Stopwatch.GetTimestamp() - t0)
-                * 1_000_000 / System.Diagnostics.Stopwatch.Frequency;
-            _tickCostTotalUs += us;
-            if (us > _tickCostMaxUs) _tickCostMaxUs = us;
-            _tickCostCount++;
-        }
+            List<(string sessionId, uint pid, string endpointId, int state)>? sampled = null;
+            var endpointsChanged = false;
+            try { sampled = SampleActiveCaptureSessions(out endpointsChanged); }
+            catch (Exception ex) { App.Log($"sample failed: {ex.Message}", "CallDetect"); }
+
+            var changed = endpointsChanged;
+            var rows = sampled;
+            _dispatcher.TryEnqueue(() =>
+            {
+                try
+                {
+                    if (rows != null && !_disposed) OnTickCore(rows, changed);
+                }
+                catch (Exception ex)
+                {
+                    App.Log($"call-detection tick failed: {ex.Message}", "CallDetect");
+                }
+                finally
+                {
+                    StopSamplingIfIdle();
+                    var us = (System.Diagnostics.Stopwatch.GetTimestamp() - t0)
+                        * 1_000_000 / System.Diagnostics.Stopwatch.Frequency;
+                    _tickCostTotalUs += us;
+                    if (us > _tickCostMaxUs) _tickCostMaxUs = us;
+                    _tickCostCount++;
+                    _sampleInFlight = false;
+                }
+            });
+        });
     }
 
-    private void OnTickCore(DispatcherQueueTimer sender, object args)
+    private void OnTickCore(
+        List<(string sessionId, uint pid, string endpointId, int state)> sampled,
+        bool endpointsChanged)
     {
         if (!_isEnabled) return;
         var app = App.Instance;
@@ -381,7 +445,7 @@ internal sealed class CallDetectionService : IDisposable
         // stopped as though the call had ended, and the reappearance two
         // seconds later started a new one. That is the "opens several
         // recordings, stops and starts at random" the user hit at 12:40.
-        _tickSessions = SampleActiveCaptureSessions(out bool endpointsChanged);
+        _tickSessions = sampled;
         if (endpointsChanged)
         {
             App.Log("endpoint set changed — skipping this sample", "CallDetect");
@@ -587,8 +651,18 @@ internal sealed class CallDetectionService : IDisposable
                 _lastEmittedExe = exe;
                 try
                 {
-                    DimmyNative.dimmy_call_signal(1, exe);
-                    App.Log($"new session: exe={exe} pid={pid} id=…{TailOf(sessionId)}", "CallDetect");
+                    // rc 1 = the core emitted call_detected, 0 = it swallowed
+                    // the signal. Discarding rc made a suppressed call look
+                    // exactly like a call nobody saw, and the only way to tell
+                    // them apart was to guess. When it is swallowed, ask the
+                    // detector why and write it down.
+                    var rc = DimmyNative.dimmy_call_signal(1, exe);
+                    App.Log($"new session: exe={exe} pid={pid} id=…{TailOf(sessionId)} rc={rc}", "CallDetect");
+                    if (rc == 0)
+                    {
+                        App.Log($"signal swallowed — detector says {DimmyNative.CallDetectorState() ?? "<no state>"}",
+                            "CallDetect");
+                    }
                 }
                 catch (Exception ex)
                 {

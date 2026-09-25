@@ -895,6 +895,12 @@ int32_t dimmy_call_signal_response(const char * _Nullable app_id,
 /// JSON snapshot of the call-detector state (enabled, excluded apps,
 /// active cooldowns, current_app). Bytes written, -1 null buf,
 /// -2 buf too small.
+/// The OS says nobody holds the microphone. Different in kind from
+/// dimmy_call_signal(0, ...), which only means "I saw no capture sessions".
+/// Releases the hold taken after a stop with no interval to wait out. A host
+/// without such a fact never calls this and keeps the old behaviour.
+int32_t dimmy_call_mic_confirmed_free(void);
+
 int32_t dimmy_call_detector_state(char * _Nonnull out_buf, int32_t buf_len);
 
 /// Returns 1 if the two combos conflict (one is a subset of the other

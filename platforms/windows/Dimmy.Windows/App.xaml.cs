@@ -2325,6 +2325,7 @@ public partial class App : Application
             _callDetection.SetEnabled(_appViewModel.CallDetectEnabled);
             _callDetection.Start();
             _appViewModel.CallDetected += OnCallDetected;
+            _appViewModel.CallDetectedPreexisting += OnCallDetectedPreexisting;
             _appViewModel.CallEnded += OnCallEnded;
             _appViewModel.CallStopSuggested += OnCallStopSuggested;
             Log("Call detection initialised", "CallDetect");
@@ -2439,6 +2440,28 @@ public partial class App : Application
     {
         try { DimmyNative.dimmy_call_signal_response(appId, "timeout"); }
         catch (Exception ex) { Log($"OnNudgeTimeout EXC: {ex.Message}", "CallDetect"); }
+    }
+
+    /// A call already under way when we arrived. The nudge appears exactly as
+    /// it does for a call we watched start, but auto-record is deliberately
+    /// NOT honoured here: starting by ourselves would record a meeting whose
+    /// first half is already gone and whose participants were never told a
+    /// recording had begun. Offering it costs the user one click and keeps
+    /// that decision theirs.
+    private void OnCallDetectedPreexisting(string? appId, long sinceSeconds)
+    {
+        try
+        {
+            if (!_appViewModel.CallDetectEnabled) return;
+            if (_appViewModel.MeetingActive) return;
+            EnsureCallNudgeWindow();
+            Log($"call_detected (already in progress): app={appId ?? "<none>"} since={sinceSeconds}s", "CallDetect");
+            _callNudgeWindow!.ShowFor(appId);
+        }
+        catch (Exception ex)
+        {
+            Log($"OnCallDetectedPreexisting EXC: {ex.Message}", "CallDetect");
+        }
     }
 
     /// Lazily construct the CallNudgeWindow + wire ALL handlers (both

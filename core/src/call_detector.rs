@@ -89,6 +89,15 @@ pub enum CallSignalOutcome {
         app: Option<String>,
         since_seconds: i64,
     },
+    /// A call that was ALREADY under way when we arrived. Worth telling the
+    /// user about - they may well want it recorded - but never worth
+    /// recording on our own initiative: we did not see it start, nobody was
+    /// told a recording was beginning, and the first half is gone anyway.
+    /// The host offers it and lets the user answer.
+    DetectedPreexisting {
+        app: Option<String>,
+        since_seconds: i64,
+    },
     Ended {
         app: Option<String>,
     },
@@ -168,6 +177,12 @@ pub struct CallDetectorState {
     /// session vanished and came back under the same id four seconds later,
     /// mid-call. Ten seconds gives that room.
     release_confirm_secs: u32,
+    /// The host told us the OPERATING SYSTEM says nobody holds the
+    /// microphone. Windows publishes that (the privacy indicator reads it
+    /// from CapabilityAccessManager), so there the hold is released on a
+    /// fact. A host without such a fact leaves this false and falls back to
+    /// `release_confirm_secs`, which is what every host did before.
+    mic_confirmed_free: bool,
     /// Whether a `mic_active = false` signal actually means "nobody holds
     /// the microphone". The hosts also send that zero while Dimmy itself is
     /// capturing, so the pill cannot self-trigger — and reading a ten-second
@@ -248,6 +263,7 @@ impl CallDetectorState {
             observed_idle: false,
             mic_free_since: None,
             release_confirm_secs: 10,
+            mic_confirmed_free: false,
             mic_free_is_evidence: true,
             stop_is_automatic: false,
             recording_active_from_us: false,
@@ -524,8 +540,20 @@ impl CallDetectorState {
         // signal "mic free" once, as an edge, and then go quiet. Accumulating
         // the interval inside the inactive path would have waited for ticks
         // that never come, and the hold would never have lifted on Windows.
+        // The question has always been "was the microphone ever genuinely
+        // free in between". Where the OS answers it, take the answer: a hold
+        // released on a fact needs no waiting, so hanging up and dialling
+        // again two seconds later records. Where it does not, fall back to
+        // the interval, which is what the wait was standing in for.
+        //
+        // The clock cost real calls: on 2026-09-25, seven hand-made Teams
+        // calls, the four with gaps under ten seconds were thrown away and
+        // the three above it went through - a clean correlation with the
+        // threshold and nothing else.
+        let confirmed_free = std::mem::take(&mut self.mic_confirmed_free);
         if let Some(free_since) = self.mic_free_since.take() {
-            if now.saturating_sub(free_since) >= self.release_confirm_secs as i64 {
+            if confirmed_free || now.saturating_sub(free_since) >= self.release_confirm_secs as i64
+            {
                 self.barred = None;
                 self.tail_of = None;
                 // Same standard for the call we walked in on. Teams drops
@@ -568,9 +596,25 @@ impl CallDetectorState {
             return CallSignalOutcome::Suppressed(SuppressionReason::MeetingActive);
         }
         if self.preexisting.contains(&app_for_lookup) {
-            return CallSignalOutcome::Suppressed(SuppressionReason::AlreadyRunning(
-                app_for_lookup,
-            ));
+            // Offer it instead of swallowing it. Auto-record still must not
+            // take it - that is the host's job, keyed off the variant - but
+            // silence was the wrong answer: the user opens Dimmy mid-meeting
+            // precisely because they want it recorded from here on.
+            if self.detection_emitted {
+                return CallSignalOutcome::Suppressed(SuppressionReason::AlreadyRunning(
+                    app_for_lookup,
+                ));
+            }
+            // `app` was already moved into current_app further up; read it
+            // back from there rather than shadowing the single source.
+            self.detection_emitted = true;
+            return CallSignalOutcome::DetectedPreexisting {
+                app: self.current_app.clone(),
+                since_seconds: self
+                    .mic_active_since
+                    .map(|t| now.saturating_sub(t))
+                    .unwrap_or(0),
+            };
         }
         // Already accepted "record now": the host is bringing up the meeting
         // (consent modal, window open) — that can take several seconds during
@@ -769,6 +813,15 @@ impl CallDetectorState {
     /// Dimmy itself is capturing — deliberately, so the pill cannot
     /// self-trigger — and a dictation is not evidence that somebody else's
     /// call has ended. Defaults to true; the FFI sets it per signal.
+    /// The OS says nobody holds the microphone. Not "we saw no sessions" -
+    /// that is an inference, and it is what the interval existed to
+    /// second-guess. Sticky until the next active edge consumes it, so an
+    /// extra notification is harmless: this RELEASES a hold rather than
+    /// restarting a clock.
+    pub fn note_mic_confirmed_free(&mut self) {
+        self.mic_confirmed_free = true;
+    }
+
     pub fn set_mic_free_is_evidence(&mut self, evidence: bool) {
         self.mic_free_is_evidence = evidence;
     }
@@ -813,6 +866,13 @@ impl CallDetectorState {
             "mic_active": self.last_mic_active,
             "detection_emitted": self.detection_emitted,
             "current_app": self.current_app,
+            // The three reasons a signal gets swallowed. Without them a
+            // suppressed call looks identical to a call that was never seen,
+            // and the host can only report that nothing happened.
+            "observed_idle": self.observed_idle,
+            "preexisting": self.preexisting.iter().collect::<Vec<&String>>(),
+            "tail_of": self.tail_of,
+            "mic_confirmed_free": self.mic_confirmed_free,
         })
     }
 }
@@ -1663,5 +1723,51 @@ mod tests {
             matches!(out, CallSignalOutcome::Detected { .. }),
             "no clock means no hold, got {out:?}"
         );
+    }
+
+    /// The hold after a stop asks one question: was the microphone ever
+    /// genuinely free in between. When the OS answers it, the answer is
+    /// enough, and no interval has to elapse.
+    #[test]
+    fn a_confirmed_free_microphone_releases_the_hold_with_no_waiting() {
+        let mut s = fresh();
+
+        // A call, recorded by us, stopped because the call ended.
+        s.signal(true, Some("teams".into()), false, 1000);
+        let _ = s.signal(true, Some("teams".into()), false, 1005);
+        s.record_response(Some("teams".into()), NudgeResponse::RecordNow, 1006);
+        s.record_response(Some("teams".into()), NudgeResponse::StopAndRecap, 1100);
+        s.meeting_stopped_at(1101);
+
+        // One second later the same app is back, and nothing says the
+        // microphone was ever free. That is the tail, and it stays held.
+        s.signal(false, None, false, 1102);
+        let held = s.signal(true, Some("teams".into()), false, 1103);
+        assert!(
+            matches!(held, CallSignalOutcome::Suppressed(_)),
+            "one second after a stop, with no evidence, this is the tail, got {held:?}"
+        );
+
+        // Now the OS says the microphone really was free. Same one-second
+        // gap, and it is a new call - no interval has to elapse.
+        s.signal(false, None, false, 1104);
+        s.note_mic_confirmed_free();
+        s.signal(true, Some("teams".into()), false, 1105);
+        let out = s.signal(true, Some("teams".into()), false, 1115);
+        assert!(
+            matches!(out, CallSignalOutcome::Detected { .. }),
+            "the OS said the microphone was free, which is the whole question, got {out:?}"
+        );
+    }
+
+    /// The fact is consumed by the edge that uses it, so a stale one cannot
+    /// release a hold taken later.
+    #[test]
+    fn the_confirmed_free_fact_does_not_outlive_the_edge_that_used_it() {
+        let mut s = fresh();
+        s.note_mic_confirmed_free();
+        s.signal(false, None, false, 0);
+        let _ = s.signal(true, Some("teams".into()), false, 1);
+        assert!(!s.mic_confirmed_free, "the fact must be consumed, not kept");
     }
 }
