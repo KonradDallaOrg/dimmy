@@ -274,6 +274,36 @@ extension DimmyCore {
     /// participants). `lang` is a BCP-47-ish tag; unsupported tags fall back to
     /// English in the core. No `isInitialized` guard for "modal" (pure), but
     /// "announcement" reads the live STT/LLM mode so call after init.
+    /// The announcement for this meeting plus the variant the core picked.
+    /// Pass that variant to `consentAudio` so the spoken take and the pasted
+    /// text are the same notice.
+    func consentAnnouncement(lang: String) -> (text: String?, variant: Int32) {
+        var variant: Int32 = 0
+        let cap = 4096
+        var buffer = [CChar](repeating: 0, count: cap)
+        let written = lang.withCString { l in
+            withUnsafeMutablePointer(to: &variant) { v in
+                dimmy_consent_announcement(l, v, &buffer, Int32(cap))
+            }
+        }
+        guard written > 0 else { return (nil, variant) }
+        return (String(cString: buffer), variant)
+    }
+
+    /// The recorded take as MP3 bytes, or nil when the core has none. The
+    /// native pointer is static read-only data, so it is copied out here and
+    /// never freed.
+    func consentAudio(lang: String, variant: Int32) -> Data? {
+        var len: Int32 = 0
+        let ptr = lang.withCString { l in
+            withUnsafeMutablePointer(to: &len) { n in
+                dimmy_consent_audio(l, variant, n)
+            }
+        }
+        guard let ptr, len > 0 else { return nil }
+        return Data(bytes: ptr, count: Int(len))
+    }
+
     func consentText(kind: String, lang: String) -> String? {
         let cap = 4096
         let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: cap)

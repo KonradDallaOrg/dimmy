@@ -45,7 +45,8 @@ public static class ConsentFlow
     /// MeetingConsentFlow.announceOnly.
     public static void AnnounceOnly(string lang)
     {
-        var announcement = DimmyNative.ConsentText("announcement", lang)
+        var (text, variant) = DimmyNative.ConsentAnnouncement(lang);
+        var announcement = text
             ?? "Quick note: this meeting is being recorded and transcribed for note-taking.";
         // The clipboard is NOT touched here, unlike the manual path. Nobody
         // asked for this recording, so nothing the user was holding to paste
@@ -55,7 +56,7 @@ public static class ConsentFlow
         // SpeakAsync writes the "announced" audit entry once the notice has
         // actually been spoken. Logging it here as well recorded every
         // announcement twice.
-        _ = SpeakAsync(announcement, lang);
+        _ = AnnounceAsync(announcement, lang, variant);
     }
 
     public static async Task<bool> ConfirmAndAnnounceAsync(XamlRoot? xamlRoot, string lang)
@@ -67,8 +68,11 @@ public static class ConsentFlow
             "You are about to record audio that may include other people. Confirm you have informed all participants and obtained their consent.");
         var intro = T("intro",
             "Dimmy will read this notice aloud and copy it so you can paste it in the meeting chat:");
-        var announcement = T("announcement",
-            "Quick note: this meeting is being recorded and transcribed for note-taking.");
+        // Picked once: the dialog shows it, the clipboard carries it and the
+        // recording speaks it, and all three must be the same wording.
+        var (announcementText, variant) = DimmyNative.ConsentAnnouncement(lang);
+        var announcement = announcementText
+            ?? "Quick note: this meeting is being recorded and transcribed for note-taking.";
         var confirmLabel = T("confirm", "I have consent, start");
         var cancelLabel = T("cancel", "Cancel");
         var theme = Dimmy.Windows.Helpers.ThemeHelper.ResolvedElementTheme();
@@ -93,7 +97,7 @@ public static class ConsentFlow
         }
         catch { /* clipboard failure must not block the meeting */ }
 
-        _ = SpeakAsync(announcement, lang);
+        _ = AnnounceAsync(announcement, lang, variant);
         return true;
     }
 
@@ -224,6 +228,39 @@ public static class ConsentFlow
             FontStyle = global::Windows.UI.Text.FontStyle.Italic,
         });
         return body;
+    }
+
+    /// Speak the notice: the recorded take if the core has one, the system
+    /// voice otherwise. The fallback is not decoration — a machine without
+    /// working audio decoding still has to tell the room it is recording.
+    private static async Task AnnounceAsync(string text, string lang, int variant)
+    {
+        if (TryPlayRecordedTake(lang, variant))
+        {
+            DimmyNative.ConsentLogEvent("announced", lang);
+            return;
+        }
+        await SpeakAsync(text, lang);
+    }
+
+    private static bool TryPlayRecordedTake(string lang, int variant)
+    {
+        try
+        {
+            var mp3 = DimmyNative.ConsentAudio(lang, variant);
+            if (mp3 == null || mp3.Length == 0) return false;
+            var stream = new global::Windows.Storage.Streams.InMemoryRandomAccessStream();
+            using (var w = new global::Windows.Storage.Streams.DataWriter(stream.GetOutputStreamAt(0)))
+            {
+                w.WriteBytes(mp3);
+                w.StoreAsync().AsTask().GetAwaiter().GetResult();
+            }
+            _player ??= new global::Windows.Media.Playback.MediaPlayer();
+            _player.Source = global::Windows.Media.Core.MediaSource.CreateFromStream(stream, "audio/mpeg");
+            _player.Play();
+            return true;
+        }
+        catch { return false; }
     }
 
     private static async Task SpeakAsync(string text, string lang)

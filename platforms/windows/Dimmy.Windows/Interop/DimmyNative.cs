@@ -134,6 +134,43 @@ public static class DimmyNative
     public static string? ConsentText(string kind, string lang) =>
         ReadBuffer((buf, len) => dimmy_consent_text(kind, lang, buf, len), 4096);
 
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_consent_announcement(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string lang,
+        out int outVariant, byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern IntPtr dimmy_consent_audio(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string lang,
+        int variant, out int outLen);
+
+    /// <summary>
+    /// The participant announcement for this meeting, plus the variant the
+    /// core picked. Pass that variant to <see cref="ConsentAudio"/> so the
+    /// spoken take and the pasted text are the same notice.
+    /// </summary>
+    public static (string? Text, int Variant) ConsentAnnouncement(string lang)
+    {
+        var variant = 0;
+        var text = ReadBuffer(
+            (buf, len) => dimmy_consent_announcement(lang, out variant, buf, len), 4096);
+        return (text, variant);
+    }
+
+    /// <summary>
+    /// The recorded take as MP3 bytes, or null when the core has none. The
+    /// native pointer is static read-only data, so it is copied out and never
+    /// freed.
+    /// </summary>
+    public static byte[]? ConsentAudio(string lang, int variant)
+    {
+        var ptr = dimmy_consent_audio(lang, variant, out var len);
+        if (ptr == IntPtr.Zero || len <= 0) return null;
+        var bytes = new byte[len];
+        Marshal.Copy(ptr, bytes, 0, len);
+        return bytes;
+    }
+
     // ── Calendar context ─────────────────────────────────────────────
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_calendar_status(byte[] outBuf, int bufLen);

@@ -6755,6 +6755,83 @@ pub unsafe extern "C" fn dimmy_detect_audio_language(
 /// `kind` is "title" or "hint". Returns the byte length written, -1 on bad
 /// args or an unknown kind.
 ///
+/// True when the audio leaves the device: STT or LLM is configured cloud.
+/// The announcement must disclose it, so both the text and the recording ask
+/// the same question here rather than each deciding for itself.
+fn consent_cloud_processing() -> bool {
+    let st = state();
+    let stt = st
+        .stt_mode
+        .lock()
+        .map(|m| m.eq_ignore_ascii_case("cloud"))
+        .unwrap_or(false);
+    let llm = st
+        .llm_mode
+        .lock()
+        .map(|m| m.eq_ignore_ascii_case("cloud"))
+        .unwrap_or(false);
+    stt || llm
+}
+
+/// The participant announcement for THIS meeting: picks one of the wordings
+/// (see [`crate::consent::ANNOUNCEMENT_VARIANTS`]) so the notice does not
+/// repeat itself verbatim every day, writes the chosen index to
+/// `out_variant`, and returns the text to paste into the chat.
+///
+/// The host must pass that same index to [`dimmy_consent_audio`]: the spoken
+/// take and the pasted text are the same notice and may never disagree.
+/// Returns bytes written, -1 on bad args.
+///
+/// # Safety
+/// `lang_ptr` must be a valid null-terminated UTF-8 C string; `out_variant`
+/// must be writable; `out_buf` must be writable for `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_consent_announcement(
+    lang_ptr: *const c_char,
+    out_variant: *mut c_int,
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if lang_ptr.is_null() || out_variant.is_null() {
+        return -1;
+    }
+    let lang = CStr::from_ptr(lang_ptr).to_str().unwrap_or("en");
+    let seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let variant = crate::consent::pick_announcement_variant(seed);
+    assert!(variant < crate::consent::ANNOUNCEMENT_VARIANTS);
+    *out_variant = variant as c_int;
+    let text = crate::consent::announcement_variant(lang, consent_cloud_processing(), variant);
+    write_to_buf(&text, out_buf, buf_len)
+}
+
+/// The recorded take matching `dimmy_consent_announcement`'s variant, as MP3
+/// bytes. The pointer is into the library's own read-only data and must NOT
+/// be freed; it stays valid for the process lifetime. Writes the length to
+/// `out_len`. Returns null on bad args.
+///
+/// # Safety
+/// `lang_ptr` must be a valid null-terminated UTF-8 C string; `out_len` must
+/// be writable.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_consent_audio(
+    lang_ptr: *const c_char,
+    variant: c_int,
+    out_len: *mut c_int,
+) -> *const u8 {
+    if lang_ptr.is_null() || out_len.is_null() || variant < 0 {
+        return std::ptr::null();
+    }
+    let lang = CStr::from_ptr(lang_ptr).to_str().unwrap_or("en");
+    let audio =
+        crate::consent::announcement_audio(lang, consent_cloud_processing(), variant as usize);
+    assert!(!audio.is_empty(), "embedded consent take must not be empty");
+    *out_len = audio.len() as c_int;
+    audio.as_ptr()
+}
+
 /// Separate from `dimmy_consent_text` on purpose: that one is the
 /// recording-consent dialog, a different obligation to a different audience.
 /// Sharing an FFI entry between them would be convenient and wrong.

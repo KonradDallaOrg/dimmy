@@ -1606,6 +1606,28 @@ enum MeetingConsentFlow {
     // Held statically so speech isn't cut off when the call returns.
     private static let synthesizer = AVSpeechSynthesizer()
 
+    // Held statically for the same reason: an AVAudioPlayer that goes out of
+    // scope stops playing.
+    private static var player: AVAudioPlayer?
+
+    /// Speak the notice: the recorded take if the core has one, the system
+    /// voice otherwise. The fallback is not decoration. A machine that cannot
+    /// decode the MP3 still has to tell the room it is recording.
+    private static func announce(_ text: String, lang: String, variant: Int32) {
+        if let mp3 = DimmyCore.shared.consentAudio(lang: lang, variant: variant),
+           let p = try? AVAudioPlayer(data: mp3) {
+            player = p
+            p.play()
+        } else {
+            let utterance = AVSpeechUtterance(string: text)
+            if let voice = AVSpeechSynthesisVoice(language: lang) {
+                utterance.voice = voice
+            }
+            synthesizer.speak(utterance)
+        }
+        DimmyCore.shared.consentLogEvent(kind: "announced", lang: lang)
+    }
+
     /// Shows the confirmation modal; on accept speaks + copies the announcement
     /// and logs each step. Returns true if the meeting may start. Main thread.
     /// Announce without asking, for the auto-record path: the user
@@ -1616,20 +1638,19 @@ enum MeetingConsentFlow {
     /// asked for this recording, so nothing the user was holding to paste
     /// may be thrown away for it. Mirror of Win ConsentFlow.AnnounceOnly.
     static func announceOnly(lang: String) {
-        let announcement = DimmyCore.shared.consentText(kind: "announcement", lang: lang)
+        let picked = DimmyCore.shared.consentAnnouncement(lang: lang)
+        let announcement = picked.text
             ?? "Quick note: this meeting is being recorded and transcribed for note-taking."
-        let utterance = AVSpeechUtterance(string: announcement)
-        if let voice = AVSpeechSynthesisVoice(language: lang) {
-            utterance.voice = voice
-        }
-        synthesizer.speak(utterance)
-        DimmyCore.shared.consentLogEvent(kind: "announced", lang: lang)
+        announce(announcement, lang: lang, variant: picked.variant)
     }
 
     static func confirmAndAnnounce(lang: String) -> Bool {
         let modal = DimmyCore.shared.consentText(kind: "modal", lang: lang)
             ?? "You are about to record audio that may include other people. Confirm you have informed all participants and obtained their consent."
-        let announcement = DimmyCore.shared.consentText(kind: "announcement", lang: lang)
+        // Picked once: the modal shows it, the pasteboard carries it and the
+        // recording speaks it, and all three must be the same wording.
+        let picked = DimmyCore.shared.consentAnnouncement(lang: lang)
+        let announcement = picked.text
             ?? "Quick note: this meeting is being recorded and transcribed for note-taking."
 
         // Localized chrome from the shared core (parity with Windows).
@@ -1661,12 +1682,7 @@ enum MeetingConsentFlow {
         DimmyCore.shared.consentLogEvent(kind: "chat_copied", lang: lang)
 
         // Speak it (reaches remotes only if the user is unmuted).
-        let utterance = AVSpeechUtterance(string: announcement)
-        if let voice = AVSpeechSynthesisVoice(language: lang) {
-            utterance.voice = voice
-        }
-        synthesizer.speak(utterance)
-        DimmyCore.shared.consentLogEvent(kind: "announced", lang: lang)
+        announce(announcement, lang: lang, variant: picked.variant)
         return true
     }
 }

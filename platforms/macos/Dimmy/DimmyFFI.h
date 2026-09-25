@@ -267,6 +267,24 @@ int32_t dimmy_model_catalog_json(char * _Nullable out_buf, int32_t buf_len);
 int32_t dimmy_consent_text(const char * _Nonnull kind, const char * _Nonnull lang,
                            char * _Nonnull out_buf, int32_t buf_len);
 
+/// The participant announcement for THIS meeting. Picks one of the wordings
+/// so the notice does not repeat itself verbatim every day, writes the chosen
+/// index to `out_variant`, and returns the text to paste into the chat. Pass
+/// that same index to dimmy_consent_audio: the spoken take and the pasted
+/// text are the same notice and may never disagree. Returns bytes written,
+/// or -1 on bad args.
+int32_t dimmy_consent_announcement(const char * _Nonnull lang,
+                                   int32_t * _Nonnull out_variant,
+                                   char * _Nonnull out_buf, int32_t buf_len);
+
+/// The recorded take for `variant`, as MP3 bytes compiled into the library.
+/// The pointer is static read-only data: do NOT free it, it stays valid for
+/// the process lifetime. Writes the length to `out_len`. Returns NULL on bad
+/// args.
+const uint8_t * _Nullable dimmy_consent_audio(const char * _Nonnull lang,
+                                              int32_t variant,
+                                              int32_t * _Nonnull out_len);
+
 /// Which language is SPOKEN in an audio file, as its English name ("Italian")
 /// ready to drop into a prompt. Writes 0 bytes when it cannot be established
 /// — no detection model on disk, unreadable or short audio, or sampled
