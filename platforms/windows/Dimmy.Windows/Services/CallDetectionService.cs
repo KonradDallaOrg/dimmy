@@ -112,6 +112,13 @@ internal sealed class CallDetectionService : IDisposable
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
     }
 
+    /// How long the 4 Hz sampling keeps running after the last app lets go of
+    /// the microphone. The stop path draws its conclusion from what it can no
+    /// longer see, so it needs samples AFTER the call ended, not just before.
+    private static readonly TimeSpan IdleGrace = TimeSpan.FromSeconds(5);
+    private MicUsageWatcher? _micWatcher;
+    private DateTime? _micFreeSince;
+
     public void Start()
     {
         if (_timer != null) return;
@@ -119,13 +126,82 @@ internal sealed class CallDetectionService : IDisposable
         _timer = _dispatcher.CreateTimer();
         _timer.Interval = TimeSpan.FromMilliseconds(250);
         _timer.Tick += OnTick;
+
+        // The sampling itself stays exactly as it was — the promote rule needs
+        // two sightings 250 ms apart, and the stop path needs to watch the
+        // origin disappear. What changes is WHEN it runs: the registry tells
+        // us the moment somebody picks the microphone up, so there is no
+        // reason to enumerate audio endpoints four times a second through the
+        // hours when nobody is on a call. Measured cost of a sample on this
+        // machine: 4-6 ms typical, 50 ms worst seen, on the UI thread.
+        _micWatcher = new MicUsageWatcher();
+        _micWatcher.Changed += OnMicUsageChanged;
+        if (_micWatcher.Start())
+        {
+            // Somebody may already be on a call when Dimmy starts. One read,
+            // not a timer.
+            if (MicUsageWatcher.AnyoneUsingMic()) StartSampling("a call is already in progress");
+            else App.Log("started — idle, waiting for the microphone to be picked up", "CallDetect");
+        }
+        else
+        {
+            // The watcher is an optimisation, never a dependency. If the
+            // privacy key cannot be watched we behave exactly like before.
+            _micWatcher.Dispose();
+            _micWatcher = null;
+            _timer.Start();
+            App.Log("started (4 Hz poll, no mic watcher)", "CallDetect");
+        }
+    }
+
+    private void OnMicUsageChanged(bool anyoneUsing)
+    {
+        // Raised on the watcher thread; everything below touches state the
+        // dispatcher owns.
+        _dispatcher.TryEnqueue(() =>
+        {
+            if (_disposed || !_isEnabled) return;
+            if (anyoneUsing)
+            {
+                _micFreeSince = null;
+                StartSampling("microphone picked up");
+            }
+            else if (_micFreeSince == null)
+            {
+                // Do NOT stop here. The stop path concludes the call is over
+                // by no longer seeing the origin, which takes samples it has
+                // not taken yet.
+                _micFreeSince = DateTime.UtcNow;
+            }
+        });
+    }
+
+    private void StartSampling(string why)
+    {
+        if (_timer == null || _timer.IsRunning) return;
         _timer.Start();
-        App.Log("CallDetectionService started (4 Hz session-id poll, generic discovery)", "CallDetect");
+        App.Log($"sampling at 4 Hz — {why}", "CallDetect");
+    }
+
+    private void StopSamplingIfIdle()
+    {
+        if (_timer == null || !_timer.IsRunning) return;
+        if (_micFreeSince == null || DateTime.UtcNow - _micFreeSince.Value < IdleGrace) return;
+        if (App.Instance?.AppViewModel.MeetingActive == true) return;
+        _timer.Stop();
+        _micFreeSince = null;
+        App.Log("microphone free — sampling stopped", "CallDetect");
     }
 
     public void Stop()
     {
         _isEnabled = false;
+        if (_micWatcher != null)
+        {
+            _micWatcher.Changed -= OnMicUsageChanged;
+            _micWatcher.Dispose();
+            _micWatcher = null;
+        }
         if (_timer != null)
         {
             _timer.Stop();
@@ -134,6 +210,7 @@ internal sealed class CallDetectionService : IDisposable
         }
         _emittedSessions.Clear();
         _pendingSessions.Clear();
+        _micFreeSince = null;
     }
 
     public void SetEnabled(bool enabled)
@@ -217,7 +294,34 @@ internal sealed class CallDetectionService : IDisposable
     /// stop-suggestion gate.
     private const float MeetingAmpFloor = 0.02f;
 
+    // What a tick actually costs, measured rather than asserted. The 4 Hz
+    // cadence is only defensible if the work is negligible, and "WASAPI
+    // enumeration is cheap" was a claim nobody had checked. Reported in the
+    // heartbeat that already runs, so this adds a timestamp read per tick
+    // and no timer of its own.
+    private long _tickCostTotalUs;
+    private long _tickCostMaxUs;
+    private int _tickCostCount;
+
     private void OnTick(DispatcherQueueTimer sender, object args)
+    {
+        var t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+        try
+        {
+            OnTickCore(sender, args);
+        }
+        finally
+        {
+            StopSamplingIfIdle();
+            var us = (System.Diagnostics.Stopwatch.GetTimestamp() - t0)
+                * 1_000_000 / System.Diagnostics.Stopwatch.Frequency;
+            _tickCostTotalUs += us;
+            if (us > _tickCostMaxUs) _tickCostMaxUs = us;
+            _tickCostCount++;
+        }
+    }
+
+    private void OnTickCore(DispatcherQueueTimer sender, object args)
     {
         if (!_isEnabled) return;
         var app = App.Instance;
@@ -461,7 +565,11 @@ internal sealed class CallDetectionService : IDisposable
             if (++_logSuppressCounter >= 120)
             {
                 _logSuppressCounter = 0;
-                App.Log($"heartbeat: live={live.Count} emitted={_emittedSessions.Count} pending={_pendingSessions.Count}", "CallDetect");
+                var avgUs = _tickCostCount > 0 ? _tickCostTotalUs / _tickCostCount : 0;
+                App.Log($"heartbeat: live={live.Count} emitted={_emittedSessions.Count} " +
+                        $"pending={_pendingSessions.Count} tick avg={avgUs}us max={_tickCostMaxUs}us " +
+                        $"over {_tickCostCount} ticks", "CallDetect");
+                _tickCostTotalUs = 0; _tickCostMaxUs = 0; _tickCostCount = 0;
             }
         }
         catch (Exception ex)
