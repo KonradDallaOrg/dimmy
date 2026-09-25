@@ -6796,11 +6796,7 @@ pub unsafe extern "C" fn dimmy_consent_announcement(
         return -1;
     }
     let lang = CStr::from_ptr(lang_ptr).to_str().unwrap_or("en");
-    let seed = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let variant = crate::consent::pick_announcement_variant(seed);
+    let variant = crate::consent::next_announcement_variant();
     assert!(variant < crate::consent::ANNOUNCEMENT_VARIANTS);
     *out_variant = variant as c_int;
     let text = crate::consent::announcement_variant(lang, consent_cloud_processing(), variant);

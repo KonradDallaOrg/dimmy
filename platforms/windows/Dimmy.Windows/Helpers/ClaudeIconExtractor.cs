@@ -84,7 +84,7 @@ internal static class ClaudeIconExtractor
             BuildInfo.ConfigDirName,
             "cache");
         Directory.CreateDirectory(cacheDir);
-        var cached = Path.Combine(cacheDir, "claude-desktop-icon.png");
+        var cached = Path.Combine(cacheDir, "claude-desktop-icon-v2.png");
 
         // Resolve the MSIX install location via the WinRT
         // PackageManager. From an unpackaged process this requires
@@ -126,24 +126,37 @@ internal static class ClaudeIconExtractor
             }
         }
 
-        // Walk the Assets dir looking for the best square logo. MSIX
-        // stores multiple scales — pick the largest variant we can
-        // read so the card renders crisp on hi-DPI displays.
+        // A tile logo (Square150x150, Square310x310) carries a wide
+        // transparent margin by design: the glyph fills the middle half of
+        // the canvas, so where this row draws it at 20px the mark lands as a
+        // ~10px smudge and the white strokes fall below a pixel. Measured on
+        // Claude 1.1: 300x300 with the artwork in the central 150x150.
+        //
+        // The targetsize-* assets are cropped tight to the mark instead, and
+        // targetsize-256 is both tight and large enough for hi-DPI. Prefer
+        // it, and keep the tile logos only as a fallback for a package that
+        // ships no targetsize variant. The _altform-* siblings are for
+        // plated/unplated taskbar rendering and are not what this card wants.
         var assetsDir = Path.Combine(installDir, "Assets");
         if (!Directory.Exists(assetsDir)) return null;
         var candidate = Directory.EnumerateFiles(assetsDir, "*Logo*.png")
             .Where(p =>
             {
                 var name = Path.GetFileName(p);
-                // Prefer the bigger ones; LargeTile + Square150 work
-                // well at 40px UI render. Avoid the tiny 16/24/30
-                // variants which blur when upscaled.
+                return name.Contains("targetsize-256", StringComparison.OrdinalIgnoreCase)
+                    && !name.Contains("altform", StringComparison.OrdinalIgnoreCase);
+            })
+            .OrderByDescending(p => new FileInfo(p).Length)
+            .FirstOrDefault()
+            ?? Directory.EnumerateFiles(assetsDir, "*Logo*.png")
+            .Where(p =>
+            {
+                var name = Path.GetFileName(p);
                 return name.Contains("Square150x150", StringComparison.OrdinalIgnoreCase)
                     || name.Contains("LargeTile", StringComparison.OrdinalIgnoreCase)
                     || name.Contains("Square71x71", StringComparison.OrdinalIgnoreCase)
                     || name.Contains("StoreLogo", StringComparison.OrdinalIgnoreCase);
             })
-            // Prefer scale-200 (hi-DPI) when present.
             .OrderByDescending(p => p.Contains("scale-200"))
             .ThenByDescending(p => new FileInfo(p).Length)
             .FirstOrDefault();

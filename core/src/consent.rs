@@ -147,6 +147,10 @@ pub fn announcement_variant(lang: &str, cloud_processing: bool, variant: usize) 
 /// The recorded announcement for `(lang, cloud_processing, variant)`, or the
 /// English one when the language is unsupported.
 ///
+/// Each variant is a DIFFERENT voice as well as different words: hearing the
+/// same person read the same sentence every day is what made the notice
+/// furniture. Variant 0 keeps the voice that shipped along with its wording.
+///
 /// The audio is compiled into the library rather than shipped as loose files:
 /// one delivery path for all three hosts, and a missing take becomes a build
 /// error instead of a meeting that announces nothing.
@@ -198,11 +202,19 @@ pub fn announcement_audio(lang: &str, cloud_processing: bool, variant: usize) ->
     audio
 }
 
-/// Which wording to use this time. Rotating is not decoration: the notice is
-/// spoken to the same colleagues every day, and one that is word-for-word
-/// identical every time stops being heard.
-pub fn pick_announcement_variant(seed: u64) -> usize {
-    (seed % ANNOUNCEMENT_VARIANTS as u64) as usize
+/// Which wording to use this time: the next one, in order. Rotating is not
+/// decoration. The notice is spoken to the same colleagues every day, and one
+/// that is word-for-word identical every time stops being heard.
+///
+/// A counter rather than the clock, because the promise is "not the same as
+/// last time" and a clock only makes that likely. The first announcement after
+/// a launch is variant 0, the wording that shipped.
+pub fn next_announcement_variant() -> usize {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let v = NEXT.fetch_add(1, Ordering::Relaxed) % ANNOUNCEMENT_VARIANTS;
+    assert!(v < ANNOUNCEMENT_VARIANTS);
+    v
 }
 
 /// Localized UI chrome for the recording-consent dialog (title, the helper
@@ -407,11 +419,11 @@ mod tests {
     }
 
     #[test]
-    fn variant_picking_stays_in_range_and_rotates() {
-        let picked: Vec<usize> = (0..6).map(pick_announcement_variant).collect();
-        assert_eq!(picked, vec![0, 1, 2, 0, 1, 2]);
-        for seed in [0u64, 7, u64::MAX] {
-            assert!(pick_announcement_variant(seed) < ANNOUNCEMENT_VARIANTS);
+    fn variant_picking_rotates_and_never_repeats_back_to_back() {
+        let picked: Vec<usize> = (0..7).map(|_| next_announcement_variant()).collect();
+        assert_eq!(picked, vec![0, 1, 2, 0, 1, 2, 0]);
+        for pair in picked.windows(2) {
+            assert_ne!(pair[0], pair[1], "the same wording twice in a row");
         }
     }
 

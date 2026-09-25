@@ -248,19 +248,34 @@ public static class ConsentFlow
         try
         {
             var mp3 = DimmyNative.ConsentAudio(lang, variant);
-            if (mp3 == null || mp3.Length == 0) return false;
-            var stream = new global::Windows.Storage.Streams.InMemoryRandomAccessStream();
-            using (var w = new global::Windows.Storage.Streams.DataWriter(stream.GetOutputStreamAt(0)))
+            if (mp3 == null || mp3.Length == 0)
             {
-                w.WriteBytes(mp3);
-                w.StoreAsync().AsTask().GetAwaiter().GetResult();
+                App.Log($"no recorded take for {lang}/{variant}, using the system voice", "Consent");
+                return false;
             }
+            var stream = new global::Windows.Storage.Streams.InMemoryRandomAccessStream();
+            var w = new global::Windows.Storage.Streams.DataWriter(stream.GetOutputStreamAt(0));
+            w.WriteBytes(mp3);
+            w.StoreAsync().AsTask().GetAwaiter().GetResult();
+            // DetachStream before disposing the writer. Disposing it while it
+            // still owns the output stream closes the stream underneath, and
+            // MediaPlayer then plays nothing at all — no exception, no sound,
+            // and the audit log still says the room was told.
+            w.DetachStream();
+            w.Dispose();
+            stream.Seek(0);
+
             _player ??= new global::Windows.Media.Playback.MediaPlayer();
             _player.Source = global::Windows.Media.Core.MediaSource.CreateFromStream(stream, "audio/mpeg");
             _player.Play();
+            App.Log($"recorded take {lang}/{variant}, {mp3.Length} bytes", "Consent");
             return true;
         }
-        catch { return false; }
+        catch (Exception ex)
+        {
+            App.Log($"recorded take failed ({ex.GetType().Name}: {ex.Message}), using the system voice", "Consent");
+            return false;
+        }
     }
 
     private static async Task SpeakAsync(string text, string lang)
