@@ -950,7 +950,7 @@ struct MeetingDoneView: View {
     // Mirror of Win MeetingWindow SpeakerBar.
 
     private var speakerBar: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
                     ForEach(vm.doneSpeakers) { speaker in
@@ -958,7 +958,7 @@ struct MeetingDoneView: View {
                     }
                 }
             }
-            HStack(spacing: 12) {
+            HStack(spacing: 8) {
                 waveModeTab("Tracks", selected: !waveBySpeaker,
                             help: "Waveform by track: you (mic) above, the call (system) below") {
                     waveBySpeaker = false
@@ -976,12 +976,16 @@ struct MeetingDoneView: View {
         Button(action: action) {
             VStack(spacing: 3) {
                 Text(title)
-                    .font(.system(size: 12))
+                    .font(.system(size: 11))
                     .foregroundStyle(Color.primary.opacity(selected ? 1 : 0.6))
                 Rectangle()
                     .fill(selected ? Color.accentColor : Color.clear)
                     .frame(height: 2)
             }
+            // The underline is a bare Rectangle, which takes all the width it
+            // is offered: without this each tab grew to half the bar and
+            // squeezed the speaker chips.
+            .fixedSize()
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
