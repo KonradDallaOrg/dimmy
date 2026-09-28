@@ -49,6 +49,16 @@ struct MeetingDoneView: View {
     /// rather than per body evaluation, which SwiftUI does often and which on a
     /// long meeting is thousands of lines.
     @State private var transcriptTurns: [TranscriptTurn] = []
+    /// Speaker label (lowercased) → palette slot, from speakers.json.
+    @State private var speakerColors: [String: Int] = [:]
+    /// Waveform by speaker (one lane each) or by track (mic / system).
+    @State private var waveBySpeaker: Bool = true
+    /// Speaker whose rename popover is open.
+    @State private var renamingSpeakerId: String?
+    @State private var renameDraft: String = ""
+    @State private var renameError: String?
+    /// Turn the transcript was last scrolled to by playback.
+    @State private var followedTurnId: Int?
 
     struct TranscriptTurn: Identifiable {
         let id: Int
@@ -56,9 +66,10 @@ struct MeetingDoneView: View {
         /// Elapsed seconds from the line's timestamp, nil when it has none —
         /// those lines are shown but cannot be jumped to.
         let seconds: TimeInterval?
-        /// "mic" or "system" when the line names its track, nil otherwise.
-        /// Drives the tint and the divider, the way Windows' TranscriptRenderer
-        /// does: without it both sides of a call read as one voice.
+        /// The track ("mic" / "system") or, in a diarized meeting, the
+        /// speaker's name; nil when the line has no label. Drives the tint and
+        /// the divider, the way Windows' TranscriptRenderer does: without it
+        /// both sides of a call read as one voice.
         var speaker: String?
         /// The line with its `[stamp] [speaker]` prefix removed, which is what
         /// is actually rendered. Falls back to the whole line when there is no
@@ -74,11 +85,13 @@ struct MeetingDoneView: View {
         }
     }
 
-    /// Split `[00:12:00] [mic] hello` into its stamp, track and text.
+    /// Split `[00:12:00] [mic] hello` into its stamp, speaker and text.
     ///
     /// Mirrors the shapes Windows parses (TranscriptRenderer.cs): the current
     /// `[hh:mm:ss] [mic] body`, the pre-2026-09-10 `[  1234 ms] [mic] body`,
-    /// and anything else passed through untouched as plain body text.
+    /// a diarized `[hh:mm:ss] [Speaker 2] body`, and anything else passed
+    /// through untouched as plain body text. `[paused]` is a marker, not a
+    /// speaker.
     static func parseTurn(_ line: String) -> (speaker: String?, body: String) {
         guard line.hasPrefix("["), let close = line.firstIndex(of: "]") else {
             return (nil, line)
@@ -88,15 +101,25 @@ struct MeetingDoneView: View {
             return (nil, line)
         }
         let track = String(rest[rest.index(after: rest.startIndex)..<close2])
-        guard track == "mic" || track == "system" else { return (nil, line) }
+            .trimmingCharacters(in: .whitespaces)
+        guard (1...40).contains(track.count),
+              track.lowercased() != "paused",
+              !track.contains("[")
+        else { return (nil, line) }
         let body = rest[rest.index(after: close2)...].drop(while: { $0 == " " })
         return (track, String(body))
     }
 
     /// Mic = mint, system = violet, the same two tracks and the same reading
     /// as Windows' SpeakerColor. Light shades on dark, saturated on light.
-    static func speakerTint(_ speaker: String?, dark: Bool) -> Color {
-        if speaker == "system" {
+    /// A diarized speaker takes its palette slot from speakers.json, or a
+    /// stable slot from its name when the file does not know it.
+    static func speakerTint(_ speaker: String?, dark: Bool, speakerColors: [String: Int] = [:]) -> Color {
+        if let speaker, !MeetingSpeakers.isTrack(speaker) {
+            let idx = speakerColors[speaker.lowercased()] ?? MeetingSpeakers.stableIndex(speaker)
+            return MeetingSpeakers.color(idx, dark: dark)
+        }
+        if speaker?.lowercased() == "system" {
             return dark
                 ? Color(red: 0xC9 / 255, green: 0xB0 / 255, blue: 1.0)
                 : Color(red: 0x55 / 255, green: 0x35 / 255, blue: 0x9C / 255)
@@ -120,9 +143,15 @@ struct MeetingDoneView: View {
         // Keep the turn list in step with whatever transcript is loaded:
         // opening another meeting, or regenerating this one, replaces it.
         .onChange(of: vm.doneRawTranscript) { _, _ in
+            vm.reloadSpeakers()
             rebuildTranscriptTurns()
         }
+        .onChange(of: vm.doneSpeakers) { _, speakers in
+            speakerColors = MeetingSpeakers.colorsByName(speakers)
+        }
         .onAppear {
+            vm.reloadSpeakers()
+            speakerColors = MeetingSpeakers.colorsByName(vm.doneSpeakers)
             rebuildTranscriptTurns()
             // Surface the Claude Desktop deeplink button only when the
             // MCP extension is installed. Status query is a single FFI
@@ -493,7 +522,7 @@ struct MeetingDoneView: View {
                                 // call reads as two voices rather than one wall.
                                 separated: i > 0
                                     && turn.speaker != nil
-                                    && transcriptTurns[i - 1].speaker != turn.speaker
+                                    && transcriptTurns[i - 1].speaker?.lowercased() != turn.speaker?.lowercased()
                             )
                             .id(turn.id)
                         }
@@ -514,7 +543,7 @@ struct MeetingDoneView: View {
     /// which is what an imported transcript looks like.
     @ViewBuilder
     private func transcriptRow(_ turn: TranscriptTurn, separated: Bool) -> some View {
-        let tint = Self.speakerTint(turn.speaker, dark: colorScheme == .dark)
+        let tint = Self.speakerTint(turn.speaker, dark: colorScheme == .dark, speakerColors: speakerColors)
         VStack(alignment: .leading, spacing: 0) {
             if separated {
                 Rectangle()
@@ -527,9 +556,16 @@ struct MeetingDoneView: View {
                     Text(Self.stamp(from: turn.text) ?? "")
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(tint)
-                    Text(speaker.uppercased())
-                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(tint)
+                    // Tracks read as tags (MIC / SYSTEM); people keep their name.
+                    if MeetingSpeakers.isTrack(speaker) {
+                        Text(speaker.uppercased())
+                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(tint)
+                    } else {
+                        Text(speaker)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(tint)
+                    }
                 }
                 Text(turn.body)
                     .font(.system(size: 12, design: .monospaced))
@@ -871,19 +907,144 @@ struct MeetingDoneView: View {
     /// See `~/Library/Application Support/dimmy/dimmy.log` for the
     /// SIGABRT we hit on first repro.
     private func audioCard(url: URL) -> some View {
-        AudioPlaybackBar(
-            url: url,
-            micURL: vm.doneAudioMicURL,
-            systemURL: vm.doneAudioSystemURL,
-            onSeek: { t in
-                seekTick += 1
-                seekRequest = SeekRequest(tick: seekTick, time: t)
+        VStack(alignment: .leading, spacing: 8) {
+            if !vm.doneSpeakers.isEmpty {
+                speakerBar
             }
-        )
-            .frame(height: 64)
+            AudioPlaybackBar(
+                url: url,
+                micURL: vm.doneAudioMicURL,
+                systemURL: vm.doneAudioSystemURL,
+                speakers: waveBySpeaker ? vm.doneSpeakers : [],
+                onSeek: { t in
+                    followedTurnId = nil
+                    seekTick += 1
+                    seekRequest = SeekRequest(tick: seekTick, time: t)
+                },
+                onPlaybackTime: followPlayback
+            )
+                .frame(height: 64)
+        }
             .padding(.horizontal, 16)
             .padding(.vertical, 14)
             .background(cardBackground)
+    }
+
+    /// While audio plays, keep the line being spoken at the top of the
+    /// transcript. It scrolls when the spoken TURN changes — not on a clock —
+    /// so a long monologue stays still and a quick back-and-forth still keeps
+    /// up. Mirror of Win MeetingWindow.FollowPlayback.
+    private func followPlayback(_ time: TimeInterval) {
+        guard let turn = Self.turn(at: time, in: transcriptTurns),
+              turn.id != followedTurnId
+        else { return }
+        followedTurnId = turn.id
+        seekTick += 1
+        seekRequest = SeekRequest(tick: seekTick, time: time)
+    }
+
+    // MARK: Speakers
+    //
+    // One chip per speaker of a diarized meeting (colour, name, talk time;
+    // click to rename) and a Tracks / Speakers switch for the waveform.
+    // Mirror of Win MeetingWindow SpeakerBar.
+
+    private var speakerBar: some View {
+        HStack(spacing: 12) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(vm.doneSpeakers) { speaker in
+                        speakerChip(speaker)
+                    }
+                }
+            }
+            HStack(spacing: 12) {
+                waveModeTab("Tracks", selected: !waveBySpeaker,
+                            help: "Waveform by track: you (mic) above, the call (system) below") {
+                    waveBySpeaker = false
+                }
+                waveModeTab("Speakers", selected: waveBySpeaker,
+                            help: "Waveform by speaker: one lane per person") {
+                    waveBySpeaker = true
+                }
+            }
+        }
+    }
+
+    private func waveModeTab(_ title: String, selected: Bool, help: String,
+                             action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 3) {
+                Text(title)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.primary.opacity(selected ? 1 : 0.6))
+                Rectangle()
+                    .fill(selected ? Color.accentColor : Color.clear)
+                    .frame(height: 2)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+
+    private func speakerChip(_ speaker: MeetingSpeaker) -> some View {
+        Button {
+            renameDraft = speaker.name
+            renameError = nil
+            renamingSpeakerId = speaker.id
+        } label: {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(MeetingSpeakers.color(speaker.colorIndex, dark: colorScheme == .dark))
+                    .frame(width: 8, height: 8)
+                Text(speaker.name)
+                    .font(.system(size: 12))
+                Text(MeetingSpeakers.formatTalkTime(speaker.talkSecs))
+                    .font(.system(size: 11, design: .monospaced))
+                    .opacity(0.6)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 3)
+            .background(Capsule().fill(Color.primary.opacity(0.06)))
+            .overlay(Capsule().stroke(Color.primary.opacity(0.10), lineWidth: 1))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help("Rename \(speaker.name)")
+        .popover(isPresented: Binding(
+            get: { renamingSpeakerId == speaker.id },
+            set: { if !$0 { renamingSpeakerId = nil } }
+        ), arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Who is this?")
+                    .font(.system(size: 12, weight: .semibold))
+                TextField("Name", text: $renameDraft, onCommit: { commitRename(speaker) })
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 240)
+                if let renameError {
+                    Text(renameError)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.red)
+                        .frame(width: 240, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                HStack {
+                    Spacer()
+                    Button("Rename") { commitRename(speaker) }
+                        .keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding(12)
+        }
+    }
+
+    private func commitRename(_ speaker: MeetingSpeaker) {
+        if let err = vm.renameSpeaker(speaker, to: renameDraft) {
+            renameError = err
+        } else {
+            renamingSpeakerId = nil
+        }
     }
 
     // MARK: Cards

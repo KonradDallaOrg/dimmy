@@ -73,12 +73,27 @@ final class TranscriptSpeakerTests: XCTestCase {
         XCTAssertEqual(p.body, "hello")
     }
 
-    func testAnUnknownTrackIsNotTreatedAsASpeaker() {
-        // Only mic and system exist. Anything else is body text, rendered
-        // whole rather than half-eaten by a bad prefix strip.
-        let p = MeetingDoneView.parseTurn("[00:01:00] [paolo] ciao")
+    func testADiarizedSpeakerNameIsASpeaker() {
+        // A diarized meeting labels lines with the speaker's name.
+        let p = MeetingDoneView.parseTurn("[00:01:00] [Speaker 2] ciao")
+        XCTAssertEqual(p.speaker, "Speaker 2")
+        XCTAssertEqual(p.body, "ciao")
+        XCTAssertEqual(MeetingDoneView.parseTurn("[00:01:00] [Marco] ok").speaker, "Marco")
+    }
+
+    func testThePausedMarkerIsNotASpeaker() {
+        let p = MeetingDoneView.parseTurn("[00:01:00] [paused] 12 s")
         XCTAssertNil(p.speaker)
-        XCTAssertEqual(p.body, "[00:01:00] [paolo] ciao")
+        XCTAssertEqual(p.body, "[00:01:00] [paused] 12 s")
+    }
+
+    @MainActor
+    func testANamedSpeakerTakesItsPaletteSlot() {
+        let colors = ["marco": 2]
+        XCTAssertEqual(MeetingDoneView.speakerTint("Marco", dark: true, speakerColors: colors),
+                       MeetingSpeakers.color(2, dark: true))
+        XCTAssertNotEqual(MeetingDoneView.speakerTint("Marco", dark: true, speakerColors: colors),
+                          MeetingDoneView.speakerTint("mic", dark: true))
     }
 
     func testAPlainLineIsPassedThroughUntouched() {

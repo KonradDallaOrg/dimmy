@@ -41,9 +41,11 @@
 		AA000608 /* AudioPlaybackBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000608 /* AudioPlaybackBar.swift */; };
 		AA000609 /* WavPeaks.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000609 /* WavPeaks.swift */; };
 		AA000610 /* MeetingAmplitudeAGC.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000610 /* MeetingAmplitudeAGC.swift */; };
+		AA000611 /* MeetingSpeakers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000611 /* MeetingSpeakers.swift */; };
 		AA000700 /* AppStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000700 /* AppStateTests.swift */; };
 		AA00071F /* LocalModelListingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00071F /* LocalModelListingTests.swift */; };
 		AA000720 /* TranscriptSeekTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000720 /* TranscriptSeekTests.swift */; };
+		AA000750 /* MeetingSpeakersTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000750 /* MeetingSpeakersTests.swift */; };
 		AA000701 /* MeetingPostProcessServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000701 /* MeetingPostProcessServiceTests.swift */; };
 		AA000702 /* RecapModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000702 /* RecapModelTests.swift */; };
 		AA000730 /* TelegramReplyTextTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000730 /* TelegramReplyTextTests.swift */; };
@@ -199,10 +201,12 @@
 		AB000608 /* AudioPlaybackBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioPlaybackBar.swift; sourceTree = "<group>"; };
 		AB000609 /* WavPeaks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WavPeaks.swift; sourceTree = "<group>"; };
 		AB000610 /* MeetingAmplitudeAGC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAmplitudeAGC.swift; sourceTree = "<group>"; };
+		AB000611 /* MeetingSpeakers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSpeakers.swift; sourceTree = "<group>"; };
 		AB000098 /* DimmyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DimmyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		AB000700 /* AppStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateTests.swift; sourceTree = "<group>"; };
 		AB00071F /* LocalModelListingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalModelListingTests.swift; sourceTree = "<group>"; };
 		AB000720 /* TranscriptSeekTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptSeekTests.swift; sourceTree = "<group>"; };
+		AB000750 /* MeetingSpeakersTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSpeakersTests.swift; sourceTree = "<group>"; };
 		AB000701 /* MeetingPostProcessServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingPostProcessServiceTests.swift; sourceTree = "<group>"; };
 		AB000702 /* RecapModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecapModelTests.swift; sourceTree = "<group>"; };
 		AB000730 /* TelegramReplyTextTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelegramReplyTextTests.swift; sourceTree = "<group>"; };
@@ -340,6 +344,7 @@
 				AB000700 /* AppStateTests.swift */,
 				AB00071F /* LocalModelListingTests.swift */,
 				AB000720 /* TranscriptSeekTests.swift */,
+				AB000750 /* MeetingSpeakersTests.swift */,
 				AB000701 /* MeetingPostProcessServiceTests.swift */,
 				AB000702 /* RecapModelTests.swift */,
 				AB000730 /* TelegramReplyTextTests.swift */,
@@ -408,6 +413,7 @@
 				AB000608 /* AudioPlaybackBar.swift */,
 				AB000609 /* WavPeaks.swift */,
 				AB000610 /* MeetingAmplitudeAGC.swift */,
+				AB000611 /* MeetingSpeakers.swift */,
 			);
 			path = Meeting;
 			sourceTree = "<group>";
@@ -910,6 +916,7 @@ echo \"[gtcrn] bundled $(basename \"$GTCRN_SRC\") into Resources\"
 				AA000608 /* AudioPlaybackBar.swift in Sources */,
 				AA000609 /* WavPeaks.swift in Sources */,
 				AA000610 /* MeetingAmplitudeAGC.swift in Sources */,
+				AA000611 /* MeetingSpeakers.swift in Sources */,
 				AA000905 /* SystemAudioCaptureService.swift in Sources */,
 				AA001110 /* SystemAudioProcessTap.swift in Sources */,
 				AA001100 /* DimmyCore+CallDetect.swift in Sources */,
@@ -930,6 +937,7 @@ echo \"[gtcrn] bundled $(basename \"$GTCRN_SRC\") into Resources\"
 				AA000700 /* AppStateTests.swift in Sources */,
 				AA00071F /* LocalModelListingTests.swift in Sources */,
 				AA000720 /* TranscriptSeekTests.swift in Sources */,
+				AA000750 /* MeetingSpeakersTests.swift in Sources */,
 				AA000701 /* MeetingPostProcessServiceTests.swift in Sources */,
 				AA000702 /* RecapModelTests.swift in Sources */,
 				AA000730 /* TelegramReplyTextTests.swift in Sources */,

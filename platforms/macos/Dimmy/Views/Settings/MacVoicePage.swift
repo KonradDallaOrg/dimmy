@@ -12,6 +12,7 @@ struct MacVoicePage: View {
 
     @State private var localModelExists: Bool = false
     @State private var downloadInFlight: Bool = false
+    @State private var diarizationDownloadFailed: Bool = false
     // What the running download is, captured when it STARTS. Reading the
     // picker live meant switching models mid-download renamed the bar without
     // changing what it measured.
@@ -166,6 +167,7 @@ struct MacVoicePage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             speechRecognitionGroup
+            speakersGroup
 
             // Per settings-map.md "Vuoi" column: Microphone (mic gain
             // + Preprocessing + Chunk streaming + Live captions),
@@ -290,6 +292,78 @@ struct MacVoicePage: View {
         let count = DimmyCore.shared.userDictRemove(word)
         if count >= 0 {
             appState.userDictWords.removeAll { $0.lowercased() == word.lowercased() }
+        }
+    }
+
+    // MARK: Speakers
+    //
+    // Diarization of meeting transcripts. Not an STT provider — it runs after
+    // whichever engine transcribed, so it sits beside the engine choice, not
+    // inside it. Mirror of Win SettingsWindow.xaml "SPEAKERS".
+
+    private var speakersGroup: some View {
+        Group {
+            MacGroupLabel(text: "Speakers")
+            MacTile {
+                MacRow(
+                    "Identify speakers in meetings",
+                    hint: "Labels each line of a meeting transcript with who said it, and lets you name them. Runs on this Mac: automatically after each meeting with on-device transcription, and whenever you regenerate a transcript (the only way with cloud transcription, so the audio is not uploaded twice). Downloads a 104 MB model the first time.",
+                    showsDivider: appState.diarizationEnabled
+                ) {
+                    Toggle("", isOn: Binding(
+                        get: { appState.diarizationEnabled },
+                        set: { newValue in
+                            appState.diarizationEnabled = newValue
+                            persistConfig()
+                            // Turning labels on fetches the model right away,
+                            // so the next meeting can use it.
+                            if newValue && !appState.diarizationModelPresent {
+                                downloadDiarizationModel()
+                            }
+                        }
+                    ))
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                }
+                if appState.diarizationEnabled {
+                    MacRow("Speaker model", description: diarizationStatusText, showsDivider: false) {
+                        if appState.isDownloadingDiarization {
+                            ProgressView(value: appState.diarizationDownloadProgress)
+                                .frame(width: 140)
+                        } else if !appState.diarizationModelPresent {
+                            Button(diarizationDownloadFailed ? "Retry download" : "Download (104 MB)") {
+                                downloadDiarizationModel()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .onAppear {
+            appState.diarizationModelPresent = DimmyCore.shared.diarizationModelPresent()
+        }
+    }
+
+    private var diarizationStatusText: String {
+        if appState.isDownloadingDiarization {
+            return "Downloading… \(Int(appState.diarizationDownloadProgress * 100))%"
+        }
+        if appState.diarizationModelPresent { return "Ready" }
+        return diarizationDownloadFailed ? "Download failed" : "Not downloaded (104 MB)"
+    }
+
+    private func downloadDiarizationModel() {
+        guard !appState.isDownloadingDiarization else { return }
+        appState.isDownloadingDiarization = true
+        appState.diarizationDownloadProgress = 0
+        diarizationDownloadFailed = false
+        DispatchQueue.global(qos: .userInitiated).async {
+            let ok = DimmyCore.shared.downloadDiarizationModel()
+            DispatchQueue.main.async {
+                appState.isDownloadingDiarization = false
+                appState.diarizationModelPresent = DimmyCore.shared.diarizationModelPresent()
+                diarizationDownloadFailed = !ok
+            }
         }
     }
 

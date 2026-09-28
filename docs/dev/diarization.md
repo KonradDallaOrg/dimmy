@@ -37,8 +37,8 @@ audio inside `dimmy_meeting_retranscribe`:
    `[00:01:23] [Speaker 2] …`. The mic track stays `[mic]` unless the diarizer hears
    more than one person on it (an in-person meeting).
 
-The Windows host runs it automatically after a meeting stops **only with local STT**
-(`Services/DiarizationService.cs`): with cloud STT it would upload the whole meeting a
+The Windows and Mac hosts run it automatically after a meeting stops **only with local STT**
+(Win `Services/DiarizationService.cs`, Mac `DiarizationService` in `Views/Meeting/MeetingSpeakers.swift`): with cloud STT it would upload the whole meeting a
 second time, so there it happens only on *Regenerate transcript*.
 
 ## Names
@@ -67,6 +67,8 @@ the cache learns a voice, and the post-pass is both cheaper and more accurate.
 
 ## Not done yet
 
-- macOS / Linux hosts (the core works on any platform with `local-stt-parakeet`).
+- Linux host (the core works on any platform with `local-stt-parakeet`).
+- Parakeet on the Mac Neural Engine (FluidAudio) returns no word timestamps, so there
+  speaker turns fall back to the dominant speaker per chunk; whisper on the Mac has them.
 - Live (during-recording) labels.
 - Keeping live word timestamps so the post-stop pass could skip re-transcription.

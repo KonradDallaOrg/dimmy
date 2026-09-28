@@ -647,7 +647,7 @@ extension DimmyCore {
 struct MeetingResult {
     let id: String
     let dir: String
-    let transcript: String
+    var transcript: String
     let durationSecs: Double
     let chunkCount: Int
     let error: String?

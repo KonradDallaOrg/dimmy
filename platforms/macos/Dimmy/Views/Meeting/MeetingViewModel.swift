@@ -80,6 +80,9 @@ final class MeetingViewModel: ObservableObject {
     /// Bound to the Done-view picker; passed into the next regenerateRecap().
     @Published var selectedMeetingType: String = "auto"
     @Published var doneRawTranscript: String = ""
+    /// Speakers of the shown meeting (speakers.json). Empty ⇒ not diarized,
+    /// and the Done view looks exactly as it did before diarization.
+    @Published var doneSpeakers: [MeetingSpeaker] = []
     @Published var doneAudioURL: URL?
     /// Per-track mic WAV (`audio_mic.wav`). When both mic + system are
     /// present the Done audio card renders a mirrored-stereo waveform
@@ -654,7 +657,14 @@ final class MeetingViewModel: ObservableObject {
 
         SystemAudioCaptureService.shared.stop()
         DispatchQueue.global(qos: .userInitiated).async {
-            let result = DimmyCore.shared.meetingStop()
+            var result = DimmyCore.shared.meetingStop()
+            // Speaker labels (when enabled) replace the live per-track
+            // transcript before the recap reads it.
+            if let stopped = result, DiarizationService.enabled() {
+                DispatchQueue.main.async { self.statusLabel = "Identifying speakers…" }
+                result?.transcript = DiarizationService.relabelIfEnabled(
+                    dir: stopped.dir, liveTranscript: stopped.transcript)
+            }
             DispatchQueue.main.async {
                 self.isPaused = false
                 guard let result else {
@@ -827,9 +837,12 @@ final class MeetingViewModel: ObservableObject {
                 switch result {
                 case .success(let text):
                     self.doneRawTranscript = text
+                    self.reloadSpeakers()
                     self.phase = .done
                     self.statusLabel = "Transcript regenerated"
-                    self.showToast("Transcript regenerated.")
+                    self.showToast(self.doneSpeakers.isEmpty
+                        ? "Transcript regenerated."
+                        : "Transcript regenerated · \(self.doneSpeakers.count) speaker(s).")
                 case .failure(let err):
                     self.phase = .done
                     self.statusLabel = "Re-transcribe failed"
@@ -837,6 +850,37 @@ final class MeetingViewModel: ObservableObject {
                 }
             }
         }
+    }
+
+    // MARK: - Speakers (diarized meetings)
+
+    private var shownDir: String? {
+        selectedDir ?? (activeMeetingDir.isEmpty ? nil : activeMeetingDir)
+    }
+
+    func reloadSpeakers() {
+        let loaded = MeetingSpeakers.load(dir: shownDir)
+        if loaded != doneSpeakers { doneSpeakers = loaded }
+    }
+
+    /// Rename a speaker. The core rewrites speakers.json and transcripts.txt,
+    /// so the transcript is re-read from disk. nil on success, else the
+    /// message to show next to the field.
+    func renameSpeaker(_ speaker: MeetingSpeaker, to rawName: String) -> String? {
+        guard let dir = shownDir else { return MeetingSpeakers.renameError(-1) }
+        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if name == speaker.name { return nil }
+        let rc = DimmyCore.shared.meetingRenameSpeaker(dir: dir, id: speaker.id, name: name)
+        guard rc == 0 else { return MeetingSpeakers.renameError(rc) }
+        let txt = URL(fileURLWithPath: dir).appendingPathComponent("transcripts.txt")
+        if let text = try? String(contentsOf: txt, encoding: .utf8) {
+            doneRawTranscript = text
+        }
+        reloadSpeakers()
+        if FileManager.default.fileExists(atPath: URL(fileURLWithPath: dir).appendingPathComponent("recap.md").path) {
+            showToast("Renamed to \(name). Regenerate the recap to use the new name.")
+        }
+        return nil
     }
 
     // MARK: - Sidebar

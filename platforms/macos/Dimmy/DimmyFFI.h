@@ -144,6 +144,23 @@ int32_t dimmy_parakeet_bundle_present(void);
 /// events with {downloaded,total}. Returns 0=OK, -1=error.
 int32_t dimmy_parakeet_download_bundle(void);
 
+// ── Speaker diarization (Nemotron-3-Diarization) ─────────────────
+
+/// 1 when the diarization model (both graphs) is on disk, 0 otherwise.
+int32_t dimmy_diarization_model_present(void);
+
+/// Download the diarization model (~104 MB). BLOCKING — call from a
+/// background thread. Emits "diarization_download_progress" events with
+/// {downloaded,total}. Returns 0=ready, -1=failed.
+int32_t dimmy_diarization_download(void);
+
+/// Rename a diarized speaker: rewrites speakers.json AND the labels in
+/// transcripts.txt. rc: 0 ok, -1 bad args, -2 unknown id, -3 io,
+/// -4 invalid name, -5 duplicate name.
+int32_t dimmy_meeting_rename_speaker(const char * _Nonnull dir,
+                                     const char * _Nonnull id,
+                                     const char * _Nonnull name);
+
 /// Direct PCM → text via Parakeet (used by tests / smoke; the live STT
 /// path goes through dimmy_stop_recording()). Returns bytes written, or -1.
 int32_t dimmy_parakeet_transcribe(const float * _Nullable pcm_ptr,
