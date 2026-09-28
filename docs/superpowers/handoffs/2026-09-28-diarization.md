@@ -63,8 +63,8 @@ expected; the user signs in the morning (re-run sign-windows, or scripts/dev/fir
 - [x] R1 bump core/Cargo.toml + both lock files to 0.7.11 on feat/diarization (commit `chore(release): bump to 0.7.11`)
 - [x] R2 release notes + CHANGELOG block (skill `release-notes`)
 - [x] R3 pre-push checks (fmt, clippy CI flags, lib tests)
-- [ ] R4 merge feat/diarization --no-ff into staging, push staging
-- [ ] R5 wait for staging-auto-update.yml green (incl. test-install) — do NOT tag if red
+- [x] R4 merge feat/diarization --no-ff into staging, push staging
+- [ ] R5 wait for staging-auto-update.yml green (incl. test-install) — do NOT tag if red. No gh token here: green = `git ls-remote origin refs/tags/staging-latest` points at the pushed staging sha (the tag is deleted at workflow start and only recreated by the final publish job, which needs every job incl. test-install). Give it up to ~90 min; if still absent, report failure to the user, do not tag.
 - [ ] R6 tag + push v0.7.11-staging.1
 - [ ] R7 tag + push v0.7.11-rc.1
 - [ ] R8 check both workflow runs reach the sign step / artifacts; report to user
