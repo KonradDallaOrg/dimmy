@@ -45,5 +45,5 @@ LOCALLY before anything is pushed. **Do not push, do not tag.**
   consider boundary smoothing. Audio-quality lead (not diarization): both tracks of the
   2026-09-29 test had >99% energy below 4 kHz; AEC logged "ref ring empty → idle" 5 s in while
   loopback had signal — investigate separately.
-- Before any push: merge the latest origin/staging (this shell could not fetch; SSH key missing).
-  Uncommitted on purpose: core/src/bin/diarize_asr_probe.rs + its Cargo.toml entry (dev probe).
+- Branch pushed 2026-09-29 (origin/staging was still c900be85 = base, nothing to merge).
+  Dev probe committed: core/src/bin/diarize_asr_probe.rs (modes in its header).
