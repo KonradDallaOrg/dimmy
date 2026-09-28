@@ -3132,6 +3132,7 @@ mod tests {
         cfg.waveform_style = "Line".to_string();
         cfg.overlay_position = "Top Left".to_string();
         cfg.keep_in_clipboard = true;
+        cfg.diarization_enabled = true;
         save_config_file(&cfg);
 
         let loaded = load_config_file();
@@ -3144,6 +3145,7 @@ mod tests {
         assert_eq!(loaded.waveform_style, "Line");
         assert_eq!(loaded.overlay_position, "Top Left");
         assert!(loaded.keep_in_clipboard);
+        assert!(loaded.diarization_enabled);
 
         // Restore default
         save_config_file(&AppConfig::default());
@@ -3176,14 +3178,10 @@ mod tests {
     }
 
     #[test]
-    fn diarization_is_off_by_default_and_survives_a_save() {
+    fn diarization_is_off_by_default() {
+        // The save/load half lives in save_load_roundtrip_preserves_new_fields:
+        // a second test writing the shared config file races it.
         assert!(!AppConfig::default().diarization_enabled);
-        let mut cfg = AppConfig::default();
-        cfg.diarization_enabled = true;
-        save_config_file(&cfg);
-        assert!(load_config_file().diarization_enabled);
-        save_config_file(&AppConfig::default());
-        assert!(!load_config_file().diarization_enabled);
     }
 
     /// A config written before this field existed must read as "on", not as
