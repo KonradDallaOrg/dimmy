@@ -1498,10 +1498,36 @@ public sealed partial class MeetingWindow : Window
         {
             var total = session.NaturalDuration.TotalSeconds;
             if (total <= 0) return;
-            double frac = session.Position.TotalSeconds / total;
-            DispatcherQueue.TryEnqueue(() => UpdateDonePlayhead(frac));
+            var pos = session.Position;
+            double frac = pos.TotalSeconds / total;
+            bool playing = session.PlaybackState == global::Windows.Media.Playback.MediaPlaybackState.Playing;
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                UpdateDonePlayhead(frac);
+                if (playing) FollowPlayback(pos);
+            });
         }
         catch { }
+    }
+
+    // Index of the turn the transcript was last scrolled to by playback.
+    private int _followedTurn = -1;
+
+    /// <summary>While audio plays, keep the line being spoken at the top of
+    /// the transcript. It scrolls when the spoken TURN changes — not on a
+    /// clock — so a long monologue stays still and a quick back-and-forth
+    /// still keeps up. A manual scroll during playback seeks the audio to
+    /// what the reader chose (SeekToScrolledTranscript), and following simply
+    /// resumes from there.</summary>
+    private void FollowPlayback(TimeSpan position)
+    {
+        if (_doneTurnAnchors.Count == 0) return;
+        var secs = position.TotalSeconds;
+        int idx = 0;
+        for (int i = 0; i < _doneTurnAnchors.Count && _doneTurnAnchors[i].Seconds <= secs; i++) idx = i;
+        if (idx == _followedTurn) return;
+        _followedTurn = idx;
+        ScrollTranscriptTo(position);
     }
 
     private void UpdateDonePlayhead(double frac)
