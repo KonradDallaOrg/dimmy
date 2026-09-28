@@ -61,7 +61,7 @@ PROD endpoints, prerelease). Check each with `scripts/check-release-tag.sh <tag>
 The sign-windows job needs runner PC-KDALLA + SimplySign: it will wait/fail tonight — that is
 expected; the user signs in the morning (re-run sign-windows, or scripts/dev/firma-release.ps1).
 - [x] R1 bump core/Cargo.toml + both lock files to 0.7.11 on feat/diarization (commit `chore(release): bump to 0.7.11`)
-- [ ] R2 release notes + CHANGELOG block (skill `release-notes`)
+- [x] R2 release notes + CHANGELOG block (skill `release-notes`)
 - [x] R3 pre-push checks (fmt, clippy CI flags, lib tests)
 - [ ] R4 merge feat/diarization --no-ff into staging, push staging
 - [ ] R5 wait for staging-auto-update.yml green (incl. test-install) — do NOT tag if red
