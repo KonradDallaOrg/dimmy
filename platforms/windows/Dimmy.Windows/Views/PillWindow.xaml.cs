@@ -1473,6 +1473,10 @@ public sealed partial class PillWindow : Window
             // started with "Generate recap" unchecked, the stop path (pill OR
             // call-detect popup, both land here) must NOT recap — same as the
             // meeting window's own stop.
+            // Speaker labels (when enabled) replace the live per-track
+            // transcript before the recap reads it.
+            if (!string.IsNullOrEmpty(dir))
+                transcript = await Services.DiarizationService.RelabelIfEnabledAsync(dir, transcript);
             bool wantRecap = App.Instance?.AppViewModel?.MeetingGenerateRecap ?? true;
             if (wantRecap && !string.IsNullOrEmpty(dir) && !string.IsNullOrWhiteSpace(transcript))
             {

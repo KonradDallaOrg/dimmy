@@ -22,13 +22,19 @@ LOCALLY before anything is pushed. **Do not push, do not tag.**
 
 ## Status
 - [x] Research + benchmark (see memory `diarization-nemotron-eval`)
-- [ ] core `diarize.rs`: download, mel, speaker cache, segments + tests
-- [ ] config field `diarization_enabled` + FFI (status/download/enable)
-- [ ] retranscribe integration + speakers.json + rename FFI
-- [ ] recap/names: transcript labels resolved to names
-- [ ] Win Settings toggle + download progress
-- [ ] Win MeetingWindow: speaker list/rename, labels, per-speaker waveform tab
+- [x] core `diarize.rs`: download, mel, speaker cache, segments + tests
+- [x] config field `diarization_enabled` + FFI (status/download/enable)
+- [x] retranscribe integration + speakers.json + rename FFI
+- [x] recap/names: transcript labels resolved to names
+- [x] Win Settings toggle + download progress
+- [x] Win MeetingWindow: speaker list/rename, labels, per-speaker waveform tab
 - [ ] Win build (DLL frozen feature set + C# x64) + local run for the user
 
 ## Next step / notes
-(update this section at every milestone)
+- Core committed 0fb15555; Win UI + docs committed after it. 1022 Rust + 487 C# tests green.
+- Build env: `C:\dp	.cmd <cmd>` (vcvars64 + Ninja + CARGO_TARGET_DIR=C:\dp). The DLL is built
+  there with the frozen feature set, then copied (dimmy_lib/ggml*/llama*/mtmd*.dll) into
+  core	argetelease so the csproj picks it up.
+- The user's dev Dimmy runs from bind\Debug — it must be closed before the final C# build.
+- Auto relabel after stop runs ONLY with stt_mode=local (cloud would re-upload the meeting).
+- Remaining: build + launch for the user's local test. Then wait for feedback.

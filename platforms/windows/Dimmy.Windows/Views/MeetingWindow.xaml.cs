@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Dimmy.Windows.Helpers;
 using Dimmy.Windows.Interop;
@@ -582,10 +583,18 @@ public sealed partial class MeetingWindow : Window
             DoneMeta.Text = $"{FormatDuration(dur)} · {chunks} chunks · {DateTime.Now:yyyy-MM-dd HH:mm}"
                 + (string.IsNullOrWhiteSpace(stopError) ? "" : " · ⚠ audio incomplete");
             RefreshDoneCalendarRow(dir);
+            if (Services.DiarizationService.Enabled())
+            {
+                ProcStep2Text.Text = "Identifying speakers…";
+                transcript = await Services.DiarizationService.RelabelIfEnabledAsync(dir, transcript);
+                ProcStep2Text.Text = ProcStep2Default;
+            }
+            LoadDoneSpeakers(dir);
             _doneTurnAnchors = Helpers.TranscriptRenderer.Render(RawTranscriptText,
                 string.IsNullOrEmpty(transcript)
                     ? "(no transcript: VAD may have removed all audio)"
-                    : HumanizeTranscript(transcript));
+                    : HumanizeTranscript(transcript),
+                SpeakerColorMap());
             await LoadDoneAudioAsync(dir);
             await LoadNotesAsync(dir);
 
@@ -1358,6 +1367,10 @@ public sealed partial class MeetingWindow : Window
                 // the session telling us a seek happened, whoever asked for it.
                 mp.PlaybackSession.SeekCompleted -= OnDoneSeekCompleted;
                 mp.PlaybackSession.SeekCompleted += OnDoneSeekCompleted;
+                // Speaker lanes are placed by time; the first paint guessed
+                // the length, so repaint once the player knows it.
+                mp.MediaOpened -= OnDoneMediaOpened;
+                mp.MediaOpened += OnDoneMediaOpened;
             }
 
             // Fixed bucket count (NOT width-derived): the peaks are decoded
@@ -1404,6 +1417,12 @@ public sealed partial class MeetingWindow : Window
         {
             App.Log($"LoadDoneAudio exc: {ex.Message}", "Meeting");
         }
+    }
+
+    private void OnDoneMediaOpened(global::Windows.Media.Playback.MediaPlayer sender, object args)
+    {
+        if (_doneSpeakers.Count > 0)
+            DispatcherQueue.TryEnqueue(DrawDoneWaveform);
     }
 
     private Microsoft.UI.Xaml.Shapes.Rectangle? _donePlayhead;
@@ -1535,6 +1554,163 @@ public sealed partial class MeetingWindow : Window
         Microsoft.UI.Xaml.Controls.Canvas.SetTop(_doneKnob, h / 2.0 - kr);
     }
 
+    // ── Speakers of a diarized meeting ─────────────────────────────
+    // Loaded from speakers.json (core/src/diarize.rs) whenever a meeting is
+    // shown or its transcript is regenerated. Empty ⇒ the meeting was not
+    // diarized, the speaker bar stays collapsed and nothing else changes.
+    private List<Helpers.MeetingSpeaker> _doneSpeakers = new();
+    private bool _waveBySpeaker = true;
+
+    private IReadOnlyDictionary<string, int>? SpeakerColorMap() =>
+        _doneSpeakers.Count > 0 ? Helpers.MeetingSpeakers.ColorsByName(_doneSpeakers) : null;
+
+    private void LoadDoneSpeakers(string dir)
+    {
+        _doneSpeakers = Helpers.MeetingSpeakers.Load(dir);
+        SpeakerBar.Visibility = _doneSpeakers.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        RebuildSpeakerChips(dir);
+        ApplyWaveModeTabs();
+    }
+
+    private void RebuildSpeakerChips(string dir)
+    {
+        SpeakerChips.Children.Clear();
+        bool dark = Helpers.ThemeHelper.ResolvedIsDark();
+        foreach (var s in _doneSpeakers)
+        {
+            var content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+            content.Children.Add(new Microsoft.UI.Xaml.Shapes.Ellipse
+            {
+                Width = 8, Height = 8,
+                Fill = new SolidColorBrush(Helpers.TranscriptRenderer.SpeakerColor(s.ColorIndex, dark)),
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+            content.Children.Add(new TextBlock
+            {
+                Text = s.Name, FontSize = 12, VerticalAlignment = VerticalAlignment.Center,
+            });
+            content.Children.Add(new TextBlock
+            {
+                Text = Helpers.MeetingSpeakers.FormatTalkTime(s.TalkSecs),
+                FontSize = 11, Opacity = 0.6, FontFamily = new FontFamily("Consolas"),
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+            var chip = new Button
+            {
+                Content = content,
+                Padding = new Thickness(10, 3, 10, 3),
+                MinHeight = 0,
+                CornerRadius = new CornerRadius(12),
+                Flyout = BuildRenameFlyout(dir, s),
+            };
+            ToolTipService.SetToolTip(chip, $"Rename {s.Name}");
+            SpeakerChips.Children.Add(chip);
+        }
+    }
+
+    private Flyout BuildRenameFlyout(string dir, Helpers.MeetingSpeaker s)
+    {
+        var box = new TextBox
+        {
+            Header = "Who is this?", Text = s.Name, Width = 240, MaxLength = 40,
+        };
+        var err = new TextBlock
+        {
+            FontSize = 12, TextWrapping = TextWrapping.Wrap, MaxWidth = 240,
+            Foreground = (Brush)Application.Current.Resources["SystemFillColorCriticalBrush"],
+            Visibility = Visibility.Collapsed,
+        };
+        var save = new Button
+        {
+            Content = "Rename",
+            Style = (Style)Application.Current.Resources["AccentButtonStyle"],
+            HorizontalAlignment = HorizontalAlignment.Right,
+        };
+        var panel = new StackPanel { Spacing = 8 };
+        panel.Children.Add(box);
+        panel.Children.Add(err);
+        panel.Children.Add(save);
+        var fly = new Flyout { Content = panel };
+
+        async void Commit()
+        {
+            var name = box.Text.Trim();
+            int rc = await Task.Run(() => DimmyNative.dimmy_meeting_rename_speaker(dir, s.Id, name));
+            if (rc != 0)
+            {
+                err.Text = rc switch
+                {
+                    -4 => "Use 1–40 characters, no brackets, and not \"mic\" or \"system\".",
+                    -5 => "Another speaker already has this name.",
+                    _ => "Could not rename this speaker.",
+                };
+                err.Visibility = Visibility.Visible;
+                return;
+            }
+            fly.Hide();
+            ReloadSpeakersAndTranscript(dir);
+            if (File.Exists(Path.Combine(dir, "recap.md")))
+                ShowToast($"Renamed to {name}. Regenerate the recap to use the new name.");
+        }
+        save.Click += (_, _) => Commit();
+        box.KeyDown += (_, e) =>
+        {
+            if (e.Key != global::Windows.System.VirtualKey.Enter) return;
+            e.Handled = true;
+            Commit();
+        };
+        fly.Opened += (_, _) =>
+        {
+            err.Visibility = Visibility.Collapsed;
+            box.Focus(FocusState.Programmatic);
+            box.SelectAll();
+        };
+        return fly;
+    }
+
+    private void ReloadSpeakersAndTranscript(string dir)
+    {
+        LoadDoneSpeakers(dir);
+        var txt = Path.Combine(dir, "transcripts.txt");
+        if (File.Exists(txt))
+            _doneTurnAnchors = Helpers.TranscriptRenderer.Render(
+                RawTranscriptText, HumanizeTranscript(ReadWhileWritten(txt)), SpeakerColorMap());
+        DrawDoneWaveform();
+    }
+
+    private void WaveMode_PointerPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        _waveBySpeaker = (sender as FrameworkElement)?.Tag as string == "speakers";
+        ApplyWaveModeTabs();
+        DrawDoneWaveform();
+    }
+
+    private void ApplyWaveModeTabs()
+    {
+        WaveModeTracksText.Opacity = _waveBySpeaker ? 0.6 : 1.0;
+        WaveModeSpeakersText.Opacity = _waveBySpeaker ? 1.0 : 0.6;
+        WaveModeTracksLine.Opacity = _waveBySpeaker ? 0 : 1;
+        WaveModeSpeakersLine.Opacity = _waveBySpeaker ? 1 : 0;
+    }
+
+    /// Length of the recording in seconds, to place speaker segments on the
+    /// waveform: the player's, once it has opened the file; until then the
+    /// end of the last segment, which is close enough for a first paint.
+    private double DoneTrackSecs()
+    {
+        try
+        {
+            var d = DoneAudioPlayer?.MediaPlayer?.PlaybackSession?.NaturalDuration.TotalSeconds ?? 0;
+            if (d > 0) return d;
+        }
+        catch { }
+        double end = 0;
+        foreach (var s in _doneSpeakers)
+            foreach (var seg in s.Segments)
+                end = Math.Max(end, seg.End);
+        return end;
+    }
+
     // Bar geometry: slim + dense. 3 px bar, 2 px gap → the count adapts to the
     // card width, so any recording length fills the card (long = each bar is the
     // peak over a longer slice ⇒ fuller/smoother; short = finer detail).
@@ -1577,16 +1753,20 @@ public sealed partial class MeetingWindow : Window
 
         double mid = h / 2.0;
         double maxH = mid - 4;
+        bool bySpeaker = _waveBySpeaker && _doneSpeakers.Count > 0;
 
         // Faint center hairline.
-        var hair = new Microsoft.UI.Xaml.Shapes.Rectangle
+        if (!bySpeaker)
         {
-            Width = w, Height = 1,
-            Fill = new SolidColorBrush(global::Windows.UI.Color.FromArgb(0x33, 0xC7, 0xCB, 0xD6)),
-            IsHitTestVisible = false,
-        };
-        Microsoft.UI.Xaml.Controls.Canvas.SetTop(hair, mid - 0.5);
-        DoneWaveformCanvas.Children.Add(hair);
+            var hair = new Microsoft.UI.Xaml.Shapes.Rectangle
+            {
+                Width = w, Height = 1,
+                Fill = new SolidColorBrush(global::Windows.UI.Color.FromArgb(0x33, 0xC7, 0xCB, 0xD6)),
+                IsHitTestVisible = false,
+            };
+            Microsoft.UI.Xaml.Controls.Canvas.SetTop(hair, mid - 0.5);
+            DoneWaveformCanvas.Children.Add(hair);
+        }
 
         // Two layers: faint "unplayed" base + full-colour "played" on top
         // (clipped to the playhead in UpdateDonePlayhead).
@@ -1608,6 +1788,47 @@ public sealed partial class MeetingWindow : Window
             layer.Children.Add(r);
         }
 
+        if (bySpeaker)
+        {
+            // One thin lane per speaker inside the same 74 px: the speaker's
+            // track, drawn only where the diarizer heard that speaker, in the
+            // speaker's colour. Same played / unplayed layers as the bands.
+            bool dark = Helpers.ThemeHelper.ResolvedIsDark();
+            double dur = DoneTrackSecs();
+            int k = _doneSpeakers.Count;
+            const double laneGap = 3;
+            double laneH = Math.Max(4, (h - laneGap * (k - 1)) / k);
+            for (int j = 0; j < k; j++)
+            {
+                var sp = _doneSpeakers[j];
+                var band = sp.Band == "mic" ? mN : sN;
+                var active = new bool[n];
+                if (dur > 0)
+                    foreach (var (a, b) in sp.Segments)
+                    {
+                        int ia = Math.Max(0, (int)(a / dur * n));
+                        int ib = Math.Min(n, (int)Math.Ceiling(b / dur * n));
+                        for (int i = ia; i < ib; i++) active[i] = true;
+                    }
+                var color = Helpers.TranscriptRenderer.SpeakerColor(sp.ColorIndex, dark);
+                double laneMid = j * (laneH + laneGap) + laneH / 2;
+                var baseLine = new Microsoft.UI.Xaml.Shapes.Rectangle
+                {
+                    Width = w, Height = 1, IsHitTestVisible = false,
+                    Fill = new SolidColorBrush(global::Windows.UI.Color.FromArgb(0x26, color.R, color.G, color.B)),
+                };
+                Microsoft.UI.Xaml.Controls.Canvas.SetTop(baseLine, laneMid - 0.5);
+                DoneWaveformCanvas.Children.Add(baseLine);
+                for (int i = 0; i < n; i++)
+                {
+                    if (!active[i]) continue;
+                    double bh = Math.Max(2, Math.Min(laneH, band[i] * norm * laneH));
+                    Bar(played, i * slot, laneMid - bh / 2, bh, color, 0xFF);
+                    Bar(unplayed, i * slot, laneMid - bh / 2, bh, color, 0x47);
+                }
+            }
+        }
+        else
         for (int i = 0; i < n; i++)
         {
             double x = i * slot;
@@ -2799,11 +3020,13 @@ public sealed partial class MeetingWindow : Window
                 }
             }
             var txt = Path.Combine(row.Dir, "transcripts.txt");
+            LoadDoneSpeakers(row.Dir);
             if (File.Exists(txt))
             {
                 _doneTurnAnchors = Helpers.TranscriptRenderer.Render(
                     RawTranscriptText,
-                    HumanizeTranscript(ReadWhileWritten(txt)));
+                    HumanizeTranscript(ReadWhileWritten(txt)),
+                    SpeakerColorMap());
             }
             await LoadDoneAudioAsync(row.Dir);
             await LoadNotesAsync(row.Dir);
@@ -3405,8 +3628,13 @@ public sealed partial class MeetingWindow : Window
 
             var txtPath = Path.Combine(dir, "transcripts.txt");
             await File.WriteAllTextAsync(txtPath, merged);
-            _doneTurnAnchors = Helpers.TranscriptRenderer.Render(RawTranscriptText, HumanizeTranscript(merged));
-            ShowToast("Transcript regenerated.");
+            LoadDoneSpeakers(dir);
+            _doneTurnAnchors = Helpers.TranscriptRenderer.Render(
+                RawTranscriptText, HumanizeTranscript(merged), SpeakerColorMap());
+            DrawDoneWaveform();
+            ShowToast(_doneSpeakers.Count > 0
+                ? $"Transcript regenerated · {_doneSpeakers.Count} speaker(s)."
+                : "Transcript regenerated.");
         }
         catch (Exception ex)
         {

@@ -584,6 +584,39 @@
                 </StackPanel>
               </StackPanel>
 
+              <!-- Speakers: diarization of meeting transcripts. Not an STT
+                   provider — it runs after whichever engine transcribed, so it
+                   sits beside the engine choice, not inside it. -->
+              <StackPanel Spacing="4">
+                <TextBlock Text="SPEAKERS"
+                           FontSize="12" FontWeight="SemiBold"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           CharacterSpacing="40" Margin="2,20,0,8" />
+                <controls:SettingCard Glyph="&#xE716;"
+                                      Label="Identify speakers in meetings"
+                                      InfoTip="Labels each line of a meeting transcript with who said it, and lets you name them. Runs on this computer: automatically after each meeting with local transcription, and whenever you regenerate a transcript (the only way with cloud transcription, so the audio is not uploaded twice). Downloads a 104 MB model the first time.">
+                  <ToggleSwitch IsOn="{Binding DiarizationEnabled, Mode=TwoWay}"
+                                Style="{StaticResource CompactToggleSwitch}" />
+                </controls:SettingCard>
+                <controls:SettingCard x:Name="DiarizationModelCard"
+                                      Glyph="&#xE946;"
+                                      Label="Speaker model"
+                                      Visibility="{Binding DiarizationEnabled, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                  <StackPanel Orientation="Vertical" Spacing="6" HorizontalAlignment="Right" MaxWidth="320">
+                    <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                      <TextBlock x:Name="DiarizationStatus" Text="Checking..."
+                                 FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                 TextWrapping="Wrap" TextAlignment="Right"
+                                 VerticalAlignment="Center" />
+                      <Button x:Name="DiarizationDownloadBtn" Content="Download (104 MB)"
+                              Click="DiarizationDownload_Click" Visibility="Collapsed" />
+                    </StackPanel>
+                    <ProgressBar x:Name="DiarizationProgress" HorizontalAlignment="Stretch"
+                                 Minimum="0" Maximum="100" Visibility="Collapsed" />
+                  </StackPanel>
+                </controls:SettingCard>
+              </StackPanel>
+
               <!-- Microphone. The Input-device picker is ESSENTIAL (you can't
                    capture audio from the wrong mic) so it lives in Simple. The
                    tuning knobs (gain / preprocessing / chunk / captions) stay

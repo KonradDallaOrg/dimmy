@@ -73,6 +73,7 @@ public sealed partial class SettingsWindow : Window
         if (Application.Current is App app)
         {
             app.AppViewModel.ParakeetDownloadProgress += OnParakeetProgress;
+            app.AppViewModel.DiarizationDownloadProgress += OnDiarizationProgress;
             app.AppViewModel.FileTranscribeProgress += OnFileTranscribeProgress;
             app.AppViewModel.SttModelDownloadProgress += OnSttModelProgress;
             app.AppViewModel.LlmModelDownloadProgress += OnLlmModelProgress;
@@ -82,6 +83,7 @@ public sealed partial class SettingsWindow : Window
             this.Closed += (_, __) =>
             {
                 app.AppViewModel.ParakeetDownloadProgress -= OnParakeetProgress;
+                app.AppViewModel.DiarizationDownloadProgress -= OnDiarizationProgress;
                 app.AppViewModel.FileTranscribeProgress -= OnFileTranscribeProgress;
                 app.AppViewModel.SttModelDownloadProgress -= OnSttModelProgress;
                 app.AppViewModel.LlmModelDownloadProgress -= OnLlmModelProgress;
@@ -147,6 +149,17 @@ public sealed partial class SettingsWindow : Window
         {
             PulseSavedInfoBar();
             ScheduleAutoSaveConfig();
+        };
+
+        // Turning speaker labels on fetches the model right away, so the
+        // next meeting can use it without a second trip to Settings.
+        RefreshDiarizationStatus();
+        ViewModel.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName != nameof(SettingsViewModel.DiarizationEnabled)) return;
+            RefreshDiarizationStatus();
+            if (ViewModel.DiarizationEnabled && DimmyNative.dimmy_diarization_model_present() != 1)
+                _ = DownloadDiarizationModelAsync();
         };
 
         // Render waveform + load audio whenever the History selection
@@ -3043,6 +3056,57 @@ public sealed partial class SettingsWindow : Window
     /// the whisper-model download path. Total is 0 when one of the
     /// HEAD calls didn't return a Content-Length — fall back to
     /// indeterminate in that case.
+    // ── Speaker diarization model ───────────────────────────────
+    private static bool _diarizationDownloading;
+
+    private void RefreshDiarizationStatus()
+    {
+        if (_diarizationDownloading) return;
+        bool present = DimmyNative.dimmy_diarization_model_present() == 1;
+        DiarizationStatus.Text = present ? "Ready" : "Not downloaded (104 MB)";
+        DiarizationDownloadBtn.Visibility = present ? Visibility.Collapsed : Visibility.Visible;
+        DiarizationProgress.Visibility = Visibility.Collapsed;
+    }
+
+    private void DiarizationDownload_Click(object sender, RoutedEventArgs e) =>
+        _ = DownloadDiarizationModelAsync();
+
+    private async System.Threading.Tasks.Task DownloadDiarizationModelAsync()
+    {
+        if (_diarizationDownloading) return;
+        _diarizationDownloading = true;
+        DiarizationDownloadBtn.Visibility = Visibility.Collapsed;
+        DiarizationProgress.Visibility = Visibility.Visible;
+        DiarizationProgress.IsIndeterminate = true;
+        DiarizationStatus.Text = "Downloading...";
+        int rc;
+        try
+        {
+            rc = await System.Threading.Tasks.Task.Run(() => DimmyNative.dimmy_diarization_download());
+        }
+        finally
+        {
+            _diarizationDownloading = false;
+        }
+        RefreshDiarizationStatus();
+        if (rc != 0)
+        {
+            DiarizationStatus.Text = "Download failed";
+            DiarizationDownloadBtn.Content = "Retry download";
+            DiarizationDownloadBtn.Visibility = Visibility.Visible;
+        }
+    }
+
+    private void OnDiarizationProgress(long downloaded, long total)
+    {
+        if (total <= 0) return;
+        DiarizationProgress.IsIndeterminate = false;
+        double percent = Math.Min(100, downloaded * 100.0 / total);
+        DiarizationProgress.Value = percent;
+        DiarizationStatus.Text =
+            $"Downloading... {FormatBytes(downloaded)} / {FormatBytes(total)} ({percent:F0}%)";
+    }
+
     private void OnParakeetProgress(long downloaded, long total)
     {
         if (total <= 0)

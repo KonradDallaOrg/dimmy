@@ -25,7 +25,8 @@ public static class TranscriptRenderer
     //   `[00:12:00] [mic] hello world`   (current)
     //   `[  1234 ms] [mic] hello world`  (before 2026-09-10)
     // One line per chunk; the timestamp is elapsed from the meeting start,
-    // [mic|system] is the speaker track, then the text.
+    // then the speaker: the track (`mic` / `system`) or, in a diarized
+    // meeting, the speaker's name (`Speaker 2`, `Marco`), then the text.
     //
     // BOTH shapes have to match. The writer switched to hh:mm:ss when the raw
     // millisecond count proved unreadable, and this regex was not updated with
@@ -34,7 +35,7 @@ public static class TranscriptRenderer
     // divider on a change of speaker. Old transcripts on disk still carry the
     // ms form, so this keeps reading them too.
     private static readonly Regex TurnRe =
-        new(@"^\s*\[(?<ts>\s*(?:\d+\s*ms|\d{1,2}:\d{2}(?::\d{2})?)\s*)\]\s+\[(?<spk>mic|system)\]\s+(?<body>.*)$",
+        new(@"^\s*\[(?<ts>\s*(?:\d+\s*ms|\d{1,2}:\d{2}(?::\d{2})?)\s*)\]\s+\[(?<spk>(?!paused\])[^\]\r\n]{1,40})\]\s+(?<body>.*)$",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     /// <summary>Where a speaker turn sits, for callers that need to scroll the
@@ -71,7 +72,10 @@ public static class TranscriptRenderer
     /// <summary>Render the transcript. The return value lists the speaker
     /// turns with their elapsed time, in document order, for callers that want
     /// to scroll to a playback position; it is safe to ignore.</summary>
-    public static List<TurnAnchor> Render(RichTextBlock target, string transcript)
+    public static List<TurnAnchor> Render(
+        RichTextBlock target,
+        string transcript,
+        IReadOnlyDictionary<string, int>? speakerColors = null)
     {
         target.Blocks.Clear();
         var anchors = new List<TurnAnchor>();
@@ -120,11 +124,12 @@ public static class TranscriptRenderer
             if (turn.Success)
             {
                 if (current != null) { target.Blocks.Add(current); current = null; }
-                var spk = turn.Groups["spk"].Value.Trim().ToLowerInvariant();
+                var spkLabel = turn.Groups["spk"].Value.Trim();
+                var spk = spkLabel.ToLowerInvariant();
                 if (lastTrack != null && lastTrack != spk)
                     target.Blocks.Add(BuildSpeakerSeparator());
                 var tsText = turn.Groups["ts"].Value.Trim();
-                var turnBlock = BuildSpeakerTurn(tsText, spk, turn.Groups["body"].Value);
+                var turnBlock = BuildSpeakerTurn(tsText, spkLabel, turn.Groups["body"].Value, speakerColors);
                 target.Blocks.Add(turnBlock);
                 var secs = ParseElapsedSeconds(tsText);
                 if (secs >= 0) anchors.Add(new TurnAnchor(secs, turnBlock));
@@ -174,9 +179,19 @@ public static class TranscriptRenderer
     /// Dark theme (high contrast on dark surfaces) and a SATURATED-DARK
     /// one for Light theme. Mirrors the palette in BuildSectionBadge so
     /// timestamps + speaker labels stay visually coherent.
-    private static global::Windows.UI.Color SpeakerColor(string speaker, bool darkTheme)
+    private static global::Windows.UI.Color SpeakerColor(
+        string speaker, bool darkTheme, IReadOnlyDictionary<string, int>? speakerColors)
     {
-        if (speaker == "system")
+        if (!IsTrack(speaker))
+        {
+            // A diarized speaker: its palette slot from speakers.json, or — for
+            // a label the file does not know — a stable slot from the name.
+            int idx = speakerColors != null && speakerColors.TryGetValue(speaker, out var i)
+                ? i
+                : StableIndex(speaker);
+            return SpeakerColor(idx, darkTheme);
+        }
+        if (speaker.Equals("system", StringComparison.OrdinalIgnoreCase))
             return darkTheme
                 ? Microsoft.UI.ColorHelper.FromArgb(0xFF, 0xC9, 0xB0, 0xFF)  // pale violet
                 : Microsoft.UI.ColorHelper.FromArgb(0xFF, 0x55, 0x35, 0x9C); // deep violet
@@ -191,14 +206,15 @@ public static class TranscriptRenderer
     /// violet, theme-aware), the body in default Foreground. One paragraph
     /// per turn so consecutive same-speaker turns stack tightly; cross-
     /// speaker turns get a thin divider above via BuildSpeakerSeparator.
-    private static Paragraph BuildSpeakerTurn(string ts, string speaker, string body)
+    private static Paragraph BuildSpeakerTurn(
+        string ts, string speaker, string body, IReadOnlyDictionary<string, int>? speakerColors)
     {
         var p = new Paragraph
         {
             Margin = new Thickness(0, 4, 0, 4),
             LineHeight = 22,
         };
-        var tint = new SolidColorBrush(SpeakerColor(speaker, IsAppDarkTheme()));
+        var tint = new SolidColorBrush(SpeakerColor(speaker, IsAppDarkTheme(), speakerColors));
         p.Inlines.Add(new Run
         {
             Text = $"[{ts}]  ",
@@ -208,8 +224,9 @@ public static class TranscriptRenderer
         });
         p.Inlines.Add(new Run
         {
-            Text = $"{speaker.ToUpperInvariant()}  ",
-            FontSize = 10,
+            // Tracks read as tags (MIC / SYSTEM); people keep their name.
+            Text = IsTrack(speaker) ? $"{speaker.ToUpperInvariant()}  " : $"{speaker}  ",
+            FontSize = IsTrack(speaker) ? 10 : 12,
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
             Foreground = tint,
         });
@@ -333,6 +350,26 @@ public static class TranscriptRenderer
         {
             p.Inlines.Add(new Run { Text = line.Substring(last) });
         }
+    }
+
+    /// Palette slot as a WinUI colour — shared with the meeting window's
+    /// speaker chips and waveform lanes so all three agree.
+    public static global::Windows.UI.Color SpeakerColor(int index, bool darkTheme)
+    {
+        var v = MeetingSpeakers.Argb(index, darkTheme);
+        return Microsoft.UI.ColorHelper.FromArgb(
+            (byte)(v >> 24), (byte)(v >> 16), (byte)(v >> 8), (byte)v);
+    }
+
+    private static bool IsTrack(string label) =>
+        label.Equals("mic", StringComparison.OrdinalIgnoreCase)
+        || label.Equals("system", StringComparison.OrdinalIgnoreCase);
+
+    private static int StableIndex(string name)
+    {
+        int h = 0;
+        foreach (var c in name.ToLowerInvariant()) h = unchecked(h * 31 + c);
+        return Math.Abs(h % 8);
     }
 
     private static Brush ThemeBrush(string key)

@@ -291,6 +291,7 @@ public partial class AppViewModel : ObservableObject
     /// is 0 if Content-Length was unavailable; consumers should treat
     /// that as "indeterminate". Fired on the UI thread.
     public event Action<long, long>? ParakeetDownloadProgress;
+    public event Action<long, long>? DiarizationDownloadProgress;
 
     /// Fires on each Whisper/STT model download progress event. Args:
     /// (filename, downloaded_bytes, total_bytes). `total` is 0 when the
@@ -463,6 +464,11 @@ public partial class AppViewModel : ObservableObject
             {
                 case "parakeet_bundle_download_progress":
                     ParakeetDownloadProgress?.Invoke(
+                        payload.GetProperty("downloaded").GetInt64(),
+                        payload.GetProperty("total").GetInt64());
+                    break;
+                case "diarization_download_progress":
+                    DiarizationDownloadProgress?.Invoke(
                         payload.GetProperty("downloaded").GetInt64(),
                         payload.GetProperty("total").GetInt64());
                     break;

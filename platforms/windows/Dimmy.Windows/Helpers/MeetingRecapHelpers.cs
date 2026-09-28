@@ -270,7 +270,12 @@ public static class MeetingRecapHelpers
             "speakers/loopback (treat as \"the remote party\" / \"interlocutor\" / specific " +
             "name only if explicitly mentioned in the transcript). When only `[mic]` is " +
             "present, the recording is monologue / dictation; when only `[system]` is " +
-            "present, the user was a silent listener.\n\n" +
+            "present, the user was a silent listener.\n" +
+            "Any OTHER label is one distinct person, told apart by voice: either a real " +
+            "name the user assigned (`[Marco]`) — use it — or a placeholder like " +
+            "`[Speaker 2]`. For a placeholder, use the person's name if the conversation " +
+            "makes it clear (they are addressed or introduce themselves); otherwise keep " +
+            "the placeholder. Never merge two labels into one person or split one.\n\n" +
 
             languageBlock +
 
@@ -300,8 +305,9 @@ public static class MeetingRecapHelpers
             "## ===NARRATIVE===\n" +
             "2-4 paragraphs of FLOWING PROSE (NOT bullets). Tell the story of the meeting: " +
             "what was discussed, in which order, with which tone, who pushed for what, " +
-            "where alignment came easy and where it was contested. Reference `[mic]` / " +
-            "`[system]` inline when attribution matters. Quote a memorable phrase verbatim " +
+            "where alignment came easy and where it was contested. Attribute to the " +
+            "speaker labels (or the names they resolve to) when attribution matters. " +
+            "Quote a memorable phrase verbatim " +
             "when it captures a moment (`\"...\"`). This is the section a busy stakeholder " +
             "would read INSTEAD of listening to the recording.\n\n" +
 

@@ -220,6 +220,7 @@ A fresh session must know these exist too — all in the shared core, so each is
 | **Resumable + integrity-checked model downloads** | `download.rs` | (backs `dimmy_download_model` / `dimmy_download_llm_model`) | Range/If-Range resume + SHA-256/magic verify; see modules.md |
 | **Notion integration** — send recaps to a page/database | `notion.rs` | `dimmy_notion_has_token`/`_set_token`/`_test_connection`/`_search`/`_send_recap` | User's own internal integration token (AES keystore, `KeyringScope::NotionToken`) |
 | **Obsidian / folder export** — write `recap.md` to a sync folder | (host-only, no Rust) | (none) | Win: `RecapExportService`. Mac: `tryExportRecap` |
+| **Speaker diarization** — "who said what" in meeting transcripts (Nemotron-3-Diarization, ONNX int8) | `diarize.rs` (+ inside `dimmy_meeting_retranscribe`) | `dimmy_diarization_model_present`/`_download`, `dimmy_meeting_rename_speaker` | Win only so far: `DiarizationService.cs`, `MeetingSpeakers.cs`, speaker chips + lanes in `MeetingWindow`. Labels ARE names in `transcripts.txt`. See [`docs/dev/diarization.md`](docs/dev/diarization.md) |
 
 ## Decision tree — where does this change go?
 
