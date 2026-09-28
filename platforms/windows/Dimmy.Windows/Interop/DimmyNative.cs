@@ -375,6 +375,23 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_parakeet_download_bundle();
 
+    // ── Speaker diarization (Nemotron-3-Diarization) ─────────────
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_diarization_model_present();
+
+    /// Blocking; progress arrives as `diarization_download_progress` events.
+    /// 0 = ready, -1 = failed.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_diarization_download();
+
+    /// Renames a speaker in speakers.json AND transcripts.txt. rc: 0 ok,
+    /// -1 bad args, -2 unknown id, -3 io, -4 invalid name, -5 duplicate.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_meeting_rename_speaker(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string dir,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string id,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string name);
+
     // -- Qwen3-ASR (third local STT backend) ---------------------
     // One catalog entry is TWO files (model + audio projector), so
     // presence and download both take the TEXT model filename and

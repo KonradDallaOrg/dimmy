@@ -1047,6 +1047,20 @@ mod whisper_cache {
         language: &str,
         prompt: &str,
     ) -> Result<String, crate::error::TranscribeError> {
+        transcribe_with_words(model_path, samples, language, prompt, None)
+    }
+
+    /// Same as [`transcribe`]; when `words` is given, whisper also runs with
+    /// token timestamps and every text token lands in it, merged into words
+    /// on whisper's leading-space convention. Times are seconds from the
+    /// start of `samples`.
+    pub fn transcribe_with_words(
+        model_path: &std::path::Path,
+        samples: &[f32],
+        language: &str,
+        prompt: &str,
+        mut words: Option<&mut Vec<crate::diarize::Word>>,
+    ) -> Result<String, crate::error::TranscribeError> {
         use std::ffi::c_int;
         use whisper_rs::{FullParams, SamplingStrategy};
 
@@ -1191,6 +1205,7 @@ mod whisper_cache {
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
+        params.set_token_timestamps(words.is_some());
 
         // Suppress the non-speech token class. Free, and it is the cheap half
         // of the anti-hallucination pair with the no-speech filter below.
@@ -1244,6 +1259,32 @@ mod whisper_cache {
                 text.push(' ');
             }
             text.push_str(seg_text.trim());
+
+            if let Some(out) = words.as_deref_mut() {
+                let eot = cached.ctx.token_eot();
+                for t in 0..segment.n_tokens() {
+                    let Some(tok) = segment.get_token(t) else {
+                        continue;
+                    };
+                    let d = tok.token_data();
+                    if d.id >= eot {
+                        continue; // timestamps, language and control tokens
+                    }
+                    let piece = tok.to_str().unwrap_or("");
+                    let (s, e) = (d.t0 as f64 / 100.0, d.t1 as f64 / 100.0);
+                    match out.last_mut() {
+                        Some(w) if !piece.starts_with(' ') && !w.text.is_empty() => {
+                            w.text.push_str(piece);
+                            w.end = e;
+                        }
+                        _ => out.push(crate::diarize::Word {
+                            start: s,
+                            end: e,
+                            text: piece.trim().to_string(),
+                        }),
+                    }
+                }
+            }
         }
 
         let final_text = text.trim().to_string();
@@ -1347,6 +1388,43 @@ pub fn transcribe_local(
     }
 
     Ok(result)
+}
+
+/// [`transcribe_local`] plus word timestamps (seconds from the start of
+/// `samples`), for speaker diarization.
+#[cfg(feature = "local-stt")]
+pub fn transcribe_local_words(
+    model_file: &Path,
+    samples: &[f32],
+    language: &str,
+    prompt: &str,
+) -> Result<(String, Vec<crate::diarize::Word>), TranscribeError> {
+    assert!(!samples.is_empty(), "samples must not be empty");
+    if !model_file.is_file() {
+        return Err(TranscribeError::LocalModel(format!(
+            "model file not found: {}",
+            model_file.display()
+        )));
+    }
+    let _no_throttle = crate::win_qos::NoThrottle::for_local_inference();
+    let load = crate::coreml_encoder::load_path(model_file);
+    let mut words = Vec::new();
+    let text =
+        whisper_cache::transcribe_with_words(&load, samples, language, prompt, Some(&mut words))?;
+    words.retain(|w| !w.text.is_empty());
+    Ok((text, words))
+}
+
+#[cfg(not(feature = "local-stt"))]
+pub fn transcribe_local_words(
+    _model_file: &Path,
+    _samples: &[f32],
+    _language: &str,
+    _prompt: &str,
+) -> Result<(String, Vec<crate::diarize::Word>), TranscribeError> {
+    Err(TranscribeError::LocalModel(
+        "local STT not available: compile with `local-stt` feature".to_string(),
+    ))
 }
 
 /// Stub when `local-stt` feature is disabled.

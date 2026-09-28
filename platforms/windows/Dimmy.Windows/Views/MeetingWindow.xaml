@@ -560,8 +560,38 @@
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                   </Grid.RowDefinitions>
-                  <Border Grid.Row="0" Height="74">
+                  <!-- Speakers of a diarized meeting: one chip each (colour,
+                       name, talk time; click to rename) and a Tracks /
+                       Speakers switch for the waveform below. Collapsed when
+                       the meeting has no speakers.json, so an undiarized
+                       meeting looks exactly as before. -->
+                  <Grid x:Name="SpeakerBar" Grid.Row="0" ColumnSpacing="12" Visibility="Collapsed">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="*"/>
+                      <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <ScrollViewer HorizontalScrollBarVisibility="Auto" HorizontalScrollMode="Enabled"
+                                  VerticalScrollBarVisibility="Disabled" VerticalScrollMode="Disabled">
+                      <StackPanel x:Name="SpeakerChips" Orientation="Horizontal" Spacing="6"/>
+                    </ScrollViewer>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                      <StackPanel Tag="tracks" Spacing="3" PointerPressed="WaveMode_PointerPressed"
+                                  ToolTipService.ToolTip="Waveform by track: you (mic) above, the call (system) below">
+                        <TextBlock x:Name="WaveModeTracksText" Text="Tracks" FontSize="12"/>
+                        <Rectangle x:Name="WaveModeTracksLine" Height="2" RadiusX="1" RadiusY="1"
+                                   Fill="{ThemeResource AccentFillColorDefaultBrush}"/>
+                      </StackPanel>
+                      <StackPanel Tag="speakers" Spacing="3" PointerPressed="WaveMode_PointerPressed"
+                                  ToolTipService.ToolTip="Waveform by speaker: one lane per person">
+                        <TextBlock x:Name="WaveModeSpeakersText" Text="Speakers" FontSize="12"/>
+                        <Rectangle x:Name="WaveModeSpeakersLine" Height="2" RadiusX="1" RadiusY="1"
+                                   Fill="{ThemeResource AccentFillColorDefaultBrush}"/>
+                      </StackPanel>
+                    </StackPanel>
+                  </Grid>
+                  <Border Grid.Row="1" Height="74">
                     <Canvas x:Name="DoneWaveformCanvas"
                             Background="Transparent"
                             IsTabStop="True" UseSystemFocusVisuals="True"
@@ -578,7 +608,7 @@
                        the waveform seeks, and until now nothing said WHERE it
                        had seeked to. Tabular figures so the digits do not
                        shuffle sideways as the seconds tick. -->
-                  <Grid Grid.Row="1" Margin="0,-4,0,0">
+                  <Grid Grid.Row="2" Margin="0,-4,0,0">
                     <TextBlock x:Name="DonePosText" Text="00:00"
                                FontSize="12" FontFamily="Consolas"
                                HorizontalAlignment="Left"
@@ -594,7 +624,7 @@
                        card / window so icons stay readable on Dark mode
                        (no hard Light theme — the card itself follows
                        the system now). -->
-                  <MediaPlayerElement x:Name="DoneAudioPlayer" Grid.Row="2"
+                  <MediaPlayerElement x:Name="DoneAudioPlayer" Grid.Row="3"
                                       AreTransportControlsEnabled="True"
                                       AutoPlay="False"
                                       MinHeight="64">

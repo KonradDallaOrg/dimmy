@@ -26,6 +26,11 @@ struct AudioPlaybackBar: View {
     /// hook a listener needs — unlike Windows, where a separate transport bar
     /// moves the session without going through the view at all.
     let onSeek: ((TimeInterval) -> Void)?
+    /// Speakers of a diarized meeting. Non-empty ⇒ one waveform lane per
+    /// speaker instead of the mic / system tracks.
+    let speakers: [MeetingSpeaker]
+    /// Playback position while playing, for the transcript to follow.
+    let onPlaybackTime: ((TimeInterval) -> Void)?
     @StateObject private var model = AudioPlaybackModel()
 
     // Decode a generous bucket count; the strips resample this down to the
@@ -36,11 +41,15 @@ struct AudioPlaybackBar: View {
     init(url: URL,
          micURL: URL? = nil,
          systemURL: URL? = nil,
-         onSeek: ((TimeInterval) -> Void)? = nil) {
+         speakers: [MeetingSpeaker] = [],
+         onSeek: ((TimeInterval) -> Void)? = nil,
+         onPlaybackTime: ((TimeInterval) -> Void)? = nil) {
         self.url = url
         self.micURL = micURL
         self.systemURL = systemURL
+        self.speakers = speakers
         self.onSeek = onSeek
+        self.onPlaybackTime = onPlaybackTime
     }
 
     private var dualBand: Bool {
@@ -76,7 +85,16 @@ struct AudioPlaybackBar: View {
                 .frame(width: 44, alignment: .leading)
 
             Group {
-                if dualBand {
+                if !speakers.isEmpty {
+                    SpeakerLanesStrip(
+                        peaksMic: model.peaksMic.isEmpty ? model.peaks : model.peaksMic,
+                        peaksSystem: model.peaksSystem.isEmpty ? model.peaks : model.peaksSystem,
+                        speakers: speakers,
+                        duration: model.duration,
+                        progress: progress,
+                        onSeekFraction: handleSeek
+                    )
+                } else if dualBand {
                     DualBandWaveformStrip(
                         peaksMic: model.peaksMic,
                         peaksSystem: model.peaksSystem,
@@ -110,6 +128,9 @@ struct AudioPlaybackBar: View {
             )
         }
         .onDisappear { model.stop() }
+        .onChange(of: model.elapsed) { _, t in
+            if model.isPlaying { onPlaybackTime?(t) }
+        }
         .onChange(of: url) { _, newURL in
             model.load(
                 url: newURL,
@@ -307,6 +328,85 @@ private struct DualBandWaveformStrip: View {
                           cornerRadius: waveBarW / 2, style: .continuous), with: shading)
             ctx.fill(Path(roundedRect: CGRect(x: x, y: mid, width: waveBarW, height: hs),
                           cornerRadius: waveBarW / 2, style: .continuous), with: shading)
+        }
+    }
+}
+
+// MARK: - Speaker lanes
+//
+// Mirror of Win MeetingWindow.DrawDoneWaveform "bySpeaker": one thin lane per
+// speaker inside the same strip, drawn only where the diarizer heard that
+// speaker, from that speaker's track, in the speaker's colour. Same played /
+// unplayed layers as the other strips.
+
+private struct SpeakerLanesStrip: View {
+    let peaksMic: [Float]
+    let peaksSystem: [Float]
+    let speakers: [MeetingSpeaker]
+    let duration: TimeInterval
+    let progress: CGFloat
+    let onSeekFraction: (CGFloat) -> Void
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Canvas { ctx, size in drawLanes(ctx: &ctx, size: size, fade: true) }
+                Canvas { ctx, size in
+                    let clipWidth = size.width * max(0, min(1, progress))
+                    ctx.clip(to: Path(CGRect(x: 0, y: 0, width: clipWidth, height: size.height)))
+                    drawLanes(ctx: &ctx, size: size, fade: false)
+                }
+                WaveKnob(progress: progress, width: geo.size.width, height: geo.size.height)
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        let f = max(0, min(1, value.location.x / geo.size.width))
+                        onSeekFraction(f)
+                    }
+            )
+        }
+    }
+
+    /// Recording length to place segments by: the player's, or — before it
+    /// has loaded — the end of the last segment.
+    private var totalSecs: Double {
+        if duration > 0 { return duration }
+        return speakers.flatMap(\.segments).map(\.end).max() ?? 0
+    }
+
+    private func drawLanes(ctx: inout GraphicsContext, size: CGSize, fade: Bool) {
+        let dur = totalSecs
+        guard dur > 0, !speakers.isEmpty else { return }
+        let slot = waveBarW + waveBarGap
+        let n = max(1, Int(size.width / slot))
+        let mic = waveResampleMax(peaksMic, n)
+        let sys = waveResampleMax(peaksSystem, n)
+        let norm = waveNorm(mic + sys)
+        let k = CGFloat(speakers.count)
+        let laneGap: CGFloat = 3
+        let laneH = max(4, (size.height - laneGap * (k - 1)) / k)
+        let dark = colorScheme == .dark
+        for (j, sp) in speakers.enumerated() {
+            let band = sp.band == "mic" ? mic : sys
+            var active = [Bool](repeating: false, count: n)
+            for seg in sp.segments {
+                let a = max(0, Int(seg.start / dur * Double(n)))
+                let b = min(n, Int((seg.end / dur * Double(n)).rounded(.up)))
+                if a < b { for i in a..<b { active[i] = true } }
+            }
+            let color = MeetingSpeakers.color(sp.colorIndex, dark: dark)
+            let laneMid = CGFloat(j) * (laneH + laneGap) + laneH / 2
+            ctx.fill(Path(CGRect(x: 0, y: laneMid - 0.5, width: size.width, height: 1)),
+                     with: .color(color.opacity(0.15)))
+            let fill = GraphicsContext.Shading.color(fade ? color.opacity(0.28) : color)
+            for i in 0..<n where active[i] {
+                let bh = max(2, min(laneH, CGFloat(Double(band[i]) * norm) * laneH))
+                let rect = CGRect(x: CGFloat(i) * slot, y: laneMid - bh / 2, width: waveBarW, height: bh)
+                ctx.fill(Path(roundedRect: rect, cornerRadius: waveBarW / 2, style: .continuous), with: fill)
+            }
         }
     }
 }

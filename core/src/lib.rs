@@ -26,6 +26,7 @@ pub mod deepgram_stream;
 pub mod dfn;
 #[cfg(feature = "local-dfn")]
 pub mod dfn3;
+pub mod diarize;
 pub mod download;
 pub mod error;
 pub mod ffi;
@@ -909,6 +910,10 @@ pub struct AppConfig {
     /// at the start of every single meeting. The per-meeting tick stays —
     /// this is only what it starts as.
     pub meeting_generate_recap: bool,
+    /// Label meeting transcripts by speaker (Nemotron-3-Diarization) whenever
+    /// they are (re)generated from the recorded audio. Off by default: it needs
+    /// a 104 MB model and adds a pass over every track.
+    pub diarization_enabled: bool,
     pub filler_removal_enabled: bool,
     // Local LLM fields
     pub llm_mode: String,        // "cloud" or "local"
@@ -1117,6 +1122,7 @@ impl Default for AppConfig {
             history_audio_max_mb: 5_000,
             auto_recap_threshold_secs: 60,
             meeting_generate_recap: true,
+            diarization_enabled: false,
             filler_removal_enabled: true,
             llm_mode: "cloud".to_string(),
             local_llm_model: local_llm::DEFAULT_LLM_MODEL.to_string(),
@@ -1236,6 +1242,7 @@ pub fn save_config_file(cfg: &AppConfig) {
             "history_audio_max_mb": cfg.history_audio_max_mb,
             "auto_recap_threshold_secs": cfg.auto_recap_threshold_secs,
             "meeting_generate_recap": cfg.meeting_generate_recap,
+            "diarization_enabled": cfg.diarization_enabled,
             "filler_removal_enabled": cfg.filler_removal_enabled,
             "llm_mode": cfg.llm_mode,
             "local_llm_model": cfg.local_llm_model,
@@ -1453,6 +1460,9 @@ pub fn load_config_file() -> AppConfig {
                     meeting_generate_recap: v["meeting_generate_recap"]
                         .as_bool()
                         .unwrap_or(defaults.meeting_generate_recap),
+                    diarization_enabled: v["diarization_enabled"]
+                        .as_bool()
+                        .unwrap_or(defaults.diarization_enabled),
                     filler_removal_enabled: v["filler_removal_enabled"]
                         .as_bool()
                         .unwrap_or(defaults.filler_removal_enabled),
@@ -1896,6 +1906,7 @@ pub struct AppState {
     pub history_audio_max_mb: Mutex<u32>,
     pub auto_recap_threshold_secs: Mutex<u32>,
     pub meeting_generate_recap: Mutex<bool>,
+    pub diarization_enabled: Mutex<bool>,
     pub filler_removal_enabled: Mutex<bool>,
     // Local LLM state
     pub llm_mode: Mutex<String>,
@@ -2057,6 +2068,7 @@ impl AppState {
             history_audio_max_mb: Mutex::new(file_cfg.history_audio_max_mb),
             auto_recap_threshold_secs: Mutex::new(file_cfg.auto_recap_threshold_secs),
             meeting_generate_recap: Mutex::new(file_cfg.meeting_generate_recap),
+            diarization_enabled: Mutex::new(file_cfg.diarization_enabled),
             filler_removal_enabled: Mutex::new(file_cfg.filler_removal_enabled),
             llm_mode: Mutex::new(file_cfg.llm_mode),
             local_llm_model: Mutex::new(file_cfg.local_llm_model),
@@ -2255,6 +2267,10 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         .meeting_generate_recap
         .lock()
         .map_err(|e| e.to_string())?;
+    let diarization_enabled = *state
+        .diarization_enabled
+        .lock()
+        .map_err(|e| e.to_string())?;
     let filler_removal_enabled = *state
         .filler_removal_enabled
         .lock()
@@ -2308,6 +2324,7 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         history_audio_max_mb,
         auto_recap_threshold_secs,
         meeting_generate_recap,
+        diarization_enabled,
         filler_removal_enabled,
         llm_mode: state.llm_mode.lock().map_err(|e| e.to_string())?.clone(),
         local_llm_model: state
@@ -3115,6 +3132,7 @@ mod tests {
         cfg.waveform_style = "Line".to_string();
         cfg.overlay_position = "Top Left".to_string();
         cfg.keep_in_clipboard = true;
+        cfg.diarization_enabled = true;
         save_config_file(&cfg);
 
         let loaded = load_config_file();
@@ -3127,6 +3145,7 @@ mod tests {
         assert_eq!(loaded.waveform_style, "Line");
         assert_eq!(loaded.overlay_position, "Top Left");
         assert!(loaded.keep_in_clipboard);
+        assert!(loaded.diarization_enabled);
 
         // Restore default
         save_config_file(&AppConfig::default());
@@ -3156,6 +3175,13 @@ mod tests {
         assert!(load_config_file().meeting_generate_recap);
 
         save_config_file(&AppConfig::default());
+    }
+
+    #[test]
+    fn diarization_is_off_by_default() {
+        // The save/load half lives in save_load_roundtrip_preserves_new_fields:
+        // a second test writing the shared config file races it.
+        assert!(!AppConfig::default().diarization_enabled);
     }
 
     /// A config written before this field existed must read as "on", not as

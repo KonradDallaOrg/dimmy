@@ -333,8 +333,11 @@ final class PillWindowController {
                             body: stopError)
                     }
                 }
-                let transcript = stopResult?.transcript
-                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                // Speaker labels (when enabled) replace the live per-track
+                // transcript before the recap reads it.
+                let transcript = stopResult.map {
+                    DiarizationService.relabelIfEnabled(dir: $0.dir, liveTranscript: $0.transcript)
+                }?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 guard let stopResult, !transcript.isEmpty else {
                     dimmyHostLog("[Recap] skip (pill stop): reason=\(stopResult == nil ? "meetingStop returned nil" : "empty transcript") — no recap will run")
                     // Empty / failed stop → no recap will run. Still post

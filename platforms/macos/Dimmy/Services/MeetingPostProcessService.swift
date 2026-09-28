@@ -540,6 +540,7 @@ enum MeetingPostProcessService {
         ## Transcript format
         Each line: `[ELAPSED_MS ms] [SPEAKER_LABEL] text`.
         Speaker labels: `[mic]` = the user recording (treat as "you" / first person when the language allows), `[system]` = remote participant(s) coming through speakers/loopback (treat as "the remote party" / "interlocutor" / specific name only if explicitly mentioned in the transcript). When only `[mic]` is present, the recording is monologue / dictation; when only `[system]` is present, the user was a silent listener.
+        Any OTHER label is one distinct person, told apart by voice: either a real name the user assigned (`[Marco]`) — use it — or a placeholder like `[Speaker 2]`. For a placeholder, use the person's name if the conversation makes it clear (they are addressed or introduce themselves); otherwise keep the placeholder. Never merge two labels into one person or split one.
 
         \(languageBlock)
 
@@ -558,7 +559,7 @@ enum MeetingPostProcessService {
         Convert ELAPSED_MS to MM:SS. Pick highlights that change the meeting's trajectory: a decision, a conflict, a key reveal, a commitment, a moment of alignment after debate. Skip routine status updates. If fewer than 3 pivotal moments exist, list only what genuinely qualifies.
 
         ## ===NARRATIVE===
-        2-4 paragraphs of FLOWING PROSE (NOT bullets). Tell the story of the meeting: what was discussed, in which order, with which tone, who pushed for what, where alignment came easy and where it was contested. Reference `[mic]` / `[system]` inline when attribution matters. Quote a memorable phrase verbatim when it captures a moment (`"..."`). This is the section a busy stakeholder would read INSTEAD of listening to the recording.
+        2-4 paragraphs of FLOWING PROSE (NOT bullets). Tell the story of the meeting: what was discussed, in which order, with which tone, who pushed for what, where alignment came easy and where it was contested. Attribute to the speaker labels (or the names they resolve to) when attribution matters. Quote a memorable phrase verbatim when it captures a moment (`"..."`). This is the section a busy stakeholder would read INSTEAD of listening to the recording.
 
         ## ===KEY_DECISIONS===
         Bullet list of decisions actually MADE in the meeting (not proposed, not considered). Each item:

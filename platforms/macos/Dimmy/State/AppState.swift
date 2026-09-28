@@ -1051,6 +1051,14 @@ final class AppState: ObservableObject {
     @Published var isDownloadingParakeet: Bool = false
     @Published var parakeetBundlePresent: Bool = false
 
+    /// Label meeting transcripts by speaker. Mirror of Rust
+    /// Config::diarization_enabled (off by default) and of Win
+    /// SettingsViewModel.DiarizationEnabled.
+    @Published var diarizationEnabled: Bool = false
+    @Published var diarizationModelPresent: Bool = false
+    @Published var diarizationDownloadProgress: Double = 0.0
+    @Published var isDownloadingDiarization: Bool = false
+
     /// Which Qwen3-ASR variant runs when `localSttBackend == "qwen"`.
     /// Names the TEXT half; the projector is derived from it in the core,
     /// because the two are only ever useful as a pair.
@@ -1681,6 +1689,7 @@ final class AppState: ObservableObject {
         // producing recaps after an update.
         if let v = config["meeting_generate_recap"] as? Bool { meetingGenerateRecapDefault = v }
         if let v = config["calendar_context_enabled"] as? Bool { calendarContextEnabled = v }
+        if let v = config["diarization_enabled"] as? Bool { diarizationEnabled = v }
         if let v = config["filler_removal_enabled"] as? Bool { fillerRemovalEnabled = v }
         if let v = config["call_detect_enabled"] as? Bool { callDetectEnabled = v }
         if let v = config["call_detect_auto_record"] as? Bool { callDetectAutoRecord = v }
@@ -2172,6 +2181,7 @@ final class AppState: ObservableObject {
             "live_captions_enabled": liveCaptionsEnabled,
             "meeting_generate_recap": meetingGenerateRecapDefault,
             "calendar_context_enabled": calendarContextEnabled,
+            "diarization_enabled": diarizationEnabled,
             "filler_removal_enabled": fillerRemovalEnabled,
             "call_detect_enabled": callDetectEnabled,
             "call_detect_auto_record": callDetectAutoRecord,

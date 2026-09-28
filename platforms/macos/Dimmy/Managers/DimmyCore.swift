@@ -1021,6 +1021,34 @@ final class DimmyCore {
         return result == 0
     }
 
+    // MARK: - Speaker diarization
+
+    /// 1 = both diarization graphs are on disk.
+    func diarizationModelPresent() -> Bool {
+        dimmy_diarization_model_present() == 1
+    }
+
+    /// Download the ~104 MB diarization model. BLOCKING — call from a
+    /// background thread. Progress arrives as "diarization_download_progress".
+    @discardableResult
+    func downloadDiarizationModel() -> Bool {
+        let result = dimmy_diarization_download()
+        if result != 0 {
+            print("[DimmyCore] ERROR: downloadDiarizationModel failed with code \(result)")
+        }
+        return result == 0
+    }
+
+    /// Rename speaker `id` of the meeting in `dir`. Returns the core rc:
+    /// 0 ok, -4 invalid name, -5 duplicate, other negatives = failure.
+    func meetingRenameSpeaker(dir: String, id: String, name: String) -> Int32 {
+        dir.withCString { d in
+            id.withCString { i in
+                name.withCString { n in dimmy_meeting_rename_speaker(d, i, n) }
+            }
+        }
+    }
+
     /// Pre-load the Parakeet sessions on a background thread so the
     /// user's first real recording doesn't pay the ~6 s cold path.
     /// No-op if the bundle isn't present yet — caller doesn't need
@@ -1434,6 +1462,13 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
            let total = payload["total"] as? Int,
            total > 0 {
             appState.parakeetDownloadProgress = Double(downloaded) / Double(total)
+        }
+
+    case "diarization_download_progress":
+        if let downloaded = payload["downloaded"] as? Int,
+           let total = payload["total"] as? Int,
+           total > 0 {
+            appState.diarizationDownloadProgress = Double(downloaded) / Double(total)
         }
 
     case "qwen_asr_download_progress":

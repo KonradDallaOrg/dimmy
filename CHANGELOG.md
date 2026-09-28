@@ -15,6 +15,40 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   folder you pick. Existing meetings stay where they are — only new ones
   go to the new location. _Thanks to Ricca for the request._
 
+## [0.7.11] - 2026-09-29
+
+### Added
+
+- Speaker diarization for meeting transcripts (Windows, macOS). NVIDIA
+  Nemotron-3-Diarization (streaming Sortformer, 100M params, int8 ONNX
+  export pinned by revision + SHA-256) runs through ort as an offline pass
+  over each saved track inside the meeting re-transcription. The speaker
+  cache is not in the ONNX graph; it is ported from the export's numpy
+  reference. Words are assigned by timestamp (Parakeet word timestamps,
+  whisper token timestamps, Deepgram words); engines without timestamps fall
+  back to the dominant speaker per line. The system track is always split;
+  the mic track stays "mic" unless it carries more than one voice.
+- Labels are the speaker names themselves in transcripts.txt, and a rename
+  rewrites the file, so recap, search, exports and the MCP server need no
+  knowledge of diarization. speakers.json holds ids, names and segments.
+- Relabel after stop runs only with local STT: with cloud STT it would
+  re-upload the meeting. Cloud users get it through Regenerate transcript.
+- The meeting transcript scrolls with playback, on turn change rather than
+  on a timer.
+
+### Notes
+
+- ORT with its default intra-op thread count (one per physical core) ran
+  the diarizer 5 to 7x slower on a 6P+8E i7-12700H than 4 threads; the
+  session is pinned to 4 threads. Measured 66 to 72x realtime on CPU.
+- Italian is outside the model's training languages; measured on Italian
+  voices: 0.8% of words on the wrong speaker with 4 voices, 5 to 6% with 6.
+- Whisper token timestamps put turn boundaries about one word late;
+  Parakeet's are tighter. FluidAudio Parakeet on macOS returns no word
+  timestamps, so the Mac falls back to per-chunk labels there.
+- This file has no entries for 0.6.38 through 0.7.10; see the GitHub
+  release notes for those versions.
+
 ## [0.6.37] - 2026-05-12
 
 Mac side of the auto-update feature. The Win build has shipped

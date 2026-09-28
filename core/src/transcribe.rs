@@ -479,6 +479,21 @@ pub fn transcribe_audio_local(
     crate::local_stt::transcribe_local(&model_path, &samples_16k, language, prompt)
 }
 
+/// [`transcribe_audio_local`] (whisper) plus word timestamps in seconds from
+/// the start of `audio`, for speaker diarization.
+pub fn transcribe_audio_local_words(
+    audio: &crate::audio::ProcessedAudio,
+    language: &str,
+    model_filename: &str,
+    prompt: &str,
+) -> Result<(String, Vec<crate::diarize::Word>), crate::error::TranscribeError> {
+    assert!(!audio.samples.is_empty(), "audio samples must not be empty");
+    assert!(audio.sample_rate > 0, "sample_rate must be positive");
+    let samples_16k = stt_input_16k(audio);
+    let model_path = crate::local_stt::model_path(model_filename);
+    crate::local_stt::transcribe_local_words(&model_path, &samples_16k, language, prompt)
+}
+
 /// The single door every local recogniser walks through: 48 kHz capture in,
 /// 16 kHz denoised mono out.
 ///
