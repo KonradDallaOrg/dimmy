@@ -555,6 +555,7 @@ fn dimmy_init_inner() -> c_int {
         history_audio_max_mb: Mutex::new(file_cfg.history_audio_max_mb),
         auto_recap_threshold_secs: Mutex::new(file_cfg.auto_recap_threshold_secs),
         meeting_generate_recap: Mutex::new(file_cfg.meeting_generate_recap),
+        diarization_enabled: Mutex::new(file_cfg.diarization_enabled),
         filler_removal_enabled: Mutex::new(file_cfg.filler_removal_enabled),
         llm_mode: Mutex::new(file_cfg.llm_mode),
         local_llm_model: Mutex::new(file_cfg.local_llm_model),
@@ -2200,6 +2201,9 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
     if let Ok(b) = st.meeting_generate_recap.lock() {
         json["meeting_generate_recap"] = serde_json::Value::from(*b);
     }
+    if let Ok(b) = st.diarization_enabled.lock() {
+        json["diarization_enabled"] = serde_json::Value::from(*b);
+    }
     if let Ok(n) = st.auto_recap_threshold_secs.lock() {
         json["auto_recap_threshold_secs"] = serde_json::Value::from(*n);
     }
@@ -2776,6 +2780,11 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
     }
     if let Some(b) = v["meeting_generate_recap"].as_bool() {
         if let Ok(mut f) = st.meeting_generate_recap.lock() {
+            *f = b;
+        }
+    }
+    if let Some(b) = v["diarization_enabled"].as_bool() {
+        if let Ok(mut f) = st.diarization_enabled.lock() {
             *f = b;
         }
     }
@@ -7373,6 +7382,89 @@ pub extern "C" fn dimmy_parakeet_download_bundle() -> c_int {
     }
 }
 
+// -- Speaker diarization ----------------------------------------------
+
+/// 1 when the diarization model (both graphs) is on disk, 0 otherwise.
+#[no_mangle]
+pub extern "C" fn dimmy_diarization_model_present() -> c_int {
+    crate::diarize::model_present() as c_int
+}
+
+/// Download the diarization model (~104 MB). BLOCKING — call from a
+/// background thread. Progress arrives as `diarization_download_progress`
+/// events (`{"downloaded":N,"total":N}`). 0 = ready, -1 = failed (an `error`
+/// event carries the reason).
+#[no_mangle]
+pub extern "C" fn dimmy_diarization_download() -> c_int {
+    let Ok(rt) = tokio::runtime::Runtime::new() else {
+        return -1;
+    };
+    const EMIT_EVERY: u64 = 1 << 20;
+    let last = std::sync::atomic::AtomicU64::new(0);
+    let result = rt.block_on(crate::diarize::download(|done, total| {
+        let prev = last.load(std::sync::atomic::Ordering::Relaxed);
+        if done.saturating_sub(prev) >= EMIT_EVERY || done >= total {
+            last.store(done, std::sync::atomic::Ordering::Relaxed);
+            emit_event(
+                "diarization_download_progress",
+                &format!(r#"{{"downloaded":{},"total":{}}}"#, done, total),
+            );
+        }
+    }));
+    crate::telemetry::track(crate::telemetry::Event::ModelDownloadCompleted {
+        kind: "diarization",
+        success: result.is_ok(),
+    });
+    match result {
+        Ok(()) => 0,
+        Err(e) => {
+            let msg: String = e.chars().take(200).collect();
+            log(&format!("[Diarize download] {}", msg));
+            emit_event("error", &message_error_payload(&msg));
+            -1
+        }
+    }
+}
+
+/// Rename a diarized speaker of the meeting in `dir`: rewrites its label in
+/// `transcripts.txt` and `speakers.json`. rc: 0 ok, -1 bad args, -2 unknown
+/// speaker id, -3 io error, -4 invalid name (empty, >40 chars, brackets, or a
+/// reserved label like "mic"), -5 another speaker already has that name.
+///
+/// # Safety
+/// All pointers must be valid NUL-terminated C strings.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_meeting_rename_speaker(
+    dir_ptr: *const c_char,
+    id_ptr: *const c_char,
+    name_ptr: *const c_char,
+) -> c_int {
+    if dir_ptr.is_null() || id_ptr.is_null() || name_ptr.is_null() {
+        return -1;
+    }
+    let (Ok(dir), Ok(id), Ok(name)) = (
+        CStr::from_ptr(dir_ptr).to_str(),
+        CStr::from_ptr(id_ptr).to_str(),
+        CStr::from_ptr(name_ptr).to_str(),
+    ) else {
+        return -1;
+    };
+    use crate::diarize::RenameError;
+    match crate::diarize::rename_speaker(std::path::Path::new(dir), id, name) {
+        Ok(_) => 0,
+        Err(RenameError::NotFound) => -2,
+        Err(RenameError::Io(e)) => {
+            log(&format!(
+                "[Diarize] rename failed: {}",
+                crate::truncate_utf8(&e, 200)
+            ));
+            -3
+        }
+        Err(RenameError::InvalidName) => -4,
+        Err(RenameError::Duplicate) => -5,
+    }
+}
+
 /// Pre-load the Parakeet sessions + run a tiny dummy inference so the
 /// user's first real recording doesn't pay the ~6 s cold path. BLOCKING —
 /// call from a background thread. Returns 0 on success, -1 on error
@@ -8879,6 +8971,61 @@ fn group_words_into_turns(words: &[(f64, String)], offset_secs: f64) -> Vec<(u12
     lines
 }
 
+/// Parakeet's word-timestamp JSON (`[{"word","start","end"}]`, seconds from
+/// the window start) as absolute diarization words.
+fn parakeet_words(ts_json: &str, offset_secs: f64) -> Vec<crate::diarize::Word> {
+    serde_json::from_str::<Vec<serde_json::Value>>(ts_json)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|w| {
+            Some(crate::diarize::Word {
+                start: offset_secs + w["start"].as_f64()?,
+                end: offset_secs + w["end"].as_f64()?,
+                text: w["word"].as_str()?.to_string(),
+            })
+        })
+        .collect()
+}
+
+/// Deepgram gives each word's start only; a word ends where the next begins,
+/// capped at one second so a pause is not credited to the last speaker.
+fn deepgram_words(words: &[(f64, String)], offset_secs: f64) -> Vec<crate::diarize::Word> {
+    words
+        .iter()
+        .enumerate()
+        .map(|(i, (s, t))| {
+            let next = words.get(i + 1).map(|w| w.0).unwrap_or(s + 1.0);
+            crate::diarize::Word {
+                start: offset_secs + s,
+                end: offset_secs + next.min(s + 1.0).max(*s),
+                text: t.clone(),
+            }
+        })
+        .collect()
+}
+
+/// For engines without word timestamps: each line goes to whoever talks most
+/// between its start and the next line's.
+fn lines_by_dominant_speaker(
+    lines: &[(u128, String)],
+    d: &crate::diarize::Diarization,
+    track_secs: f64,
+) -> Vec<(u128, Option<usize>, String)> {
+    lines
+        .iter()
+        .enumerate()
+        .map(|(i, (ms, t))| {
+            let start = *ms as f64 / 1000.0;
+            let end = lines
+                .get(i + 1)
+                .map(|l| l.0 as f64 / 1000.0)
+                .unwrap_or(track_secs)
+                .max(start);
+            (*ms, d.speaker_for_span(start, end), t.clone())
+        })
+        .collect()
+}
+
 /// Re-transcribe a meeting's PER-TRACK audio (`audio_mic` + `audio_system`),
 /// rebuilding `transcripts.txt` in the SAME `[hh:mm:ss] [band] text` format the
 /// live worker writes. The old "Regenerate transcript" path transcribed each
@@ -8992,9 +9139,21 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
         .unwrap_or(15.0)
         .max(5.0);
 
-    let mut lines: Vec<(u128, &'static str, String)> = Vec::new();
+    // Speaker labels: on when the user enabled them AND the model is on disk.
+    // Words with timestamps are collected per track so each one can be put on
+    // the speaker who said it; see `crate::diarize`.
+    let diarize_on = st.diarization_enabled.lock().map(|b| *b).unwrap_or(false)
+        && crate::diarize::model_present();
+    if !diarize_on && st.diarization_enabled.lock().map(|b| *b).unwrap_or(false) {
+        log("[Retranscribe] diarization enabled but the model is not downloaded");
+    }
+    let mut diar_bands: Vec<crate::diarize::BandTurns> = Vec::new();
+
+    let mut lines: Vec<(u128, String, String)> = Vec::new();
     for (band, path) in &bands {
         let band: &'static str = if *band == "system" { "system" } else { "mic" };
+        let mut band_lines: Vec<(u128, String)> = Vec::new();
+        let mut band_words: Vec<crate::diarize::Word> = Vec::new();
         let ext = std::path::Path::new(path)
             .extension()
             .and_then(|s| s.to_str())
@@ -9028,6 +9187,7 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
                     sample_rate: rate,
                 };
                 let elapsed_ms = (start as f64 / rate as f64 * 1000.0) as u128;
+                let offset_secs = start as f64 / rate as f64;
                 let text = if backend == "qwen" {
                     crate::transcribe::transcribe_audio_local_qwen(
                         &window,
@@ -9036,9 +9196,32 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
                     )
                     .unwrap_or_default()
                 } else if backend == "parakeet" {
-                    crate::transcribe::transcribe_audio_local_parakeet_with_word_ts(&window)
-                        .map(|(t, _)| t)
-                        .unwrap_or_default()
+                    match crate::transcribe::transcribe_audio_local_parakeet_with_word_ts(&window) {
+                        Ok((t, ts_json)) => {
+                            if diarize_on {
+                                band_words.extend(parakeet_words(&ts_json, offset_secs));
+                            }
+                            t
+                        }
+                        Err(_) => String::new(),
+                    }
+                } else if diarize_on {
+                    match crate::transcribe::transcribe_audio_local_words(
+                        &window,
+                        &language,
+                        &model,
+                        &composed_prompt,
+                    ) {
+                        Ok((t, words)) => {
+                            band_words.extend(words.into_iter().map(|w| crate::diarize::Word {
+                                start: w.start + offset_secs,
+                                end: w.end + offset_secs,
+                                text: w.text,
+                            }));
+                            t
+                        }
+                        Err(_) => String::new(),
+                    }
                 } else {
                     crate::transcribe::transcribe_audio_local(
                         &window,
@@ -9050,7 +9233,7 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
                 };
                 let trimmed = text.trim();
                 if !trimmed.is_empty() {
-                    lines.push((elapsed_ms, band, trimmed.to_string()));
+                    band_lines.push((elapsed_ms, trimmed.to_string()));
                 }
                 emit_event(
                     "file_transcribe_progress",
@@ -9093,8 +9276,11 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
                             .ok()
                         })
                         .unwrap_or_default();
+                    if diarize_on {
+                        band_words.extend(deepgram_words(&words, chunk_start_secs));
+                    }
                     for (ms, text) in group_words_into_turns(&words, chunk_start_secs) {
-                        lines.push((ms, band, text));
+                        band_lines.push((ms, text));
                     }
                 } else {
                     let text = cloud_rt
@@ -9113,11 +9299,7 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
                         .unwrap_or_default();
                     let trimmed = text.trim();
                     if !trimmed.is_empty() {
-                        lines.push((
-                            (chunk_start_secs * 1000.0) as u128,
-                            band,
-                            trimmed.to_string(),
-                        ));
+                        band_lines.push(((chunk_start_secs * 1000.0) as u128, trimmed.to_string()));
                     }
                 }
                 emit_event(
@@ -9128,6 +9310,53 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
                 start = end;
             }
         }
+
+        let diarized = if diarize_on && !band_lines.is_empty() {
+            let pcm16k = crate::preprocess::downsample_to_16k(&processed, rate);
+            let t0 = std::time::Instant::now();
+            match crate::diarize::diarize(&pcm16k) {
+                Ok(d) => {
+                    log(&format!(
+                        "[Retranscribe] diarized {} ({:.0} s audio) in {:.1} s: {} speaker(s)",
+                        band,
+                        pcm16k.len() as f64 / 16_000.0,
+                        t0.elapsed().as_secs_f64(),
+                        d.speakers(1.0).len()
+                    ));
+                    let turns = if band_words.is_empty() {
+                        lines_by_dominant_speaker(&band_lines, &d, total as f64 / rate as f64)
+                    } else {
+                        crate::diarize::group_words(&band_words, &d)
+                    };
+                    diar_bands.push(crate::diarize::BandTurns {
+                        band,
+                        diar: d,
+                        turns,
+                    });
+                    true
+                }
+                Err(e) => {
+                    log(&format!("[Retranscribe] diarize {} failed: {}", band, e));
+                    false
+                }
+            }
+        } else {
+            false
+        };
+        if !diarized {
+            lines.extend(
+                band_lines
+                    .into_iter()
+                    .map(|(ms, t)| (ms, band.to_string(), t)),
+            );
+        }
+    }
+
+    let prior = crate::diarize::load_speakers(dir_path);
+    let (diar_lines, speakers) = crate::diarize::label_bands(diar_bands, &prior);
+    lines.extend(diar_lines);
+    if let Err(e) = crate::diarize::save_speakers(dir_path, &speakers) {
+        log(&format!("[Retranscribe] write speakers.json failed: {}", e));
     }
 
     // Interleave the two bands by time (stable so mic precedes system on ties).
@@ -11683,6 +11912,7 @@ mod tests {
                 history_audio_max_mb: Mutex::new(5_000),
                 auto_recap_threshold_secs: Mutex::new(60),
                 meeting_generate_recap: Mutex::new(true),
+                diarization_enabled: Mutex::new(false),
                 filler_removal_enabled: Mutex::new(true),
                 llm_mode: Mutex::new("cloud".to_string()),
                 local_llm_model: Mutex::new(crate::local_llm::DEFAULT_LLM_MODEL.to_string()),
