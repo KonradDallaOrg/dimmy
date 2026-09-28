@@ -11,6 +11,11 @@ name = "dimmy_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
+name = "diarize_asr_probe"
+path = "src/bin/diarize_asr_probe.rs"
+required-features = ["local-stt-parakeet"]
+
+[[bin]]
 name = "bench_local"
 path = "src/bin/bench_local.rs"
 required-features = ["local-stt"]
