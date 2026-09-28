@@ -425,9 +425,12 @@ pub fn verify_token(token: &str, pubkey_b64: &str) -> Result<Claims, String> {
     if claims.iat <= 0 || claims.exp <= 0 {
         return Err("iat/exp must be positive".to_string());
     }
-    if claims.exp < claims.iat {
-        return Err("exp must be >= iat".to_string());
-    }
+    // No check that exp comes after iat. It used to reject such a token as
+    // invalid, but past this point the signature has verified: our own
+    // server issued it, and a token that expired before it was issued is
+    // simply expired. The status code below says so plainly - "trial
+    // expired", "expired", with a way to renew - where "invalid" only told
+    // a user on 2026-09-28 that something was broken ("exp must be >= iat").
     Ok(claims)
 }
 
@@ -1081,6 +1084,49 @@ mod tests {
             r.unwrap_err().contains("signature verify"),
             "rejection should reference signature"
         );
+    }
+
+    /// Reported 2026-09-28 from macOS: "exp must be >= iat", shown as an
+    /// invalid license. The server had signed a token for a license already
+    /// past its expiry, so exp came before iat. The signature was GOOD - our
+    /// own server made it - so the honest reading is "expired", which the
+    /// status code already knows how to say (TrialExpired / Expired, with a
+    /// way to renew), not "invalid", which only tells the user something is
+    /// broken. The server no longer mints these, but tokens already on disk
+    /// have to read correctly too.
+    #[cfg(feature = "license-client")]
+    #[test]
+    fn a_genuine_token_that_expired_before_it_was_issued_is_expired_not_invalid() {
+        use ed25519_dalek::{Signer, SigningKey};
+        let mut csprng = rand::thread_rng();
+        let sk = SigningKey::generate(&mut csprng);
+        let pubkey_b64 = b64_encode(sk.verifying_key().as_bytes());
+        let header_b64 = b64_encode(br#"{"alg":"EdDSA","typ":"DLT"}"#);
+        let claims = Claims {
+            v: 1,
+            lid: "01HKZ".into(),
+            eh: "abc".into(),
+            tier: Tier::Lifetime,
+            iat: 1_790_500_000,
+            exp: 1_790_067_918, // the real one: 2026-09-22, issued after it
+            max_offline: 30,
+            did: "01HKD".into(),
+            scope: vec![],
+            cancels_at: None,
+        };
+        let payload_b64 = b64_encode(&serde_json::to_vec(&claims).unwrap());
+        let signing_input = format!("{}.{}", header_b64, payload_b64);
+        let sig = sk.sign(signing_input.as_bytes());
+        let token = format!(
+            "{}.{}.{}",
+            header_b64,
+            payload_b64,
+            b64_encode(&sig.to_bytes())
+        );
+
+        let back = verify_token(&token, &pubkey_b64)
+            .expect("a correctly signed token must verify; its dates decide expiry, not validity");
+        assert!(back.exp < back.iat);
     }
 
     #[cfg(feature = "license-client")]
