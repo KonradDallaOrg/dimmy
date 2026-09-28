@@ -950,14 +950,17 @@ struct MeetingDoneView: View {
     // Mirror of Win MeetingWindow SpeakerBar.
 
     private var speakerBar: some View {
-        HStack(spacing: 10) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(vm.doneSpeakers) { speaker in
-                        speakerChip(speaker)
-                    }
+        HStack(alignment: .top, spacing: 10) {
+            // Wrap rather than scroll: a horizontal ScrollView on the Mac only
+            // moves with a trackpad or Shift+wheel, so with a mouse the chips
+            // past the edge were unreachable. At most eight speakers, so two
+            // lines at worst.
+            ChipFlowLayout(spacing: 6) {
+                ForEach(vm.doneSpeakers) { speaker in
+                    speakerChip(speaker)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             HStack(spacing: 8) {
                 waveModeTab("Tracks", selected: !waveBySpeaker,
                             help: "Waveform by track: you (mic) above, the call (system) below") {
@@ -1329,6 +1332,52 @@ enum MarkdownBlockParser {
 // giving the click affordance without the heavy default Bordered pill.
 // Used for the Done view header toolbar (regen, copy, send-to-notion,
 // open-folder).
+/// Lays its children out left to right, wrapping onto a new line when the
+/// next one does not fit.
+private struct ChipFlowLayout: Layout {
+    var spacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let rows = arrange(width: proposal.width ?? .infinity, subviews: subviews)
+        let width = rows.map(\.width).max() ?? 0
+        let height = rows.map(\.height).reduce(0, +) + spacing * CGFloat(max(0, rows.count - 1))
+        return CGSize(width: proposal.width ?? width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in arrange(width: bounds.width, subviews: subviews) {
+            var x = bounds.minX
+            for i in row.indices {
+                let size = subviews[i].sizeThatFits(.unspecified)
+                subviews[i].place(at: CGPoint(x: x, y: y + (row.height - size.height) / 2),
+                                  proposal: ProposedViewSize(size))
+                x += size.width + spacing
+            }
+            y += row.height + spacing
+        }
+    }
+
+    private struct Row { var indices: [Int] = []; var width: CGFloat = 0; var height: CGFloat = 0 }
+
+    private func arrange(width: CGFloat, subviews: Subviews) -> [Row] {
+        var rows: [Row] = [Row()]
+        for i in subviews.indices {
+            let size = subviews[i].sizeThatFits(.unspecified)
+            let needed = rows[rows.count - 1].indices.isEmpty ? size.width : rows[rows.count - 1].width + spacing + size.width
+            if needed > width && !rows[rows.count - 1].indices.isEmpty {
+                rows.append(Row())
+            }
+            var row = rows[rows.count - 1]
+            row.width = row.indices.isEmpty ? size.width : row.width + spacing + size.width
+            row.height = max(row.height, size.height)
+            row.indices.append(i)
+            rows[rows.count - 1] = row
+        }
+        return rows
+    }
+}
+
 private struct ToolbarIconButton<Label: View>: View {
     let help: String
     let action: () -> Void
