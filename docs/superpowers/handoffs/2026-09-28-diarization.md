@@ -31,10 +31,19 @@ LOCALLY before anything is pushed. **Do not push, do not tag.**
 - [x] Win build (DLL frozen feature set + C# x64) + local run for the user (launched 2026-09-29 00:24)
 
 ## Next step / notes
-- Core committed 0fb15555; Win UI + docs 99d0829d. 1022 Rust + 487 C# tests green.
-- Build env: `C:/dp/t.cmd <cmd>` (vcvars64 + Ninja + CARGO_TARGET_DIR=C:/dp). The DLL is built
-  there with the frozen feature set, then copied (dimmy_lib/ggml*/llama*/mtmd*.dll) into
-  core/target/release so the csproj picks it up.
-- The user's dev Dimmy runs from bin/x64/Debug; it must be closed before the final C# build.
-- Auto relabel after stop runs ONLY with stt_mode=local (cloud would re-upload the meeting).
-- WAITING for the user's local test feedback. Known: with whisper, turns split ~1 word late (token ts); consider word-boundary smoothing or preferring parakeet timestamps.
+- Windows DONE and tested by the user 2026-09-29: UI approved; diarization quality so-so on a
+  test recorded with a loud TV in the room (extra voices + narrowband audio) — retest on a real
+  call in a quiet room before judging the model.
+- Also on the branch: transcript auto-follows playback (scrolls on turn change), fe571be1.
+- NEXT (2026-09-30, on the Mac): Swift parity. Core needs no change (Mac ships ort +
+  libonnxruntime.dylib). To do in Swift: voice-settings toggle + model download
+  (`diarization_download_progress` event), relabel after stop when stt_mode=local
+  (mirror `Services/DiarizationService.cs`), transcript renderer accepting any label,
+  speaker chips + rename (`dimmy_meeting_rename_speaker`), per-speaker waveform lanes, recap
+  prompt text (mirror `MeetingRecapHelpers.cs`), auto-follow. Run `scripts/dev/preflight-mac.sh`.
+- Open issues: with whisper, turns split ~1 word late (token timestamps; parakeet is better) —
+  consider boundary smoothing. Audio-quality lead (not diarization): both tracks of the
+  2026-09-29 test had >99% energy below 4 kHz; AEC logged "ref ring empty → idle" 5 s in while
+  loopback had signal — investigate separately.
+- Before any push: merge the latest origin/staging (this shell could not fetch; SSH key missing).
+  Uncommitted on purpose: core/src/bin/diarize_asr_probe.rs + its Cargo.toml entry (dev probe).
