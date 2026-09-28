@@ -47,3 +47,9 @@ LOCALLY before anything is pushed. **Do not push, do not tag.**
   loopback had signal — investigate separately.
 - Branch pushed 2026-09-29 (origin/staging was still c900be85 = base, nothing to merge).
   Dev probe committed: core/src/bin/diarize_asr_probe.rs (modes in its header).
+- 2026-09-29 Mac parity DONE (commits 213c910, e3f7b3c, dfcdaf0): Voice → Speakers toggle +
+  download, relabel after stop (window + pill), any-label transcript, chips + rename popover
+  (chips wrap, no horizontal scroll), Tracks/Speakers lanes, auto-follow, recap prompt.
+  Tested locally by the user on the AMI ES2002a 4-min clip. Parakeet on Mac (FluidAudio) has
+  no word timestamps → per-chunk dominant speaker; whisper is precise.
+- NEXT: continue on Windows (user). Consider porting the chip wrap to Win if the chips overflow.
