@@ -28,7 +28,7 @@ LOCALLY before anything is pushed. **Do not push, do not tag.**
 - [x] recap/names: transcript labels resolved to names
 - [x] Win Settings toggle + download progress
 - [x] Win MeetingWindow: speaker list/rename, labels, per-speaker waveform tab
-- [ ] Win build (DLL frozen feature set + C# x64) + local run for the user
+- [x] Win build (DLL frozen feature set + C# x64) + local run for the user (launched 2026-09-29 00:24)
 
 ## Next step / notes
 - Core committed 0fb15555; Win UI + docs 99d0829d. 1022 Rust + 487 C# tests green.
@@ -37,4 +37,4 @@ LOCALLY before anything is pushed. **Do not push, do not tag.**
   core/target/release so the csproj picks it up.
 - The user's dev Dimmy runs from bin/x64/Debug; it must be closed before the final C# build.
 - Auto relabel after stop runs ONLY with stt_mode=local (cloud would re-upload the meeting).
-- Remaining: build + launch for the user's local test. Then wait for feedback.
+- WAITING for the user's local test feedback. Known: with whisper, turns split ~1 word late (token ts); consider word-boundary smoothing or preferring parakeet timestamps.
