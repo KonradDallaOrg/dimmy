@@ -254,3 +254,86 @@ fn stop_while_paused_does_not_deadlock() {
     // pushed audio. The key check is that stop() returned at all.
     assert_eq!(result.chunk_count, 0);
 }
+
+/// Two meetings share one pair of capture buffers, and a stopping meeting
+/// can outlive the start of the next one: its worker may be stalled on a slow
+/// disk or a loaded machine exactly when people go from one call straight
+/// into the next. When it wakes up it must not touch audio that now belongs
+/// to someone else. Before the ownership claim it did: it padded the new
+/// system track to its own clock and drained the new buffers by its own stale
+/// cursors, deleting seconds of the next meeting that were not on disk yet
+/// (CLAUDE.md, THE AUDIO RULE).
+#[test]
+fn a_meeting_that_lost_the_buffers_never_touches_them_again() {
+    let _g = FFI_LOCK.lock().unwrap();
+    isolate();
+    use dimmy_lib::audio::AudioSource;
+    use dimmy_lib::meeting::{claim_capture_buffers, MeetingSession, SttSnapshot};
+    use std::sync::Arc;
+
+    let stt = SttSnapshot {
+        mode: "cloud".to_string(),
+        api_url: "https://test.invalid/v1/transcriptions".to_string(),
+        api_model: "dummy".to_string(),
+        api_key: Some("dummy".to_string()),
+        prompt: String::new(),
+        local_model: String::new(),
+        local_backend: "whisper".to_string(),
+        language: "en".to_string(),
+        chunk_secs: Some(15.0),
+        preprocessing_enabled: true,
+        speaker_labels: false,
+    };
+    let primary: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+    let secondary: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+    let session = match MeetingSession::start(
+        primary.clone(),
+        secondary.clone(),
+        48_000,
+        48_000,
+        AudioSource::Mix,
+        stt,
+    ) {
+        Ok(s) => s,
+        Err(_) => return, // skip cleanly on CI without config dir
+    };
+
+    // Two seconds of this meeting's own audio, written as usual.
+    primary
+        .lock()
+        .unwrap()
+        .extend(std::iter::repeat_n(0.1f32, 96_000));
+    std::thread::sleep(Duration::from_millis(400));
+
+    // The next meeting claims the buffers, clears them and starts filling
+    // them, which is what `dimmy_meeting_start` does. Enough audio that a
+    // worker still acting on it would cut a 15 s window and then drain the
+    // buffer (10 s threshold), and a system track short enough that it
+    // would be zero-padded up to the mic.
+    claim_capture_buffers();
+    let next_mic = 48_000 * 22;
+    let next_system = 48_000;
+    {
+        let mut p = primary.lock().unwrap();
+        p.clear();
+        p.extend(std::iter::repeat_n(0.2f32, next_mic));
+    }
+    {
+        let mut s = secondary.lock().unwrap();
+        s.clear();
+        s.extend(std::iter::repeat_n(0.2f32, next_system));
+    }
+    std::thread::sleep(Duration::from_millis(600));
+
+    let mic_len = primary.lock().unwrap().len();
+    let system_len = secondary.lock().unwrap().len();
+    let _ = session.stop();
+    assert_eq!(
+        mic_len, next_mic,
+        "the previous meeting drained audio that belongs to the next one"
+    );
+    assert_eq!(
+        system_len, next_system,
+        "the previous meeting padded the next meeting's system track"
+    );
+}
