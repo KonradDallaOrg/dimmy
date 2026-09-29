@@ -95,6 +95,10 @@ pub struct SttSnapshot {
     /// model sees it — the same rule the batch dictation path applies
     /// (`preprocess_route(..) == Full`).
     pub preprocessing_enabled: bool,
+    /// Label speakers while recording (diarization on, model on disk, local
+    /// STT). When the live run covers the whole meeting the stop returns a
+    /// labelled transcript and no second pass is needed.
+    pub speaker_labels: bool,
 }
 
 /// Encode 16 kHz mono f32 PCM into an in-memory WAV byte buffer suitable
@@ -276,6 +280,8 @@ pub struct MeetingResult {
     pub duration_secs: f64,
     pub chunk_count: u32,
     pub error: Option<String>,
+    /// The transcript already carries speaker labels from the live run.
+    pub speakers_labeled: bool,
 }
 
 impl MeetingSession {
@@ -457,6 +463,7 @@ impl MeetingSession {
                     duration_secs: 0.0,
                     chunk_count: 0,
                     error: Some("worker panicked".into()),
+                    speakers_labeled: false,
                 },
                 BoundedJoin::TimedOut => {
                     crate::log("[Meeting] stop join TIMED OUT — worker wedged (likely a CoreAudio HAL lock); returning partial result so the app never freezes");
@@ -471,6 +478,7 @@ impl MeetingSession {
                             "meeting stop timed out (audio subsystem wedged); recap may be incomplete"
                                 .into(),
                         ),
+                        speakers_labeled: false,
                     }
                 }
             },
@@ -481,6 +489,7 @@ impl MeetingSession {
                 duration_secs: 0.0,
                 chunk_count: 0,
                 error: Some("worker never started".into()),
+                speakers_labeled: false,
             },
         };
         // Marker is removed only on clean exit so a crash leaves it.
@@ -641,9 +650,90 @@ pub fn format_elapsed(ms: u128) -> String {
     )
 }
 
+/// Share of one track's re-transcription that is transcription when speaker
+/// labels are on; the diarizer takes the rest. Measured 2026-09-29 on a
+/// 12-minute meeting: 86 s transcribing + 14 s diarizing the mic, 76 s + 19 s
+/// the system track.
+pub const TRANSCRIBE_SHARE_WITH_SPEAKERS: f64 = 0.85;
+
+/// One progress figure for a whole re-transcription, 0-100. It used to be
+/// per track, so the bar ran to 100 % on the mic and started again at 0 on
+/// the system track, which reads as going backwards. `within` is how far
+/// through track `track` we are, 0-1.
+pub fn retranscribe_percent(track: usize, tracks: usize, within: f64) -> f64 {
+    assert!(tracks > 0 && track < tracks, "track {track} of {tracks}");
+    assert!(within.is_finite(), "within must be finite");
+    let p = (track as f64 + within.clamp(0.0, 1.0)) / tracks as f64 * 100.0;
+    assert!((0.0..=100.0).contains(&p), "percent {p}");
+    p
+}
+
+#[cfg(test)]
+mod live_transcript_rewrite {
+    use super::replace_transcript;
+    use std::io::Write as _;
+
+    /// transcripts.txt is open for APPEND the whole meeting. On Windows that
+    /// handle may not truncate: the first live-labelled stop failed with
+    /// "Accesso negato (os error 5)" on 2026-09-29 and fell back to the full
+    /// re-transcription.
+    #[test]
+    fn the_transcript_is_replaced_while_held_open_for_append() {
+        let dir = std::env::temp_dir().join(format!("dimmy-tx-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("transcripts.txt");
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .unwrap();
+        f.write_all(
+            b"[00:00:01] [mic] live line that is much longer than the new one
+",
+        )
+        .unwrap();
+        replace_transcript(
+            &mut f,
+            &path,
+            "[00:00:01] [Speaker 1] ciao
+",
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "[00:00:01] [Speaker 1] ciao
+"
+        );
+        drop(f);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 #[cfg(test)]
 mod elapsed_format {
-    use super::format_elapsed;
+    use super::{format_elapsed, retranscribe_percent};
+
+    #[test]
+    fn retranscribe_progress_runs_once_across_both_tracks() {
+        assert_eq!(retranscribe_percent(0, 2, 0.0), 0.0);
+        assert_eq!(retranscribe_percent(0, 2, 1.0), 50.0);
+        assert_eq!(retranscribe_percent(1, 2, 0.0), 50.0);
+        assert_eq!(retranscribe_percent(1, 2, 1.0), 100.0);
+        assert_eq!(retranscribe_percent(0, 1, 0.5), 50.0);
+        let mut last = -1.0;
+        for t in 0..2 {
+            for i in 0..=10 {
+                let p = retranscribe_percent(t, 2, i as f64 / 10.0);
+                assert!(p >= last, "went backwards: {last} -> {p}");
+                last = p;
+            }
+        }
+        assert_eq!(
+            retranscribe_percent(0, 2, 1.7),
+            50.0,
+            "clamped to the track"
+        );
+    }
 
     #[test]
     fn the_number_that_prompted_this() {
@@ -692,6 +782,9 @@ enum SttJob {
         mic: Vec<f32>,
         system: Vec<f32>,
         elapsed_ms: u128,
+        /// Track sample of the window's first sample, on the timeline of the
+        /// files on disk (pauses excluded).
+        track_start: usize,
     },
     /// A `[paused Ns]` marker, queued rather than written inline so it
     /// keeps its place in transcripts.txt relative to the chunks around it.
@@ -727,6 +820,18 @@ struct SttThreadCtx {
     /// Shared so the capture worker can read the count even when the
     /// join times out on a wedged transcriber.
     chunk_count: Arc<std::sync::atomic::AtomicU32>,
+    /// Set by the capture worker when a window never reaches this thread
+    /// (queue full, or the final window capped): live speaker labels would
+    /// have a hole, so the stop falls back to the full pass.
+    windows_lost: Arc<AtomicBool>,
+}
+
+/// What the transcription thread hands back at stop.
+struct SttOutcome {
+    /// Per-speaker accumulators, used only when transcripts.txt cannot be
+    /// read back.
+    fallback: String,
+    speakers_labeled: bool,
 }
 
 /// Transcription thread: receives windows, runs STT, appends to
@@ -739,11 +844,24 @@ struct SttThreadCtx {
 /// has drained.
 /// Returns the per-speaker accumulators joined as a fallback transcript,
 /// used only when transcripts.txt cannot be read back at stop.
-fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx) -> String {
+fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx) -> SttOutcome {
     use std::io::Write as _;
 
     let mut mic_accum = String::new();
     let mut system_accum = String::new();
+
+    let mut live = if ctx.stt.speaker_labels && ctx.stt.mode == "local" {
+        match crate::diarize::LiveSpeakers::start() {
+            Ok(l) => Some(l),
+            Err(e) => {
+                crate::log(&format!("[Meeting] live speaker labels unavailable: {e}"));
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let want_words = live.is_some();
 
     // Helper: downsample a slice (if needed) and run STT through
     // whichever backend the user has configured. The caller MUST
@@ -753,9 +871,14 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
     // Mixing them up = sending 48k-sampled data with a 16k WAV
     // header to the cloud STT, which Gemini returns as empty
     // because the speech is 3x compressed and unintelligible.
-    let transcribe = |slice: Vec<f32>, source_sr: u32| -> String {
+    // Returns the text and, when live speaker labels are on and the engine
+    // has them, the word timestamps (seconds from the window start). The
+    // silence gate keeps or drops a window WHOLE, so the times stay aligned.
+    let transcribe = |slice: Vec<f32>,
+                      source_sr: u32|
+     -> (String, Option<Vec<crate::diarize::Word>>) {
         if slice.is_empty() {
-            return String::new();
+            return (String::new(), None);
         }
         // Silence trim before the model sees the window. An idle
         // chunk collapses to empty here and never reaches whisper,
@@ -766,7 +889,7 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
             slice
         };
         if slice.is_empty() {
-            return String::new();
+            return (String::new(), None);
         }
         let pcm_16k = if source_sr == 16_000 {
             slice
@@ -774,7 +897,7 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
             crate::preprocess::downsample_to_16k(&slice, source_sr)
         };
         if pcm_16k.is_empty() {
-            return String::new();
+            return (String::new(), None);
         }
         if ctx.stt.mode == "cloud" {
             let wav = pcm16k_to_wav_bytes(&pcm_16k);
@@ -806,16 +929,16 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
                         .await
                     });
                     match result {
-                        Ok(t) => t,
+                        Ok(t) => (t, None),
                         Err(e) => {
                             crate::log(&format!("[Meeting] cloud STT error: {}", e));
-                            String::new()
+                            (String::new(), None)
                         }
                     }
                 }
                 _ => {
                     crate::log("[Meeting] cloud STT unavailable: missing key or runtime");
-                    String::new()
+                    (String::new(), None)
                 }
             }
         } else if ctx.stt.local_backend == "parakeet" {
@@ -824,17 +947,42 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
             // OnceLock cache so each call only pays mel/encoder/
             // decoder inference, not model load. No .bin file
             // needed — the bundle ships separately.
-            match crate::parakeet::transcribe(&pcm_16k) {
-                Ok(t) => t,
-                Err(e) => {
-                    crate::log(&format!("[Meeting] parakeet error: {}", e));
-                    String::new()
+            // Same decode either way: `transcribe` is this call's text.
+            if want_words {
+                match crate::parakeet::transcribe_with_word_timestamps(&pcm_16k) {
+                    Ok((t, ts)) => (t, Some(crate::diarize::parakeet_words(&ts, 0.0))),
+                    Err(e) => {
+                        crate::log(&format!("[Meeting] parakeet error: {}", e));
+                        (String::new(), None)
+                    }
+                }
+            } else {
+                match crate::parakeet::transcribe(&pcm_16k) {
+                    Ok(t) => (t, None),
+                    Err(e) => {
+                        crate::log(&format!("[Meeting] parakeet error: {}", e));
+                        (String::new(), None)
+                    }
                 }
             }
         } else {
             // Default = whisper. Routes through the cached
             // WhisperContext via local_stt::transcribe_local.
             match &ctx.resolved_local_model {
+                Some(model_path) if want_words => {
+                    match crate::local_stt::transcribe_local_words(
+                        model_path,
+                        &pcm_16k,
+                        &ctx.language,
+                        &ctx.stt.prompt,
+                    ) {
+                        Ok((t, words)) => (t, Some(words)),
+                        Err(e) => {
+                            crate::log(&format!("[Meeting] whisper error: {}", e));
+                            (String::new(), None)
+                        }
+                    }
+                }
                 Some(model_path) => {
                     match crate::local_stt::transcribe_local(
                         model_path,
@@ -842,23 +990,23 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
                         &ctx.language,
                         &ctx.stt.prompt,
                     ) {
-                        Ok(t) => t,
+                        Ok(t) => (t, None),
                         Err(e) => {
                             crate::log(&format!("[Meeting] whisper error: {}", e));
-                            String::new()
+                            (String::new(), None)
                         }
                     }
                 }
                 None => {
                     crate::log("[Meeting] local STT skipped: no usable .bin model");
-                    String::new()
+                    (String::new(), None)
                 }
             }
         }
     };
 
     while let Ok(job) = rx.recv() {
-        let (mic_slice, system_slice, elapsed_ms) = match job {
+        let (mic_slice, system_slice, elapsed_ms, track_start) = match job {
             SttJob::Paused { elapsed_ms, dur_ms } => {
                 let line = format!(
                     "[{}] [paused] (resumed after {})\n",
@@ -873,14 +1021,20 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
                 mic,
                 system,
                 elapsed_ms,
-            } => (mic, system, elapsed_ms),
+                track_start,
+            } => (mic, system, elapsed_ms, track_start),
         };
 
-        let mic_text = transcribe(mic_slice, ctx.device_sample_rate);
-        let system_text = if ctx.mix_active {
+        let mic_audio = live.as_ref().map(|_| mic_slice.clone());
+        let (mic_text, mic_words) = transcribe(mic_slice, ctx.device_sample_rate);
+        let system_audio = live
+            .as_ref()
+            .filter(|_| ctx.mix_active)
+            .map(|_| system_slice.clone());
+        let (system_text, system_words) = if ctx.mix_active {
             transcribe(system_slice, ctx.system_sample_rate)
         } else {
-            String::new()
+            (String::new(), None)
         };
 
         // Append helper: dedup vs the per-speaker accumulator,
@@ -888,13 +1042,13 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
         // labeled line into transcripts.txt, AND fire a
         // `meeting_chunk` event so host UIs can refresh their
         // live transcript view without polling the on-disk file.
-        let mut emit = |speaker: &str, text: &str, accum: &mut String| {
+        let mut emit = |speaker: &str, text: &str, accum: &mut String| -> String {
             if text.trim().is_empty() {
-                return;
+                return String::new();
             }
             let delta = crate::chunked_stt::dedup_last_3_words(accum, text);
             if delta.is_empty() {
-                return;
+                return String::new();
             }
             if !accum.is_empty() && !accum.ends_with(' ') {
                 accum.push(' ');
@@ -921,11 +1075,40 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
             })
             .to_string();
             crate::ffi::emit_event("meeting_chunk", &payload);
+            delta
         };
 
-        emit(ctx.mic_label, &mic_text, &mut mic_accum);
-        if ctx.mix_active {
-            emit("system", &system_text, &mut system_accum);
+        let mic_line = emit(ctx.mic_label, &mic_text, &mut mic_accum);
+        let system_line = if ctx.mix_active {
+            emit("system", &system_text, &mut system_accum)
+        } else {
+            String::new()
+        };
+        if let Some(l) = live.as_mut() {
+            if let Some(a) = &mic_audio {
+                l.feed(
+                    ctx.mic_label,
+                    track_start,
+                    ctx.device_sample_rate,
+                    a,
+                    &mic_line,
+                    mic_words,
+                );
+            }
+            if let Some(a) = &system_audio {
+                l.feed(
+                    "system",
+                    track_start,
+                    ctx.system_sample_rate,
+                    a,
+                    &system_line,
+                    system_words,
+                );
+            }
+            if l.broken().is_some() {
+                // Frees the models; the stop re-transcribes as before.
+                live = None;
+            }
         }
 
         // Stats: this chunk contributed transcribed words. Mirrors the
@@ -942,6 +1125,16 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
         }
     }
 
+    let speakers_labeled = match live {
+        Some(mut l) => {
+            if ctx.windows_lost.load(Ordering::SeqCst) {
+                l.mark_broken("some audio never reached the transcriber");
+            }
+            write_live_speakers(&mut ctx, l)
+        }
+        None => false,
+    };
+
     let mut fallback = String::new();
     if !mic_accum.trim().is_empty() {
         fallback.push_str(&format!(
@@ -957,7 +1150,70 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
             system_accum
         ));
     }
-    fallback
+    SttOutcome {
+        fallback,
+        speakers_labeled,
+    }
+}
+
+/// Overwrite transcripts.txt while this thread still holds it open for
+/// appending. That handle cannot truncate on Windows (os error 5), so the
+/// rewrite goes through a handle of its own; the append handle is flushed
+/// first so nothing it buffered lands after the new text.
+fn replace_transcript(
+    open: &mut std::fs::File,
+    path: &std::path::Path,
+    text: &str,
+) -> std::io::Result<()> {
+    use std::io::Write as _;
+    open.flush()?;
+    std::fs::write(path, text.as_bytes())?;
+    assert_eq!(
+        std::fs::metadata(path)?.len(),
+        text.len() as u64,
+        "transcript rewrite must leave exactly the new text"
+    );
+    Ok(())
+}
+
+/// Replace the live transcript with the speaker-labelled one, in the format
+/// "Regenerate transcript" writes. On any failure the live transcript stays
+/// as it is and the stop runs the full pass, exactly as before live labels.
+fn write_live_speakers(ctx: &mut SttThreadCtx, live: crate::diarize::LiveSpeakers) -> bool {
+    let t0 = Instant::now();
+    let bands = match live.finish() {
+        Ok(b) => b,
+        Err(e) => {
+            crate::log(&format!("[Meeting] live speaker labels not used: {e}"));
+            return false;
+        }
+    };
+    let (lines, speakers) = crate::diarize::label_bands(bands, &[]);
+    if lines.is_empty() {
+        return false;
+    }
+    let mut out = String::new();
+    for (ms, label, text) in &lines {
+        out.push_str(&format!("[{}] [{}] {}\n", format_elapsed(*ms), label, text));
+    }
+    let dir = std::path::Path::new(&ctx.dir_str);
+    let written = replace_transcript(
+        &mut ctx.transcripts_file,
+        &dir.join("transcripts.txt"),
+        &out,
+    )
+    .and_then(|_| crate::diarize::save_speakers(dir, &speakers));
+    if let Err(e) = written {
+        crate::log(&format!("[Meeting] live speaker labels not saved: {e}"));
+        return false;
+    }
+    crate::log(&format!(
+        "[Meeting] live speaker labels: {} lines, {} speaker(s), last chunk in {:.1} s",
+        lines.len(),
+        speakers.len(),
+        t0.elapsed().as_secs_f64()
+    ));
+    true
 }
 
 /// Capture worker: drains the audio buffers to disk and hands windows to
@@ -1106,6 +1362,7 @@ fn worker_loop(
                 duration_secs: 0.0,
                 chunk_count: 0,
                 error: Some(format!("open transcripts.txt: {}", e)),
+                speakers_labeled: false,
             };
         }
     };
@@ -1115,6 +1372,7 @@ fn worker_loop(
     // never waits on the other side. See `worker_loop`'s doc comment for
     // why that separation is not negotiable.
     let chunk_count_shared = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let windows_lost = Arc::new(AtomicBool::new(false));
     let (stt_tx, stt_rx) = std::sync::mpsc::sync_channel::<SttJob>(STT_QUEUE_DEPTH);
     let stt_ctx = SttThreadCtx {
         stt: stt.clone(),
@@ -1129,6 +1387,7 @@ fn worker_loop(
         dir_str: dir.to_string_lossy().to_string(),
         transcripts_file,
         chunk_count: Arc::clone(&chunk_count_shared),
+        windows_lost: Arc::clone(&windows_lost),
     };
     let stt_handle = thread::Builder::new()
         .name("dimmy-meeting-stt".into())
@@ -1155,6 +1414,7 @@ fn worker_loop(
             duration_secs: 0.0,
             chunk_count: 0,
             error: Some(e),
+            speakers_labeled: false,
         })
     };
     let mut writer = match make_sink("audio", device_sample_rate) {
@@ -1476,6 +1736,7 @@ fn worker_loop(
                 // transcript" can redo the lot from the file.
                 let capped = (last_processed + chunk_samples * 4).min(buf_len_now);
                 if capped < buf_len_now {
+                    windows_lost.store(true, Ordering::SeqCst);
                     crate::log(&format!(
                         "[Meeting] final window capped: {} of {} samples transcribed at stop \
                          (transcriber was behind) — audio is complete on disk, \
@@ -1516,10 +1777,14 @@ fn worker_loop(
                 mic: mic_chunk,
                 system: system_chunk,
                 elapsed_ms: started.elapsed().as_millis(),
+                // Everything up to `samples_written` is on disk, and the
+                // buffer index maps to the file one-to-one behind it.
+                track_start: total_written.saturating_sub(samples_written - start),
             };
             match stt_tx.try_send(job) {
                 Ok(()) => {}
                 Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                    windows_lost.store(true, Ordering::SeqCst);
                     stt_dropped_chunks += 1;
                     if stt_dropped_chunks == 1 || stt_dropped_chunks.is_multiple_of(10) {
                         crate::log(&format!(
@@ -1678,22 +1943,21 @@ fn worker_loop(
             &serde_json::json!({ "dropped_windows": stt_dropped_chunks }).to_string(),
         );
     }
-    let stt_fallback = match stt_handle {
+    let (stt_fallback, speakers_labeled) = match stt_handle {
         Some(h) => match join_bounded(h, Duration::from_secs(90)) {
-            BoundedJoin::Done(s) => s,
+            BoundedJoin::Done(o) => (o.fallback, o.speakers_labeled),
             BoundedJoin::Panicked => {
                 crate::log("[Meeting] transcription thread panicked — audio is unaffected");
-                String::new()
+                (String::new(), false)
             }
             BoundedJoin::TimedOut => {
                 crate::log(
-                    "[Meeting] transcription thread still busy at stop — abandoning it; \
-                     the recording and everything transcribed so far are already on disk",
+                    "[Meeting] transcription thread still busy at stop — abandoning it;                      the recording and everything transcribed so far are already on disk",
                 );
-                String::new()
+                (String::new(), false)
             }
         },
-        None => String::new(),
+        None => (String::new(), false),
     };
     if stt_dropped_chunks > 0 {
         crate::log(&format!(
@@ -1760,6 +2024,7 @@ fn worker_loop(
         duration_secs,
         chunk_count,
         error: finalize_error,
+        speakers_labeled,
     }
 }
 

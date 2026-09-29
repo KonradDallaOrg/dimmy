@@ -116,6 +116,7 @@ fn pause_resume_idempotency_via_session() {
         language: "en".to_string(),
         chunk_secs: Some(15.0),
         preprocessing_enabled: true,
+        speaker_labels: false,
     };
     let primary: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
     let secondary: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
@@ -220,6 +221,7 @@ fn stop_while_paused_does_not_deadlock() {
         language: "en".to_string(),
         chunk_secs: Some(15.0),
         preprocessing_enabled: true,
+        speaker_labels: false,
     };
     let primary: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
     let secondary: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));

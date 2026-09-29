@@ -4258,6 +4258,8 @@ pub unsafe extern "C" fn dimmy_meeting_start(out_buf: *mut c_char, buf_len: c_in
             .unwrap_or_else(|| "auto".to_string()),
         chunk_secs: st.meeting_chunk_secs.lock().ok().map(|s| *s),
         preprocessing_enabled: st.preprocessing_enabled.lock().map(|b| *b).unwrap_or(true),
+        speaker_labels: st.diarization_enabled.lock().map(|b| *b).unwrap_or(false)
+            && crate::diarize::model_present(),
     };
     // Both buffers always run at the canonical 48 kHz (see device_sr
     // comment above) — secondary cpal callback resamples too.
@@ -4376,6 +4378,7 @@ pub unsafe extern "C" fn dimmy_meeting_stop(out_buf: *mut c_char, buf_len: c_int
         "duration_secs": result.duration_secs,
         "chunk_count": result.chunk_count,
         "error": result.error,
+        "speakers_labeled": result.speakers_labeled,
     })
     .to_string();
     write_to_buf(&json, out_buf, buf_len)
@@ -8973,19 +8976,7 @@ fn group_words_into_turns(words: &[(f64, String)], offset_secs: f64) -> Vec<(u12
 
 /// Parakeet's word-timestamp JSON (`[{"word","start","end"}]`, seconds from
 /// the window start) as absolute diarization words.
-fn parakeet_words(ts_json: &str, offset_secs: f64) -> Vec<crate::diarize::Word> {
-    serde_json::from_str::<Vec<serde_json::Value>>(ts_json)
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|w| {
-            Some(crate::diarize::Word {
-                start: offset_secs + w["start"].as_f64()?,
-                end: offset_secs + w["end"].as_f64()?,
-                text: w["word"].as_str()?.to_string(),
-            })
-        })
-        .collect()
-}
+use crate::diarize::parakeet_words;
 
 /// Deepgram gives each word's start only; a word ends where the next begins,
 /// capped at one second so a pause is not credited to the last speaker.
@@ -9004,27 +8995,7 @@ fn deepgram_words(words: &[(f64, String)], offset_secs: f64) -> Vec<crate::diari
         .collect()
 }
 
-/// For engines without word timestamps: each line goes to whoever talks most
-/// between its start and the next line's.
-fn lines_by_dominant_speaker(
-    lines: &[(u128, String)],
-    d: &crate::diarize::Diarization,
-    track_secs: f64,
-) -> Vec<(u128, Option<usize>, String)> {
-    lines
-        .iter()
-        .enumerate()
-        .map(|(i, (ms, t))| {
-            let start = *ms as f64 / 1000.0;
-            let end = lines
-                .get(i + 1)
-                .map(|l| l.0 as f64 / 1000.0)
-                .unwrap_or(track_secs)
-                .max(start);
-            (*ms, d.speaker_for_span(start, end), t.clone())
-        })
-        .collect()
-}
+use crate::diarize::lines_by_dominant_speaker;
 
 /// Re-transcribe a meeting's PER-TRACK audio (`audio_mic` + `audio_system`),
 /// rebuilding `transcripts.txt` in the SAME `[hh:mm:ss] [band] text` format the
@@ -9150,7 +9121,25 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
     let mut diar_bands: Vec<crate::diarize::BandTurns> = Vec::new();
 
     let mut lines: Vec<(u128, String, String)> = Vec::new();
-    for (band, path) in &bands {
+    let tracks = bands.len();
+    let transcribe_share = if diarize_on {
+        crate::meeting::TRANSCRIBE_SHARE_WITH_SPEAKERS
+    } else {
+        1.0
+    };
+    // One figure for the whole job plus what it is doing, so a host can say
+    // more than "Wrapping up" for the minutes this takes after a meeting.
+    let progress = |track: usize, within: f64, stage: &str| {
+        emit_event(
+            "file_transcribe_progress",
+            &serde_json::json!({
+                "percent": crate::meeting::retranscribe_percent(track, tracks, within),
+                "stage": stage,
+            })
+            .to_string(),
+        );
+    };
+    for (track, (band, path)) in bands.iter().enumerate() {
         let band: &'static str = if *band == "system" { "system" } else { "mic" };
         let mut band_lines: Vec<(u128, String)> = Vec::new();
         let mut band_words: Vec<crate::diarize::Word> = Vec::new();
@@ -9235,14 +9224,7 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
                 if !trimmed.is_empty() {
                     band_lines.push((elapsed_ms, trimmed.to_string()));
                 }
-                emit_event(
-                    "file_transcribe_progress",
-                    &serde_json::json!({
-                        "percent": PREPROCESS_PROGRESS_SHARE
-                            + (end as f64 / total as f64) * (100.0 - PREPROCESS_PROGRESS_SHARE)
-                    })
-                    .to_string(),
-                );
+                progress(track, end as f64 / total as f64 * transcribe_share, band);
                 start = end;
             }
         } else {
@@ -9302,16 +9284,13 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
                         band_lines.push(((chunk_start_secs * 1000.0) as u128, trimmed.to_string()));
                     }
                 }
-                emit_event(
-                    "file_transcribe_progress",
-                    &serde_json::json!({ "percent": (end as f64 / total as f64) * 100.0 })
-                        .to_string(),
-                );
+                progress(track, end as f64 / total as f64 * transcribe_share, band);
                 start = end;
             }
         }
 
         let diarized = if diarize_on && !band_lines.is_empty() {
+            progress(track, transcribe_share, "speakers");
             let pcm16k = crate::preprocess::downsample_to_16k(&processed, rate);
             let t0 = std::time::Instant::now();
             match crate::diarize::diarize(&pcm16k) {
@@ -9343,6 +9322,7 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
         } else {
             false
         };
+        progress(track, 1.0, band);
         if !diarized {
             lines.extend(
                 band_lines
@@ -13171,6 +13151,7 @@ mod tests {
             language: "en".to_string(),
             chunk_secs: Some(15.0),
             preprocessing_enabled: true,
+            speaker_labels: false,
         };
         let primary: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
         let secondary: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
