@@ -37,6 +37,13 @@ public sealed partial class MeetingWindow : Window
     private string? _viewingMeetingDir;      // dir currently shown in main panel (may differ)
     private readonly System.Text.StringBuilder _liveTranscriptBuilder = new();
     private MeetingState _state = MeetingState.Idle;
+    /// Bumped by every successful start. The stop pipeline of an earlier
+    /// meeting (speaker pass + recap, minutes with a local model) checks it
+    /// before touching the window: people go from one call straight into the
+    /// next, and that pipeline finishing used to flip the window to Done over
+    /// the recording in progress, Stop button and all. Mac mirror:
+    /// MeetingViewModel.meetingGeneration.
+    private int _meetingGeneration;
     // Decoupled from _state so the user can browse past meetings
     // (state == Done) while a recording is still active. RecordingBar
     // visibility, close-blocking and the Back-to-Live affordance all
@@ -461,6 +468,7 @@ public sealed partial class MeetingWindow : Window
                 return false;
             }
             var id = System.Text.Encoding.UTF8.GetString(buf, 0, rc);
+            _meetingGeneration++;
             _startedAt = DateTime.UtcNow;
             _liveTranscriptBuilder.Clear();
             _ampHistory.Clear();
@@ -543,6 +551,9 @@ public sealed partial class MeetingWindow : Window
         // been pressed — the log jumped straight from the suggestion to the
         // meeting ending 44 s later, with no way to tell the two apart.
         App.Log("Stop button pressed", "Meeting");
+        var generation = _meetingGeneration;
+        // Pinned now: the next meeting's start writes its own choice here.
+        bool wantRecapAtStop = App.Instance?.AppViewModel?.MeetingGenerateRecap ?? true;
         StopBtn.IsEnabled = false;
         StopPolling();
         StopAmplitudePoll();
@@ -605,6 +616,21 @@ public sealed partial class MeetingWindow : Window
                 ProcStep2Text.Text = ProcStep2Default;
                 HideProcProgress();
             }
+            if (generation != _meetingGeneration)
+            {
+                // A newer meeting is recording in this window. Its
+                // predecessor's recap still runs, out of sight, and lands in
+                // the sidebar.
+                App.Log("previous meeting wrapped up while the next one records — recap in the background", "Meeting");
+                if (wantRecapAtStop && !string.IsNullOrWhiteSpace(transcript))
+                {
+                    var recap = await Services.MeetingPostProcessService.RunRecapAsync(dir, transcript);
+                    if (!recap.Success)
+                        App.Log($"recap of the previous meeting failed: {recap.Error}", "Meeting");
+                }
+                LoadHistory();
+                return;
+            }
             LoadDoneSpeakers(dir);
             _doneTurnAnchors = Helpers.TranscriptRenderer.Render(RawTranscriptText,
                 string.IsNullOrEmpty(transcript)
@@ -614,8 +640,7 @@ public sealed partial class MeetingWindow : Window
             await LoadDoneAudioAsync(dir);
             await LoadNotesAsync(dir);
 
-            bool wantRecap = App.Instance?.AppViewModel?.MeetingGenerateRecap ?? true;
-            if (wantRecap && !string.IsNullOrWhiteSpace(transcript))
+            if (wantRecapAtStop && !string.IsNullOrWhiteSpace(transcript))
             {
                 SetProcStep(2, false);
                 await GeneratePostProcessAsync(dir, transcript);
@@ -628,6 +653,13 @@ public sealed partial class MeetingWindow : Window
                 SetProcStep(3, true);
             }
 
+            // The recap itself can take minutes; a newer meeting may have
+            // started while it ran.
+            if (generation != _meetingGeneration)
+            {
+                LoadHistory();
+                return;
+            }
             SetState(MeetingState.Done);
             LoadHistory(); // freshly-finished meeting appears at top of sidebar
         }
@@ -2895,6 +2927,14 @@ public sealed partial class MeetingWindow : Window
     public void RefreshAndSelectDir(string dir)
     {
         if (string.IsNullOrEmpty(dir)) return;
+        // The recap of a meeting that ended while the NEXT one is recording
+        // (auto-stop, then auto-start on the next call): selecting it would
+        // take the window off the live recording. It is in the sidebar.
+        if (_state == MeetingState.Recording)
+        {
+            LoadHistory();
+            return;
+        }
         // External stop path leaves us pinned in Processing via
         // OnAppVmPropertyChanged; HistoryList_SelectionChanged would
         // refuse the selection and toast the user. Flip to Done first
@@ -3730,6 +3770,13 @@ public sealed partial class MeetingWindow : Window
             RegenProgressBar.Value = 0;
             RegenProgressText.Text = "Transcribing audio…";
             RegenProgressPanel.Visibility = Visibility.Visible;
+            // The core steps aside while a meeting records (rc -7): the
+            // recording has the machine. Say that, not "no audio found".
+            if (DimmyNative.dimmy_meeting_is_active() == 1)
+            {
+                ShowToast("A meeting is recording. Regenerate the transcript once it ends.");
+                return;
+            }
             var merged = await Task.Run(() => TranscribeMeetingDir(dir));
             if (string.IsNullOrWhiteSpace(merged))
             {

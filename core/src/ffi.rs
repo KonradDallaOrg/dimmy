@@ -4177,6 +4177,9 @@ pub unsafe extern "C" fn dimmy_meeting_start(out_buf: *mut c_char, buf_len: c_in
     // Claim the shared audio state: any meeting still stopping in the
     // background must not tear it down under us from here on.
     MEETING_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    // And the capture buffers themselves: a previous worker still finishing
+    // must not act on what we are about to put in them.
+    crate::meeting::claim_capture_buffers();
     // Clear any stale buffers from a previous recording so the meeting
     // worker starts at offset 0 on both primary and secondary streams.
     if let Ok(mut b) = st.audio_buffer.lock() {
@@ -9014,7 +9017,8 @@ use crate::diarize::lines_by_dominant_speaker;
 /// Falls back to the combined `audio` mix (labeled `[mic]`) when no per-track
 /// files exist. Uses `process_buffer_for_file_load` (highpass only — AGC NaNs
 /// long files, CLAUDE.md AUDIO-001). rc: bytes written, -1 bad args, -2 no
-/// audio, -3 write failed, -5 empty result, -6 cloud config incomplete.
+/// audio, -3 write failed, -5 empty result, -6 cloud config incomplete,
+/// -7 a meeting is recording (the pass steps aside; nothing is written).
 ///
 /// # Safety
 /// `dir_ptr` must be a valid NUL-terminated C string. `out_buf` must be a
@@ -9049,6 +9053,20 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
     if bands.is_empty() {
         log("[Retranscribe] no audio tracks in dir");
         return -2;
+    }
+    // The heaviest thing Dimmy does, and it runs right after a stop, when
+    // the next call may already be starting. A recording in progress has the
+    // machine: the pass gives way, the caller keeps the live transcript, and
+    // "Regenerate transcript" can redo it once the meeting is over.
+    let meeting_took_over = || {
+        let active = meeting_is_active();
+        if active {
+            log("[Retranscribe] a meeting is recording — stepping aside (nothing written); regenerate after it ends");
+        }
+        active
+    };
+    if meeting_took_over() {
+        return -7;
     }
 
     let st = state();
@@ -9170,6 +9188,9 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
             let chunk_samples = ((chunk_secs * rate as f32) as usize).max(rate as usize);
             let mut start = 0usize;
             while start < total {
+                if meeting_took_over() {
+                    return -7;
+                }
                 let end = (start + chunk_samples).min(total);
                 let window = crate::audio::ProcessedAudio {
                     samples: processed[start..end].to_vec(),
@@ -9239,6 +9260,9 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
             let win = (((max_16k as f64 / 16_000.0) * rate as f64) as usize).max(rate as usize);
             let mut start = 0usize;
             while start < total {
+                if meeting_took_over() {
+                    return -7;
+                }
                 let end = (start + win).min(total);
                 let pcm16k = crate::preprocess::downsample_to_16k(&processed[start..end], rate);
                 let wav = crate::audio::encode_wav(&pcm16k, 16000).unwrap_or_default();
@@ -9289,6 +9313,9 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
             }
         }
 
+        if meeting_took_over() {
+            return -7;
+        }
         let diarized = if diarize_on && !band_lines.is_empty() {
             progress(track, transcribe_share, "speakers");
             let pcm16k = crate::preprocess::downsample_to_16k(&processed, rate);
@@ -10775,6 +10802,27 @@ pub unsafe extern "C" fn dimmy_call_signal(mic_active: c_int, app_id: *const c_c
     };
 
     use crate::call_detector::CallSignalOutcome;
+    // One line per decision, so "why did it record before I joined" and "why
+    // is there a four-second meeting" can be answered from dimmy.log. The app
+    // id is a category ("teams") or an app name, never user content.
+    let who = |app: &Option<String>| app.clone().unwrap_or_else(|| "<unknown app>".into());
+    match &outcome {
+        CallSignalOutcome::Detected { app, since_seconds } => log(&format!(
+            "[CallDetect] call detected: {} (microphone held {} s)",
+            who(app),
+            since_seconds
+        )),
+        CallSignalOutcome::DetectedPreexisting { app, .. } => log(&format!(
+            "[CallDetect] call already under way when first seen: {} — offer only",
+            who(app)
+        )),
+        CallSignalOutcome::Ended { app } => log(&format!("[CallDetect] call ended: {}", who(app))),
+        CallSignalOutcome::StopSuggested { app, .. } => log(&format!(
+            "[CallDetect] stop suggested: {} released the microphone",
+            who(app)
+        )),
+        _ => {}
+    }
     match outcome {
         CallSignalOutcome::Detected { app, since_seconds } => {
             let payload = serde_json::json!({
@@ -12745,6 +12793,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn emit_meeting_state_payload_is_valid_json_with_correct_keys() {
         reset_event_capture();
         emit_meeting_state_event(true, true);
@@ -13123,6 +13172,77 @@ mod tests {
             dimmy_meeting_is_paused(),
             0,
             "is_paused without meeting → 0"
+        );
+    }
+
+    /// Re-transcribing a whole meeting is the heaviest thing Dimmy does, and
+    /// it runs right after a stop: exactly when the next call is starting.
+    /// Two passes of a large model on one machine is how the gap between two
+    /// meetings froze a Mac (2026-09-29). A recording in progress has the
+    /// machine; the pass steps aside and the caller keeps the live transcript.
+    #[test]
+    #[serial]
+    fn retranscribe_steps_aside_while_a_meeting_records() {
+        ensure_test_state();
+        if let Ok(mut g) = MEETING.lock() {
+            *g = None;
+        }
+        use crate::audio::AudioSource;
+        use crate::meeting::{MeetingSession, SttSnapshot};
+        use std::sync::Arc;
+
+        let past = std::env::temp_dir().join(format!("dimmy-retx-{}", std::process::id()));
+        std::fs::create_dir_all(&past).unwrap();
+        let wav = crate::audio::encode_wav(&vec![0.05f32; 16_000 * 2], 16_000).unwrap();
+        std::fs::write(past.join("audio_mic.wav"), wav).unwrap();
+
+        let stt = SttSnapshot {
+            mode: "cloud".to_string(),
+            api_url: "https://test.invalid/".to_string(),
+            api_model: "x".to_string(),
+            api_key: Some("x".to_string()),
+            prompt: String::new(),
+            local_model: String::new(),
+            local_backend: "whisper".to_string(),
+            language: "en".to_string(),
+            chunk_secs: Some(15.0),
+            preprocessing_enabled: true,
+            speaker_labels: false,
+        };
+        let primary: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+        let secondary: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+        let session = match MeetingSession::start(
+            primary,
+            secondary,
+            48_000,
+            48_000,
+            AudioSource::Mix,
+            stt,
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("[skip] start failed: {e}");
+                return;
+            }
+        };
+        if let Ok(mut g) = MEETING.lock() {
+            *g = Some(session);
+        }
+
+        let dir = CString::new(past.to_string_lossy().as_bytes()).unwrap();
+        let mut out = vec![0 as c_char; 4096];
+        let rc = unsafe {
+            dimmy_meeting_retranscribe(dir.as_ptr(), out.as_mut_ptr(), out.len() as c_int)
+        };
+
+        let session = MEETING.lock().ok().and_then(|mut g| g.take());
+        if let Some(s) = session {
+            let _ = s.stop();
+        }
+        let _ = std::fs::remove_dir_all(&past);
+        assert_eq!(
+            rc, -7,
+            "a re-transcription ran while a meeting was recording"
         );
     }
 

@@ -2082,7 +2082,13 @@ final class AppState: ObservableObject {
     /// window + starts a session; `stop_and_recap` runs the same
     /// stop+recap pipeline the pill uses.
     func callNudgeRespond(app: String?, response: String) {
-        _ = DimmyCore.shared.callSignalResponse(appId: app, response: response)
+        // "Record now" is told to the core only once the meeting window has
+        // accepted the start (below): told first, a refused start left the
+        // detector sure a recording of ours was running, and it stayed quiet
+        // for every call after that.
+        if response != "record_now" {
+            _ = DimmyCore.shared.callSignalResponse(appId: app, response: response)
+        }
         switch response {
         case "record_now":
             // Idempotency guard — mirror of Win's
@@ -2092,6 +2098,7 @@ final class AppState: ObservableObject {
             // Record on the call popup), don't try to start a second
             // one — just surface the existing window.
             if DimmyCore.shared.meetingIsActive {
+                _ = DimmyCore.shared.callSignalResponse(appId: app, response: response)
                 AppDelegate.shared?.openMeetingWindow()
                 break
             }
@@ -2108,7 +2115,11 @@ final class AppState: ObservableObject {
             // still get the spoken notice and the pasteable text.
             let auto = Self.autoRecordEffective(detectEnabled: callDetectEnabled,
                                                 autoRecord: callDetectAutoRecord)
-            MeetingWindowController.shared.viewModel.start(consent: auto ? .announceOnly : .modal)
+            guard MeetingWindowController.shared.viewModel.start(consent: auto ? .announceOnly : .modal) else {
+                dimmyHostLog("[CallDetect] record_now for \(app ?? "<unknown app>") not started (window refused or consent declined)")
+                break
+            }
+            _ = DimmyCore.shared.callSignalResponse(appId: app, response: response)
             // Bind the detected call as this meeting's origin so the
             // deterministic "call ended" path can watch it (Mac mirror of
             // Win MarkMeetingOriginFromCurrentSession). Falls back to the

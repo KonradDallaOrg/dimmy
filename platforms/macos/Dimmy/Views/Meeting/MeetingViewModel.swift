@@ -421,7 +421,16 @@ final class MeetingViewModel: ObservableObject {
     /// the window can never strand the user in processing limbo.
     private var wrapUpWatchdog: Timer?
     private var sessionId: String = ""
+    /// True only while a start or a stop is talking to the core — never
+    /// through the recap that follows a stop. People go from one call
+    /// straight into the next, and a flag held for the whole recap (a
+    /// minute, several with a local model) made the next start a silent
+    /// no-op: the second meeting was never recorded.
     private var isWorking: Bool = false
+    /// Bumped by every start. Work that belongs to an earlier meeting (its
+    /// recap, a regenerate) checks it before touching the window, so a
+    /// recap finishing late never pulls the window off a newer recording.
+    private var meetingGeneration: Int = 0
     private var activeMeetingDir: String = ""
     private var toastDismissTask: Task<Void, Never>?
 
@@ -547,17 +556,25 @@ final class MeetingViewModel: ObservableObject {
         !meetingActive && phase != .recording
     }
 
-    func start(consent: ConsentMode = .modal) {
+    /// Returns false when the start was refused outright (busy, a meeting
+    /// already recording, consent declined). True means the core is being
+    /// asked to start; it can still fail there, which the core reports to
+    /// the call detector itself.
+    @discardableResult
+    func start(consent: ConsentMode = .modal) -> Bool {
         guard !isWorking,
               Self.canStart(phase: phase, meetingActive: DimmyCore.shared.meetingIsActive)
-        else { return }
+        else {
+            dimmyHostLog("[Meeting] start refused: busy=\(isWorking) phase=\(phase) active=\(DimmyCore.shared.meetingIsActive)")
+            return false
+        }
         // Recording-consent gate (mandatory). A meeting captures system audio
         // = other people, so we confirm consent and announce before recording.
         // Cancelling aborts the start. Mirror of Win MeetingWindow.Start_Click.
         let lang = Locale.current.language.languageCode?.identifier ?? "en"
         switch consent {
         case .modal:
-            guard MeetingConsentFlow.confirmAndAnnounce(lang: lang) else { return }
+            guard MeetingConsentFlow.confirmAndAnnounce(lang: lang) else { return false }
         case .announceOnly:
             // Armed, not spoken. The notice follows the recording; it never
             // leads it. See the announce-after-it-survives block below.
@@ -567,6 +584,7 @@ final class MeetingViewModel: ObservableObject {
         // we wipe the buffer, matches the LostFocus save on Win.
         saveNotes()
         isWorking = true
+        meetingGeneration += 1
         phase = .recording
         statusLabel = "Starting..."
         subStatusLabel = ""
@@ -608,6 +626,11 @@ final class MeetingViewModel: ObservableObject {
                 }
                 self.sessionId = id
                 self.startedAt = Date()
+                // The live meeting's own folder. Left pointing at the previous
+                // meeting, a window reopened mid-recording loaded THAT
+                // meeting's transcript into the live pane.
+                self.activeMeetingDir = DimmyCore.shared.meetingActiveDir() ?? ""
+                self.selectedDir = nil
                 // Pin the recap choice for THIS meeting, every stop path
                 // (window, pill, call-detect popup) reads
                 // AppState.meetingGenerateRecap so a stale checkbox on a
@@ -656,6 +679,7 @@ final class MeetingViewModel: ObservableObject {
                 }
             }
         }
+        return true
     }
 
     // MARK: - Pause / Resume
@@ -702,19 +726,46 @@ final class MeetingViewModel: ObservableObject {
         doneRawTranscript = AppState.shared.meetingLiveTranscript
         AppState.shared.meetingActiveDir = ""
 
+        // Pinned now: a meeting started before this one's recap runs writes
+        // its own choice into the same AppState field.
+        let wantRecap = AppState.shared.meetingGenerateRecap
+        let generation = meetingGeneration
         SystemAudioCaptureService.shared.stop()
         DispatchQueue.global(qos: .userInitiated).async {
             var result = DimmyCore.shared.meetingStop()
+            // The core is done with this meeting: the next one may start now,
+            // while the speaker pass and the recap below still run.
+            DispatchQueue.main.async { self.isWorking = false }
             // Speaker labels (when enabled) replace the live per-track
             // transcript before the recap reads it.
             if let stopped = result, !stopped.speakersLabeled, DiarizationService.enabled() {
-                DispatchQueue.main.async { self.statusLabel = "Identifying speakers…" }
+                DispatchQueue.main.async {
+                    if self.meetingGeneration == generation { self.statusLabel = "Identifying speakers…" }
+                }
                 result?.transcript = DiarizationService.relabelIfEnabled(
                     dir: stopped.dir, liveTranscript: stopped.transcript,
                     alreadyLabeled: false)
-                DispatchQueue.main.async { self.clearRetranscribeProgress() }
+                DispatchQueue.main.async {
+                    if self.meetingGeneration == generation { self.clearRetranscribeProgress() }
+                }
             }
+            let stopped = result
             DispatchQueue.main.async {
+                let result = stopped
+                // A newer meeting took the window while this one wrapped up.
+                // Its recap still runs, out of sight; the window stays on the
+                // recording.
+                guard self.meetingGeneration == generation else {
+                    if let result {
+                        let transcript = result.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !transcript.isEmpty && wantRecap {
+                            self.runPostProcess(dir: result.dir, transcript: transcript,
+                                                generation: generation)
+                        }
+                    }
+                    self.loadHistory()
+                    return
+                }
                 self.isPaused = false
                 guard let result else {
                     self.isWorking = false
@@ -760,11 +811,12 @@ final class MeetingViewModel: ObservableObject {
                     self.statusLabel = "Empty recording"
                     self.subStatusLabel = "No transcript was produced"
                     self.loadHistory()
-                } else if AppState.shared.meetingGenerateRecap {
+                } else if wantRecap {
                     // Read the flag pinned at meeting start, NOT the live
                     // checkbox (which a reopened window can render stale).
                     self.processingStep = .generatingRecap
-                    self.runPostProcess(dir: result.dir, transcript: cleanTranscript)
+                    self.runPostProcess(dir: result.dir, transcript: cleanTranscript,
+                                        generation: generation)
                 } else {
                     dimmyHostLog("[Recap] skip (window stop): reason=meetingGenerateRecap=false (recap toggled off for this meeting) — transcript kept, no recap")
                     self.isWorking = false
@@ -779,8 +831,8 @@ final class MeetingViewModel: ObservableObject {
         }
     }
 
-    private func runPostProcess(dir: String, transcript: String) {
-        statusLabel = "Generating recap with LLM..."
+    private func runPostProcess(dir: String, transcript: String, generation: Int) {
+        if meetingGeneration == generation { statusLabel = "Generating recap with LLM..." }
         let notionAutoSend = AppState.shared.notionAutoSend
         let meetingType = selectedMeetingType == "auto" ? "" : selectedMeetingType
         DispatchQueue.global(qos: .userInitiated).async {
@@ -791,7 +843,12 @@ final class MeetingViewModel: ObservableObject {
                 meetingType: meetingType
             )
             DispatchQueue.main.async {
-                self.isWorking = false
+                guard self.meetingGeneration == generation else {
+                    // The recap of an earlier meeting, finished while a newer
+                    // one records: it is on disk and in the sidebar.
+                    self.loadHistory()
+                    return
+                }
                 self.phase = .done
                 switch result {
                 case .success(let recap):
@@ -832,6 +889,7 @@ final class MeetingViewModel: ObservableObject {
         processingStep = .generatingRecap
         statusLabel = "Regenerating recap..."
         let notionAutoSend = AppState.shared.notionAutoSend
+        let generation = meetingGeneration
         DispatchQueue.global(qos: .userInitiated).async {
             let result = MeetingPostProcessService.runRecap(
                 dir: dir,
@@ -839,6 +897,10 @@ final class MeetingViewModel: ObservableObject {
                 notionAutoSend: notionAutoSend
             )
             DispatchQueue.main.async {
+                guard self.meetingGeneration == generation else {
+                    self.loadHistory()
+                    return
+                }
                 self.phase = .done
                 switch result {
                 case .success(let recap):
@@ -1457,39 +1519,42 @@ final class MeetingViewModel: ObservableObject {
         return (try? String(contentsOf: url, encoding: .utf8)) ?? ""
     }
 
-    /// Append a `[mm:ss] ` time stamp at the end of the notes buffer so
-    /// the user can type the note after it. Mirror of the Win Recording-
-    /// view "Add note" / Ctrl+Enter behaviour. Uses the meeting elapsed
-    /// time (the same monotonic clock the recording bar shows). No-op
-    /// before a meeting has started, guards against accidental invokes
-    /// from the Done view (which has its own meta time, not elapsed).
-    func stampMeetingTime() {
-        guard phase == .recording else { return }
-        doneNotes = Self.stamping(notes: doneNotes, timerLabel: timerLabel)
+    /// "Add note" during a recording: append the note, stamped with the
+    /// meeting time, and save it straight away — the recording can end, or
+    /// the app quit, before any focus change would have saved it. Returns the
+    /// stamp for the confirmation, nil when there was nothing to add.
+    /// Mirror of Win MeetingWindow.SubmitNote.
+    @discardableResult
+    func addNote(_ text: String) -> String? {
+        guard phase == .recording,
+              let updated = Self.appendingNote(notes: doneNotes, text: text, timerLabel: timerLabel)
+        else { return nil }
+        doneNotes = updated
+        saveNotes()
+        return Self.noteStamp(timerLabel: timerLabel)
     }
 
-    /// Pure: the body of `stampMeetingTime()` factored out so the format
-    /// (trim `HH:` prefix, insert newline if needed) is pinned by
-    /// `MeetingStampTests` without spinning up a real ViewModel.
-    /// `internal` access so the test target reaches it via @testable.
-    nonisolated static func stamping(notes: String, timerLabel: String) -> String {
-        let stamp: String
-        if timerLabel.count >= 8 {
-            // "HH:MM:SS" → strip "HH:" to match Win "[mm:ss]" shape.
-            let idx = timerLabel.index(timerLabel.startIndex, offsetBy: 3)
-            stamp = "[" + String(timerLabel[idx...]) + "] "
-        } else {
-            stamp = "[" + timerLabel + "] "
-        }
-        let separator: String
-        if notes.isEmpty {
-            separator = ""
-        } else if notes.hasSuffix("\n") {
-            separator = ""
-        } else {
-            separator = "\n"
-        }
-        return notes + separator + stamp
+    /// `mm:ss`, or `h:mm:ss` past the hour — the Windows shape.
+    nonisolated static func noteStamp(timerLabel: String) -> String {
+        let parts = timerLabel.split(separator: ":").compactMap { Int($0) }
+        guard parts.count == 3 else { return timerLabel }
+        return parts[0] > 0
+            ? String(format: "%d:%02d:%02d", parts[0], parts[1], parts[2])
+            : String(format: "%02d:%02d", parts[1], parts[2])
+    }
+
+    /// Pure: `notes` with the block for `text` appended — `**[stamp]** text`
+    /// and a blank line, the format Windows writes to the same notes.md.
+    /// nil for a blank note. Pinned by `MeetingStampTests`.
+    nonisolated static func appendingNote(notes: String, text: String, timerLabel: String) -> String? {
+        let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { $0.replacingOccurrences(of: "\\s+$", with: "", options: .regularExpression) }
+            .joined(separator: "\n")
+        guard !body.isEmpty else { return nil }
+        let block = "**[\(noteStamp(timerLabel: timerLabel))]** \(body)\n\n"
+        let kept = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        return kept.isEmpty ? block : kept + "\n\n" + block
     }
 
     /// Write the current `doneNotes` buffer to `<dir>/notes.md`. No-op
@@ -1530,7 +1595,7 @@ final class MeetingViewModel: ObservableObject {
 
     // MARK: - Toast
 
-    private func showToast(_ text: String) {
+    func showToast(_ text: String) {
         toastDismissTask?.cancel()
         toastMessage = text
         toastDismissTask = Task { @MainActor in

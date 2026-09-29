@@ -70,6 +70,30 @@ pub(crate) fn join_bounded<T: Send + 'static>(
     }
 }
 
+/// Which meeting may touch the shared capture buffers.
+///
+/// Stop takes a meeting out of the global slot at once, so the next one can
+/// start while the previous worker is still finishing - and a worker stalled
+/// on a slow disk or a loaded machine can wake up after the next meeting has
+/// cleared the buffers and started filling them. Acting on its own cursors it
+/// would pad the new system track and drain audio the new meeting has not
+/// written yet. Every meeting claims the buffers before it touches them; a
+/// worker that has lost the claim leaves them alone.
+static CAPTURE_OWNER: AtomicU64 = AtomicU64::new(0);
+static CAPTURE_CLAIMS: AtomicU64 = AtomicU64::new(0);
+
+/// Take the shared capture buffers for a new meeting. Call BEFORE clearing
+/// them: from here on any earlier worker stops touching them.
+pub fn claim_capture_buffers() -> u64 {
+    let claim = CAPTURE_CLAIMS.fetch_add(1, Ordering::SeqCst) + 1;
+    CAPTURE_OWNER.store(claim, Ordering::SeqCst);
+    claim
+}
+
+fn owns_capture_buffers(claim: u64) -> bool {
+    CAPTURE_OWNER.load(Ordering::SeqCst) == claim
+}
+
 /// Snapshot of the user's STT preferences taken at meeting-start time.
 /// Worker uses this to route each chunk to the SAME backend the
 /// dictation pipeline would use (cloud or local), so meeting and
@@ -363,6 +387,7 @@ impl MeetingSession {
         // be moved across the spawn boundary). The worker owns them end
         // to end.
 
+        let claim = claim_capture_buffers();
         let cancel = Arc::new(AtomicBool::new(false));
         let paused = Arc::new(AtomicBool::new(false));
         let cancel_w = cancel.clone();
@@ -384,6 +409,7 @@ impl MeetingSession {
                     id_w,
                     cancel_w,
                     paused_w,
+                    claim,
                 )
             })
             .map_err(|e| format!("spawn meeting worker: {}", e))?;
@@ -785,6 +811,10 @@ enum SttJob {
         /// Track sample of the window's first sample, on the timeline of the
         /// files on disk (pauses excluded).
         track_start: usize,
+        /// Recorded time for the usage stats: this window plus any whose
+        /// job was dropped. Persisted by the transcription thread, which may
+        /// block; the capture loop may not.
+        stats_secs: f64,
     },
     /// A `[paused Ns]` marker, queued rather than written inline so it
     /// keeps its place in transcripts.txt relative to the chunks around it.
@@ -1006,7 +1036,7 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
     };
 
     while let Ok(job) = rx.recv() {
-        let (mic_slice, system_slice, elapsed_ms, track_start) = match job {
+        let (mic_slice, system_slice, elapsed_ms, track_start, stats_secs) = match job {
             SttJob::Paused { elapsed_ms, dur_ms } => {
                 let line = format!(
                     "[{}] [paused] (resumed after {})\n",
@@ -1022,7 +1052,8 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
                 system,
                 elapsed_ms,
                 track_start,
-            } => (mic, system, elapsed_ms, track_start),
+                stats_secs,
+            } => (mic, system, elapsed_ms, track_start, stats_secs),
         };
 
         let mic_audio = live.as_ref().map(|_| mic_slice.clone());
@@ -1120,8 +1151,8 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
         let chunk_words = (mic_text.split_whitespace().count()
             + system_text.split_whitespace().count())
             as std::os::raw::c_int;
-        if chunk_words > 0 {
-            let _ = crate::ffi::dimmy_update_stats(chunk_words, 0.0);
+        if chunk_words > 0 || stats_secs > 0.0 {
+            let _ = crate::ffi::dimmy_update_stats(chunk_words, stats_secs);
         }
     }
 
@@ -1246,6 +1277,7 @@ fn worker_loop(
     id: String,
     cancel: Arc<AtomicBool>,
     paused: Arc<AtomicBool>,
+    claim: u64,
 ) -> MeetingResult {
     let chunk_secs = stt
         .chunk_secs
@@ -1400,6 +1432,10 @@ fn worker_loop(
     }
     let mut stt_dropped_chunks: u32 = 0;
     let mut stt_disconnected_logged = false;
+    // Recorded seconds not yet handed to the transcription thread for the
+    // usage stats (see `SttJob::Chunk::stats_secs`).
+    let mut pending_stats_secs: f64 = 0.0;
+    let mut lost_claim = false;
 
     // Track sinks — created HERE (on the worker thread) because the
     // Vorbis encoder is !Send and can't cross the spawn boundary. Each
@@ -1549,6 +1585,10 @@ fn worker_loop(
     loop {
         let cancelled = cancel.load(Ordering::SeqCst);
         thread::sleep(POLL_INTERVAL);
+        if !owns_capture_buffers(claim) {
+            lost_claim = true;
+            break;
+        }
 
         // Enforce the secondary-tracks-primary invariant. Zero-pads
         // the loopback buffer up to the mic buffer's length, so
@@ -1667,6 +1707,10 @@ fn worker_loop(
                 None => continue,
             };
 
+        if !owns_capture_buffers(claim) {
+            lost_claim = true;
+            break;
+        }
         // Stream new samples into the WAV files at NATIVE sample rate
         // (no downsample). Three writers fan out:
         //   audio.wav         = mix (synth = primary + secondary clamped)
@@ -1773,6 +1817,12 @@ fn worker_loop(
             // transcribe as fast as it records, and the correct answer is
             // to drop TRANSCRIPT and keep recording. Blocking here would
             // reintroduce exactly the coupling this split removes.
+            // Time captured for this window counts regardless of whether the
+            // transcriber takes it: the audio IS recorded. Deliberately the
+            // same `end - start` span (overlap included) the stats have
+            // always used, so the Settings "Time saved" figure does not
+            // shift. A dropped window's seconds ride on the next job.
+            pending_stats_secs += (end - start) as f64 / device_sample_rate as f64;
             let job = SttJob::Chunk {
                 mic: mic_chunk,
                 system: system_chunk,
@@ -1780,9 +1830,10 @@ fn worker_loop(
                 // Everything up to `samples_written` is on disk, and the
                 // buffer index maps to the file one-to-one behind it.
                 track_start: total_written.saturating_sub(samples_written - start),
+                stats_secs: pending_stats_secs,
             };
             match stt_tx.try_send(job) {
-                Ok(()) => {}
+                Ok(()) => pending_stats_secs = 0.0,
                 Err(std::sync::mpsc::TrySendError::Full(_)) => {
                     windows_lost.store(true, Ordering::SeqCst);
                     stt_dropped_chunks += 1;
@@ -1833,22 +1884,6 @@ fn worker_loop(
                 }
             }
 
-            // Time captured for this window counts regardless of whether the
-            // transcriber took it: the audio IS recorded. Deliberately the
-            // same `end - start` span the single-threaded version used
-            // (overlap included), so the Settings "Time saved" figure does
-            // not shift. Words are added separately by the transcription
-            // thread — the only side that knows them — and the two calls sum
-            // to exactly what the single call did.
-            let chunk_secs = if device_sample_rate > 0 {
-                (end - start) as f64 / device_sample_rate as f64
-            } else {
-                0.0
-            };
-            if chunk_secs > 0.0 {
-                let _ = crate::ffi::dimmy_update_stats(0, chunk_secs);
-            }
-
             last_processed = end;
         }
 
@@ -1862,6 +1897,10 @@ fn worker_loop(
         // Skipped while paused: the pause/resume edge re-derives both
         // cursors from the live buffer length, and moving the floor out from
         // under it would make the resume skip the wrong window.
+        if !owns_capture_buffers(claim) {
+            lost_claim = true;
+            break;
+        }
         if !is_paused_now {
             let drop_n = drainable_samples(
                 samples_written,
@@ -1916,6 +1955,17 @@ fn worker_loop(
         if let Err(e) = w.finalize() {
             finalize_error.get_or_insert(format!("system track incomplete: {e}"));
         }
+    }
+
+    if lost_claim {
+        crate::log(
+            "[Meeting] a newer meeting took over the capture buffers before this one \
+             finished — stopped touching them; this meeting's audio up to here is on disk",
+        );
+    }
+    // The sinks are final, so a slow write here can no longer cost a sample.
+    if pending_stats_secs > 0.0 {
+        let _ = crate::ffi::dimmy_update_stats(0, pending_stats_secs);
     }
 
     // Audio is safe. NOW wait for the transcriber to drain what is queued.
@@ -2711,6 +2761,22 @@ mod audio_never_blocked {
             "queue depth {} is outside the range that bounds memory while \
              absorbing a slow patch",
             STT_QUEUE_DEPTH
+        );
+    }
+
+    /// Persisting the stats rewrites config.json under every config lock:
+    /// disk I/O and other threads' locks, inside the loop that may never
+    /// wait. On a machine busy loading a large model the write alone can
+    /// take seconds. The seconds a window covers travel with the window to
+    /// the transcription thread instead, which may block.
+    #[test]
+    fn the_capture_loop_never_persists_the_config() {
+        let src = include_str!("meeting.rs");
+        let start = src.find("fn worker_loop(").expect("worker_loop");
+        let end = start + src[start..].find("ORDER MATTERS").expect("end of the loop");
+        assert!(
+            !src[start..end].contains("update_stats("),
+            "the capture loop writes config.json again"
         );
     }
 

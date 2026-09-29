@@ -14,10 +14,10 @@ import SwiftUI
 
 struct MeetingRecordingView: View {
     @ObservedObject var vm: MeetingViewModel
-    /// Focus tracker for the Notes editor, used to save on blur, same
-    /// pattern as MeetingDoneView. SwiftUI's TextEditor has no native
-    /// "lost focus" callback; the @FocusState onChange handler is it.
-    @FocusState private var notesFocused: Bool
+    /// The note being written. It becomes part of notes.md only when it is
+    /// added, stamped with the meeting time.
+    @State private var noteDraft: String = ""
+    @FocusState private var noteFocused: Bool
 
     var body: some View {
         VStack(spacing: 12) {
@@ -203,12 +203,8 @@ struct MeetingRecordingView: View {
             }
         }
         .background(panelBackground)
-        // Save when the user leaves the Notes tab, mirrors the Done-
-        // view onChange save (MeetingDoneView line ~169). Stop +
-        // newMeeting already call saveNotes too, so a tab-leave save
-        // is the only NEW persistence trigger this view introduces.
-        .onChange(of: vm.recordingSelectedTab) { oldTab, _ in
-            if oldTab == .notes { vm.saveNotes() }
+        .onChange(of: vm.recordingSelectedTab) { _, tab in
+            if tab == .notes { noteFocused = true }
         }
     }
 
@@ -223,21 +219,7 @@ struct MeetingRecordingView: View {
             .labelsHidden()
             .frame(maxWidth: 280)
             Spacer()
-            if vm.recordingSelectedTab == .notes {
-                Button(action: {
-                    vm.stampMeetingTime()
-                    notesFocused = true
-                }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "plus.circle")
-                        Text("Stamp time")
-                    }
-                    .font(.system(size: 12))
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .help("Insert a [mm:ss] stamp at the end of your notes")
-            } else if !vm.chunkSummary.isEmpty {
+            if vm.recordingSelectedTab == .live, !vm.chunkSummary.isEmpty {
                 Text(vm.chunkSummary)
                     .font(.system(size: 11))
                     .foregroundStyle(Color.macTextTertiary)
@@ -271,27 +253,85 @@ struct MeetingRecordingView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    /// Notes during a recording, the way Windows does them: write a note,
+    /// Add it, and it lands in notes.md stamped with the meeting time. The
+    /// notes added so far stay in view above, so it is plain that they were
+    /// kept. The recap reads them as the user's own emphasis.
     private var notesEditor: some View {
-        ZStack(alignment: .topLeading) {
-            if vm.doneNotes.isEmpty {
-                Text("Your notes, stamp the current time with the button, then type. Saved to notes.md, also visible from the Done view.")
+        VStack(alignment: .leading, spacing: 10) {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    Group {
+                        if vm.doneNotes.isEmpty {
+                            Text("No notes yet. What you add here is stamped with the meeting time, and the recap gives it the most weight.")
+                                .foregroundStyle(Color.macTextSecondary)
+                        } else {
+                            Text(Self.rendered(vm.doneNotes))
+                                .textSelection(.enabled)
+                        }
+                    }
                     .font(.system(size: 13))
-                    .foregroundStyle(Color.macTextSecondary.opacity(0.7))
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 16)
-                    .allowsHitTesting(false)
-            }
-            TextEditor(text: $vm.doneNotes)
-                .font(.system(size: 13))
-                .scrollContentBackground(.hidden)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-                .focused($notesFocused)
-                .onChange(of: notesFocused) { _, isFocused in
-                    if !isFocused { vm.saveNotes() }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .id("notes-end")
                 }
+                .onChange(of: vm.doneNotes) { _, _ in
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        proxy.scrollTo("notes-end", anchor: .bottom)
+                    }
+                }
+            }
+            ZStack(alignment: .topLeading) {
+                if noteDraft.isEmpty {
+                    Text("Write a note…")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.macTextSecondary.opacity(0.7))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 8)
+                        .allowsHitTesting(false)
+                }
+                TextEditor(text: $noteDraft)
+                    .font(.system(size: 13))
+                    .scrollContentBackground(.hidden)
+                    .focused($noteFocused)
+            }
+            .frame(height: 64)
+            .padding(6)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(Color.primary.opacity(0.15), lineWidth: 1)
+            )
+            HStack {
+                Text("⌘↩ to add · stamped with the meeting time")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.macTextTertiary)
+                Spacer()
+                Button(action: addNote) {
+                    Label("Add note", systemImage: "square.and.pencil")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .keyboardShortcut(.return, modifiers: .command)
+                .disabled(noteDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
         }
+        .padding(14)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// The bold stamps rendered, line breaks kept. Plain text when the notes
+    /// are not valid markdown.
+    static func rendered(_ notes: String) -> AttributedString {
+        (try? AttributedString(
+            markdown: notes,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+            ?? AttributedString(notes)
+    }
+
+    private func addNote() {
+        guard let stamp = vm.addNote(noteDraft) else { return }
+        noteDraft = ""
+        vm.showToast("Note added at \(stamp).")
+        noteFocused = true
     }
 
     private var panelBackground: some View {

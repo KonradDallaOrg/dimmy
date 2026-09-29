@@ -52,6 +52,17 @@ final class UpdateService: NSObject, ObservableObject {
     /// doing something even when the answer turns out to be "no update".
     @Published private(set) var isChecking: Bool = false
 
+    /// A downloaded update that can be installed right now (relaunching
+    /// Dimmy) instead of waiting for the next quit. Set from Sparkle's
+    /// `willInstallUpdateOnQuit`; the About page shows the button while
+    /// it is non-nil.
+    @Published private(set) var canInstallNow: Bool = false
+    private var installNowHandler: (() -> Void)?
+    /// Version of the update Sparkle is working on, for the status line.
+    private var pendingVersion: String = ""
+    /// Takes the spinner down if Sparkle never answers a check.
+    private var checkWatchdog: Task<Void, Never>?
+
     /// False when the `auto_update` scope is absent. The About page
     /// hides the channel picker on false, mirroring Windows, where
     /// `UpdateChannelCard` collapses for users without the scope.
@@ -180,13 +191,64 @@ final class UpdateService: NSObject, ObservableObject {
             }
             return
         }
+        // Already downloaded: nothing to check, say so and offer it.
+        if canInstallNow {
+            statusText = readyText
+            return
+        }
+        // Sparkle ignores a user check while its own background session is
+        // still fetching the feed or downloading the update — no callback
+        // ever comes back. Spinning here is the "wheel that never stops"
+        // (reported 2026-09-29); the download finishing is what answers.
+        guard let updater = controller?.updater, updater.canCheckForUpdates else {
+            statusText = pendingVersion.isEmpty
+                ? "Dimmy is already checking in the background. The answer will appear here."
+                : "Downloading update \(pendingVersion) in the background. It will appear here when ready."
+            return
+        }
         isChecking = true
         statusText = "Checking for updates..."
+        armCheckWatchdog()
         // Bring Dimmy forward so Sparkle's modal lands on top. Without
         // this an agent app shows the sheet behind whatever the user
         // was looking at.
         NSApp.activate(ignoringOtherApps: true)
         controller?.checkForUpdates(nil)
+    }
+
+    /// Install the downloaded update and relaunch, now. Refused while a
+    /// meeting records, for the same reason the checks are.
+    func installNow() {
+        guard Self.mayEndProcess(dimmy_meeting_is_active()) else {
+            statusText = UpdateGateError.meetingRecording.errorDescription ?? ""
+            return
+        }
+        guard let handler = installNowHandler else { return }
+        NSLog("[Update] installing \(pendingVersion) now (user asked)")
+        handler()
+    }
+
+    private var readyText: String {
+        "Update \(pendingVersion) is ready. Install it now, or it installs when you quit Dimmy."
+    }
+
+    /// A check Sparkle never answers must not leave the button disabled
+    /// for good. Every real outcome clears this long before it fires.
+    private func armCheckWatchdog() {
+        checkWatchdog?.cancel()
+        checkWatchdog = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 60_000_000_000)
+            guard !Task.isCancelled, self.isChecking else { return }
+            self.isChecking = false
+            self.statusText = "No answer from the update check. Try again in a moment."
+            NSLog("[Update] user check got no answer in 60 s — spinner cleared")
+        }
+    }
+
+    private func endCheck() {
+        isChecking = false
+        checkWatchdog?.cancel()
+        checkWatchdog = nil
     }
 
     /// Background check used by the scheduled timer + first-launch
@@ -302,16 +364,75 @@ extension UpdateService: SPUUpdaterDelegate {
         let version = item.displayVersionString
         let raw = item.versionString
         Task { @MainActor in
-            self.isChecking = false
+            self.endCheck()
             self.isUpdateReady = true
-            self.statusText = "Update \(version) available — apply at quit"
+            self.pendingVersion = version
+            if !self.canInstallNow {
+                self.statusText = "Update \(version) available. Downloading it..."
+            }
             NSLog("[Update] found valid update: \(raw)")
+        }
+    }
+
+    nonisolated func updater(_ updater: SPUUpdater, didDownloadUpdate item: SUAppcastItem) {
+        let version = item.displayVersionString
+        Task { @MainActor in
+            self.pendingVersion = version
+            self.statusText = "Update \(version) downloaded. It installs when you quit Dimmy."
+            NSLog("[Update] downloaded \(item.versionString)")
+        }
+    }
+
+    /// A silently downloaded update, waiting for the app to quit. Taking the
+    /// handler lets the About page offer "Install and relaunch" now; Sparkle
+    /// still installs at quit if nobody presses it.
+    nonisolated func updater(
+        _ updater: SPUUpdater, willInstallUpdateOnQuit item: SUAppcastItem,
+        immediateInstallationBlock immediateInstallHandler: @escaping () -> Void
+    ) -> Bool {
+        let version = item.displayVersionString
+        // Sparkle calls its delegate on the main thread, where the handler
+        // is also invoked; it never crosses to another thread.
+        nonisolated(unsafe) let handler = immediateInstallHandler
+        Task { @MainActor in
+            self.installNowHandler = handler
+            self.canInstallNow = true
+            self.isUpdateReady = true
+            self.pendingVersion = version
+            self.endCheck()
+            self.statusText = self.readyText
+            NSLog("[Update] \(item.versionString) ready — install now or at quit")
+        }
+        return true
+    }
+
+    /// The one callback every update cycle ends with, whatever happened in
+    /// it — including the outcomes the specific callbacks above never see
+    /// (an update shown and dismissed, a resumed download). The spinner
+    /// always comes down here.
+    nonisolated func updater(
+        _ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck,
+        error: (any Error)?
+    ) {
+        Task { @MainActor in
+            guard self.isChecking else { return }
+            self.endCheck()
+            if self.statusText == "Checking for updates..." {
+                self.statusText = self.canInstallNow
+                    ? self.readyText
+                    : "You're on the latest \(self.channelLabel) version (\(Self.runningVersion))"
+            }
         }
     }
 
     nonisolated func updaterDidNotFindUpdate(_ updater: SPUUpdater) {
         Task { @MainActor in
-            self.isChecking = false
+            self.endCheck()
+            // A downloaded update is still waiting: that is the news.
+            if self.canInstallNow {
+                self.statusText = self.readyText
+                return
+            }
             self.isUpdateReady = false
             self.statusText = "You're on the latest \(self.channelLabel) version (\(Self.runningVersion))"
             NSLog("[Update] no update available")
@@ -342,11 +463,11 @@ extension UpdateService: SPUUpdaterDelegate {
             // Still clear the spinner: the happy-path delegate has
             // already written the status line, but nothing else would
             // take the button out of its "Checking..." state.
-            Task { @MainActor in self.isChecking = false }
+            Task { @MainActor in self.endCheck() }
             return
         }
         Task { @MainActor in
-            self.isChecking = false
+            self.endCheck()
             self.statusText = "Couldn't reach the update server. Try again in a moment."
             NSLog("[Update] aborted (\(nsErr.domain) \(nsErr.code)): \(msg)")
         }

@@ -1476,9 +1476,11 @@ public sealed partial class PillWindow : Window
             // meeting window's own stop.
             // Speaker labels (when enabled) replace the live per-track
             // transcript before the recap reads it.
+            // Read BEFORE the speaker pass: the next meeting can start while it
+            // runs and writes its own choice into the same flag.
+            bool wantRecap = App.Instance?.AppViewModel?.MeetingGenerateRecap ?? true;
             if (!string.IsNullOrEmpty(dir))
                 transcript = await Services.DiarizationService.RelabelIfEnabledAsync(dir, transcript, labeled);
-            bool wantRecap = App.Instance?.AppViewModel?.MeetingGenerateRecap ?? true;
             if (wantRecap && !string.IsNullOrEmpty(dir) && !string.IsNullOrWhiteSpace(transcript))
             {
                 var result = await Services.MeetingPostProcessService.RunRecapAsync(dir, transcript);

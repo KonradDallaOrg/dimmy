@@ -31,6 +31,11 @@ struct AudioPlaybackBar: View {
     let speakers: [MeetingSpeaker]
     /// Playback position while playing, for the transcript to follow.
     let onPlaybackTime: ((TimeInterval) -> Void)?
+    /// A position asked for from outside (the reader scrolled the
+    /// transcript). `seekTick` changes on every request, so asking twice for
+    /// the same second still moves the playhead.
+    let seekTo: TimeInterval?
+    let seekTick: Int
     @StateObject private var model = AudioPlaybackModel()
 
     // Decode a generous bucket count; the strips resample this down to the
@@ -42,12 +47,16 @@ struct AudioPlaybackBar: View {
          micURL: URL? = nil,
          systemURL: URL? = nil,
          speakers: [MeetingSpeaker] = [],
+         seekTo: TimeInterval? = nil,
+         seekTick: Int = 0,
          onSeek: ((TimeInterval) -> Void)? = nil,
          onPlaybackTime: ((TimeInterval) -> Void)? = nil) {
         self.url = url
         self.micURL = micURL
         self.systemURL = systemURL
         self.speakers = speakers
+        self.seekTo = seekTo
+        self.seekTick = seekTick
         self.onSeek = onSeek
         self.onPlaybackTime = onPlaybackTime
     }
@@ -130,6 +139,15 @@ struct AudioPlaybackBar: View {
         .onDisappear { model.stop() }
         .onChange(of: model.elapsed) { _, t in
             if model.isPlaying { onPlaybackTime?(t) }
+        }
+        // Not through `onSeek`: that one scrolls the transcript, which is
+        // where this request came from.
+        .onChange(of: seekTick) { _, _ in
+            guard let t = seekTo, model.duration > 0 else { return }
+            let target = min(max(0, t), model.duration)
+            // A sub-second move is the scroller settling, not a new intent.
+            guard abs(target - model.elapsed) >= 0.5 else { return }
+            model.seek(to: target)
         }
         .onChange(of: url) { _, newURL in
             model.load(

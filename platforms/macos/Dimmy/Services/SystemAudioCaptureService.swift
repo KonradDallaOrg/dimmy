@@ -1,4 +1,5 @@
 import Foundation
+import os
 import ScreenCaptureKit
 import AVFoundation
 
@@ -34,6 +35,11 @@ final class SystemAudioCaptureService: NSObject {
     /// Active Core Audio tap (macOS 14.4+). Stored as AnyObject because the
     /// concrete type is gated above the 14.0 deployment target.
     private var processTap: AnyObject?
+    /// The one SCStream allowed to deliver. `stopCapture` is asynchronous,
+    /// so a stopped stream can still hand us buffers while the next
+    /// meeting's stream is running — the same double delivery the tap's
+    /// gate prevents. Read from the capture queue, hence the lock.
+    nonisolated private let deliveringStream = OSAllocatedUnfairLock<ObjectIdentifier?>(initialState: nil)
     private override init() {}
 
     /// Whether the system-audio path is healthy. Three cases for the tap
@@ -205,11 +211,14 @@ final class SystemAudioCaptureService: NSObject {
                 self, type: .audio,
                 sampleHandlerQueue: .global(qos: .userInteractive)
             )
+            let streamID = ObjectIdentifier(s)
+            deliveringStream.withLock { $0 = streamID }
             try await s.startCapture()
             stream = s
             isRunning = true
             return true
         } catch {
+            deliveringStream.withLock { $0 = nil }
             print("[SystemAudio] start failed: \(error)")
             return false
         }
@@ -223,6 +232,7 @@ final class SystemAudioCaptureService: NSObject {
             return
         }
         guard isRunning, let s = stream else { return }
+        deliveringStream.withLock { $0 = nil }
         s.stopCapture { _ in }
         stream = nil
         isRunning = false
@@ -236,6 +246,7 @@ extension SystemAudioCaptureService: SCStreamOutput {
         of type: SCStreamOutputType
     ) {
         guard type == .audio,
+              deliveringStream.withLock({ $0 }) == ObjectIdentifier(stream),
               let blockBuffer = sampleBuffer.dataBuffer else { return }
 
         // Read the actual rate ScreenCaptureKit ships samples at from
