@@ -205,6 +205,44 @@ pub struct Word {
     pub text: String,
 }
 
+/// Parakeet's word timestamps (`[{"word","start","end"}]`, seconds from the
+/// start of the audio it was given) shifted by `offset_secs`.
+pub fn parakeet_words(ts_json: &str, offset_secs: f64) -> Vec<Word> {
+    serde_json::from_str::<Vec<serde_json::Value>>(ts_json)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|w| {
+            Some(Word {
+                start: offset_secs + w["start"].as_f64()?,
+                end: offset_secs + w["end"].as_f64()?,
+                text: w["word"].as_str()?.to_string(),
+            })
+        })
+        .collect()
+}
+
+/// For engines without word timestamps: each line goes to whoever talks most
+/// between its start and the next line's.
+pub fn lines_by_dominant_speaker(
+    lines: &[(u128, String)],
+    d: &Diarization,
+    track_secs: f64,
+) -> Vec<(u128, Option<usize>, String)> {
+    lines
+        .iter()
+        .enumerate()
+        .map(|(i, (ms, t))| {
+            let start = *ms as f64 / 1000.0;
+            let end = lines
+                .get(i + 1)
+                .map(|l| l.0 as f64 / 1000.0)
+                .unwrap_or(track_secs)
+                .max(start);
+            (*ms, d.speaker_for_span(start, end), t.clone())
+        })
+        .collect()
+}
+
 /// Group words into speaker turns: `(start_ms, speaker, text)`. A turn ends on
 /// a speaker change, a pause longer than `GAP_SECS`, or a long line. A word the
 /// diarizer puts nowhere inherits the previous word's speaker, so a mumbled
@@ -278,6 +316,7 @@ pub fn label_bands(
     for b in bands {
         let keep_band_label = b.band != "system" && b.diar.speakers(1.0).len() <= 1;
         let segments = b.diar.segments();
+        let has_turns = !b.turns.is_empty();
         let mut local_to_global: Vec<(usize, usize)> = Vec::new();
         for (ms, spk, text) in b.turns {
             let label = match spk {
@@ -311,6 +350,20 @@ pub fn label_bands(
                 _ => b.band.to_string(),
             };
             lines.push((ms, label, text));
+        }
+        // One voice on the mic keeps its track label in the transcript, but
+        // it is still a speaker: it gets a lane under that label.
+        if keep_band_label && has_turns {
+            let segs = merge_segments(segments.iter().map(|s| (s.1, s.2)));
+            if !segs.is_empty() {
+                speakers.push(SpeakerInfo {
+                    id: b.band.to_string(),
+                    name: b.band.to_string(),
+                    band: b.band.to_string(),
+                    talk_secs: segs.iter().map(|(a, e)| e - a).sum(),
+                    segments: segs,
+                });
+            }
         }
     }
     lines.sort_by_key(|l| l.0);
@@ -389,6 +442,9 @@ pub fn rename_speaker(
         .iter()
         .position(|s| s.id == id)
         .ok_or(RenameError::NotFound)?;
+    if RESERVED_LABELS.contains(&speakers[idx].id.as_str()) {
+        return Err(RenameError::InvalidName);
+    }
     if speakers
         .iter()
         .enumerate()
@@ -698,79 +754,232 @@ fn mel_window_input(wave: &[f32], first: usize, last: usize) -> Vec<f32> {
     out
 }
 
+/// Mel frames whose whole STFT window lies inside the first `len` samples.
+/// A whole-file pass computes exactly these the same way, so a stream can
+/// compute them early and never revisit them.
+fn mel_frames_complete(len: usize) -> usize {
+    if len < N_FFT / 2 {
+        0
+    } else {
+        (len - N_FFT / 2) / HOP + 1
+    }
+}
+
+/// A non-final encoder chunk starting at embedding frame `start` can run once
+/// its right context is in: the same inputs the whole-file pass gives it.
+fn chunk_ready(start: usize, mel_done: usize) -> bool {
+    (start + CHUNK_LEN + CHUNK_RIGHT_CONTEXT) * SUBSAMPLING <= mel_done
+}
+
+/// First sample a stream still needs for mel frame `first`: one sample of
+/// lookback before the window, on a HOP boundary so frame indices stay whole.
+fn pcm_keep_from(first: usize) -> usize {
+    ((first * HOP).saturating_sub(N_FFT / 2 + 1) / HOP) * HOP
+}
+
+/// The two ONNX sessions, loaded once and shared by every track's stream.
 #[cfg(feature = "local-stt-parakeet")]
-pub fn diarize(pcm_16k: &[f32]) -> Result<Diarization, String> {
-    use ort::session::{builder::GraphOptimizationLevel, Session};
-    use ort::value::Tensor;
+pub struct DiarModels {
+    pre: ort::session::Session,
+    model: ort::session::Session,
+}
 
-    assert!(
-        pcm_16k.iter().all(|s| s.is_finite()),
-        "diarize: pcm must be finite"
-    );
-    if pcm_16k.len() < N_FFT {
-        return Ok(Diarization::default());
+#[cfg(feature = "local-stt-parakeet")]
+impl DiarModels {
+    pub fn load() -> Result<Self, String> {
+        use ort::session::{builder::GraphOptimizationLevel, Session};
+        let dir = model_dir().ok_or("config dir unknown")?;
+        if !model_present() {
+            return Err("diarization model not downloaded".into());
+        }
+        // Four threads. ORT's default (one per physical core) was 5-7x SLOWER
+        // on a 6P+8E i7-12700H: the pool straddles E-cores and every step
+        // waits for the slowest one. 4 threads measured 78x realtime offline.
+        const THREADS: usize = 4;
+        let session = |name: &str| -> Result<Session, String> {
+            Session::builder()
+                .and_then(|b| b.with_intra_threads(THREADS))
+                .and_then(|b| b.with_inter_threads(1))
+                .and_then(|b| b.with_optimization_level(GraphOptimizationLevel::Level3))
+                .and_then(|b| b.commit_from_file(dir.join(name)))
+                .map_err(|e| format!("load {name}: {e}"))
+        };
+        Ok(DiarModels {
+            pre: session(FILE_PREPROCESSOR)?,
+            model: session(FILE_MODEL)?,
+        })
     }
-    let dir = model_dir().ok_or("config dir unknown")?;
-    if !model_present() {
-        return Err("diarization model not downloaded".into());
+}
+
+/// Diarization of one track as its audio arrives. The model is a streaming
+/// Sortformer: the speaker cache that carries identity from one 30 s chunk to
+/// the next is the whole of its memory, so feeding a meeting as it happens
+/// gives the same answer as feeding the finished file, and at stop only the
+/// last chunk is left to run.
+#[cfg(feature = "local-stt-parakeet")]
+pub struct StreamDiarizer {
+    /// Samples from absolute index `pcm_offset` on; older ones are dropped.
+    pcm: Vec<f32>,
+    pcm_offset: usize,
+    total: usize,
+    /// Mel frames from absolute frame `mel_offset` on.
+    mel: Vec<f32>,
+    mel_offset: usize,
+    mel_done: usize,
+    next_emb: usize,
+    cache: SpeakerCache,
+    logits: Vec<f32>,
+}
+
+#[cfg(feature = "local-stt-parakeet")]
+impl Default for StreamDiarizer {
+    fn default() -> Self {
+        Self::new()
     }
-    let _no_throttle = crate::win_qos::NoThrottle::for_local_inference();
+}
 
-    // Four threads. ORT's default (one per physical core) was 5-7x SLOWER on
-    // a 6P+8E i7-12700H: the pool straddles E-cores and every step waits for
-    // the slowest one. 4 threads measured 78x realtime offline.
-    const THREADS: usize = 4;
-    let session = |name: &str| -> Result<Session, String> {
-        Session::builder()
-            .and_then(|b| b.with_intra_threads(THREADS))
-            .and_then(|b| b.with_inter_threads(1))
-            .and_then(|b| b.with_optimization_level(GraphOptimizationLevel::Level3))
-            .and_then(|b| b.commit_from_file(dir.join(name)))
-            .map_err(|e| format!("load {name}: {e}"))
-    };
-    let mut pre = session(FILE_PREPROCESSOR)?;
-    let mut model = session(FILE_MODEL)?;
+#[cfg(feature = "local-stt-parakeet")]
+impl StreamDiarizer {
+    pub fn new() -> Self {
+        StreamDiarizer {
+            pcm: Vec::new(),
+            pcm_offset: 0,
+            total: 0,
+            mel: Vec::new(),
+            mel_offset: 0,
+            mel_done: 0,
+            next_emb: 0,
+            cache: SpeakerCache::new(),
+            logits: Vec::new(),
+        }
+    }
 
-    // 1. Log-mel [n_mel, 128], windowed.
-    let n_mel = 1 + pcm_16k.len() / HOP;
-    let mut mel = vec![0.0f32; n_mel * N_MELS];
-    let mut first = 0;
-    while first < n_mel {
-        let last = (first + MEL_WINDOW_FRAMES).min(n_mel);
-        let input = mel_window_input(pcm_16k, first, last);
-        let len = input.len() as i64;
-        let t = Tensor::from_array((vec![1i64, len], input)).map_err(|e| format!("mel in: {e}"))?;
-        let out = pre
-            .run(ort::inputs! { "preemphasized" => t })
-            .map_err(|e| format!("mel run: {e}"))?;
-        let (_, data) = out["log_mel"]
-            .try_extract_tensor::<f32>()
-            .map_err(|e| format!("mel out: {e}"))?;
-        let frames = last - first;
+    fn append(&mut self, pcm_16k: &[f32]) {
         assert!(
-            data.len() >= frames * N_MELS,
-            "preprocessor returned too few frames"
+            pcm_16k.iter().all(|s| s.is_finite()),
+            "diarize: pcm must be finite"
         );
-        mel[first * N_MELS..last * N_MELS].copy_from_slice(&data[..frames * N_MELS]);
-        first = last;
+        self.pcm.extend_from_slice(pcm_16k);
+        self.total += pcm_16k.len();
+        assert_eq!(
+            self.pcm_offset + self.pcm.len(),
+            self.total,
+            "pcm bookkeeping"
+        );
     }
-    // The reference zeroes the trailing frame and treats it as padding.
-    mel[(n_mel - 1) * N_MELS..].fill(0.0);
-    let valid_mel = n_mel - 1;
 
-    // 2. Chunked encoding with the speaker cache threaded between chunks.
-    let n_emb = n_mel.div_ceil(SUBSAMPLING);
-    let mut cache = SpeakerCache::new();
-    let mut logits_all: Vec<f32> = Vec::with_capacity(n_emb * SUBSAMPLING * NUM_SPEAKERS);
-    let mut start = 0;
-    while start < n_emb {
-        let end = (start + CHUNK_LEN).min(n_emb);
-        let n_chunk = end - start;
+    /// Append 16 kHz audio and run every chunk it completes.
+    pub fn push(&mut self, models: &mut DiarModels, pcm_16k: &[f32]) -> Result<(), String> {
+        self.append(pcm_16k);
+        let _no_throttle = crate::win_qos::NoThrottle::for_local_inference();
+        self.compute_mel(models, mel_frames_complete(self.total))?;
+        while chunk_ready(self.next_emb, self.mel_done) {
+            let start = self.next_emb;
+            let end = start + CHUNK_LEN;
+            let mel_end = (end + CHUNK_RIGHT_CONTEXT) * SUBSAMPLING;
+            self.run_chunk(models, start, end, mel_end, mel_end - start * SUBSAMPLING)?;
+        }
+        Ok(())
+    }
+
+    /// Run what is left, exactly as a whole-file pass ends.
+    pub fn finish(mut self, models: &mut DiarModels) -> Result<Diarization, String> {
+        if self.total < N_FFT {
+            return Ok(Diarization::default());
+        }
+        let _no_throttle = crate::win_qos::NoThrottle::for_local_inference();
+        let n_mel = 1 + self.total / HOP;
+        self.compute_mel(models, n_mel)?;
+        // The reference zeroes the trailing frame and treats it as padding.
+        let last = n_mel - 1 - self.mel_offset;
+        self.mel[last * N_MELS..(last + 1) * N_MELS].fill(0.0);
+        let valid_mel = n_mel - 1;
+        let n_emb = n_mel.div_ceil(SUBSAMPLING);
+        while self.next_emb < n_emb {
+            let start = self.next_emb;
+            let end = (start + CHUNK_LEN).min(n_emb);
+            let mel_start = start * SUBSAMPLING;
+            let mel_end = ((end + CHUNK_RIGHT_CONTEXT) * SUBSAMPLING).min(n_mel);
+            let chunk_len = mel_end.min(valid_mel).saturating_sub(mel_start);
+            self.run_chunk(models, start, end, mel_end, chunk_len)?;
+        }
+
+        let probs: Vec<[f32; NUM_SPEAKERS]> = self
+            .logits
+            .chunks_exact(NUM_SPEAKERS)
+            .take(n_mel)
+            .map(|r| std::array::from_fn(|k| sigmoid(r[k])))
+            .collect();
+        assert!(
+            probs
+                .iter()
+                .flatten()
+                .all(|p| p.is_finite() && (0.0..=1.0).contains(p)),
+            "speaker probabilities must be finite and in [0, 1]"
+        );
+        Ok(Diarization { probs })
+    }
+
+    /// Log-mel frames up to `upto`, in windows of at most MEL_WINDOW_FRAMES.
+    fn compute_mel(&mut self, models: &mut DiarModels, upto: usize) -> Result<(), String> {
+        use ort::value::Tensor;
+        while self.mel_done < upto {
+            let first = self.mel_done;
+            let last = (first + MEL_WINDOW_FRAMES).min(upto);
+            let base = self.pcm_offset / HOP;
+            let input = mel_window_input(&self.pcm, first - base, last - base);
+            let len = input.len() as i64;
+            let t =
+                Tensor::from_array((vec![1i64, len], input)).map_err(|e| format!("mel in: {e}"))?;
+            let out = models
+                .pre
+                .run(ort::inputs! { "preemphasized" => t })
+                .map_err(|e| format!("mel run: {e}"))?;
+            let (_, data) = out["log_mel"]
+                .try_extract_tensor::<f32>()
+                .map_err(|e| format!("mel out: {e}"))?;
+            let frames = last - first;
+            assert!(
+                data.len() >= frames * N_MELS,
+                "preprocessor returned too few frames"
+            );
+            self.mel.extend_from_slice(&data[..frames * N_MELS]);
+            self.mel_done = last;
+            assert_eq!(
+                self.mel_offset + self.mel.len() / N_MELS,
+                self.mel_done,
+                "mel bookkeeping"
+            );
+            // Drop the samples no later frame can read.
+            let keep = pcm_keep_from(self.mel_done).max(self.pcm_offset);
+            self.pcm.drain(..keep - self.pcm_offset);
+            self.pcm_offset = keep;
+        }
+        Ok(())
+    }
+
+    fn run_chunk(
+        &mut self,
+        models: &mut DiarModels,
+        start: usize,
+        end: usize,
+        mel_end: usize,
+        chunk_len: usize,
+    ) -> Result<(), String> {
+        use ort::value::Tensor;
+        assert!(start < end && end - start <= CHUNK_LEN, "chunk bounds");
         let mel_start = start * SUBSAMPLING;
-        let mel_end = ((end + CHUNK_RIGHT_CONTEXT) * SUBSAMPLING).min(n_mel);
-        let chunk = mel[mel_start * N_MELS..mel_end * N_MELS].to_vec();
-        let chunk_len = mel_end.min(valid_mel).saturating_sub(mel_start) as i64;
-        let ctx = cache.context();
+        assert!(
+            mel_start >= self.mel_offset && mel_end <= self.mel_done,
+            "chunk needs mel {mel_start}..{mel_end}, have {}..{}",
+            self.mel_offset,
+            self.mel_done
+        );
+        let n_chunk = end - start;
+        let a_mel = (mel_start - self.mel_offset) * N_MELS;
+        let b_mel = (mel_end - self.mel_offset) * N_MELS;
+        let chunk = self.mel[a_mel..b_mel].to_vec();
+        let ctx = self.cache.context();
         let ctx_frames = ctx.len() / HIDDEN;
 
         // The first chunk has no context. `from_array` refuses a zero-length
@@ -786,11 +995,12 @@ pub fn diarize(pcm_16k: &[f32]) -> Result<Diarization, String> {
             chunk,
         ))
         .map_err(|e| format!("chunk: {e}"))?;
-        let chunk_len_t = Tensor::from_array((Vec::<i64>::new(), vec![chunk_len]))
+        let chunk_len_t = Tensor::from_array((Vec::<i64>::new(), vec![chunk_len as i64]))
             .map_err(|e| format!("chunk len: {e}"))?;
         let ctx_len_t = Tensor::from_array((Vec::<i64>::new(), vec![ctx_frames as i64]))
             .map_err(|e| format!("ctx len: {e}"))?;
-        let out = model
+        let out = models
+            .model
             .run(ort::inputs! {
                 "chunk_mel" => chunk_t,
                 "chunk_mel_length" => chunk_len_t,
@@ -804,27 +1014,223 @@ pub fn diarize(pcm_16k: &[f32]) -> Result<Diarization, String> {
         let (_, embeds) = out["embeds"]
             .try_extract_tensor::<f32>()
             .map_err(|e| format!("embeds: {e}"))?;
-        cache.update(embeds, logits, n_chunk);
+        self.cache.update(embeds, logits, n_chunk);
 
         let a = ctx_frames * SUBSAMPLING * NUM_SPEAKERS;
         let b = (ctx_frames + n_chunk) * SUBSAMPLING * NUM_SPEAKERS;
-        logits_all.extend_from_slice(&logits[a..b.min(logits.len())]);
-        start = end;
+        self.logits
+            .extend_from_slice(&logits[a..b.min(logits.len())]);
+        self.next_emb = end;
+        // Frames before the next chunk are never read again.
+        let drop = (self.next_emb * SUBSAMPLING).min(self.mel_done) - self.mel_offset;
+        self.mel.drain(..drop * N_MELS);
+        self.mel_offset += drop;
+        Ok(())
+    }
+}
+
+/// Diarize a finished recording in one go.
+#[cfg(feature = "local-stt-parakeet")]
+pub fn diarize(pcm_16k: &[f32]) -> Result<Diarization, String> {
+    if pcm_16k.len() < N_FFT {
+        return Ok(Diarization::default());
+    }
+    let mut models = DiarModels::load()?;
+    let mut s = StreamDiarizer::new();
+    s.append(pcm_16k);
+    s.finish(&mut models)
+}
+
+/// Keep a word from a window that overlaps the previous one only if it starts
+/// after what was already kept: the overlap is transcribed twice.
+fn append_new_words(kept: &mut Vec<Word>, window: Vec<Word>) {
+    for w in window {
+        let last_end = kept.last().map(|l| l.end).unwrap_or(f64::NEG_INFINITY);
+        if w.start >= last_end - 0.05 {
+            kept.push(w);
+        }
+    }
+}
+
+/// One track of a meeting being labelled while it is recorded.
+#[cfg(feature = "local-stt-parakeet")]
+struct LiveTrack {
+    band: &'static str,
+    diar: StreamDiarizer,
+    words: Vec<Word>,
+    /// The live transcript's lines, for a recogniser without word timestamps
+    /// (FluidAudio on the Mac, Qwen): each goes to the dominant speaker.
+    lines: Vec<(u128, String)>,
+    no_words: bool,
+    /// Track sample up to which the diarizer has been fed.
+    fed_until: usize,
+    rate: u32,
+}
+
+/// Speaker labels built WHILE the meeting records, so that stopping costs the
+/// last chunk instead of a second pass over the whole recording (195 s on a
+/// 12-minute meeting, 2026-09-29). Runs on the transcription thread only.
+///
+/// It either covers the whole meeting or it is `broken` and says why: a gap
+/// (a window the transcriber was too slow to take) or a model error. A broken
+/// run is thrown away and the stop does what it always did, the full
+/// re-transcription. A recogniser without word timestamps is not a reason:
+/// its lines go to the dominant speaker, as the full pass does for it.
+pub struct LiveSpeakers {
+    #[cfg(feature = "local-stt-parakeet")]
+    models: DiarModels,
+    #[cfg(feature = "local-stt-parakeet")]
+    tracks: Vec<LiveTrack>,
+    broken: Option<String>,
+}
+
+impl LiveSpeakers {
+    #[cfg(feature = "local-stt-parakeet")]
+    pub fn start() -> Result<Self, String> {
+        Ok(LiveSpeakers {
+            models: DiarModels::load()?,
+            tracks: Vec::new(),
+            broken: None,
+        })
     }
 
-    let probs: Vec<[f32; NUM_SPEAKERS]> = logits_all
-        .chunks_exact(NUM_SPEAKERS)
-        .take(n_mel)
-        .map(|r| std::array::from_fn(|k| sigmoid(r[k])))
-        .collect();
-    assert!(
-        probs
-            .iter()
-            .flatten()
-            .all(|p| p.is_finite() && (0.0..=1.0).contains(p)),
-        "speaker probabilities must be finite and in [0, 1]"
-    );
-    Ok(Diarization { probs })
+    #[cfg(not(feature = "local-stt-parakeet"))]
+    pub fn start() -> Result<Self, String> {
+        Err("diarization requires the local-stt-parakeet cargo feature".into())
+    }
+
+    pub fn broken(&self) -> Option<&str> {
+        self.broken.as_deref()
+    }
+
+    pub fn mark_broken(&mut self, why: &str) {
+        if self.broken.is_none() {
+            crate::log(&format!(
+                "[Meeting] live speaker labels off for this meeting: {why}; stop will re-transcribe"
+            ));
+            self.broken = Some(why.to_string());
+        }
+    }
+
+    /// One transcription window of `band`: `samples` at `rate` starting at
+    /// track sample `start`, the line it added to the live transcript (overlap
+    /// removed) and the words the recogniser found in it (seconds from the
+    /// window start; None when the recogniser gives no timestamps).
+    #[cfg(feature = "local-stt-parakeet")]
+    pub fn feed(
+        &mut self,
+        band: &'static str,
+        start: usize,
+        rate: u32,
+        samples: &[f32],
+        line: &str,
+        words: Option<Vec<Word>>,
+    ) {
+        assert!(rate > 0, "rate must be positive");
+        if self.broken.is_some() {
+            return;
+        }
+        let idx = match self.tracks.iter().position(|t| t.band == band) {
+            Some(i) => i,
+            None if start > rate as usize / 10 => {
+                return self.mark_broken("a track's first window never reached the transcriber");
+            }
+            None => {
+                self.tracks.push(LiveTrack {
+                    band,
+                    diar: StreamDiarizer::new(),
+                    words: Vec::new(),
+                    lines: Vec::new(),
+                    no_words: false,
+                    fed_until: start,
+                    rate,
+                });
+                self.tracks.len() - 1
+            }
+        };
+        let t = &mut self.tracks[idx];
+        let has_line = !line.trim().is_empty();
+        let words = words.unwrap_or_default();
+        if has_line {
+            t.no_words |= words.is_empty();
+            t.lines.push((
+                (start as f64 / rate as f64 * 1000.0) as u128,
+                line.trim().to_string(),
+            ));
+        }
+        if start > t.fed_until + (rate as usize / 10) {
+            return self.mark_broken("a window never reached the transcriber");
+        }
+        let skip = t.fed_until.saturating_sub(start).min(samples.len());
+        let fresh = &samples[skip..];
+        let offset = start as f64 / rate as f64;
+        let words = words
+            .into_iter()
+            .map(|w| Word {
+                start: w.start + offset,
+                end: w.end + offset,
+                text: w.text,
+            })
+            .collect();
+        append_new_words(&mut t.words, words);
+        t.fed_until = t.fed_until.max(start + samples.len());
+        if fresh.is_empty() {
+            return;
+        }
+        let pcm = crate::preprocess::downsample_to_16k(fresh, rate);
+        if let Err(e) = t.diar.push(&mut self.models, &pcm) {
+            self.mark_broken(&format!("diarizer: {}", crate::truncate_utf8(&e, 200)));
+        }
+    }
+
+    // Never reached: `start` fails without the feature.
+    #[cfg(not(feature = "local-stt-parakeet"))]
+    pub fn feed(
+        &mut self,
+        _band: &'static str,
+        _start: usize,
+        _rate: u32,
+        _samples: &[f32],
+        _line: &str,
+        _words: Option<Vec<Word>>,
+    ) {
+    }
+
+    #[cfg(not(feature = "local-stt-parakeet"))]
+    pub fn finish(self) -> Result<Vec<BandTurns>, String> {
+        Err("diarization requires the local-stt-parakeet cargo feature".into())
+    }
+
+    /// Run the last chunk of every track and hand back its turns.
+    #[cfg(feature = "local-stt-parakeet")]
+    pub fn finish(mut self) -> Result<Vec<BandTurns>, String> {
+        if let Some(why) = self.broken {
+            return Err(why);
+        }
+        let mut out = Vec::new();
+        for t in std::mem::take(&mut self.tracks) {
+            let d = t.diar.finish(&mut self.models)?;
+            if t.lines.is_empty() {
+                continue;
+            }
+            let turns = if t.no_words {
+                lines_by_dominant_speaker(&t.lines, &d, t.fed_until as f64 / t.rate as f64)
+            } else {
+                group_words(&t.words, &d)
+            };
+            crate::log(&format!(
+                "[Meeting] live speakers: {} has {} speaker(s)",
+                t.band,
+                d.speakers(1.0).len()
+            ));
+            out.push(BandTurns {
+                band: t.band,
+                turns,
+                diar: d,
+            });
+        }
+        Ok(out)
+    }
 }
 
 #[cfg(not(feature = "local-stt-parakeet"))]
@@ -895,12 +1301,68 @@ mod tests {
         let (lines, speakers) = label_bands(vec![mic, sys], &[]);
         let labels: Vec<&str> = lines.iter().map(|l| l.1.as_str()).collect();
         assert_eq!(labels, vec!["Speaker 1", "mic", "Speaker 2"]);
-        assert_eq!(speakers.len(), 2);
         assert_eq!(
             (speakers[0].id.as_str(), speakers[0].band.as_str()),
             ("S1", "system")
         );
         assert!((speakers[1].talk_secs - 2.0).abs() < 0.02);
+    }
+
+    /// The person at the microphone is a speaker too. Without an entry the
+    /// Speakers view — the default one — drew a lane for every voice on the
+    /// call and none for the user (seen 2026-09-29: three lanes, no mic).
+    #[test]
+    fn a_lone_mic_voice_still_gets_its_lane() {
+        let sys = band(
+            "system",
+            &[(0, 200), (1, 200)],
+            &[(0, Some(0), "ciao"), (2000, Some(1), "salve")],
+        );
+        let mic = band("mic", &[(0, 300)], &[(1000, Some(0), "eccomi")]);
+        let (_, speakers) = label_bands(vec![mic, sys], &[]);
+        assert_eq!(speakers.len(), 3);
+        let m = &speakers[2];
+        assert_eq!(
+            (m.id.as_str(), m.name.as_str(), m.band.as_str()),
+            ("mic", "mic", "mic")
+        );
+        assert!((m.talk_secs - 3.0).abs() < 0.02);
+        assert_eq!(m.segments, vec![(0.0, 3.0)]);
+    }
+
+    #[test]
+    fn a_silent_mic_gets_no_lane() {
+        let sys = band("system", &[(0, 200)], &[(0, Some(0), "ciao")]);
+        let mic = band("mic", &[(99, 300)], &[]);
+        let (_, speakers) = label_bands(vec![mic, sys], &[]);
+        assert_eq!(speakers.len(), 1);
+    }
+
+    /// `[mic]` is the track label the rest of the app keys on; renaming it
+    /// would rewrite every mic line and a regenerate would put them back.
+    #[test]
+    fn the_mic_lane_is_not_renamed() {
+        let dir = std::env::temp_dir().join(format!("dimmy-diar-mic-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("transcripts.txt"),
+            "[00:00:01] [mic] ciao
+",
+        )
+        .unwrap();
+        let mut me = spk("mic", "mic");
+        me.band = "mic".into();
+        save_speakers(&dir, &[me]).unwrap();
+        assert_eq!(
+            rename_speaker(&dir, "mic", "Konrad"),
+            Err(RenameError::InvalidName)
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("transcripts.txt")).unwrap(),
+            "[00:00:01] [mic] ciao
+"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1060,6 +1522,139 @@ mod tests {
         assert_eq!(&b[..N_FFT], &whole[f * HOP..f * HOP + N_FFT]);
         assert_eq!(&a[..N_FFT], &whole[..N_FFT]);
         assert_eq!(whole[N_FFT / 2], wave[0], "first real sample is kept as-is");
+    }
+
+    fn test_wave(n: usize) -> Vec<f32> {
+        (0..n)
+            .map(|i| {
+                let t = i as f32 / 16_000.0;
+                0.3 * (t * 220.0 * (1.0 + (t / 7.0).sin())).sin()
+                    + ((i * 7919) % 1000) as f32 / 5000.0
+                    - 0.1
+            })
+            .collect()
+    }
+
+    /// Frames declared complete read no padding past what has arrived, so a
+    /// stream computes them exactly as the finished file would.
+    #[test]
+    fn complete_frames_do_not_depend_on_audio_still_to_come() {
+        let wave = test_wave(40_000);
+        for len in [0usize, 255, 256, 257, 4_000, 16_001, 39_999] {
+            let k = mel_frames_complete(len);
+            assert!(
+                k <= len / HOP,
+                "never the zeroed trailing frame (len {len})"
+            );
+            if k > 0 {
+                assert_eq!(
+                    mel_window_input(&wave[..len], 0, k),
+                    mel_window_input(&wave, 0, k),
+                    "len {len}"
+                );
+            }
+        }
+    }
+
+    /// Dropping the samples behind `pcm_keep_from` changes nothing a later
+    /// frame reads.
+    #[test]
+    fn a_trimmed_stream_builds_the_same_mel_input() {
+        let wave = test_wave(64_000);
+        let n_mel = 1 + wave.len() / HOP;
+        for first in [1usize, 2, 3, 40, 177, 350] {
+            let keep = pcm_keep_from(first);
+            assert_eq!(keep % HOP, 0);
+            let base = keep / HOP;
+            assert_eq!(
+                mel_window_input(&wave[keep..], first - base, n_mel - base),
+                mel_window_input(&wave, first, n_mel),
+                "first {first}"
+            );
+        }
+    }
+
+    #[test]
+    fn words_heard_twice_in_the_overlap_are_kept_once() {
+        let mut kept = vec![w(10.0, 10.4, "ciao"), w(10.5, 11.0, "a")];
+        append_new_words(&mut kept, vec![w(10.52, 11.0, "a"), w(11.1, 11.5, "tutti")]);
+        let texts: Vec<&str> = kept.iter().map(|w| w.text.as_str()).collect();
+        assert_eq!(texts, vec!["ciao", "a", "tutti"]);
+    }
+
+    /// A dropped window leaves a hole the diarizer cannot see across: the
+    /// run must give up so the stop falls back to the full re-transcription.
+    #[cfg(feature = "local-stt-parakeet")]
+    #[test]
+    fn a_hole_in_the_meeting_hands_back_to_the_full_pass() {
+        if !model_present() {
+            eprintln!("diarization model not downloaded: skipped");
+            return;
+        }
+        let rate = 16_000u32;
+        let win = test_wave(rate as usize * 15);
+        let mut live = LiveSpeakers::start().expect("models");
+        live.feed("mic", 0, rate, &win, "", Some(vec![]));
+        assert!(live.broken().is_none());
+        live.feed("mic", rate as usize * 14, rate, &win, "", Some(vec![]));
+        assert!(live.broken().is_none(), "an overlap is not a hole");
+        live.feed("mic", rate as usize * 60, rate, &win, "", Some(vec![]));
+        assert!(live.broken().is_some());
+        assert!(live.finish().is_err());
+
+        // No timestamps (FluidAudio, Qwen): the line goes to its speaker.
+        let mut live = LiveSpeakers::start().expect("models");
+        live.feed("mic", 0, rate, &win, "ciao a tutti", None);
+        assert!(live.broken().is_none(), "no timestamps is not a hole");
+        let bands = live.finish().expect("finish");
+        assert_eq!(bands.len(), 1);
+        assert_eq!(bands[0].turns.len(), 1);
+        assert_eq!(bands[0].turns[0].2, "ciao a tutti");
+    }
+
+    #[test]
+    fn a_chunk_waits_for_its_right_context() {
+        let need = (CHUNK_LEN + CHUNK_RIGHT_CONTEXT) * SUBSAMPLING;
+        assert!(!chunk_ready(0, need - 1));
+        assert!(chunk_ready(0, need));
+        assert!(!chunk_ready(CHUNK_LEN, need));
+    }
+
+    /// The point of the stream: a meeting fed as it happens gets the same
+    /// speakers as the finished file. Needs the model; skipped without it.
+    #[cfg(feature = "local-stt-parakeet")]
+    #[test]
+    fn a_stream_in_uneven_pieces_matches_the_whole_file() {
+        if !model_present() {
+            eprintln!("diarization model not downloaded: skipped");
+            return;
+        }
+        let wave = test_wave(16_000 * 75);
+        let whole = diarize(&wave).expect("whole-file pass");
+        let mut models = DiarModels::load().expect("models");
+        let mut s = StreamDiarizer::new();
+        let mut at = 0;
+        for (i, piece) in [7_777usize, 240_000, 16_000 * 15, 3, 16_000 * 22]
+            .iter()
+            .cycle()
+            .enumerate()
+        {
+            if at >= wave.len() || i > 100 {
+                break;
+            }
+            let end = (at + piece).min(wave.len());
+            s.push(&mut models, &wave[at..end]).expect("push");
+            at = end;
+        }
+        let streamed = s.finish(&mut models).expect("finish");
+        assert_eq!(streamed.probs.len(), whole.probs.len());
+        let worst = streamed
+            .probs
+            .iter()
+            .zip(&whole.probs)
+            .flat_map(|(a, b)| a.iter().zip(b).map(|(x, y)| (x - y).abs()))
+            .fold(0.0f32, f32::max);
+        assert!(worst < 1e-3, "streamed probabilities drift by {worst}");
     }
 
     #[test]

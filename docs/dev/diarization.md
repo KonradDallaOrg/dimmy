@@ -41,6 +41,31 @@ The Windows and Mac hosts run it automatically after a meeting stops **only with
 (Win `Services/DiarizationService.cs`, Mac `DiarizationService` in `Views/Meeting/MeetingSpeakers.swift`): with cloud STT it would upload the whole meeting a
 second time, so there it happens only on *Regenerate transcript*.
 
+## During the meeting (2026-09-29)
+
+The full pass above re-transcribes the whole meeting after it stops: 195 s for a
+12-minute meeting, of which diarization was 33 s. When speaker labels are on and the
+meeting runs on local Parakeet or whisper, the transcription thread now does the work
+while recording instead (`diarize::LiveSpeakers`, fed from `meeting::stt_thread_loop`):
+
+- it keeps each window's word timestamps (Parakeet returns them from the same decode,
+  so the text is unchanged; whisper switches to its token-timestamp call);
+- it feeds each track's new audio (not the overlap) to a `diarize::StreamDiarizer`,
+  which runs every 30.4 s offline-preset chunk as soon as its right context is in.
+  It is the same algorithm as `diarize()` — the speaker cache is its only memory — and
+  `a_stream_in_uneven_pieces_matches_the_whole_file` pins that the probabilities match
+  the whole-file pass;
+- at stop it runs the last chunk, labels the words, rewrites `transcripts.txt` +
+  `speakers.json`, and the stop JSON says `"speakers_labeled": true`. The hosts then
+  skip the full pass.
+
+Nothing touches the capture worker except two numbers it already had: each window's
+position in the track files, and an atomic flag it raises when a window is dropped or
+the final window is capped. Anything that could leave a hole — a dropped window, a
+diarizer error, a window with text but no timestamps (FluidAudio on the Mac), cloud
+STT, Qwen — turns the live run off, and the stop does exactly what it did before.
+Labels are still decided once, at stop, from the whole meeting; nothing is shown live.
+
 ## Names
 
 `dimmy_meeting_rename_speaker(dir, id, name)` rewrites `speakers.json` AND the labels in
@@ -62,13 +87,13 @@ unique, and never `mic` / `system` / `paused`. A later re-run keeps names by spe
 Italian is not among the model's training languages (EN/ZH/HI/KN/TE/BN); it works anyway.
 
 The streaming presets (0.32–1.04 s latency) keep up on CPU at 1.04 s with 4 threads
-(RTFx ≈ 5), not at 0.32 s. Live labels are not implemented: labels can still change as
-the cache learns a voice, and the post-pass is both cheaper and more accurate.
+(RTFx ≈ 5), not at 0.32 s. Labels SHOWN live are not implemented: they can still change
+as the cache learns a voice. Running the offline preset during the meeting (above) has
+no such problem, because nothing is decided until the stop.
 
 ## Not done yet
 
 - Linux host (the core works on any platform with `local-stt-parakeet`).
 - Parakeet on the Mac Neural Engine (FluidAudio) returns no word timestamps, so there
   speaker turns fall back to the dominant speaker per chunk; whisper on the Mac has them.
-- Live (during-recording) labels.
-- Keeping live word timestamps so the post-stop pass could skip re-transcription.
+- Labels shown while recording.

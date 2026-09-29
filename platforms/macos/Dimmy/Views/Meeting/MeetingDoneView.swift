@@ -997,6 +997,8 @@ struct MeetingDoneView: View {
 
     private func speakerChip(_ speaker: MeetingSpeaker) -> some View {
         Button {
+            // The mic lane is the track label, which the core will not rename.
+            guard speaker.id != "mic" else { return }
             renameDraft = speaker.name
             renameError = nil
             renamingSpeakerId = speaker.id
@@ -1018,7 +1020,7 @@ struct MeetingDoneView: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .help("Rename \(speaker.name)")
+        .help(speaker.id == "mic" ? speaker.name : "Rename \(speaker.name)")
         .popover(isPresented: Binding(
             get: { renamingSpeakerId == speaker.id },
             set: { if !$0 { renamingSpeakerId = nil } }

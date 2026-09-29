@@ -187,6 +187,9 @@ struct FileTranscribeProgress: Equatable {
     let percent: Double
     let chunkIndex: Int
     let chunkTotal: Int
+    /// Meeting re-transcription only: `mic`, `system` or `speakers`, with
+    /// `percent` covering the whole job. File-load progress has none.
+    var stage: String? = nil
 }
 
 enum AppTheme: String, CaseIterable {

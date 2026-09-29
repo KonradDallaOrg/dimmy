@@ -135,7 +135,14 @@ enum DiarizationService {
     /// when labels are off or the pass fails — a failed diarization must never
     /// cost the user the transcript or the recap they would have had without
     /// it. BLOCKING — call off the main thread.
-    static func relabelIfEnabled(dir: String, liveTranscript: String) -> String {
+    /// `alreadyLabeled`: the core labelled the meeting while it recorded
+    /// (stop JSON `speakers_labeled`), so the full pass is skipped.
+    static func relabelIfEnabled(dir: String, liveTranscript: String,
+                                 alreadyLabeled: Bool) -> String {
+        if alreadyLabeled {
+            dimmyHostLog("[Meeting] diarized relabel skipped: labelled while recording")
+            return liveTranscript
+        }
         guard !dir.isEmpty, enabled() else { return liveTranscript }
         let t0 = Date()
         let result = DimmyCore.shared.meetingRetranscribe(dir: dir)

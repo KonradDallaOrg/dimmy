@@ -56,7 +56,13 @@ public sealed partial class MeetingWindow : Window
     private readonly List<Microsoft.UI.Xaml.Shapes.Rectangle> _ampBarsSys = new();
     private SolidColorBrush? _liveBrushMic;
     private SolidColorBrush? _liveBrushSys;
-    private DateTime _ampLastSampleUtc;
+    // The strip moves on this clock, not on timer ticks. A tick that lands
+    // late (the timer is coarse, and a local-STT chunk starves the UI thread
+    // of CPU) used to freeze the strip until it arrived and then jump: the
+    // "scorre a scattini" of 2026-09-29.
+    private readonly System.Diagnostics.Stopwatch _ampClock = new();
+    // Samples laid on the strip so far, one per AMP_SAMPLE_MS of clock.
+    private long _ampSamplesLaid;
     private bool _ampRenderHooked;
     // Second history for the loopback (system) stream so the live
     // waveform can draw mic and system as two distinct bands.
@@ -71,6 +77,10 @@ public sealed partial class MeetingWindow : Window
     private const double AMP_SAMPLE_MS = 83.0;
     private const double AMP_BAR_PX = 4.0;
     private const double AMP_GAP_PX = 2.0;
+    // Bars kept off-screen on the right: the display runs this many samples
+    // (~83 ms each) behind the microphone, and a tick can be that late before
+    // the strip has to wait for it.
+    private const double AMP_SLACK_SAMPLES = 2.0;
     private const int AMP_MIN_HISTORY = 20;
     private const int AMP_MAX_HISTORY = 240;
     private int _ampHistorySize = 40;
@@ -207,6 +217,7 @@ public sealed partial class MeetingWindow : Window
             // file_transcribe_progress event the core already emits per
             // chunk during dimmy_meeting_retranscribe.
             vm.FileTranscribeProgress += OnRegenTranscribeProgress;
+            vm.MeetingRetranscribeProgress += OnRetranscribeProgress;
             // React to externally-driven stop (pill stop button, call-detect
             // popup "Stop & recap"). Without this hook, the MeetingWindow
             // stays painted in Recording state for the entire recap LLM
@@ -229,6 +240,7 @@ public sealed partial class MeetingWindow : Window
                 vmClose.MeetingChunkReceived -= OnMeetingChunkReceived;
                 vmClose.MeetingFinishingTranscription -= OnFinishingTranscription;
                 vmClose.FileTranscribeProgress -= OnRegenTranscribeProgress;
+                vmClose.MeetingRetranscribeProgress -= OnRetranscribeProgress;
                 vmClose.PropertyChanged -= OnAppVmPropertyChanged;
             }
 
@@ -583,11 +595,15 @@ public sealed partial class MeetingWindow : Window
             DoneMeta.Text = $"{FormatDuration(dur)} · {chunks} chunks · {DateTime.Now:yyyy-MM-dd HH:mm}"
                 + (string.IsNullOrWhiteSpace(stopError) ? "" : " · ⚠ audio incomplete");
             RefreshDoneCalendarRow(dir);
-            if (Services.DiarizationService.Enabled())
+            // Labelled while recording: nothing left to do here.
+            bool labeled = root.TryGetProperty("speakers_labeled", out var slEl)
+                && slEl.ValueKind == JsonValueKind.True;
+            if (!labeled && Services.DiarizationService.Enabled())
             {
                 ProcStep2Text.Text = "Identifying speakers…";
-                transcript = await Services.DiarizationService.RelabelIfEnabledAsync(dir, transcript);
+                transcript = await Services.DiarizationService.RelabelIfEnabledAsync(dir, transcript, labeled);
                 ProcStep2Text.Text = ProcStep2Default;
+                HideProcProgress();
             }
             LoadDoneSpeakers(dir);
             _doneTurnAnchors = Helpers.TranscriptRenderer.Render(RawTranscriptText,
@@ -1118,7 +1134,8 @@ public sealed partial class MeetingWindow : Window
         _ampTimer.IsRepeating = true;
         _ampTimer.Tick += OnAmpTick;
         _ampTimer.Start();
-        _ampLastSampleUtc = DateTime.UtcNow;
+        _ampClock.Restart();
+        _ampSamplesLaid = 0;
         HookAmpRendering(true);
     }
 
@@ -1136,13 +1153,12 @@ public sealed partial class MeetingWindow : Window
     private void OnAmpRendering(object? sender, object e)
     {
         if (_ampScrollTransform == null) return;
-        // How far into the current sample are we? The bars are laid out with
-        // the newest one PAST the right edge, then the whole layer glides one
-        // pitch left over the sample interval, so a bar enters continuously
-        // instead of popping into place.
-        var elapsed = (DateTime.UtcNow - _ampLastSampleUtc).TotalMilliseconds;
-        var frac = Math.Clamp(elapsed / AMP_SAMPLE_MS, 0.0, 1.0);
-        _ampScrollTransform.X = -(AMP_BAR_PX + AMP_GAP_PX) * frac;
+        // How far the clock is past the last sample laid. The newest bars wait
+        // PAST the right edge and the layer glides left on the clock, so a bar
+        // enters continuously. The second pitch of slack is what lets a late
+        // tick go unseen: the strip keeps moving into it instead of stopping.
+        double frac = _ampClock.Elapsed.TotalMilliseconds / AMP_SAMPLE_MS - _ampSamplesLaid;
+        _ampScrollTransform.X = -(AMP_BAR_PX + AMP_GAP_PX) * Math.Clamp(frac, 0.0, AMP_SLACK_SAMPLES);
     }
 
     private void StopAmplitudePoll()
@@ -1162,11 +1178,22 @@ public sealed partial class MeetingWindow : Window
     {
         try
         {
+            // Every sample the clock has passed gets a bar, so a late tick
+            // fills its gap with the level it reads now and the strip keeps
+            // the speed of real time.
+            long due = (long)(_ampClock.Elapsed.TotalMilliseconds / AMP_SAMPLE_MS);
+            long missing = Math.Min(due - _ampSamplesLaid, _ampHistorySize);
+            if (missing <= 0) return;
+            _ampSamplesLaid = due;
+
             float ampMic = DimmyNative.dimmy_get_amplitude();
             if (!float.IsFinite(ampMic)) ampMic = 0;
             ampMic = (float)Math.Min(1.0, Math.Sqrt(ampMic) * 1.4);
-            while (_ampHistory.Count >= _ampHistorySize) _ampHistory.Dequeue();
-            _ampHistory.Enqueue(ampMic);
+            for (long k = 0; k < missing; k++)
+            {
+                while (_ampHistory.Count >= _ampHistorySize) _ampHistory.Dequeue();
+                _ampHistory.Enqueue(ampMic);
+            }
 
             // Loopback (system) amplitude — populated only in Mix mode.
             // In Mic-only / System-only modes this is 0, which collapses
@@ -1175,10 +1202,12 @@ public sealed partial class MeetingWindow : Window
             float ampSys = DimmyNative.dimmy_get_loopback_amplitude();
             if (!float.IsFinite(ampSys)) ampSys = 0;
             ampSys = (float)Math.Min(1.0, Math.Sqrt(ampSys) * 1.4);
-            while (_ampHistorySystem.Count >= _ampHistorySize) _ampHistorySystem.Dequeue();
-            _ampHistorySystem.Enqueue(ampSys);
+            for (long k = 0; k < missing; k++)
+            {
+                while (_ampHistorySystem.Count >= _ampHistorySize) _ampHistorySystem.Dequeue();
+                _ampHistorySystem.Enqueue(ampSys);
+            }
 
-            _ampLastSampleUtc = DateTime.UtcNow;
             DrawLiveWaveform();
         }
         catch { }
@@ -1192,7 +1221,8 @@ public sealed partial class MeetingWindow : Window
         // stretches the existing 40 bars across the whole canvas.
         double w = LiveWaveformCanvas.ActualWidth;
         if (w <= 0) return;
-        int n = (int)(w / (AMP_BAR_PX + AMP_GAP_PX));
+        // + the bars waiting past the right edge, or the left edge shows a gap.
+        int n = (int)(w / (AMP_BAR_PX + AMP_GAP_PX)) + (int)AMP_SLACK_SAMPLES;
         n = Math.Clamp(n, AMP_MIN_HISTORY, AMP_MAX_HISTORY);
         _ampHistorySize = n;
         while (_ampHistory.Count > n) _ampHistory.Dequeue();
@@ -1289,10 +1319,10 @@ public sealed partial class MeetingWindow : Window
 
         for (int i = 0; i < n; i++)
         {
-            // +pitch: the newest bar sits just off the right edge and the layer
-            // transform walks it in. Without it the bar would appear already
-            // in place and the whole strip would jump.
-            double x = w + pitch - (n - i) * pitch;
+            // The newest AMP_SLACK_SAMPLES bars sit off the right edge and the
+            // layer transform walks them in. Without it a bar would appear
+            // already in place and the whole strip would jump.
+            double x = w + AMP_SLACK_SAMPLES * pitch - (n - i) * pitch;
             double height = Math.Max(AMP_BAR_PX, samples[i] * maxHeight);
             var rect = pool[i];
             if (!ReferenceEquals(rect.Fill, brush)) rect.Fill = brush;
@@ -1627,9 +1657,13 @@ public sealed partial class MeetingWindow : Window
                 Padding = new Thickness(10, 3, 10, 3),
                 MinHeight = 0,
                 CornerRadius = new CornerRadius(12),
-                Flyout = BuildRenameFlyout(dir, s),
             };
-            ToolTipService.SetToolTip(chip, $"Rename {s.Name}");
+            // The mic lane is the track label, which the core will not rename.
+            if (s.Id != "mic")
+            {
+                chip.Flyout = BuildRenameFlyout(dir, s);
+                ToolTipService.SetToolTip(chip, $"Rename {s.Name}");
+            }
             SpeakerChips.Children.Add(chip);
         }
     }
@@ -2135,6 +2169,57 @@ public sealed partial class MeetingWindow : Window
         // Restore the default label — a previous stop may have rewritten it
         // to the transcription-backlog wording.
         if (ProcStep2Text != null) ProcStep2Text.Text = ProcStep2Default;
+        HideProcProgress();
+    }
+
+    private readonly System.Diagnostics.Stopwatch _procProgressClock = new();
+
+    /// The speaker-label pass after a stop (from this window or the pill),
+    /// shown as a bar, the stage and a time estimate instead of a bare
+    /// "Wrapping up" for minutes: 195 s on a 12-minute meeting, 2026-09-29.
+    private void OnRetranscribeProgress(double percent, string stage)
+    {
+        if (_state != MeetingState.Processing) return;
+        if (percent >= 100)
+        {
+            HideProcProgress();
+            ProcStep2Text.Text = ProcStep2Default;
+            return;
+        }
+        if (ProcProgressPanel.Visibility != Visibility.Visible)
+        {
+            ProcProgressPanel.Visibility = Visibility.Visible;
+            _procProgressClock.Restart();
+        }
+        ProcStep2Text.Text = "Identifying speakers...";
+        ProcProgressBar.Value = percent;
+        string what = stage switch
+        {
+            "mic" => "Transcribing your microphone",
+            "system" => "Transcribing the call audio",
+            _ => "Telling the voices apart",
+        };
+        string eta = TimeLeft(_procProgressClock.Elapsed.TotalSeconds, percent);
+        ProcProgressText.Text = $"{what} · {(int)percent}%" + (eta.Length > 0 ? $" · {eta}" : "");
+    }
+
+    /// Straight-line estimate from the rate so far; silent until there is
+    /// enough of it to mean something.
+    internal static string TimeLeft(double elapsedSecs, double percent)
+    {
+        if (percent < 5 || elapsedSecs < 5) return "";
+        double left = elapsedSecs * (100 - percent) / percent;
+        if (left < 60) return "less than a minute left";
+        int mins = (int)Math.Ceiling(left / 60);
+        return mins == 1 ? "about 1 minute left" : $"about {mins} minutes left";
+    }
+
+    private void HideProcProgress()
+    {
+        if (ProcProgressPanel == null) return;
+        ProcProgressPanel.Visibility = Visibility.Collapsed;
+        ProcProgressBar.Value = 0;
+        _procProgressClock.Reset();
     }
 
     private const string ProcStep2Default = "Generating recap with LLM...";
