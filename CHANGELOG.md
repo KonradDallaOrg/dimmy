@@ -6,14 +6,67 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.12] - 2026-09-29
+
 ### Added
 
-- **Meetings: choose your own storage folder.** You can now set a custom
-  destination directory for meeting recordings in Settings → Meetings.
-  Every part of the app (the meeting list, playback, recap, Notion send,
-  file-load-to-meeting, and the Claude Desktop MCP bridge) reads from the
-  folder you pick. Existing meetings stay where they are — only new ones
-  go to the new location. _Thanks to Ricca for the request._
+- Live speaker labelling. Diarization now runs incrementally on the
+  transcription thread as audio arrives (same offline-preset chunks, pinned
+  by a test to give whole-file probabilities), using Parakeet word
+  timestamps or, without them (FluidAudio, Qwen), the dominant-speaker
+  fallback on live lines. At stop the last chunk is labelled and the stop
+  result reports `speakers_labeled`; hosts then skip the full
+  re-transcription, which on a 27-minute meeting took 384 s (62 s of it
+  diarization). Any hole (dropped window, capped window, model error)
+  disables it and stop falls back to the full pass. A single mic voice gets
+  a speaker entry (non-renamable) so its lane is drawn.
+- Mac meeting Notes: composer with Add note (Cmd+Return) appending
+  `**[mm:ss]** text` (h:mm:ss past the hour), matching Windows; the Done
+  view has Update recap with notes.
+- Re-transcription progress is one percentage for the whole job plus a
+  stage, with a time estimate in both hosts.
+
+### Fixed
+
+- Back-to-back meetings: every meeting now claims the shared capture
+  buffers at start, and a worker that lost the claim stops before padding,
+  writing or draining them. Before, a stopping meeting's worker could drain
+  up to 22 s of the next meeting's audio (reproduced in
+  `a_meeting_that_lost_the_buffers_never_touches_them_again`).
+- Mac "bleating" audio in the second of two meetings: the Core Audio
+  process tap was destroyed asynchronously, so its IO proc kept pushing
+  loopback audio into the next meeting's buffer until the HAL destroy ran,
+  duplicating 10 ms grains and doubling the AEC reference. A per-tap gate is
+  now closed synchronously at teardown; same for the ScreenCaptureKit
+  fallback.
+- The meeting capture loop persisted usage stats (config.json write under
+  every config lock) on every chunk; the seconds now travel with the STT job
+  and are flushed after the sinks are finalized.
+- `dimmy_meeting_retranscribe` returns -7 and writes nothing while a meeting
+  is recording, so a post-stop pass never competes with the next call.
+- Hosts: a previous stop's recap can no longer take the meeting window off a
+  newer recording (generation guard); the recap flag is pinned at stop time.
+- Mac call detection counted a call app's audio output before a meeting,
+  so opening Teams started a recording; only the microphone counts now
+  (Windows parity). Every detector decision is logged as `[CallDetect]`.
+- Mac: Record now is confirmed to the core only after the window accepted
+  the start.
+- Mac: deferred Core ML encoder compile ran at meeting stop; it now waits
+  10 minutes and re-defers while a meeting records.
+- Check for updates spinner: Sparkle ignores a user check while
+  `canCheckForUpdates` is false (background download in progress), so the
+  spinner never ended; now handled, plus a 60 s watchdog and an Install and
+  relaunch action. Windows runs a single in-flight update pass with
+  Velopack progress.
+- Licensing: `verify_token` rejected a correctly signed token whose `exp`
+  preceded its `iat`, surfacing "exp must be >= iat" as an invalid license.
+  The check is removed (signature, schema version and positive timestamps
+  still enforced), so such a token reads as Expired. The server stopped
+  minting these in dimmy-backend 34a100d.
+- Windows live waveform scrolls on a continuous clock instead of freezing
+  on a late timer tick.
+- Mac: scrolling the transcript seeks playback (parity with Windows).
+- Windows: Done Notes placeholder no longer claims notes skip the recap.
 
 ## [0.7.11] - 2026-09-29
 
