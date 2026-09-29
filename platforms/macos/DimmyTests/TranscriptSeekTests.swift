@@ -23,6 +23,26 @@ final class TranscriptSeekTests: XCTestCase {
         XCTAssertEqual(MeetingDoneView.turn(at: 10_000, in: turns)?.id, 2)
     }
 
+    /// The other direction: scrolling the transcript moves the audio to the
+    /// line now at the top. Windows does it (SeekToScrolledTranscript); on the
+    /// Mac scrolling moved nothing, reported 2026-09-29.
+    func testScrollingSeeksToTheLineAtTheTop() {
+        XCTAssertEqual(MeetingDoneView.seekSeconds(forTopTurn: 1, in: turns), 60)
+        XCTAssertEqual(MeetingDoneView.seekSeconds(forTopTurn: 0, in: turns), 30)
+    }
+
+    func testScrollingOntoAnUnstampedLineSeeksToTheNextStampedOne() {
+        let mixed = [
+            Turn(id: 0, text: "[00:00:30] [mic] stamped", seconds: 30),
+            Turn(id: 1, text: "", seconds: nil),
+            Turn(id: 2, text: "[00:01:10] [system] next", seconds: 70),
+        ]
+        XCTAssertEqual(MeetingDoneView.seekSeconds(forTopTurn: 1, in: mixed), 70)
+        XCTAssertNil(MeetingDoneView.seekSeconds(forTopTurn: 9, in: mixed))
+        XCTAssertNil(MeetingDoneView.seekSeconds(
+            forTopTurn: 0, in: [Turn(id: 0, text: "no stamp", seconds: nil)]))
+    }
+
     func testSeekBeforeTheFirstStampFallsBackToTheFirstLine() {
         // Used to return nil, which left the transcript wherever it was for
         // the whole opening window. Windows falls back the same way

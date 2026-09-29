@@ -59,6 +59,15 @@ struct MeetingDoneView: View {
     @State private var renameError: String?
     /// Turn the transcript was last scrolled to by playback.
     @State private var followedTurnId: Int?
+    /// The turn at the top of the transcript pane, kept by the ScrollView.
+    @State private var topTurnId: Int?
+    /// When WE last scrolled the transcript (playback following, a waveform
+    /// seek). A scroll inside a second of that is ours, not the reader's —
+    /// without this the two directions would drive each other.
+    @State private var ourScrollAt: Date = .distantPast
+    @State private var scrollSeekTask: Task<Void, Never>?
+    /// A seek the transcript asks the player for.
+    @State private var audioSeek: SeekRequest?
 
     struct TranscriptTurn: Identifiable {
         let id: Int
@@ -493,9 +502,40 @@ struct MeetingDoneView: View {
         return hit ?? turns.first { $0.seconds != nil }
     }
 
+    /// Where the audio goes when the reader scrolls line `id` to the top: its
+    /// stamp, or the next stamped line's when it has none. nil when nothing
+    /// from there on carries a stamp.
+    static func seekSeconds(forTopTurn id: Int, in turns: [TranscriptTurn]) -> TimeInterval? {
+        guard let start = turns.firstIndex(where: { $0.id == id }) else { return nil }
+        return turns[start...].first { $0.seconds != nil }?.seconds
+    }
+
+    /// The reader scrolled the transcript: once the scroll settles, move the
+    /// playhead to the line now at the top, so the waveform keeps saying
+    /// where in the meeting you are. Mirror of Win
+    /// MeetingWindow.SeekToScrolledTranscript.
+    private func transcriptScrolled(from old: Int?, to new: Int?) {
+        // The first position after the pane appears is layout, not a scroll:
+        // opening the Transcript tab must not send the audio back to 0.
+        guard old != nil, let new else { return }
+        guard Date().timeIntervalSince(ourScrollAt) > 1.0 else { return }
+        scrollSeekTask?.cancel()
+        scrollSeekTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled, topTurnId == new,
+                  let secs = Self.seekSeconds(forTopTurn: new, in: transcriptTurns)
+            else { return }
+            // Playback following must not pull the pane straight back.
+            followedTurnId = Self.turn(at: secs, in: transcriptTurns)?.id
+            seekTick += 1
+            audioSeek = SeekRequest(tick: seekTick, time: secs)
+        }
+    }
+
     /// Bring the turn being spoken at `time` to the top.
     private func scrollTranscript(to time: TimeInterval, using proxy: ScrollViewProxy) {
         guard let target = Self.turn(at: time, in: transcriptTurns) else { return }
+        ourScrollAt = Date()
         withAnimation(.easeInOut(duration: 0.22)) {
             proxy.scrollTo(target.id, anchor: .top)
         }
@@ -528,8 +568,13 @@ struct MeetingDoneView: View {
                         }
                     }
                 }
+                .scrollTargetLayout()
                 .padding(14)
                 .background(cardBackground)
+            }
+            .scrollPosition(id: $topTurnId, anchor: .top)
+            .onChange(of: topTurnId) { old, new in
+                transcriptScrolled(from: old, to: new)
             }
             .onChange(of: seekRequest) { _, request in
                 guard let request else { return }
@@ -916,6 +961,8 @@ struct MeetingDoneView: View {
                 micURL: vm.doneAudioMicURL,
                 systemURL: vm.doneAudioSystemURL,
                 speakers: waveBySpeaker ? vm.doneSpeakers : [],
+                seekTo: audioSeek?.time,
+                seekTick: audioSeek?.tick ?? 0,
                 onSeek: { t in
                     followedTurnId = nil
                     seekTick += 1
