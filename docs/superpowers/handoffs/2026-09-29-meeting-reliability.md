@@ -115,3 +115,21 @@ Windows (uncompiled)
 - AEC notes (E) untouched on purpose: Mac audio path never fully tested, change only with a repro.
 - `meeting_transcription_behind` `emit_event` still sits in the capture loop (FREEZE list says it
   should not); host callbacks are async on both OSes today, so left as is.
+
+## Third pass (2026-09-29 evening) + push
+- 6f54955 Mac: scrolling the transcript seeks the audio (parity with Win SeekToScrolledTranscript).
+- 8b62482 Notes: Mac recording Notes tab = composer + "Add note" (Cmd+Return), appends
+  `**[mm:ss]** text` (h:mm:ss past the hour) like Win SubmitNote; Done Notes says editable + used by
+  the recap, "Update recap with notes" button. Win: placeholder no longer claims notes skip the recap.
+- Branch pushed on user request so staging + rc can be cut from Windows.
+
+## Windows session checklist (before merging into staging)
+1. `dotnet build platforms/windows/Dimmy.Windows/Dimmy.Windows.csproj -c Debug -p:Platform=x64` —
+   the C# in this branch was never compiled (UpdateService single-flight + `progress:` on
+   `DownloadUpdatesAsync`, SettingsWindow CheckUpdates_Click, MeetingWindow generation guard,
+   PillWindow recap flag, MeetingWindow.xaml placeholder).
+2. Core checklist from CLAUDE.md (already green on the Mac: fmt, clippy, lib 1025, ffi_e2e 14,
+   meeting_pause_resume 5).
+3. Version check before any tag (CLAUDE.md "Versioning"): 0.7.11 already has staging.1/.2 and rc.1.
+4. Then back on the Mac: install the rc DMG from the web and test Sparkle's update path (the
+   spinner fix is in UpdateService.swift).
