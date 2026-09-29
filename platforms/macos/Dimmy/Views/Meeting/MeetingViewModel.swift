@@ -1519,39 +1519,42 @@ final class MeetingViewModel: ObservableObject {
         return (try? String(contentsOf: url, encoding: .utf8)) ?? ""
     }
 
-    /// Append a `[mm:ss] ` time stamp at the end of the notes buffer so
-    /// the user can type the note after it. Mirror of the Win Recording-
-    /// view "Add note" / Ctrl+Enter behaviour. Uses the meeting elapsed
-    /// time (the same monotonic clock the recording bar shows). No-op
-    /// before a meeting has started, guards against accidental invokes
-    /// from the Done view (which has its own meta time, not elapsed).
-    func stampMeetingTime() {
-        guard phase == .recording else { return }
-        doneNotes = Self.stamping(notes: doneNotes, timerLabel: timerLabel)
+    /// "Add note" during a recording: append the note, stamped with the
+    /// meeting time, and save it straight away — the recording can end, or
+    /// the app quit, before any focus change would have saved it. Returns the
+    /// stamp for the confirmation, nil when there was nothing to add.
+    /// Mirror of Win MeetingWindow.SubmitNote.
+    @discardableResult
+    func addNote(_ text: String) -> String? {
+        guard phase == .recording,
+              let updated = Self.appendingNote(notes: doneNotes, text: text, timerLabel: timerLabel)
+        else { return nil }
+        doneNotes = updated
+        saveNotes()
+        return Self.noteStamp(timerLabel: timerLabel)
     }
 
-    /// Pure: the body of `stampMeetingTime()` factored out so the format
-    /// (trim `HH:` prefix, insert newline if needed) is pinned by
-    /// `MeetingStampTests` without spinning up a real ViewModel.
-    /// `internal` access so the test target reaches it via @testable.
-    nonisolated static func stamping(notes: String, timerLabel: String) -> String {
-        let stamp: String
-        if timerLabel.count >= 8 {
-            // "HH:MM:SS" → strip "HH:" to match Win "[mm:ss]" shape.
-            let idx = timerLabel.index(timerLabel.startIndex, offsetBy: 3)
-            stamp = "[" + String(timerLabel[idx...]) + "] "
-        } else {
-            stamp = "[" + timerLabel + "] "
-        }
-        let separator: String
-        if notes.isEmpty {
-            separator = ""
-        } else if notes.hasSuffix("\n") {
-            separator = ""
-        } else {
-            separator = "\n"
-        }
-        return notes + separator + stamp
+    /// `mm:ss`, or `h:mm:ss` past the hour — the Windows shape.
+    nonisolated static func noteStamp(timerLabel: String) -> String {
+        let parts = timerLabel.split(separator: ":").compactMap { Int($0) }
+        guard parts.count == 3 else { return timerLabel }
+        return parts[0] > 0
+            ? String(format: "%d:%02d:%02d", parts[0], parts[1], parts[2])
+            : String(format: "%02d:%02d", parts[1], parts[2])
+    }
+
+    /// Pure: `notes` with the block for `text` appended — `**[stamp]** text`
+    /// and a blank line, the format Windows writes to the same notes.md.
+    /// nil for a blank note. Pinned by `MeetingStampTests`.
+    nonisolated static func appendingNote(notes: String, text: String, timerLabel: String) -> String? {
+        let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { $0.replacingOccurrences(of: "\\s+$", with: "", options: .regularExpression) }
+            .joined(separator: "\n")
+        guard !body.isEmpty else { return nil }
+        let block = "**[\(noteStamp(timerLabel: timerLabel))]** \(body)\n\n"
+        let kept = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        return kept.isEmpty ? block : kept + "\n\n" + block
     }
 
     /// Write the current `doneNotes` buffer to `<dir>/notes.md`. No-op
@@ -1592,7 +1595,7 @@ final class MeetingViewModel: ObservableObject {
 
     // MARK: - Toast
 
-    private func showToast(_ text: String) {
+    func showToast(_ text: String) {
         toastDismissTask?.cancel()
         toastMessage = text
         toastDismissTask = Task { @MainActor in

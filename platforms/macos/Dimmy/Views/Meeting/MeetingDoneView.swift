@@ -631,10 +631,26 @@ struct MeetingDoneView: View {
 
     private var notesContent: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Local notes, saved to notes.md in the meeting folder. Markdown supported.")
-                .font(.system(size: 11))
-                .foregroundStyle(Color.macTextSecondary)
-                .padding(.horizontal, 4)
+            // Editable at any time, and it matters: the recap reads these
+            // notes as the user's own emphasis. Nothing on this tab used to
+            // say either, so it read as a read-only record.
+            HStack(alignment: .center, spacing: 8) {
+                Text("Your notes. Edit them any time; they save by themselves, and the recap gives them the most weight.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.macTextSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+                Button {
+                    vm.regenerateRecap()
+                } label: {
+                    Label(vm.doneSections.isEmpty ? "Generate recap with notes" : "Update recap with notes",
+                          systemImage: "arrow.triangle.2.circlepath")
+                }
+                .controlSize(.small)
+                .disabled(vm.doneNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .help("Saves the notes and runs the recap again with them")
+            }
+            .padding(.horizontal, 4)
             ZStack(alignment: .topLeading) {
                 if vm.doneNotes.isEmpty {
                     Text("Write notes about this meeting...")

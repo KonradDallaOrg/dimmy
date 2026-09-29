@@ -1050,9 +1050,9 @@
                                IsTextSelectionEnabled="True"/>
               </Border>
 
-              <!-- Notes tab — user-typed scratchpad. Local-only for
-                   now; future: prepended to the recap LLM prompt so
-                   the user can steer the recap with context. -->
+              <!-- Notes tab — user-typed notes.md, editable after the
+                   meeting. The recap reads them as the user's own emphasis
+                   (MeetingRecapHelpers "Listener's notes"). -->
               <StackPanel x:Name="NotesTabPanel" Visibility="Collapsed" Spacing="8">
                 <TextBlock Text="Your notes for this meeting"
                            FontSize="12" FontWeight="SemiBold"
@@ -1060,12 +1060,12 @@
                 <TextBox x:Name="NotesBox"
                          AcceptsReturn="True" TextWrapping="Wrap"
                          MinHeight="180"
-                         PlaceholderText="Add context, attendees, decisions you want surfaced in the recap. (Not yet sent to the LLM — UI only for now.)"
+                         PlaceholderText="Add context, attendees, decisions you want surfaced in the recap. The recap gives your notes the most weight."
                          LostFocus="NotesBox_LostFocus"/>
                 <TextBlock x:Name="NotesHint"
                            FontSize="11"
                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                           Text="Saved alongside the meeting in notes.md."/>
+                           Text="Saved in notes.md when you leave the box. Regenerate the recap to use changes."/>
               </StackPanel>
               </StackPanel>
             </ScrollViewer>
