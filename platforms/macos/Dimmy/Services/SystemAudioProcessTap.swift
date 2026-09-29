@@ -251,6 +251,18 @@ final class SystemAudioProcessTap {
     private var tapID = AudioObjectID(kAudioObjectUnknown)
     private var aggregateID = AudioObjectID(kAudioObjectUnknown)
     private var ioProcID: AudioDeviceIOProcID?
+    /// Open while THIS build of the tap may deliver audio. One per build,
+    /// captured by its IO proc and closed synchronously in `teardown()`.
+    ///
+    /// The HAL destroy runs asynchronously (see `teardown`), so the old IO
+    /// proc keeps firing until `AudioDeviceStop` actually executes — for as
+    /// long as the destroy queue is behind, or forever if a destroy wedged it.
+    /// Meanwhile the next meeting (or a rebuild) starts a new tap, and two IO
+    /// procs push into the one loopback buffer: every ~10 ms of the call
+    /// arrives twice, interleaved, and the AEC reference with it. That is the
+    /// "sheep bleating" meeting of 2026-09-29. A closed gate drops the stale
+    /// proc's frames on the floor, whatever the HAL is doing.
+    private var liveGate: OSAllocatedUnfairLock<Bool>?
     private var sampleRate: Int32 = 48_000
     private var channelCount: Int = 1
     private var running = false
@@ -528,9 +540,15 @@ final class SystemAudioProcessTap {
         let audible = audibleCounter
         let estimator = rateEstimator
         let ticksPerSecond = Self.hostTicksPerSecond
+        let gate = OSAllocatedUnfairLock(initialState: true)
+        liveGate = gate
         var newProcID: AudioDeviceIOProcID?
         err = AudioDeviceCreateIOProcIDWithBlock(&newProcID, aggregateID, ioQueue) {
             _, inInputData, inInputTime, _, _ in
+            // A torn-down build: not one frame, not even the heartbeat —
+            // a stale proc bumping the counter would also hide a dead
+            // replacement from the liveness watchdog.
+            guard gate.withLock({ $0 }) else { return }
             // Heartbeat: bump on EVERY fire (even silent/zero buffers) so the
             // liveness watchdog can see the IO proc is alive and distinguish a
             // quiet-but-healthy tap from a dead one.
@@ -1317,6 +1335,10 @@ final class SystemAudioProcessTap {
     private static let teardownQueue = DispatchQueue(label: "com.dimmy.tap.teardown")
 
     private func teardown() {
+        // Close the gate FIRST, synchronously: from here on this build's IO
+        // proc delivers nothing, however long the HAL takes to stop it.
+        liveGate?.withLock { $0 = false }
+        liveGate = nil
         currentTapPidSet = []
         builtOutputUID = nil
         // Reset the diagnostic "first fire" latch so a rebuilt instance

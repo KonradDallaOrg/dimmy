@@ -93,6 +93,9 @@ struct MacAboutPage: View {
                     if updates.isChecking {
                         ProgressView()
                             .controlSize(.small)
+                    } else if updates.canInstallNow {
+                        Button("Install and relaunch") { updates.installNow() }
+                            .buttonStyle(.borderedProminent)
                     } else if updates.isUpdateReady {
                         Circle()
                             .fill(Color.accentColor)

@@ -251,11 +251,38 @@ pub fn prepare_in_background(model_filename: &str) {
     }
 }
 
-/// Start the preparation a meeting made wait. Called when a meeting stops.
+/// How long after a meeting stops before a deferred preparation starts.
+///
+/// The moment a meeting stops is the worst one to begin a compile that runs
+/// for minutes inside Apple's ANE service: the recap, the speaker pass and,
+/// very often, the NEXT call all start right then. Between two meetings the
+/// machine must stay free (a Mac froze exactly there on 2026-09-29). Waiting
+/// costs nothing — the GPU encoder keeps working until the bundle is ready.
+const AFTER_MEETING_GRACE: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// Start the preparation a meeting made wait, once the machine has had a
+/// while to itself. Called when a meeting stops. A meeting started in the
+/// meantime defers it again, to that meeting's stop.
 pub fn run_deferred() {
     let pending = DEFERRED.lock().ok().and_then(|mut d| d.take());
-    if let Some(name) = pending {
-        prepare_in_background(&name);
+    let Some(name) = pending else {
+        return;
+    };
+    crate::log(&format!(
+        "[CoreML] encoder preparation waits {} min after the meeting",
+        AFTER_MEETING_GRACE.as_secs() / 60
+    ));
+    let spawned = std::thread::Builder::new()
+        .name("dimmy-coreml-wait".to_string())
+        .spawn(move || {
+            std::thread::sleep(AFTER_MEETING_GRACE);
+            // Re-defers by itself if a meeting is recording now.
+            prepare_in_background(&name);
+        });
+    if spawned.is_err() {
+        crate::log(
+            "[CoreML] could not schedule the deferred preparation; it runs on the next start",
+        );
     }
 }
 

@@ -83,6 +83,8 @@ extension DimmyCore {
     ///   - .failure(.openFailed)       — no decodable band audio (-2)
     ///   - .failure(.silentInput)      — every band produced empty text (-5)
     ///   - .failure(.cloudUnsupported) — cloud STT config incomplete (-6)
+    ///   - .failure(.meetingRecording) — a meeting is recording; the pass
+    ///                                   stepped aside, nothing written (-7)
     ///   - .failure(.backendFailed)    — write failed / backend error (other)
     func meetingRetranscribe(dir: String) -> Result<String, FileTranscribeError> {
         guard isInitialized else { return .failure(.notInitialized) }
@@ -97,6 +99,7 @@ extension DimmyCore {
             case -2: return .failure(.openFailed)
             case -5: return .failure(.silentInput)
             case -6: return .failure(.cloudUnsupported)
+            case -7: return .failure(.meetingRecording)
             default: return .failure(.backendFailed)
             }
         }
@@ -111,6 +114,7 @@ extension DimmyCore {
         case silentInput
         case cloudUnsupported
         case backendFailed
+        case meetingRecording
         case unknown(Int)
 
         var description: String {
@@ -121,6 +125,7 @@ extension DimmyCore {
             case .silentInput: return "Preprocess removed all audio (silent input?)"
             case .cloudUnsupported: return "Cloud STT is not supported via file load — use local mode"
             case .backendFailed: return "Local STT backend failed to transcribe"
+            case .meetingRecording: return "A meeting is recording. Regenerate the transcript once it ends."
             case .unknown(let code): return "transcribe_file failed (code \(code))"
             }
         }

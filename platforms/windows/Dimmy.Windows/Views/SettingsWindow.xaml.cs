@@ -5449,7 +5449,30 @@ public sealed partial class SettingsWindow : Window
             }
 
             var channel = Services.UiPreferences.Load().UpdateChannel;
-            var result = await svc.CheckAndDownloadAsync();
+            // Already downloaded: that is the answer, no network needed.
+            // Asking again re-ran the whole download behind a spinner.
+            if (svc.IsUpdateReady)
+            {
+                var (readyOk, readyMsg) = Services.UpdateCheckMessages.For(
+                    Services.UpdateCheckOutcome.UpdateReady, svc.PendingVersion, channel);
+                ShowUpdateCheckResult(readyOk, readyMsg);
+                return;
+            }
+            // A download can take minutes: say how far along it is instead
+            // of a bare "Checking...".
+            void OnDownloadProgress(string version, int percent) =>
+                DispatcherQueue.TryEnqueue(() =>
+                    ShowUpdateCheckBusy($"Downloading Dimmy v{version}... {percent}%"));
+            svc.DownloadProgress += OnDownloadProgress;
+            Services.UpdateCheckResult result;
+            try
+            {
+                result = await svc.CheckAndDownloadAsync();
+            }
+            finally
+            {
+                svc.DownloadProgress -= OnDownloadProgress;
+            }
             // On UpdateReady the UpdateCard has already appeared via the
             // UpdateReady event; this line just closes the loop on the
             // click so the press is never a silent no-op.

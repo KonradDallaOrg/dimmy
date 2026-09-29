@@ -195,7 +195,29 @@ public sealed class UpdateService
     /// what happened via the returned <see cref="UpdateCheckResult"/>
     /// so the button can render a concrete answer. The background loop
     /// discards the result.</summary>
-    public async Task<UpdateCheckResult> CheckAndDownloadAsync(CancellationToken ct = default)
+    public Task<UpdateCheckResult> CheckAndDownloadAsync(CancellationToken ct = default)
+    {
+        // One pass at a time. A click during the background download used
+        // to start a second check-and-download next to it, on a manager the
+        // new pass had just replaced, and the button then waited on that for
+        // as long as the download took: the "Checking..." that never ends.
+        // A click now joins the pass already running.
+        lock (_checkGate)
+        {
+            if (_checkInFlight is { IsCompleted: false }) return _checkInFlight;
+            _checkInFlight = RunCheckAndDownloadAsync(ct);
+            return _checkInFlight;
+        }
+    }
+
+    private readonly object _checkGate = new();
+    private Task<UpdateCheckResult>? _checkInFlight;
+
+    /// <summary>Download progress of the pass in flight: (version, percent
+    /// 0-100). Raised on a background thread; subscribers marshal.</summary>
+    public event Action<string, int>? DownloadProgress;
+
+    private async Task<UpdateCheckResult> RunCheckAndDownloadAsync(CancellationToken ct)
     {
         try
         {
@@ -254,7 +276,11 @@ public sealed class UpdateService
             }
 
             App.Log($"update available: {info.TargetFullRelease.Version}; downloading", "Update");
-            await _manager.DownloadUpdatesAsync(info, cancelToken: ct).ConfigureAwait(false);
+            var downloading = info.TargetFullRelease.Version.ToString();
+            await _manager.DownloadUpdatesAsync(
+                info,
+                progress: p => DownloadProgress?.Invoke(downloading, p),
+                cancelToken: ct).ConfigureAwait(false);
             _pendingUpdate = info;
             App.Log($"update downloaded: v{info.TargetFullRelease.Version}", "Update");
 

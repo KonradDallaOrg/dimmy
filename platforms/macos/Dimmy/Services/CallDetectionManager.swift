@@ -25,11 +25,16 @@ import Foundation
 ///     `appState.$meetingActive` (transitions). 30 s `DispatchSourceTimer`
 ///     backstop as safety net for missed HAL events.
 ///
-///     Input side is generic discovery (any non-system app holding mic);
-///     output side is gated to the curated `bundleWhitelist` (Zoom, Teams,
-///     Meet/Slack, Discord, Webex) so Spotify / YouTube don't spuriously
-///     nudge. `systemBundleIgnore` keeps Apple's mic grabbers (Control
-///     Center, Siri) out of both sides.
+///     Before a meeting only the MICROPHONE counts — generic discovery of
+///     any non-system app holding it, the same fact Windows reads from its
+///     capture sessions. A call app's audio OUTPUT alone does not: Teams
+///     plays sound with its window merely open (notifications, the ring,
+///     the "call ended" chime), and with auto-record on that started a
+///     recording before anyone joined, which the origin watch then ended
+///     seconds later — the short recordings either side of real meetings
+///     (reported 2026-09-29). Output still counts once a meeting records,
+///     to adopt a listen-only call as its origin. `systemBundleIgnore`
+///     keeps Apple's mic grabbers (Control Center, Siri) out.
 ///
 ///   • **Meeting-active origin presence (Job 2, event-driven)**: when a
 ///     meeting is bound to an origin PID (via "Record now" or mid-meeting
@@ -286,7 +291,7 @@ final class CallDetectionManager {
         // watch — otherwise (no candidate pid) keep the backstop as the only
         // stop signal. Watching a real pid is the deterministic authority.
         _ = dimmy_call_set_tracked_origin(meetingOriginPid != 0 ? 1 : 0)
-        print("[CallDetect] meeting origin bound pid=\(meetingOriginPid) app=\(meetingOriginApp ?? "<none>")")
+        dimmyHostLog("[CallDetect] meeting origin bound pid=\(meetingOriginPid) app=\(meetingOriginApp ?? "<none>")")
     }
 
     private func clearMeetingOrigin() {
@@ -342,7 +347,7 @@ final class CallDetectionManager {
         scanInFlight = true
         let watchedPid = lastCandidatePid
         Self.scanQueue.async { [weak self] in
-            let (found, foundApp, foundPid) = Self.scanRunningProcesses()
+            let (found, foundApp, foundPid) = Self.scanRunningProcesses(includeOutput: false)
             var facts: CallAudioFacts?
             if #available(macOS 14.4, *) {
                 let pid = found ? foundPid : watchedPid
@@ -385,7 +390,7 @@ final class CallDetectionManager {
                 self.lastCandidatePid = micActive ? pid : 0
                 self.lastCandidateApp = micActive ? appId : nil
                 if micActive != self.lastMicActive {
-                    print("[CallDetect] mic_active=\(micActive) app=\(appId ?? "<none>") pid=\(pid)")
+                    dimmyHostLog("[CallDetect] microphone \(micActive ? "in use" : "free") app=\(appId ?? "<none>") pid=\(pid)")
                     self.lastMicActive = micActive
                 }
             }
@@ -449,11 +454,11 @@ final class CallDetectionManager {
                 case .inCall:
                     break
                 case .moving:
-                    print("[CallDetect] origin pid=\(originPid) pushed off its device — still in the call")
+                    dimmyHostLog("[CallDetect] origin pid=\(originPid) pushed off its device — still in the call")
                 case .released, .gone:
                     self.sessionEndedSignaled = true
                     let rc = DimmyCore.shared.callSignalSessionEnded()
-                    print("[CallDetect] origin pid=\(originPid) \(state == .gone ? "exited" : "released its audio") → session_ended rc=\(rc)")
+                    dimmyHostLog("[CallDetect] origin pid=\(originPid) \(state == .gone ? "exited" : "released its audio") → session_ended rc=\(rc)")
                 }
             }
         }
@@ -474,7 +479,7 @@ final class CallDetectionManager {
         guard meetingOriginPid == 0, !sessionEndedSignaled else { return }
         adoptInFlight = true
         Self.scanQueue.async { [weak self] in
-            let (active, appId, originPid) = Self.scanRunningProcesses()
+            let (active, appId, originPid) = Self.scanRunningProcesses(includeOutput: true)
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.adoptInFlight = false
@@ -492,7 +497,7 @@ final class CallDetectionManager {
                     // Now watching a real process deterministically → suppress
                     // the Rust silence backstop (the 15-popups bug).
                     _ = dimmy_call_set_tracked_origin(1)
-                    print("[CallDetect] adopted call origin mid-meeting pid=\(originPid) app=\(appId)")
+                    dimmyHostLog("[CallDetect] adopted call origin mid-meeting pid=\(originPid) app=\(appId)")
                 }
             }
         }
@@ -684,11 +689,12 @@ final class CallDetectionManager {
     // MARK: - CoreAudio enumeration (callable from any queue)
 
     /// Returns (any_call_app_active, app_id_or_nil, origin_pid). On 14.4+
-    /// the first non-system app holding the mic is the candidate; if none,
-    /// the first known-call-app producing audio output wins (catches the
-    /// "joined Zoom muted" case where the user's mic isn't open but the
-    /// peer's audio is flowing). On 14.0-14.3 we only know "some input
-    /// device is running" (app=nil).
+    /// the first non-system app holding the mic is the candidate; if none
+    /// and `includeOutput`, the first known-call-app producing audio output
+    /// wins (a listen-only call adopted as the origin of a meeting already
+    /// recording). Never before a meeting: an open Teams window plays sound
+    /// too. On 14.0-14.3 we only know "some input device is running"
+    /// (app=nil).
     ///
     /// Input over output is deliberate: input is the stronger signal
     /// (recording a user's mic is unambiguously a call action), output
@@ -696,7 +702,7 @@ final class CallDetectionManager {
     /// YouTube nudges. Tested in `CallDetectionCandidateSelectionTests`
     /// — the gated resolver returns nil for non-whitelist bundles so the
     /// `firstCallCandidate` picker skips them.
-    nonisolated private static func scanRunningProcesses() -> (Bool, String?, pid_t) {
+    nonisolated private static func scanRunningProcesses(includeOutput: Bool) -> (Bool, String?, pid_t) {
         if #available(macOS 14.4, *) {
             let selfPid = ProcessInfo.processInfo.processIdentifier
             // Input side: generic discovery.
@@ -706,6 +712,7 @@ final class CallDetectionManager {
             ) {
                 return (true, appId, pid)
             }
+            guard includeOutput else { return (false, nil, 0) }
             // Output side: known-call-app gated. Reuses the shared HAL
             // enumeration from SystemAudioProcessTap so call-detect and
             // per-process tap input selection see the same world.

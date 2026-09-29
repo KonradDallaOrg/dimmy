@@ -41,6 +41,11 @@ final class MeetingWindowController {
             Task { @MainActor in
                 guard let self else { return }
                 self.viewModel.loadHistory()
+                // The recap of a meeting that ended while the NEXT one was
+                // already recording (auto-stop, then auto-start on the next
+                // call). Opening it would take the window off the live
+                // recording and its Stop button; it is in the sidebar.
+                guard self.viewModel.phase != .recording else { return }
                 if let dir = note.userInfo?["dir"] as? String {
                     self.viewModel.loadDoneFromDisk(dir: dir)
                 }

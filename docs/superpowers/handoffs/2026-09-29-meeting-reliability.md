@@ -63,34 +63,55 @@ E. AEC ring design notes (not changed, audio untested on Mac — be careful): ze
   none in dimmy.log (only `print`).
 - `emit_meeting_state_payload_is_valid_json_with_correct_keys` made `#[serial]` (global callback).
 
-## TODO next session (Mac first, all testable locally)
-1. (A) tap `alive` gate — see above. Small, RT-safe.
-2. MeetingViewModel between meetings:
-   - `stopAndProcess` keeps `isWorking = true` through relabel + recap → `start()` silently refuses
-     a second meeting (manual or auto) during the previous recap. Set `isWorking = false` as soon as
-     `meetingStop` returns; add a generation token so the previous stop's completion never sets
-     `phase = .done` / done fields while a newer meeting records (only `loadHistory()` + toast).
-   - `MeetingWindowController` `meetingRecapSaved` observer calls `loadDoneFromDisk` unconditionally
-     → a recap of meeting 1 (pill / auto-stop path) switches the window away from meeting 2's
-     recording. Guard: if `viewModel.phase == .recording` only `loadHistory()`.
-   - `AppState.callNudgeRespond("record_now")` tells the core RecordNow BEFORE `start()`; if start
-     refuses (consent cancelled, busy) the detector stays in RecordingAccepted forever. Make start
-     report success and undo on failure.
-3. Call detect (reports 2 + 3): Mac pre-meeting scan treats OUTPUT of a whitelisted app (Teams open,
-   notification, "call ended" sound) as `mic_active` → auto-record before joining, and the origin
-   watch then ends it seconds later (short recordings before/after). Windows uses capture sessions
-   only. Fix: pre-meeting `scanRunningProcesses(includeOutput: false)` (keep output for mid-meeting
-   adoption); mirror `[CallDetect] mic_active=...` prints to `dimmyHostLog`. Residual risk on both
-   OSes: Teams pre-join screen may open the mic (preview meter) — verify with colleague logs
-   (`[CallDetect] call detected` timestamp vs join time).
-4. Update spinner (Mac, Sparkle 2.9.1): with `automaticallyDownloadsUpdates` a background session
-   is in progress / update resumable; a manual `checkForUpdates` then fires none of
-   didFindValidUpdate / didNotFind / didAbort → `isChecking` stuck. Implement
-   `updater(_:didFinishUpdateCycleFor:error:)` → `isChecking = false`; `didDownloadUpdate` →
-   "Update X downloaded — installs when you quit"; if `updater.sessionInProgress` or
-   `isUpdateReady` don't spin; optional "Install and relaunch" via `willInstallUpdateOnQuit`
-   returning YES + stored handler (guard `mayEndProcess`). Windows (`CheckUpdates_Click` →
-   `CheckAndDownloadAsync`): no concurrency guard, re-downloads when `IsUpdateReady`, no progress →
-   short-circuit when ready, share the in-flight task, report download %. Build on Windows.
-5. Rebuild Mac lib (`source .env.staging` + frozen features) + xcodebuild + launch; run
-   `scripts/dev/preflight-mac.sh` steps; then ask the user to test, then push branch.
+## Done in the second pass (same branch, local commits only)
+Verified: `cargo fmt --check`, `cargo clippy --features local-stt,local-llm -D warnings`,
+`cargo test --lib` 1025/1025, `--test ffi_e2e` 14/14, `--test meeting_pause_resume` 5/5 (handover
+test green), Mac static lib (frozen features + `.env.staging`), `xcodebuild` Debug, Swift tests
+250/250, app launched 7 s without a SelfTests crash. Windows C# NOT compiled (no WinUI on the Mac):
+build on Windows before merging.
+
+Mac
+- (A) `SystemAudioProcessTap`: one `OSAllocatedUnfairLock<Bool>` gate per tap BUILD, captured by
+  the IO proc, closed synchronously first thing in `teardown()`; the proc returns before touching
+  even the heartbeat. `SystemAudioCaptureService`: same for SCStream (`deliveringStream` id checked
+  in the sample handler, cleared on stop).
+- `MeetingViewModel`: `isWorking` only covers the core start/stop call; `meetingGeneration` bumped
+  per start; a stop's relabel/recap completion (and regenerate recap) never touches the window if a
+  newer meeting started — it still runs the recap in the background and refreshes the sidebar. The
+  recap flag is pinned at stop time. `start()` returns Bool and sets `activeMeetingDir` from
+  `dimmy_meeting_active_dir` (was left on the previous meeting). `.meetingRecording` error for -7.
+- `MeetingWindowController`: recap-saved notice does not open Done while `phase == .recording`.
+- `AppState.callNudgeRespond("record_now")`: RecordNow sent to the core only after the window
+  accepted the start; refused start is logged, no origin bound.
+- `CallDetectionManager`: pre-meeting scan is microphone-only (`scanRunningProcesses(includeOutput:
+  false)`); output kept for mid-meeting origin adoption. Transitions logged with `dimmyHostLog`.
+- `UpdateService` (Sparkle): no spinner when `!canCheckForUpdates` (background download in progress
+  — Sparkle ignores the user check, the root cause) or when an update is already downloaded;
+  `didFinishUpdateCycleFor` catch-all; 60 s watchdog; `didDownloadUpdate` status;
+  `willInstallUpdateOnQuit` keeps the handler → About page "Install and relaunch" button
+  (`installNow`, refused while a meeting records).
+
+Core
+- `coreml_encoder::run_deferred`: waits 10 min after the meeting stop before compiling (re-defers if
+  a meeting is recording then).
+
+Windows (uncompiled)
+- `UpdateService.CheckAndDownloadAsync`: single in-flight pass (click joins the background one);
+  `DownloadProgress` event from Velopack's `progress:` callback.
+- `SettingsWindow.CheckUpdates_Click`: instant answer when `IsUpdateReady`; "Downloading vX… N%".
+- `MeetingWindow`: `_meetingGeneration` guard in the stop pipeline (background recap via
+  `MeetingPostProcessService.RunRecapAsync` when superseded), recap flag pinned at stop,
+  `RefreshAndSelectDir` ignored while Recording, "Regenerate transcript" says a meeting is recording.
+- `PillWindow`: recap flag read before the speaker pass.
+
+## Still open (deliberately not done)
+- Confirm the causes with the colleague's dimmy.log (fingerprints above).
+- Teams pre-join screen may open the MICROPHONE (level meter) — then auto-record still starts in the
+  lobby on both OSes. Now visible in the log (`[CallDetect] call detected: teams`,
+  `[CallDetect] microphone in use app=teams`) vs the join time. If confirmed, next step: require the
+  call app to hold mic AND output together (duplex) before AUTO-record, ask otherwise.
+- `dimmy_meeting_start` failing in the core (-3) after "record now" leaves the detector in
+  RecordingAccepted until the next stop — rare (mkdir/spawn failure); needs a small FFI to reset.
+- AEC notes (E) untouched on purpose: Mac audio path never fully tested, change only with a repro.
+- `meeting_transcription_behind` `emit_event` still sits in the capture loop (FREEZE list says it
+  should not); host callbacks are async on both OSes today, so left as is.
