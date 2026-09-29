@@ -455,6 +455,17 @@
               </StackPanel>
             </StackPanel>
 
+            <!-- Speaker labels re-transcribe the whole meeting after a stop:
+                 minutes on a long one. The core reports one percent for the
+                 whole job and the stage it is in. -->
+            <StackPanel x:Name="ProcProgressPanel" Spacing="6" Width="320"
+                        HorizontalAlignment="Center" Visibility="Collapsed">
+              <ProgressBar x:Name="ProcProgressBar" Minimum="0" Maximum="100"/>
+              <TextBlock x:Name="ProcProgressText" FontSize="12" TextWrapping="Wrap"
+                         HorizontalAlignment="Center" TextAlignment="Center"
+                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+            </StackPanel>
+
             <!-- The model's reasoning, then its text, as they arrive. This
                  lives HERE and not only in the Done panel: during a recap the
                  window is in Processing state, so a card inside DonePanel is

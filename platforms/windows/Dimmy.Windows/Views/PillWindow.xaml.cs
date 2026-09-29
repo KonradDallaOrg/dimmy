@@ -1427,11 +1427,11 @@ public sealed partial class PillWindow : Window
             // happened. Reverts to Idle in the finally block.
             _vm.SetState(AppState.Transcribing);
 
-            var (rc, dir, transcript, stopError) = await System.Threading.Tasks.Task.Run(() =>
+            var (rc, dir, transcript, stopError, labeled) = await System.Threading.Tasks.Task.Run(() =>
             {
                 var buf = new byte[1 << 22];
                 int code = DimmyNative.dimmy_meeting_stop(buf, buf.Length);
-                if (code <= 0) return (code, "", "", (string?)null);
+                if (code <= 0) return (code, "", "", (string?)null, false);
                 var json = System.Text.Encoding.UTF8.GetString(buf, 0, code);
                 try
                 {
@@ -1445,9 +1445,10 @@ public sealed partial class PillWindow : Window
                     // land here) swallowed them.
                     var err = root.TryGetProperty("error", out var e)
                         ? e.GetString() : null;
-                    return (code, d, t, string.IsNullOrWhiteSpace(err) ? null : err);
+                    bool lab = root.TryGetProperty("speakers_labeled", out var sl) && sl.ValueKind == System.Text.Json.JsonValueKind.True;
+                    return (code, d, t, string.IsNullOrWhiteSpace(err) ? null : err, lab);
                 }
-                catch { return (code, "", "", (string?)null); }
+                catch { return (code, "", "", (string?)null, false); }
             });
             App.Log($"Pill Stop meeting rc={rc} dir='{dir}' transcript={transcript.Length} chars", "Pill");
 
@@ -1476,7 +1477,7 @@ public sealed partial class PillWindow : Window
             // Speaker labels (when enabled) replace the live per-track
             // transcript before the recap reads it.
             if (!string.IsNullOrEmpty(dir))
-                transcript = await Services.DiarizationService.RelabelIfEnabledAsync(dir, transcript);
+                transcript = await Services.DiarizationService.RelabelIfEnabledAsync(dir, transcript, labeled);
             bool wantRecap = App.Instance?.AppViewModel?.MeetingGenerateRecap ?? true;
             if (wantRecap && !string.IsNullOrEmpty(dir) && !string.IsNullOrWhiteSpace(transcript))
             {

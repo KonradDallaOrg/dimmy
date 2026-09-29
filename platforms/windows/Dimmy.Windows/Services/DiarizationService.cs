@@ -38,8 +38,16 @@ public static class DiarizationService
     /// <paramref name="liveTranscript"/> unchanged when labels are off or the
     /// pass fails — a failed diarization must never cost the user the
     /// transcript or the recap they would have had without it.
-    public static async Task<string> RelabelIfEnabledAsync(string dir, string liveTranscript)
+    /// <paramref name="alreadyLabeled"/>: the core labelled the meeting while
+    /// it recorded (stop JSON <c>speakers_labeled</c>), so the transcript it
+    /// returned is the final one and the full pass is skipped.
+    public static async Task<string> RelabelIfEnabledAsync(string dir, string liveTranscript, bool alreadyLabeled)
     {
+        if (alreadyLabeled)
+        {
+            App.Log("diarized relabel skipped: labelled while recording", "Meeting");
+            return liveTranscript;
+        }
         if (string.IsNullOrEmpty(dir) || !Enabled()) return liveTranscript;
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var labelled = await Task.Run(() =>

@@ -381,6 +381,11 @@ public partial class AppViewModel : ObservableObject
     /// load card to drive a determinate progress bar.
     public event Action<double, double, double>? FileTranscribeProgress;
 
+    /// A meeting re-transcription (speaker labels after a stop, or
+    /// Regenerate transcript): one percent for the whole job and the stage it
+    /// is in (`mic`, `system`, `speakers`). File-load progress has no stage.
+    public event Action<double, string>? MeetingRetranscribeProgress;
+
     /// Fires when the Rust core emits a `transcript_ready` event with
     /// the final dictation text. Args: (text). Used by the onboarding
     /// "Try It" step to preview the user's first dictation inline
@@ -574,6 +579,8 @@ public partial class AppViewModel : ObservableObject
                         double total = payload.TryGetProperty("total_secs", out var ts) ? ts.GetDouble() : 0;
                         double percent = payload.TryGetProperty("percent", out var pc) ? pc.GetDouble() : 0;
                         FileTranscribeProgress?.Invoke(processed, total, percent);
+                        if (payload.TryGetProperty("stage", out var st) && st.GetString() is { } stage)
+                            MeetingRetranscribeProgress?.Invoke(percent, stage);
                     }
                     break;
                 case "recording_started":
