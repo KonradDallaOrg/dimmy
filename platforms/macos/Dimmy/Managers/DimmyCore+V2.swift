@@ -651,6 +651,8 @@ struct MeetingResult {
     let durationSecs: Double
     let chunkCount: Int
     let error: String?
+    /// The core labelled speakers while recording; no full pass needed.
+    let speakersLabeled: Bool
 
     init(dict: [String: Any]) {
         self.id = dict["id"] as? String ?? ""
@@ -658,6 +660,7 @@ struct MeetingResult {
         self.transcript = dict["transcript"] as? String ?? ""
         self.durationSecs = dict["duration_secs"] as? Double ?? 0.0
         self.chunkCount = dict["chunk_count"] as? Int ?? 0
+        self.speakersLabeled = dict["speakers_labeled"] as? Bool ?? false
         // `error` is null when the meeting completed cleanly.
         if let err = dict["error"] as? String, !err.isEmpty {
             self.error = err

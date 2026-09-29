@@ -1493,7 +1493,8 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
             totalSecs: total,
             percent: percent,
             chunkIndex: chunkIndex,
-            chunkTotal: chunkTotal
+            chunkTotal: chunkTotal,
+            stage: payload["stage"] as? String
         )
 
     case "llm_stream":

@@ -27,8 +27,11 @@ struct MeetingProcessingView: View {
             if let pct = vm.retranscribePercent {
                 ProgressView(value: pct, total: 100)
                     .frame(width: 260)
-                Text("Transcribing audio… \(Int(pct))%")
+                Text(vm.retranscribeStage == nil ? "Transcribing audio…" : "Identifying speakers…")
                     .font(.system(size: 20, weight: .semibold))
+                Text(vm.retranscribeCaption)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.macTextSecondary)
             } else {
                 ProgressView()
                     .controlSize(.large)

@@ -171,6 +171,42 @@ final class MeetingViewModel: ObservableObject {
     /// spinner (recap / idle). Set to 0 by regenerateTranscript, cleared when
     /// the transcription pass returns.
     @Published var retranscribePercent: Double?
+    /// What the re-transcription is doing (`mic` / `system` / `speakers`),
+    /// and when it started, for the stage line and the time estimate.
+    @Published var retranscribeStage: String?
+    private var retranscribeStartedAt: Date?
+
+    /// "Transcribing your microphone · 42% · about 2 minutes left". Win
+    /// parity: MeetingWindow.OnRetranscribeProgress.
+    var retranscribeCaption: String {
+        let pct = retranscribePercent ?? 0
+        let what: String
+        switch retranscribeStage {
+        case "mic": what = "Transcribing your microphone"
+        case "system": what = "Transcribing the call audio"
+        case "speakers": what = "Telling the voices apart"
+        default: what = "Transcribing audio"
+        }
+        let elapsed = retranscribeStartedAt.map { Date().timeIntervalSince($0) } ?? 0
+        let eta = Self.timeLeft(elapsedSecs: elapsed, percent: pct)
+        return "\(what) · \(Int(pct))%" + (eta.isEmpty ? "" : " · \(eta)")
+    }
+
+    /// Straight-line estimate from the rate so far; silent until there is
+    /// enough of it to mean something.
+    static func timeLeft(elapsedSecs: Double, percent: Double) -> String {
+        guard percent >= 5, elapsedSecs >= 5 else { return "" }
+        let left = elapsedSecs * (100 - percent) / percent
+        if left < 60 { return "less than a minute left" }
+        let mins = Int((left / 60).rounded(.up))
+        return mins == 1 ? "about 1 minute left" : "about \(mins) minutes left"
+    }
+
+    private func clearRetranscribeProgress() {
+        retranscribePercent = nil
+        retranscribeStage = nil
+        retranscribeStartedAt = nil
+    }
 
     /// Combine bag for the live-transcript pipe from AppState.
     /// DimmyCore.handleEvent writes every `meeting_chunk` event's
@@ -208,7 +244,18 @@ final class MeetingViewModel: ObservableObject {
         AppState.shared.$fileTranscribeProgress
             .receive(on: DispatchQueue.main)
             .sink { [weak self] progress in
-                guard let self, self.retranscribePercent != nil, let p = progress else { return }
+                guard let self, let p = progress else { return }
+                // A stop's speaker pass reports a stage; follow it while the
+                // window is wrapping up, like an explicit regenerate.
+                let armed = self.retranscribePercent != nil
+                    || (p.stage != nil && self.phase == .processing)
+                guard armed else { return }
+                if p.stage != nil && p.percent >= 100 {
+                    self.clearRetranscribeProgress()
+                    return
+                }
+                if self.retranscribeStartedAt == nil { self.retranscribeStartedAt = Date() }
+                self.retranscribeStage = p.stage
                 self.retranscribePercent = p.percent
             }
             .store(in: &liveTranscriptBag)
@@ -660,10 +707,12 @@ final class MeetingViewModel: ObservableObject {
             var result = DimmyCore.shared.meetingStop()
             // Speaker labels (when enabled) replace the live per-track
             // transcript before the recap reads it.
-            if let stopped = result, DiarizationService.enabled() {
+            if let stopped = result, !stopped.speakersLabeled, DiarizationService.enabled() {
                 DispatchQueue.main.async { self.statusLabel = "Identifying speakers…" }
                 result?.transcript = DiarizationService.relabelIfEnabled(
-                    dir: stopped.dir, liveTranscript: stopped.transcript)
+                    dir: stopped.dir, liveTranscript: stopped.transcript,
+                    alreadyLabeled: false)
+                DispatchQueue.main.async { self.clearRetranscribeProgress() }
             }
             DispatchQueue.main.async {
                 self.isPaused = false
@@ -833,7 +882,7 @@ final class MeetingViewModel: ObservableObject {
             DispatchQueue.main.async {
                 // Transcription pass done — clear the determinate bar so the
                 // recap step (no progress events) falls back to the spinner.
-                self.retranscribePercent = nil
+                self.clearRetranscribeProgress()
                 switch result {
                 case .success(let text):
                     self.doneRawTranscript = text
