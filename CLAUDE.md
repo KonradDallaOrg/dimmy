@@ -360,8 +360,11 @@ Once a line has crossed nine WITHOUT dots there is no rescue inside it:
 bump the patch (`0.7.1-rc.1`), because `0.7.1-*` outranks every
 `0.7.0-*`.
 
-`scripts/check-release-tag.sh <tag>` enforces both the shape and the
-ordering, and `release.yml` runs it before building anything. Note that
+`scripts/check-release-tag.sh <tag>` enforces the shape, the ordering
+**within each track** (staging vs staging, rc/stable vs rc/stable — never
+across, since "rc" < "staging" in SemVer) and the promotion ladder (rc X.Y.Z
+≤ highest staging X.Y.Z; stable X.Y.Z needs a published X.Y.Z-rc.N).
+`release.yml` and `staging-tester.yml` run it before building anything. Note that
 `check-release-version.sh` cannot catch this — it compares only the base
 version, and its `sort -V` is more permissive than SemVer.
 

@@ -34,8 +34,19 @@ rc10 and rc11 to nobody. Once a line has passed nine without dots, no tag
 inside it can outrank the earlier ones: bump the patch instead.
 
 `scripts/check-release-tag.sh <tag>` checks both shape and ordering, and
-`release.yml` runs it before building. `check-release-version.sh` does NOT
-cover this: it compares only the base version.
+`release.yml` and `staging-tester.yml` run it before building.
+`check-release-version.sh` does NOT cover this: it compares only the base
+version.
+
+Each track is ranked only against itself: a staging tag against published
+staging releases, an rc or stable tag against published prod releases (rc and
+stable share the prod packId). Staging and prod never compete, so publishing
+`0.7.12-staging.1` does not block `0.7.12-rc.1`, even though SemVer puts
+"rc" below "staging". On top of that, a promotion ladder: staging may run
+ahead, an rc's X.Y.Z may not exceed the highest staging X.Y.Z, and a stable
+X.Y.Z needs a published X.Y.Z-rc.N. Only the three shapes `vX.Y.Z`,
+`vX.Y.Z-rc.N`, `vX.Y.Z-staging.N` are accepted. Tests:
+`bash scripts/ci/test_check_release_tag.sh`.
 
 | Ship a stable release to **all** users (channel-stable + prerelease) | `release.yml` | Tag `v0.6.46` (no `-rcN` suffix). GitHub Release is marked `prerelease=false`, becomes "Latest". |
 | Test the full pay flow against Stripe Test (Buy → checkout → webhook → license active), side-by-side with a prod install | `staging-tester.yml` | `git tag -a v0.6.46-staging.1 -m '...'` + push. Produces installer that lives in `Local\Dimmy-Staging\` + reads `Roaming\dimmy-staging\`. Both packId and config dir are separate from prod. Doesn't touch the prod install. |

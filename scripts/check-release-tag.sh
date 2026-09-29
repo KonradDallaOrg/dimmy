@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Dimmy release-TAG preflight — refuse a tag that SemVer ranks below one
-# already published.
+# Dimmy release-TAG preflight — refuse a tag that no client would ever be
+# offered, or that skips a step of the promotion ladder.
 #
 # Burned 2026-09-07. `v0.7.0-rc10` was published and no Windows client
 # ever offered it, because SemVer 11.4 compares a pre-release identifier
@@ -9,26 +9,36 @@
 #     "rc10" vs "rc8"  →  'r'='r', 'c'='c', '1'(0x31) < '8'(0x38)
 #     → 0.7.0-rc10 is OLDER than 0.7.0-rc8
 #
-# Every updater agreed and kept people on rc8. It had already happened
-# once — v0.6.73 reached `rc11` — and the fix (dots, see below) was
-# applied to the v0.6.74 line and never written down, so it lapsed.
-#
 # The dot is the fix: in `rc.10` the `10` is its own identifier, made of
 # digits only, and SemVer compares those NUMERICALLY. `rc.10 > rc.9`.
-# Without it there is no second identifier to compare numerically.
 #
-# The existing check-release-version.sh cannot catch this: it compares
-# only the BASE (`0.7.0`), deliberately, and its `sort -V` would rank
-# rc10 above rc8 anyway — GNU sort is more permissive than SemVer.
+# Burned 2026-09-29. This check compared every tag with EVERY published
+# release, so once `0.7.12-staging.1` was out, `0.7.12-rc.1` was refused:
+# "rc" < "staging" in ASCII. Staging (packId Dimmy-Staging) and prod
+# (packId Dimmy) are separate update tracks; no client ever ranks one
+# against the other. Each track is now ranked against itself.
+#
+# Tracks and the ladder between them:
+#
+#   staging  vX.Y.Z-staging.N   ranked against staging releases; may run ahead
+#   rc       vX.Y.Z-rc.N        ranked against prod (rc + stable) releases;
+#                               X.Y.Z may not exceed the highest staging X.Y.Z
+#   stable   vX.Y.Z             ranked against prod releases;
+#                               needs a published X.Y.Z-rc.N to promote
+#
+# rc and stable share one track because they share the prod packId: the
+# prerelease channel is offered both, so an rc below a published stable
+# would never reach anyone.
 #
 # Usage:  ./scripts/check-release-tag.sh v0.7.1-rc.1
-# Exit:   0 tag outranks everything published   1 it does not   2 cannot tell
+#         DIMMY_PUBLISHED_TAGS=$'v0.7.0\nv0.7.1-staging.1' ./scripts/check-release-tag.sh v0.7.1-rc.1
+#         (tests inject the published list; otherwise it comes from gh)
+# Tests:  bash scripts/ci/test_check_release_tag.sh
+# Exit:   0 tag is fine   1 it is not   2 cannot tell
 set -euo pipefail
 
 TAG="${1:-}"
 [ -n "$TAG" ] || { echo "usage: $0 <tag>"; exit 2; }
-
-VER="${TAG#v}"
 
 # --- SemVer 2.0.0 precedence -------------------------------------------
 # Returns 0 when A > B, 1 otherwise. Build metadata is ignored, as the
@@ -80,43 +90,79 @@ semver_gt() {
     return 1
 }
 
+# Prints the track of a tag (staging | rc | stable), or nothing if the tag
+# is not one of the three shapes the pipelines understand.
+track_of() {
+    local n='(0|[1-9][0-9]*)'
+    if   [[ "$1" =~ ^v$n\.$n\.$n-staging\.$n$ ]]; then echo staging
+    elif [[ "$1" =~ ^v$n\.$n\.$n-rc\.$n$ ]];      then echo rc
+    elif [[ "$1" =~ ^v$n\.$n\.$n$ ]];             then echo stable
+    fi
+}
+
+base_of() { local v="${1#v}"; echo "${v%%-*}"; }
+
 # --- Shape ---------------------------------------------------------------
-# Only warn: a stable tag (v0.7.1) has no suffix, and staging tags use
-# `-staging.N`, which is already dotted.
-case "$VER" in
-    *-rc[0-9]*)
-        echo "[check-tag] ✗ '$TAG' uses -rcN. Use -rc.N (a DOT before the number)."
-        echo "[check-tag]   Without the dot 'rc10' sorts BELOW 'rc8' and no client is offered the build."
-        exit 1
-        ;;
+TRACK=$(track_of "$TAG")
+if [ -z "$TRACK" ]; then
+    echo "[check-tag] ✗ '$TAG' is not vX.Y.Z, vX.Y.Z-rc.N or vX.Y.Z-staging.N."
+    case "$TAG" in
+        *-rc[0-9]*|*-staging[0-9]*)
+            echo "[check-tag]   Put a DOT before the number: without it 'rc10' sorts BELOW 'rc8'." ;;
+    esac
+    exit 1
+fi
+VER="${TAG#v}"
+BASE=$(base_of "$TAG")
+
+# --- Published releases, split by track --------------------------------
+if [ -n "${DIMMY_PUBLISHED_TAGS+x}" ]; then
+    PUBLISHED="$DIMMY_PUBLISHED_TAGS"
+else
+    if ! command -v gh >/dev/null 2>&1; then
+        echo "[check-tag] gh CLI unavailable — cannot compare against published releases."
+        exit 2
+    fi
+    PUBLISHED=$(gh release list --limit 100 --json tagName,isDraft \
+                  --jq '.[] | select(.isDraft | not) | .tagName')
+fi
+
+HIGH_STAGING="" HIGH_PROD="" HIGH_STAGING_BASE="" RC_FOR_BASE=""
+while read -r t; do
+    [ -n "$t" ] || continue
+    tr=$(track_of "$t"); v="${t#v}"
+    case "$tr" in
+        staging)
+            if [ -z "$HIGH_STAGING" ] || semver_gt "$v" "$HIGH_STAGING"; then HIGH_STAGING="$v"; fi ;;
+        rc|stable)
+            if [ -z "$HIGH_PROD" ] || semver_gt "$v" "$HIGH_PROD"; then HIGH_PROD="$v"; fi
+            [ "$tr" = rc ] && [ "$(base_of "$t")" = "$BASE" ] && RC_FOR_BASE="$v" ;;
+    esac
+done <<< "$PUBLISHED"
+[ -n "$HIGH_STAGING" ] && HIGH_STAGING_BASE="${HIGH_STAGING%%-*}"
+
+# --- Rule 1: the tag outranks everything on its own track ----------------
+if [ "$TRACK" = staging ]; then HIGH="$HIGH_STAGING"; else HIGH="$HIGH_PROD"; fi
+echo "[check-tag] $TRACK tag $VER   highest on its track: ${HIGH:-none}"
+if [ -n "$HIGH" ] && ! semver_gt "$VER" "$HIGH"; then
+    echo "[check-tag] ✗ '$VER' does NOT outrank '$HIGH' under SemVer."
+    echo "[check-tag]   Clients on this track would keep $HIGH and never see this build."
+    exit 1
+fi
+
+# --- Rule 2: the promotion ladder ---------------------------------------
+case "$TRACK" in
+    rc)
+        if [ -z "$HIGH_STAGING_BASE" ] || semver_gt "$BASE" "$HIGH_STAGING_BASE"; then
+            echo "[check-tag] ✗ rc $BASE is ahead of staging (highest staging: ${HIGH_STAGING:-none})."
+            echo "[check-tag]   Cut v$BASE-staging.N first; an rc promotes what staging has already shipped."
+            exit 1
+        fi ;;
+    stable)
+        if [ -z "$RC_FOR_BASE" ]; then
+            echo "[check-tag] ✗ no published $BASE-rc.N to promote to stable."
+            exit 1
+        fi ;;
 esac
 
-# --- Compare against what is actually published --------------------------
-if ! command -v gh >/dev/null 2>&1; then
-    echo "[check-tag] gh CLI unavailable — cannot compare against published releases."
-    exit 2
-fi
-
-HIGHEST=""
-while read -r r; do
-    [ -n "$r" ] || continue
-    cand="${r#v}"
-    if [ -z "$HIGHEST" ] || semver_gt "$cand" "$HIGHEST"; then HIGHEST="$cand"; fi
-done < <(gh release list --limit 40 --json tagName,isDraft \
-           --jq '.[] | select(.isDraft | not) | .tagName' 2>/dev/null || true)
-
-if [ -z "$HIGHEST" ]; then
-    echo "[check-tag] no published release to compare against — allowing '$TAG'."
-    exit 0
-fi
-
-echo "[check-tag] tag $VER   highest published $HIGHEST"
-if semver_gt "$VER" "$HIGHEST"; then
-    echo "[check-tag] OK ✓ SemVer ranks it above every published release."
-    exit 0
-fi
-
-echo "[check-tag] ✗ '$VER' does NOT outrank '$HIGHEST' under SemVer."
-echo "[check-tag]   Clients would keep offering $HIGHEST and never see this build."
-echo "[check-tag]   Fix: bump the patch (e.g. the next $(echo "$HIGHEST" | cut -d. -f1,2).x) rather than adding another rc."
-exit 1
+echo "[check-tag] OK ✓"

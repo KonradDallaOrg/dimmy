@@ -51,6 +51,13 @@ jobs:
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
+      # Same gate as release.yml: a staging tag must outrank every published
+      # staging release, or no staging install is ever offered it.
+      - name: Refuse a tag SemVer ranks below a published release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash ./scripts/check-release-tag.sh "${GITHUB_REF_NAME}"
+
       - name: Generate changelog
         run: |
           # Pick prev tag matching the same staging shape, never a
