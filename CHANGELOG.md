@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.12] - 2026-09-30
+
 ### Added
 
 - Settings → Providers & keys → On-device: click the download arrow to fetch
@@ -19,24 +21,11 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   trained for English and Chinese). Measured over 72 real dictations x 8
   styles with reasoning off: Qwen3.5-2B answered in 2.2 s on a T600 and
   4.5 s on an Intel iGPU.
-
-### Fixed
-
-- Local LLM, reasoning models: every answer from MiniCPM5 or Qwen3.5 came
-  back empty (76 of 76 calls on three models), and the app pasted the
-  user's own text back as if the style had run. The generation loop skipped
-  a tag-like token with `continue` BEFORE feeding it back, so the model
-  sampled `<think>` again from the same state until max_tokens. Hidden
-  tokens are now still decoded (`PieceFilter`), reasoning inside a think
-  block never reaches the text, and a template with an `enable_thinking`
-  switch gets an empty think block pre-filled so the model answers at once.
-  Gemma 4 (`<|think|>` syntax, off by default) and Qwen3-4B-Instruct-2507
-  (no switch) are untouched.
-
-## [0.7.12] - 2026-09-29
-
-### Added
-
+- Delete removes the model, its resume files and, on Mac, the Core ML
+  alias + encoder bundle when no other quantisation shares them. A loaded
+  copy is dropped first because Windows refuses to delete a file llama.cpp
+  still has mapped. It is refused while that model is downloading, and for
+  Qwen on the Neural Engine, whose folders FluidAudio owns.
 - Live speaker labelling. Diarization now runs incrementally on the
   transcription thread as audio arrives (same offline-preset chunks, pinned
   by a test to give whole-file probabilities), using Parakeet word
@@ -53,7 +42,25 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Re-transcription progress is one percentage for the whole job plus a
   stage, with a time estimate in both hosts.
 
+### Changed
+
+- The per-page download paths for the local LLM, Parakeet and Qwen now take
+  the same per-model slot whisper already used, so a Settings-page button
+  and the new download queue can never write one partial file from two
+  offsets.
+
 ### Fixed
+
+- Local LLM, reasoning models: every answer from MiniCPM5 or Qwen3.5 came
+  back empty (76 of 76 calls on three models), and the app pasted the
+  user's own text back as if the style had run. The generation loop skipped
+  a tag-like token with `continue` BEFORE feeding it back, so the model
+  sampled `<think>` again from the same state until max_tokens. Hidden
+  tokens are now still decoded (`PieceFilter`), reasoning inside a think
+  block never reaches the text, and a template with an `enable_thinking`
+  switch gets an empty think block pre-filled so the model answers at once.
+  Gemma 4 (`<|think|>` syntax, off by default) and Qwen3-4B-Instruct-2507
+  (no switch) are untouched.
 
 - Back-to-back meetings: every meeting now claims the shared capture
   buffers at start, and a worker that lost the claim stops before padding,
