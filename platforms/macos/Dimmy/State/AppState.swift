@@ -1502,9 +1502,9 @@ final class AppState: ObservableObject {
     /// core's queue so a download keeps its progress across pages.
     @Published var modelDownloads: [String: ModelDownloadJob] = [:]
 
-    /// Bumped each time a download lands, so pickers re-read the disk
-    /// once per model rather than on every progress tick.
-    @Published var modelDownloadsFinished: Int = 0
+    /// Bumped each time a model lands on disk or is deleted, so pickers
+    /// re-read the disk once per model rather than on every progress tick.
+    @Published var modelFilesChanged: Int = 0
 
     // MARK: - whisper Core ML encoder preparation
 

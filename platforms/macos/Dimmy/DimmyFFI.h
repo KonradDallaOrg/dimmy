@@ -146,6 +146,12 @@ int32_t dimmy_model_download_enqueue(const char * _Nonnull id);
 /// resume). Returns 0=cancelled, -1=nothing to cancel.
 int32_t dimmy_model_download_cancel(const char * _Nonnull id);
 
+/// Delete an On-device model from disk, partial download included.
+/// BLOCKING (drops a loaded copy first): call off the main thread.
+/// Returns 0=removed, 1=nothing on disk, 2=queued/downloading,
+/// -1=unknown id, -2=could not remove (in use), -3=not deletable from Dimmy.
+int32_t dimmy_model_delete(const char * _Nonnull id);
+
 /// JSON array of every job, same shape as the event payload. Returns
 /// bytes written or -1.
 int32_t dimmy_model_download_snapshot_json(char * _Nonnull out_buf, int32_t buf_len);

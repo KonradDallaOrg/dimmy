@@ -992,7 +992,7 @@ struct MacOutputPage: View {
             appState.refreshClaudeCodeStatus()
             appState.refreshCodexStatus()
         }
-        .onChange(of: appState.modelDownloadsFinished) { _ in
+        .onChange(of: appState.modelFilesChanged) { _ in
             refreshLocalLlmStatus()
         }
     }

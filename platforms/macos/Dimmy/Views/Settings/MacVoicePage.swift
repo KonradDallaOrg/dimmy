@@ -658,9 +658,9 @@ struct MacVoicePage: View {
         .onChange(of: appState.coremlPrepareState) { _ in
             refreshLocalModelStatus()
         }
-        // Same for a model the download center just finished, wherever it
-        // was started from: the picker's green checks come from the disk.
-        .onChange(of: appState.modelDownloadsFinished) { _ in
+        // Same for a model the download center just finished or deleted,
+        // wherever that happened: the picker's green checks come from the disk.
+        .onChange(of: appState.modelFilesChanged) { _ in
             refreshLocalModelStatus()
         }
     }

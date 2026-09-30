@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // MARK: - MacProvidersPage
@@ -292,6 +293,9 @@ struct MacProvidersPage: View {
                             if model.stt { capabilityBadge("STT", color: Color(red: 0.18, green: 0.70, blue: 0.48)) }
                             if model.llm { capabilityBadge("LLM", color: Color(red: 0.39, green: 0.45, blue: 1.00)) }
                             if model.recap { capabilityBadge("Recap", color: Color(red: 0.78, green: 0.40, blue: 0.90)) }
+                            if let file = model.localFilename {
+                                deleteButton(file, name: model.name)
+                            }
                         }
                         .padding(.vertical, 6)
                         .padding(.horizontal, 8)
@@ -354,6 +358,57 @@ struct MacProvidersPage: View {
             .buttonStyle(.plain)
             .help(failed ? "Download failed: \(job?.error ?? "unknown error"). Click to retry." : "Download")
             .accessibilityLabel("Download \(name)")
+        }
+    }
+
+    /// Trash button for whatever of this model is on disk: the full model,
+    /// or the partial file a cancelled / failed download keeps for a resume.
+    /// Hidden while a download runs (cancel first) and for the Neural Engine
+    /// Qwen rows, whose files FluidAudio owns. Mirrors Win BuildDeleteButton.
+    @ViewBuilder
+    private func deleteButton(_ id: String, name: String) -> some View {
+        let job = appState.modelDownloads[id]
+        let complete = job?.state == "done" || (job?.state != "deleted" && isLocallyPresent(id))
+        let partial = !complete && (job?.state == "cancelled" || job?.state == "failed")
+        if !(job?.isActive ?? false), !id.hasPrefix("qwen:fluid:"), complete || partial {
+            let what = complete ? "Delete" : "Discard partial download"
+            Button {
+                confirmDeleteModel(id, name: name, complete: complete)
+            } label: {
+                Image(systemName: "trash")
+                    .foregroundStyle(Color.macTextSecondary)
+                    .font(.system(size: 11))
+            }
+            .buttonStyle(.plain)
+            .help(what)
+            .accessibilityLabel("\(what) of \(name)")
+        }
+    }
+
+    private func confirmDeleteModel(_ id: String, name: String, complete: Bool) {
+        let alert = NSAlert()
+        alert.messageText = complete ? "Delete \(name)?" : "Discard the partial download of \(name)?"
+        alert.informativeText = complete
+            ? "The model is removed from this Mac. You can download it again at any time."
+            : "The part already downloaded is removed; the next download starts from zero."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: complete ? "Delete" : "Discard")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        // Blocking in the core: a loaded copy is dropped first, after any
+        // inference in progress. The row updates from the `deleted` event.
+        Task.detached {
+            let rc = DimmyCore.shared.deleteModel(id)
+            guard rc == -2 else { return }
+            await MainActor.run {
+                let failed = NSAlert()
+                failed.messageText = "Couldn't delete the model"
+                failed.informativeText = "\(name) is in use. Restart Dimmy and try again."
+                failed.alertStyle = .warning
+                failed.addButton(withTitle: "OK")
+                failed.runModal()
+            }
         }
     }
 
