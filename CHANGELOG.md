@@ -6,6 +6,26 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Local LLM catalog: Qwen 3.5 2B, Qwen 3.5 4B and MiniCPM5 2B (experimental,
+  trained for English and Chinese). Measured over 72 real dictations x 8
+  styles with reasoning off: Qwen3.5-2B answered in 2.2 s on a T600 and
+  4.5 s on an Intel iGPU.
+
+### Fixed
+
+- Local LLM, reasoning models: every answer from MiniCPM5 or Qwen3.5 came
+  back empty (76 of 76 calls on three models), and the app pasted the
+  user's own text back as if the style had run. The generation loop skipped
+  a tag-like token with `continue` BEFORE feeding it back, so the model
+  sampled `<think>` again from the same state until max_tokens. Hidden
+  tokens are now still decoded (`PieceFilter`), reasoning inside a think
+  block never reaches the text, and a template with an `enable_thinking`
+  switch gets an empty think block pre-filled so the model answers at once.
+  Gemma 4 (`<|think|>` syntax, off by default) and Qwen3-4B-Instruct-2507
+  (no switch) are untouched.
+
 ## [0.7.12] - 2026-09-29
 
 ### Added

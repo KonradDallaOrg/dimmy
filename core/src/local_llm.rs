@@ -185,6 +185,31 @@ pub const AVAILABLE_LLM_MODELS: &[LlmModel] = &[
         description: "Fast fallback, multilingual (3.8B params)",
         url: Some("https://huggingface.co/matrixportalx/Phi-4-mini-instruct-Q4_K_M-GGUF/resolve/main/phi-4-mini-instruct-q4_k_m.gguf"),
     },
+    // Reasoning families: they need PieceFilter + skip_thinking_suffix, or
+    // every answer comes back empty. Measured 2026-09-30 over 72 real
+    // dictations x 8 styles, reasoning off: Qwen3.5-2B 2.2 s/answer on a T600
+    // with 1 wrong-language and 1 untouched output (Gemma 4 E2B: 7 and 4).
+    LlmModel {
+        name: "Qwen 3.5 2B Q4",
+        filename: "Qwen3.5-2B-Q4_K_M.gguf",
+        size_mb: 1222,
+        description: "Fast and multilingual, strong at rewriting (2B params)",
+        url: Some("https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf"),
+    },
+    LlmModel {
+        name: "Qwen 3.5 4B Q4",
+        filename: "Qwen3.5-4B-Q4_K_M.gguf",
+        size_mb: 2614,
+        description: "Larger sibling, fewer mistakes, about 2.5x slower (4B params)",
+        url: Some("https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf"),
+    },
+    LlmModel {
+        name: "MiniCPM5 2B Q4",
+        filename: "MiniCPM5-2B-Q4_K_M.gguf",
+        size_mb: 1489,
+        description: "Experimental. Trained for English and Chinese (2.5B params)",
+        url: Some("https://huggingface.co/openbmb/MiniCPM5-2B-GGUF/resolve/main/MiniCPM5-2B-Q4_K_M.gguf"),
+    },
 ];
 
 // ── Model directory helpers ──────────────────────────────────────
@@ -343,6 +368,82 @@ where
     assert!(dest.is_file(), "LLM model file must exist after download");
 
     Ok(dest)
+}
+
+// ── Generation output filter ─────────────────────────────────────
+
+/// What the generation loop does with one decoded piece. `Hide` still feeds
+/// the token back to the model: only the user's text leaves it out.
+#[derive(Debug, PartialEq)]
+#[cfg_attr(not(feature = "local-llm"), allow(dead_code))]
+pub(crate) enum PieceAction {
+    Stop,
+    Hide,
+    Show,
+}
+
+/// Per-generation state: whether we are inside a `<think>` block.
+///
+/// Reasoning models (MiniCPM5, Qwen3.5) open every answer with `<think>`. The
+/// loop used to skip a tag-like piece with a bare `continue`, BEFORE feeding
+/// it back, so the model sampled `<think>` again from the same state until
+/// max_tokens: an empty string, and the caller pasted the user's own text
+/// back as if the style had run. 76 of 76 calls on three models, 2026-09-30.
+#[derive(Default)]
+#[cfg_attr(not(feature = "local-llm"), allow(dead_code))]
+pub(crate) struct PieceFilter {
+    in_think: bool,
+}
+
+#[cfg_attr(not(feature = "local-llm"), allow(dead_code))]
+impl PieceFilter {
+    pub(crate) fn classify(&mut self, piece: &str) -> PieceAction {
+        // Turn markers: the model is starting the next turn. The ChatML pair
+        // matters as much as Gemma's: without it a Qwen/QAT model closes its
+        // turn, opens a new one and says the whole thing again (users saw
+        // their dictation two or three times over, 2026-09-05).
+        const STOPS: [&str; 6] = [
+            "<end_of_turn>",
+            "<start_of_turn>",
+            "</s>",
+            "<|endoftext|>",
+            "<|im_end|>",
+            "<|im_start|>",
+        ];
+        if STOPS.iter().any(|s| piece.contains(s)) {
+            return PieceAction::Stop;
+        }
+        let t = piece.trim();
+        if t.contains("<think>") || t.contains("<|think|>") {
+            self.in_think = true;
+            return PieceAction::Hide;
+        }
+        if t.contains("</think>") || t.contains("<|/think|>") {
+            self.in_think = false;
+            return PieceAction::Hide;
+        }
+        if self.in_think
+            || (t.starts_with('<') && t.ends_with('>') && t.len() > 2 && !t.contains(' '))
+        {
+            return PieceAction::Hide;
+        }
+        PieceAction::Show
+    }
+}
+
+/// The documented way to skip reasoning on a model whose template has an
+/// `enable_thinking` switch: pre-fill an empty, closed think block after the
+/// assistant turn opens. A rewrite of one sentence gains nothing from a
+/// hidden essay first, and costs its whole token budget. Templates without
+/// the switch get nothing: a model that always reasons cannot be told not to,
+/// and the filter above keeps its reasoning out of the text.
+#[cfg_attr(not(feature = "local-llm"), allow(dead_code))]
+pub(crate) fn skip_thinking_suffix(chat_template: &str) -> &'static str {
+    if chat_template.contains("enable_thinking") && chat_template.contains("<think>") {
+        "<think>\n\n</think>\n\n"
+    } else {
+        ""
+    }
 }
 
 // ── Prompt formatting ────────────────────────────────────────────
@@ -878,12 +979,17 @@ mod llm_cache {
             LlamaChatMessage::new("user".to_string(), user_text.to_string())
                 .map_err(|e| crate::error::LlmError::LocalModel(format!("chat msg user: {}", e)))?,
         ];
-        let full_prompt = cached
+        let mut full_prompt = cached
             .model
             .apply_chat_template(None, &messages, /* add_ass */ true)
             .map_err(|e| {
                 crate::error::LlmError::LocalModel(format!("chat template apply: {}", e))
             })?;
+        let template = cached
+            .model
+            .get_chat_template(64 * 1024)
+            .unwrap_or_default();
+        full_prompt.push_str(super::skip_thinking_suffix(&template));
 
         let tokens = cached
             .model
@@ -1095,6 +1201,7 @@ mod llm_cache {
         let mut output = String::new();
         let mut n_generated: u32 = 0;
         let mut next_pos = tokens.len() as i32;
+        let mut filter = super::PieceFilter::default();
 
         loop {
             if n_generated >= max_tokens {
@@ -1123,22 +1230,23 @@ mod llm_cache {
             // stray "</|im_end|>" surviving into the text, which is the same
             // marker seen from the other side. Stripping it after the fact
             // hid the cause and kept the duplicate.
-            if piece.contains("<end_of_turn>")
-                || piece.contains("<start_of_turn>")
-                || piece.contains("</s>")
-                || piece.contains("<|endoftext|>")
-                || piece.contains("<|im_end|>")
-                || piece.contains("<|im_start|>")
-            {
-                break;
-            }
-
-            // Skip any special/control tokens — they start with < and end with >
-            // This catches <|think|>, <|/think|>, <pad>, etc.
-            let trimmed = piece.trim();
-            if trimmed.starts_with('<') && trimmed.ends_with('>') {
-                n_generated += 1;
-                continue;
+            // Control tokens and reasoning are hidden from the text but still
+            // decoded below: see PieceFilter.
+            match filter.classify(&piece) {
+                super::PieceAction::Stop => break,
+                super::PieceAction::Hide => {
+                    n_generated += 1;
+                    batch.clear();
+                    batch.add(new_token, next_pos, &[0], true).map_err(|e| {
+                        crate::error::LlmError::LocalModel(format!("batch add failed: {}", e))
+                    })?;
+                    next_pos += 1;
+                    ctx.decode(&mut batch).map_err(|e| {
+                        crate::error::LlmError::LocalModel(format!("decode failed: {}", e))
+                    })?;
+                    continue;
+                }
+                super::PieceAction::Show => {}
             }
 
             let first_visible = output.is_empty();
@@ -2101,5 +2209,59 @@ Hi"
         } else {
             panic!("Expected LocalModel error from stub");
         }
+    }
+
+    // ── Thinking models (MiniCPM5, Qwen3.5) ─────────────────────
+
+    #[test]
+    fn a_tag_piece_is_hidden_but_does_not_stop_generation() {
+        let mut f = PieceFilter::default();
+        assert_eq!(f.classify("<think>"), PieceAction::Hide);
+        assert_eq!(f.classify("<|im_end|>"), PieceAction::Stop);
+    }
+
+    #[test]
+    fn reasoning_inside_a_think_block_never_reaches_the_output() {
+        let mut f = PieceFilter::default();
+        let pieces = [
+            "<think>",
+            "The user",
+            " wants a summary",
+            "</think>",
+            "Ciao",
+            " a tutti",
+            "<|im_end|>",
+        ];
+        let mut shown = String::new();
+        for p in pieces {
+            match f.classify(p) {
+                PieceAction::Show => shown.push_str(p),
+                PieceAction::Hide => {}
+                PieceAction::Stop => break,
+            }
+        }
+        assert_eq!(shown, "Ciao a tutti");
+    }
+
+    #[test]
+    fn plain_text_is_shown() {
+        let mut f = PieceFilter::default();
+        assert_eq!(f.classify("Buongiorno"), PieceAction::Show);
+        assert_eq!(f.classify(" <3 "), PieceAction::Show);
+    }
+
+    #[test]
+    fn a_template_with_a_thinking_switch_gets_an_empty_think_block() {
+        let qwen_like = "{%- if enable_thinking is defined and enable_thinking is false %}{{- '<think>\\n\\n</think>\\n\\n' }}{%- endif %}";
+        assert_eq!(skip_thinking_suffix(qwen_like), "<think>\n\n</think>\n\n");
+    }
+
+    #[test]
+    fn a_template_without_a_thinking_switch_is_left_alone() {
+        let gemma_like = "{{ bos_token }}{% for message in messages %}<start_of_turn>{{ message.role }}{% endfor %}";
+        assert_eq!(skip_thinking_suffix(gemma_like), "");
+        // A model that always reasons (no switch) cannot be told to stop;
+        // pre-filling would only confuse it. The filter hides its reasoning.
+        assert_eq!(skip_thinking_suffix("{{ '<think>\\n' }}"), "");
     }
 }
