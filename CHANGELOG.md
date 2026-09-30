@@ -101,6 +101,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   on a late timer tick.
 - Mac: scrolling the transcript seeks playback (parity with Windows).
 - Windows: Done Notes placeholder no longer claims notes skip the recap.
+- Windows, On-device rows: cancel never fired. The row's download indicator
+  was rebuilt on every progress event (about every 100 ms on a fast link),
+  replacing the cancel button between pointer press and release. The active
+  download control is now built once and updated in place.
+- Windows, On-device rows: the delete button's glyph was an empty string, so
+  the button rendered blank.
+- Windows + Mac: the download ring now carries a stop square so it reads as a
+  cancel button.
 
 ## [0.7.11] - 2026-09-29
 
