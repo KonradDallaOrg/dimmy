@@ -13,6 +13,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and keeps its progress when you switch pages, retries after a dropped
   connection (resuming the partial file), can be cancelled, and turns the
   row's check green when done — the Voice input / Output pickers update too.
+- On-device rows also get a delete button: it removes a downloaded model, or
+  the partial file a cancelled download keeps for resuming, after asking.
 - Local LLM catalog: Qwen 3.5 2B, Qwen 3.5 4B and MiniCPM5 2B (experimental,
   trained for English and Chinese). Measured over 72 real dictations x 8
   styles with reasoning off: Qwen3.5-2B answered in 2.2 s on a T600 and

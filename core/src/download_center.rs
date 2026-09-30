@@ -30,6 +30,8 @@ pub enum State {
     Done,
     Failed,
     Cancelled,
+    /// Removed from disk, `.part` included: the row offers a fresh download.
+    Deleted,
 }
 
 impl State {
@@ -40,6 +42,7 @@ impl State {
             State::Done => "done",
             State::Failed => "failed",
             State::Cancelled => "cancelled",
+            State::Deleted => "deleted",
         }
     }
 
@@ -52,6 +55,15 @@ impl State {
 pub enum Enqueued {
     New,
     AlreadyActive,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Deleted {
+    Removed,
+    NothingOnDisk,
+    /// Queued or downloading: cancel first, so a delete never races a write.
+    Busy,
+    Failed(String),
 }
 
 /// Set by `cancel`, observed by the running fetch both synchronously and as
@@ -86,6 +98,8 @@ impl Cancel {
 pub type Fetch =
     dyn Fn(&str, &(dyn Fn(u64, u64) + Sync), &Cancel) -> Result<(), String> + Send + Sync;
 pub type Emit = dyn Fn(&str) + Send + Sync;
+/// Ok(true) when something was on disk and is gone now.
+pub type Remove = dyn Fn(&str) -> Result<bool, String> + Send + Sync;
 
 struct Job {
     state: State,
@@ -122,6 +136,7 @@ pub struct Center {
     emit_order: Mutex<()>,
     wake: Condvar,
     fetch: Box<Fetch>,
+    remove: Box<Remove>,
     emit: Box<Emit>,
     /// One entry per retry; its length is the retry count.
     backoff: Vec<Duration>,
@@ -130,12 +145,18 @@ pub struct Center {
 const ERROR_MAX_CHARS: usize = 200;
 
 impl Center {
-    pub fn new(fetch: Box<Fetch>, emit: Box<Emit>, backoff: Vec<Duration>) -> Arc<Self> {
+    pub fn new(
+        fetch: Box<Fetch>,
+        remove: Box<Remove>,
+        emit: Box<Emit>,
+        backoff: Vec<Duration>,
+    ) -> Arc<Self> {
         Arc::new(Center {
             inner: Mutex::new(Inner::default()),
             emit_order: Mutex::new(()),
             wake: Condvar::new(),
             fetch,
+            remove,
             emit,
             backoff,
         })
@@ -187,6 +208,39 @@ impl Center {
                 true
             }
             _ => false,
+        }
+    }
+
+    /// Remove the model and any partial download from disk. Blocks while a
+    /// loaded copy is dropped from memory (an inference in progress finishes
+    /// first), so hosts call it off the UI thread.
+    pub fn delete(&self, id: &str) -> Deleted {
+        assert!(!id.is_empty(), "download id must not be empty");
+        if self
+            .lock()
+            .jobs
+            .get(id)
+            .is_some_and(|j| j.state.is_active())
+        {
+            return Deleted::Busy;
+        }
+        // Not under `inner`: the remove waits on model caches. A download
+        // enqueued meanwhile is serialised by the per-model slot both take.
+        let removed = match (self.remove)(id) {
+            Ok(removed) => removed,
+            Err(e) => return Deleted::Failed(e.chars().take(ERROR_MAX_CHARS).collect()),
+        };
+        let mut inner = self.lock();
+        if !inner.jobs.get(id).is_some_and(|j| j.state.is_active()) {
+            let mut job = Job::queued();
+            job.state = State::Deleted;
+            inner.jobs.insert(id.to_string(), job);
+            self.publish(inner, id);
+        }
+        if removed {
+            Deleted::Removed
+        } else {
+            Deleted::NothingOnDisk
         }
     }
 
@@ -342,6 +396,26 @@ pub fn is_known_id(id: &str) -> bool {
     parse(id).is_some()
 }
 
+/// Qwen on the Neural Engine is stored by FluidAudio, in folders it names
+/// itself; rather than guess at them, Dimmy leaves those to the user.
+pub fn is_deletable_id(id: &str) -> bool {
+    match parse(id) {
+        Some(Kind::Qwen(f)) => crate::qwen_asr::find(f)
+            .is_some_and(|m| m.runtime != crate::qwen_asr::Runtime::NeuralEngine),
+        Some(_) => true,
+        None => false,
+    }
+}
+
+fn present(kind: Kind<'_>) -> bool {
+    match kind {
+        Kind::Whisper(f) => crate::local_stt::model_exists(f),
+        Kind::Llm(f) => crate::local_llm::model_exists(f),
+        Kind::Parakeet => crate::parakeet::active_bundle_present(),
+        Kind::Qwen(f) => crate::qwen_asr::bundle_present(f),
+    }
+}
+
 fn real_fetch(
     id: &str,
     progress: &(dyn Fn(u64, u64) + Sync),
@@ -352,13 +426,7 @@ fn real_fetch(
     // to one `.part` from different offsets.
     let slot = crate::ffi::model_download_slot(id);
     let _busy = slot.lock().unwrap_or_else(|e| e.into_inner());
-    let present = match kind {
-        Kind::Whisper(f) => crate::local_stt::model_exists(f),
-        Kind::Llm(f) => crate::local_llm::model_exists(f),
-        Kind::Parakeet => crate::parakeet::active_bundle_present(),
-        Kind::Qwen(f) => crate::qwen_asr::bundle_present(f),
-    };
-    if present {
+    if present(kind) {
         return Ok(());
     }
 
@@ -415,11 +483,87 @@ fn real_fetch(
     result
 }
 
+/// A file and the two a resumable download leaves beside it.
+fn with_partials(file: std::path::PathBuf) -> [std::path::PathBuf; 3] {
+    let name = file
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    assert!(!name.is_empty(), "model path has a file name");
+    let part = file.with_file_name(format!("{name}.part"));
+    let etag = file.with_file_name(format!("{name}.part.etag"));
+    [file, part, etag]
+}
+
+/// Ok(false) when nothing is there.
+fn remove_path(path: &std::path::Path) -> Result<bool, String> {
+    let result = match std::fs::symlink_metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => Err(e),
+        Ok(m) if m.is_dir() => std::fs::remove_dir_all(path),
+        Ok(_) => std::fs::remove_file(path),
+    };
+    result.map(|()| true).map_err(|e| {
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        if e.kind() == std::io::ErrorKind::PermissionDenied {
+            format!("{name} is in use; restart Dimmy and try again")
+        } else {
+            format!("{name}: {e}")
+        }
+    })
+}
+
+fn real_remove(id: &str) -> Result<bool, String> {
+    let kind = parse(id).expect("delete only accepts known ids");
+    assert!(is_deletable_id(id), "delete only accepts deletable ids");
+    let slot = crate::ffi::model_download_slot(id);
+    let _busy = slot.lock().unwrap_or_else(|e| e.into_inner());
+
+    // A loaded model holds its file open (llama.cpp maps it), and Windows
+    // refuses to delete an open file: drop it from memory first.
+    let mut paths: Vec<std::path::PathBuf> = Vec::new();
+    match kind {
+        Kind::Whisper(f) => {
+            crate::local_stt::clear_model_cache();
+            paths.extend(with_partials(crate::local_stt::model_path(f)));
+            paths.extend(crate::coreml_encoder::artifacts(f));
+        }
+        Kind::Llm(f) => {
+            crate::local_llm::clear_llm_cache();
+            paths.extend(with_partials(crate::local_llm::model_path(f)));
+        }
+        Kind::Qwen(f) => {
+            crate::qwen_asr::clear_model_cache();
+            let m = crate::qwen_asr::find(f).expect("parsed id is in the catalog");
+            for file in [m.model_file, m.mmproj_file] {
+                paths.extend(with_partials(crate::qwen_asr::file_path(file)));
+            }
+        }
+        // ONNX Runtime keeps its session for the process, so a loaded
+        // Parakeet on Windows reports "in use" until Dimmy restarts.
+        Kind::Parakeet => paths.extend(crate::parakeet::active_bundle_dir()),
+    }
+
+    let mut removed = false;
+    for path in &paths {
+        removed |= remove_path(path)?;
+    }
+    assert!(
+        !present(kind),
+        "{id} still present after its files were removed"
+    );
+    crate::log(&format!(
+        "[Download center] deleted {id} (removed={removed})"
+    ));
+    Ok(removed)
+}
+
 pub fn global() -> &'static Arc<Center> {
     static CENTER: OnceLock<Arc<Center>> = OnceLock::new();
     CENTER.get_or_init(|| {
         Center::new(
             Box::new(real_fetch),
+            Box::new(real_remove),
             Box::new(|payload| crate::ffi::emit_event(EVENT, payload)),
             vec![
                 Duration::from_secs(2),
@@ -443,6 +587,7 @@ mod tests {
         let sink = Arc::clone(&events);
         let c = Center::new(
             fetch,
+            Box::new(|_| Ok(false)),
             Box::new(move |p| sink.lock().unwrap().push(serde_json::from_str(p).unwrap())),
             backoff,
         );
@@ -695,5 +840,114 @@ mod tests {
         assert!(!is_known_id("../../evil.bin"));
         assert!(!is_known_id("qwen:nope.gguf"));
         assert!(!is_known_id(""));
+    }
+
+    fn center_with_remove(remove: Box<Remove>) -> (Arc<Center>, Events) {
+        let events: Events = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&events);
+        let c = Center::new(
+            Box::new(|_, _, _| Ok(())),
+            remove,
+            Box::new(move |p| sink.lock().unwrap().push(serde_json::from_str(p).unwrap())),
+            vec![],
+        );
+        (c, events)
+    }
+
+    #[test]
+    fn delete_removes_and_reports_deleted() {
+        let (c, events) = center_with_remove(Box::new(|_| Ok(true)));
+        assert_eq!(c.delete("m.bin"), Deleted::Removed);
+        let last = events.lock().unwrap().last().unwrap().clone();
+        assert_eq!(
+            last,
+            serde_json::json!({"id": "m.bin", "state": "deleted", "done": 0, "total": 0})
+        );
+    }
+
+    #[test]
+    fn delete_with_nothing_on_disk_still_clears_a_stale_job() {
+        let (c, events) = center_with_remove(Box::new(|_| Ok(false)));
+        c.enqueue("m.bin");
+        wait_terminal(&c, "m.bin");
+        assert_eq!(c.delete("m.bin"), Deleted::NothingOnDisk);
+        assert_eq!(states_of(&events, "m.bin").last().unwrap(), "deleted");
+    }
+
+    #[test]
+    fn delete_refuses_a_download_in_progress() {
+        let (gate_tx, gate_rx) = mpsc::channel::<()>();
+        let gate = Mutex::new(gate_rx);
+        let removes = Arc::new(Mutex::new(0));
+        let n = Arc::clone(&removes);
+        let events: Events = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&events);
+        let c = Center::new(
+            Box::new(move |_, _, _| {
+                gate.lock().unwrap().recv().ok();
+                Ok(())
+            }),
+            Box::new(move |_| {
+                *n.lock().unwrap() += 1;
+                Ok(true)
+            }),
+            Box::new(move |p| sink.lock().unwrap().push(serde_json::from_str(p).unwrap())),
+            vec![],
+        );
+        c.enqueue("m.bin");
+        assert_eq!(c.delete("m.bin"), Deleted::Busy);
+        assert_eq!(*removes.lock().unwrap(), 0, "nothing touched the disk");
+        gate_tx.send(()).unwrap();
+        wait_terminal(&c, "m.bin");
+        assert_eq!(states_of(&events, "m.bin").last().unwrap(), "done");
+    }
+
+    #[test]
+    fn a_failed_delete_keeps_the_state_and_truncates_the_reason() {
+        let (c, events) = center_with_remove(Box::new(|_| Err("y".repeat(500))));
+        let Deleted::Failed(reason) = c.delete("m.bin") else {
+            panic!("expected Failed");
+        };
+        assert_eq!(reason.chars().count(), ERROR_MAX_CHARS);
+        assert!(
+            events.lock().unwrap().is_empty(),
+            "no state change to report"
+        );
+    }
+
+    #[test]
+    fn remove_path_takes_files_and_folders_and_skips_what_is_absent() {
+        let root = std::env::temp_dir().join(format!("dimmy-dc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("bundle")).unwrap();
+        std::fs::write(root.join("bundle").join("a.onnx"), b"x").unwrap();
+        std::fs::write(root.join("m.bin.part"), b"x").unwrap();
+
+        assert_eq!(remove_path(&root.join("m.bin.part")), Ok(true));
+        assert_eq!(remove_path(&root.join("bundle")), Ok(true));
+        assert_eq!(remove_path(&root.join("never-there")), Ok(false));
+        assert!(!root.join("bundle").exists() && !root.join("m.bin.part").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn with_partials_covers_the_resume_files() {
+        let p = std::path::Path::new("models").join("m.bin");
+        let names: Vec<String> = with_partials(p)
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["m.bin", "m.bin.part", "m.bin.part.etag"]);
+    }
+
+    #[test]
+    fn neural_engine_qwen_is_not_deletable_here() {
+        for m in crate::qwen_asr::AVAILABLE_MODELS {
+            let id = format!("qwen:{}", m.model_file);
+            let fluid = m.runtime == crate::qwen_asr::Runtime::NeuralEngine;
+            assert_eq!(is_deletable_id(&id), !fluid, "{id}");
+        }
+        assert!(is_deletable_id(PARAKEET_ID));
+        assert!(!is_deletable_id("../../evil.bin"));
     }
 }

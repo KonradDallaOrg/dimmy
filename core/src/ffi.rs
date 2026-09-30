@@ -7636,6 +7636,41 @@ pub unsafe extern "C" fn dimmy_model_download_cancel(id_ptr: *const c_char) -> c
     0
 }
 
+/// Delete an On-device model from disk, partial download included; a loaded
+/// copy is dropped from memory first. Blocking (it waits for an inference in
+/// progress to finish): call it off the UI thread. On success hosts get a
+/// `model_download` event with state `deleted`.
+/// rc: 0 removed, 1 nothing was on disk, 2 queued/downloading (cancel first),
+/// -1 unknown id, -2 could not remove (in use / IO; see the log),
+/// -3 not deletable from Dimmy (Qwen on the Neural Engine, owned by FluidAudio).
+///
+/// # Safety
+/// `id_ptr` must be a valid null-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_model_delete(id_ptr: *const c_char) -> c_int {
+    if id_ptr.is_null() {
+        return -1;
+    }
+    let Ok(id) = CStr::from_ptr(id_ptr).to_str() else {
+        return -1;
+    };
+    if !crate::download_center::is_known_id(id) {
+        return -1;
+    }
+    if !crate::download_center::is_deletable_id(id) {
+        return -3;
+    }
+    match crate::download_center::global().delete(id) {
+        crate::download_center::Deleted::Removed => 0,
+        crate::download_center::Deleted::NothingOnDisk => 1,
+        crate::download_center::Deleted::Busy => 2,
+        crate::download_center::Deleted::Failed(e) => {
+            log(&format!("[Download center] delete {} failed: {}", id, e));
+            -2
+        }
+    }
+}
+
 /// Every job the center knows, as a JSON array of `model_download` payloads.
 /// Read once when a page opens; the events keep it current afterwards.
 /// rc: bytes written, -1 bad buffer.

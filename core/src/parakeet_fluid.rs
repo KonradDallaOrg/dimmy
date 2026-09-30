@@ -35,7 +35,7 @@ pub fn cache_dir() -> Option<PathBuf> {
 /// Specific Parakeet bundle subdir. FluidAudio writes the v3 CoreML
 /// model under `parakeet-tdt-0.6b-v3-coreml/`; if that exists with
 /// the expected `.mlmodelc` children we treat the bundle as present.
-fn parakeet_bundle_dir() -> Option<PathBuf> {
+pub fn parakeet_bundle_dir() -> Option<PathBuf> {
     cache_dir().map(|p| p.join("parakeet-tdt-0.6b-v3-coreml"))
 }
 
