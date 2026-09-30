@@ -69,7 +69,7 @@ public sealed partial class SettingsWindow
     private void OnModelDownloadChanged(ModelDownloadJob job)
     {
         if (_downloadIndicators.TryGetValue(job.Id, out var render)) render(job);
-        if (job.State == "done") RefreshDownloadedPickers();
+        if (job.State is "done" or "deleted") RefreshDownloadedPickers();
     }
 
     private void BuildProviderCards()
@@ -295,20 +295,28 @@ public sealed partial class SettingsWindow
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });             // on-disk indicator
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });             // delete
 
         // Leading on-disk indicator -- only for On-device rows, which carry a
         // LocalFilename. Green check when the file/bundle is present, a download
         // button otherwise, progress while the core's download center works on
         // it. Cloud rows leave LocalFilename null, so no indicator, no shift.
+        // The trailing delete button shows whenever something is on disk.
         if (m.LocalFilename is string file)
         {
             var slot = new ContentControl { VerticalAlignment = VerticalAlignment.Center };
-            void Render(ModelDownloadJob? job) =>
+            var deleteSlot = new ContentControl { VerticalAlignment = VerticalAlignment.Center };
+            void Render(ModelDownloadJob? job)
+            {
                 slot.Content = BuildDownloadIndicator(file, m.Name, job);
+                deleteSlot.Content = BuildDeleteButton(file, m.Name, job);
+            }
             Render(ModelDownloadCenter.Instance.Get(file));
             _downloadIndicators[file] = Render;
             Grid.SetColumn(slot, 0);
             row.Children.Add(slot);
+            Grid.SetColumn(deleteSlot, 3);
+            row.Children.Add(deleteSlot);
         }
 
         var name = new TextBlock
@@ -400,6 +408,58 @@ public sealed partial class SettingsWindow
             int rc = Interop.DimmyNative.dimmy_model_download_enqueue(id);
             if (rc < 0) App.Log($"[Providers] download enqueue refused for {id} rc={rc}", "Providers");
         });
+    }
+
+    /// <summary>Trash button for whatever of this model is on disk: the full
+    /// model, or the partial file a cancelled / failed download leaves for a
+    /// resume. Null while a download runs (cancel first) and for the Neural
+    /// Engine Qwen rows, whose files FluidAudio owns.</summary>
+    private FrameworkElement? BuildDeleteButton(string id, string modelName, ModelDownloadJob? job)
+    {
+        if (job is { IsActive: true } || id.StartsWith("qwen:fluid:", StringComparison.Ordinal)) return null;
+        bool complete = job?.State == "done" || job?.State != "deleted" && IsLocallyPresent(id);
+        bool partial = !complete && job?.State is "cancelled" or "failed";
+        if (!complete && !partial) return null;
+
+        var glyph = new FontIcon
+        {
+            Glyph = "", // Delete
+            FontSize = 12,
+            Foreground = ThemeBrush("TextFillColorSecondaryBrush"),
+        };
+        string what = complete ? "Delete" : "Discard partial download";
+        return IconButton(glyph, what, $"{what} of {modelName}", () => ConfirmDeleteModel(id, modelName, complete));
+    }
+
+    private async void ConfirmDeleteModel(string id, string modelName, bool complete)
+    {
+        var confirm = new ContentDialog
+        {
+            RequestedTheme = Dimmy.Windows.Helpers.ThemeHelper.ResolvedElementTheme(),
+            Title = complete ? $"Delete {modelName}?" : $"Discard the partial download of {modelName}?",
+            Content = complete
+                ? "The model is removed from this PC. You can download it again at any time."
+                : "The part already downloaded is removed; the next download starts from zero.",
+            PrimaryButtonText = complete ? "Delete" : "Discard",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = (this.Content as FrameworkElement)?.XamlRoot,
+        };
+        if ((await confirm.ShowAsync()) != ContentDialogResult.Primary) return;
+
+        // Blocking in the core: a loaded copy is dropped first, after any
+        // inference in progress. The row updates from the `deleted` event.
+        int rc = await System.Threading.Tasks.Task.Run(() => Interop.DimmyNative.dimmy_model_delete(id));
+        App.Log($"[Providers] delete {id} rc={rc}", "Providers");
+        if (rc != -2) return;
+        await new ContentDialog
+        {
+            RequestedTheme = Dimmy.Windows.Helpers.ThemeHelper.ResolvedElementTheme(),
+            Title = "Couldn't delete the model",
+            Content = $"{modelName} is in use. Restart Dimmy and try again.",
+            CloseButtonText = "OK",
+            XamlRoot = (this.Content as FrameworkElement)?.XamlRoot,
+        }.ShowAsync();
     }
 
     private static Button IconButton(UIElement content, string tooltip, string automationName, Action onClick)

@@ -419,6 +419,14 @@ public static class DimmyNative
     public static extern int dimmy_model_download_cancel(
         [MarshalAs(UnmanagedType.LPUTF8Str)] string id);
 
+    /// Delete an On-device model from disk, partial download included.
+    /// BLOCKING (drops a loaded copy first): call off the UI thread.
+    /// 0 removed, 1 nothing on disk, 2 queued/downloading, -1 unknown id,
+    /// -2 could not remove (in use), -3 not deletable from Dimmy.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_model_delete(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string id);
+
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_model_download_snapshot_json(byte[] outBuf, int bufLen);
 
