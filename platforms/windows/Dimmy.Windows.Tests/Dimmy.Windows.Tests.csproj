@@ -40,6 +40,7 @@
     <Compile Include="..\Dimmy.Windows\Services\BuildInfo.cs" Link="Services\BuildInfo.cs" />
     <Compile Include="..\Dimmy.Windows\Services\ModelCatalog.cs" Link="Services\ModelCatalog.cs" />
     <Compile Include="..\Dimmy.Windows\Services\ProviderCatalog.cs" Link="Services\ProviderCatalog.cs" />
+    <Compile Include="..\Dimmy.Windows\Services\ModelDownloadCenter.cs" Link="Services\ModelDownloadCenter.cs" />
     <Compile Include="..\Dimmy.Windows\Services\DictHotkeyParser.cs" Link="Services\DictHotkeyParser.cs" />
     <Compile Include="..\Dimmy.Windows\Services\DictFailureHints.cs" Link="Services\DictFailureHints.cs" />
     <Compile Include="..\Dimmy.Windows\Services\UpdateCheckMessages.cs" Link="Services\UpdateCheckMessages.cs" />
