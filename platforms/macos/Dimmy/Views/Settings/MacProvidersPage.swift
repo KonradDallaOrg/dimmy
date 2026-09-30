@@ -278,21 +278,13 @@ struct MacProvidersPage: View {
                             Divider().background(Color.macRowDivider).opacity(0.5)
                         }
                         HStack(spacing: 8) {
-                            // Leading on-disk indicator. Only fires when
-                            // `localFilename` is set (i.e. the local card) and
-                            // the matching file is present. A subtle dot
-                            // placeholder keeps the rows aligned even when no
-                            // model is downloaded yet.
+                            // Leading on-disk indicator, only on the local
+                            // card: green check when present, a download
+                            // button otherwise, progress while the core's
+                            // download center works on it. Mirrors Win
+                            // SettingsWindow.Providers.BuildDownloadIndicator.
                             if let file = model.localFilename {
-                                if isLocallyPresent(file) {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundStyle(.green)
-                                        .font(.system(size: 11))
-                                } else {
-                                    Image(systemName: "circle.dotted")
-                                        .foregroundStyle(Color.macTextSecondary.opacity(0.4))
-                                        .font(.system(size: 11))
-                                }
+                                downloadIndicator(file, name: model.name)
                             }
                             Text(model.name)
                                 .font(.system(size: 12))
@@ -315,6 +307,53 @@ struct MacProvidersPage: View {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .stroke(Color.macControlStroke, lineWidth: 0.5)
             )
+        }
+    }
+
+    @ViewBuilder
+    private func downloadIndicator(_ id: String, name: String) -> some View {
+        let job = appState.modelDownloads[id]
+        let failed = job?.state == "failed"
+        if job?.state == "done" || (!(job?.isActive ?? false) && !failed && isLocallyPresent(id)) {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+                .font(.system(size: 11))
+                .help("Downloaded")
+                .accessibilityLabel("\(name) downloaded")
+        } else if let job, job.isActive {
+            let status = job.state == "queued" ? "Queued"
+                : job.fraction.map { "\(Int($0 * 100))%" } ?? "\(job.done / 1_048_576) MB"
+            Button {
+                DimmyCore.shared.cancelModelDownload(id)
+            } label: {
+                HStack(spacing: 4) {
+                    if let f = job.fraction, job.state == "downloading" {
+                        ProgressView(value: f)
+                            .progressViewStyle(.circular)
+                            .controlSize(.mini)
+                    } else {
+                        ProgressView().controlSize(.mini)
+                    }
+                    Text(status)
+                        .font(.system(size: 10))
+                        .foregroundStyle(Color.macTextSecondary)
+                        .monospacedDigit()
+                }
+            }
+            .buttonStyle(.plain)
+            .help("\(status) · click to cancel")
+            .accessibilityLabel("Cancel download of \(name)")
+        } else {
+            Button {
+                DimmyCore.shared.enqueueModelDownload(id)
+            } label: {
+                Image(systemName: failed ? "arrow.clockwise.circle" : "arrow.down.circle")
+                    .foregroundStyle(failed ? Color.red : Color.macTextSecondary)
+                    .font(.system(size: 11))
+            }
+            .buttonStyle(.plain)
+            .help(failed ? "Download failed: \(job?.error ?? "unknown error"). Click to retry." : "Download")
+            .accessibilityLabel("Download \(name)")
         }
     }
 

@@ -992,6 +992,9 @@ struct MacOutputPage: View {
             appState.refreshClaudeCodeStatus()
             appState.refreshCodexStatus()
         }
+        .onChange(of: appState.modelDownloadsFinished) { _ in
+            refreshLocalLlmStatus()
+        }
     }
 
     private func refreshLocalLlmStatus() {

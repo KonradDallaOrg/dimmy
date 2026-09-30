@@ -1002,6 +1002,19 @@ final class DimmyCore {
         return result == 0
     }
 
+    // MARK: - Download center
+
+    /// 0 queued, 1 already queued/downloading, -1 unknown id. Non-blocking.
+    @discardableResult
+    func enqueueModelDownload(_ id: String) -> Int32 {
+        dimmy_model_download_enqueue(id)
+    }
+
+    @discardableResult
+    func cancelModelDownload(_ id: String) -> Int32 {
+        dimmy_model_download_cancel(id)
+    }
+
     // MARK: - Parakeet (alternative local STT backend)
 
     /// 1 = bundle complete on disk, 0 = missing or partial.
@@ -1469,6 +1482,12 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
            let total = payload["total"] as? Int,
            total > 0 {
             appState.diarizationDownloadProgress = Double(downloaded) / Double(total)
+        }
+
+    case "model_download":
+        if let job = ModelDownloadJob(payload) {
+            appState.modelDownloads[job.id] = job
+            if job.state == "done" { appState.modelDownloadsFinished += 1 }
         }
 
     case "qwen_asr_download_progress":
