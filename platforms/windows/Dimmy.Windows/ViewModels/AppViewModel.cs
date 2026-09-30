@@ -501,6 +501,9 @@ public partial class AppViewModel : ObservableObject
                         LlmModelDownloadProgress?.Invoke(fn, dl, tot);
                     }
                     break;
+                case "model_download":
+                    Services.ModelDownloadCenter.Instance.Apply(payload.GetRawText());
+                    break;
                 case "llm_stream":
                     {
                         // phase: start | delta | thinking | end.

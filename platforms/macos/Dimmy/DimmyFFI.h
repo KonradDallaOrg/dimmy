@@ -134,6 +134,28 @@ int32_t dimmy_qwen_asr_bundle_present(const char * _Nonnull model_file);
 /// numbers cover the pair. Returns 0=OK, -1=error.
 int32_t dimmy_qwen_asr_download(const char * _Nonnull model_file);
 
+// ── Download center (one queue for every on-device model) ───────────
+
+/// Queue a download of the On-device row `id` (whisper .bin, LLM .gguf,
+/// "parakeet:fp32", "qwen:<file>"). Non-blocking; state arrives as
+/// "model_download" events {id,state,done,total,error?}.
+/// Returns 0=queued, 1=already queued/downloading, -1=unknown id.
+int32_t dimmy_model_download_enqueue(const char * _Nonnull id);
+
+/// Cancel a queued or running download (the partial file stays for a
+/// resume). Returns 0=cancelled, -1=nothing to cancel.
+int32_t dimmy_model_download_cancel(const char * _Nonnull id);
+
+/// Delete an On-device model from disk, partial download included.
+/// BLOCKING (drops a loaded copy first): call off the main thread.
+/// Returns 0=removed, 1=nothing on disk, 2=queued/downloading,
+/// -1=unknown id, -2=could not remove (in use), -3=not deletable from Dimmy.
+int32_t dimmy_model_delete(const char * _Nonnull id);
+
+/// JSON array of every job, same shape as the event payload. Returns
+/// bytes written or -1.
+int32_t dimmy_model_download_snapshot_json(char * _Nonnull out_buf, int32_t buf_len);
+
 // ── Parakeet TDT v3 FP32 (alternative local STT backend) ────────────
 
 /// 1 = the Parakeet FP32 bundle (~2.5 GB) is fully on disk, 0 otherwise.

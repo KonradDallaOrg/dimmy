@@ -192,6 +192,33 @@ struct FileTranscribeProgress: Equatable {
     var stage: String? = nil
 }
 
+/// One on-device model download as the core reports it (`model_download`
+/// event / snapshot entry). Mirror of Win `ModelDownloadJob`.
+struct ModelDownloadJob: Equatable {
+    let id: String
+    /// queued | downloading | done | failed | cancelled
+    let state: String
+    let done: Int64
+    let total: Int64
+    let error: String?
+
+    var isActive: Bool { state == "queued" || state == "downloading" }
+
+    /// nil while the size is unknown: show an indeterminate spinner.
+    var fraction: Double? { total > 0 ? min(1.0, Double(done) / Double(total)) : nil }
+
+    init?(_ payload: [String: Any]) {
+        guard let id = payload["id"] as? String, !id.isEmpty,
+              let state = payload["state"] as? String, !state.isEmpty
+        else { return nil }
+        self.id = id
+        self.state = state
+        self.done = (payload["done"] as? NSNumber)?.int64Value ?? 0
+        self.total = (payload["total"] as? NSNumber)?.int64Value ?? 0
+        self.error = payload["error"] as? String
+    }
+}
+
 enum AppTheme: String, CaseIterable {
     case auto = "Auto"
     case light = "Light"
@@ -1468,6 +1495,16 @@ final class AppState: ObservableObject {
     @Published var telegramHasCredentials: Bool = false
     /// Last worker error (from `telegram_error`), shown inline in Settings.
     @Published var telegramError: String?
+
+    // MARK: - Download center
+
+    /// Last `model_download` state per On-device id, mirrored from the
+    /// core's queue so a download keeps its progress across pages.
+    @Published var modelDownloads: [String: ModelDownloadJob] = [:]
+
+    /// Bumped each time a model lands on disk or is deleted, so pickers
+    /// re-read the disk once per model rather than on every progress tick.
+    @Published var modelFilesChanged: Int = 0
 
     // MARK: - whisper Core ML encoder preparation
 

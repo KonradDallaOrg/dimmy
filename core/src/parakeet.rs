@@ -189,6 +189,20 @@ pub fn active_bundle_present() -> bool {
     bundle_present()
 }
 
+/// Where the active backend's bundle lives; the folder a delete removes.
+pub fn active_bundle_dir() -> Option<PathBuf> {
+    #[cfg(all(
+        feature = "local-stt-parakeet-fluid",
+        target_os = "macos",
+        target_arch = "aarch64"
+    ))]
+    {
+        return crate::parakeet_fluid::parakeet_bundle_dir();
+    }
+    #[allow(unreachable_code)]
+    bundle_dir()
+}
+
 /// Download the bundle for the active backend. Mirrors `transcribe`
 /// dispatch — fluid on Mac (when wired), ort otherwise. Progress is
 /// emitted as `(downloaded_bytes, total_bytes)`; fluid only emits

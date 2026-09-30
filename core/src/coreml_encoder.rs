@@ -99,6 +99,26 @@ pub fn bundle_name(model_filename: &str) -> String {
         .unwrap_or_default()
 }
 
+/// What deleting `model_filename` takes with it: always its GPU alias (a hard
+/// link, so the disk is only freed once it goes too); the encoder bundle and
+/// its marker only when no other downloaded quantisation still shares them.
+/// Paths that don't exist (every one of them off macOS) cost nothing.
+pub fn artifacts(model_filename: &str) -> Vec<PathBuf> {
+    let model = crate::local_stt::model_path(model_filename);
+    let mut out: Vec<PathBuf> = gpu_alias(&model).into_iter().collect();
+    let bundle = bundle_path(model_filename);
+    let shared = crate::local_stt::AVAILABLE_MODELS.iter().any(|m| {
+        m.filename != model_filename
+            && bundle_path(m.filename) == bundle
+            && crate::local_stt::model_exists(m.filename)
+    });
+    if !shared {
+        out.push(prepared_marker(model_filename));
+        out.push(bundle);
+    }
+    out
+}
+
 /// Written beside the bundle (never inside it) once macOS has compiled it.
 fn prepared_marker(model_filename: &str) -> PathBuf {
     bundle_path(model_filename).with_extension("prepared")

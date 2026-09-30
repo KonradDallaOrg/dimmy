@@ -62,6 +62,15 @@ One place for every multi-GB model download (LLM GGUF, whisper ggml/GGUF, parake
 - **Integrity:** HuggingFace LFS serves each file's SHA-256 as the (`X-Linked-`)`ETag` → captured and compared after download (streamed in 1 MiB chunks, never buffered whole), plus optional magic-byte prefixes. On ANY integrity/size failure the `.part` is DELETED so the retry restarts clean instead of resuming corruption.
 - `sha2` is a **non-optional** dependency so the check runs in every build (incl. the frozen Windows feature set, which has no `license-client`).
 
+## `download_center.rs` — one queue for every on-device model
+
+- FFI: `dimmy_model_download_enqueue(id)` (0 queued / 1 already active / -1 unknown id), `_cancel(id)`, `_snapshot_json(buf,len)`. Ids are the On-device row ids: whisper `.bin`, LLM `.gguf`, `parakeet:fp32`, `qwen:<file>` — anything outside the catalogs is refused (the id becomes a path).
+- One worker thread, FIFO, exits when idle. Each job: presence check → the existing per-kind download fn (so `download.rs` resume applies) → up to 3 retries (2 s / 8 s / 30 s). Cancel drops the running future via `tokio::select!`; the `.part` stays for the next try.
+- Emits `model_download` `{"id","state","done","total","error"?}` on every state change and at most once per percent (per MiB when the size is unknown). Emitted outside the state lock, serialized by `emit_order`, so a host may read the snapshot from inside its callback.
+- Shares `ffi::model_download_slot(id)` with the per-page download FFIs, so the two paths can never append to one `.part` from different offsets.
+- `dimmy_model_delete(id)` (0 removed / 1 nothing on disk / 2 queued-or-downloading / -1 unknown / -2 could not remove / -3 not deletable): drops a loaded copy first (whisper, LLM, Qwen caches — llama.cpp maps its file and Windows refuses to delete an open one), then removes the model, its `.part` + `.part.etag`, and on Mac the CoreML GPU alias + encoder bundle when no other quantisation shares it. Blocking; emits state `deleted`. Parakeet ORT keeps its session for the process, so a loaded Parakeet on Windows answers -2 until restart. Qwen on the Neural Engine is -3: FluidAudio owns those folders.
+- Hosts: Win `Services/ModelDownloadCenter.cs` (fed by `AppViewModel.HandleEvent`), Providers page On-device rows.
+
 ## `llm.rs` — post-processing router
 
 - Two entry points: `process_text` (dictation enhancement — style + tone + translate, wraps the text in `[TRANSCRIPTION]` and applies `build_system_prompt`) and `process_raw_prompt` (command mode + meeting recap — sends the caller's prompt verbatim). Local mirrors live in `local_llm.rs`.

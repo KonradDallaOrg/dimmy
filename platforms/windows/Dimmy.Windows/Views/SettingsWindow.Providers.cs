@@ -53,7 +53,23 @@ public sealed partial class SettingsWindow
     {
         if (_providerCardsBuilt) return;
         _providerCardsBuilt = true;
+        // Downloads started before this window opened are already in the
+        // center; the snapshot covers the (theoretical) case of a job the
+        // host never saw an event for.
+        ModelDownloadCenter.Instance.LoadSnapshot(Interop.DimmyNative.ModelDownloadSnapshotJson());
+        ModelDownloadCenter.Instance.Changed += OnModelDownloadChanged;
+        Closed += (_, _) => ModelDownloadCenter.Instance.Changed -= OnModelDownloadChanged;
         BuildProviderCards();
+    }
+
+    /// <summary>Row re-renderers keyed by download id, rebuilt with the cards.</summary>
+    private readonly System.Collections.Generic.Dictionary<string, Action<ModelDownloadJob?>> _downloadIndicators =
+        new(StringComparer.Ordinal);
+
+    private void OnModelDownloadChanged(ModelDownloadJob job)
+    {
+        if (_downloadIndicators.TryGetValue(job.Id, out var render)) render(job);
+        if (job.State is "done" or "deleted") RefreshDownloadedPickers();
     }
 
     private void BuildProviderCards()
@@ -70,6 +86,7 @@ public sealed partial class SettingsWindow
             _ => ProviderCardsHost.ActualTheme == ElementTheme.Dark, // "Default" = follow system
         };
         ProviderCardsHost.Children.Clear();
+        _downloadIndicators.Clear();
 
         foreach (var p in ProviderCatalog.All)
             ProviderCardsHost.Children.Add(BuildProviderCard(p));
@@ -278,24 +295,28 @@ public sealed partial class SettingsWindow
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });             // on-disk indicator
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });             // delete
 
         // Leading on-disk indicator -- only for On-device rows, which carry a
-        // LocalFilename. Green check when the file/bundle is present, a faint
-        // download glyph otherwise, so the list reads which models are already
-        // downloaded at a glance. Mirrors MacProvidersPage + the Voice/Output
-        // pickers. Cloud rows leave LocalFilename null, so no indicator, no shift.
+        // LocalFilename. Green check when the file/bundle is present, a download
+        // button otherwise, progress while the core's download center works on
+        // it. Cloud rows leave LocalFilename null, so no indicator, no shift.
+        // The trailing delete button shows whenever something is on disk.
         if (m.LocalFilename is string file)
         {
-            bool present = IsLocallyPresent(file);
-            var dot = new FontIcon
+            var slot = new ContentControl { VerticalAlignment = VerticalAlignment.Center };
+            var deleteSlot = new ContentControl { VerticalAlignment = VerticalAlignment.Center };
+            void Render(ModelDownloadJob? job)
             {
-                Glyph = present ? "" : "", // CheckMark : Download
-                FontSize = 12,
-                Foreground = present ? SolidBrush(OkColor) : ThemeBrush("TextFillColorSecondaryBrush"),
-                VerticalAlignment = VerticalAlignment.Center,
-            };
-            Grid.SetColumn(dot, 0);
-            row.Children.Add(dot);
+                slot.Content = BuildDownloadIndicator(file, m.Name, job);
+                deleteSlot.Content = BuildDeleteButton(file, m.Name, job);
+            }
+            Render(ModelDownloadCenter.Instance.Get(file));
+            _downloadIndicators[file] = Render;
+            Grid.SetColumn(slot, 0);
+            row.Children.Add(slot);
+            Grid.SetColumn(deleteSlot, 3);
+            row.Children.Add(deleteSlot);
         }
 
         var name = new TextBlock
@@ -321,6 +342,161 @@ public sealed partial class SettingsWindow
         Grid.SetColumn(badges, 2);
         row.Children.Add(badges);
         return row;
+    }
+
+    /// <summary>The leading control of an On-device row for one download
+    /// state: check (on disk), download button (absent or cancelled), ring +
+    /// percent with click-to-cancel (queued / downloading), retry (failed).</summary>
+    private FrameworkElement BuildDownloadIndicator(string id, string modelName, ModelDownloadJob? job)
+    {
+        bool failed = job?.State == "failed";
+        bool present = job?.State == "done" || job is not { IsActive: true } && !failed && IsLocallyPresent(id);
+        if (present)
+        {
+            var check = new FontIcon
+            {
+                Glyph = "", // CheckMark
+                FontSize = 12,
+                Foreground = SolidBrush(OkColor),
+            };
+            ToolTipService.SetToolTip(check, "Downloaded");
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(check, $"{modelName} downloaded");
+            return check;
+        }
+
+        if (job is { IsActive: true })
+        {
+            var ring = new ProgressRing
+            {
+                Width = 16,
+                Height = 16,
+                MinWidth = 16,
+                MinHeight = 16,
+                IsActive = true,
+                IsIndeterminate = job.State == "queued" || job.Percent is null,
+                Value = job.Percent ?? 0,
+            };
+            string status = job.State == "queued" ? "Queued"
+                : job.Percent is double pct ? $"{pct:F0}%"
+                : FormatDownloadedMb(job.Done);
+            var cancel = IconButton(ring, $"{status} · click to cancel", $"Cancel download of {modelName}",
+                () => Interop.DimmyNative.dimmy_model_download_cancel(id));
+            var panel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+            panel.Children.Add(cancel);
+            panel.Children.Add(new TextBlock
+            {
+                Text = status,
+                FontSize = 11,
+                MinWidth = 30,
+                VerticalAlignment = VerticalAlignment.Center,
+                Foreground = ThemeBrush("TextFillColorSecondaryBrush"),
+            });
+            return panel;
+        }
+
+        var glyph = new FontIcon
+        {
+            Glyph = failed ? "" : "", // Refresh : Download
+            FontSize = 12,
+            Foreground = failed ? SolidBrush(ErrColor) : ThemeBrush("TextFillColorSecondaryBrush"),
+        };
+        string tip = failed
+            ? $"Download failed: {job!.Error ?? "unknown error"}. Click to retry."
+            : "Download";
+        return IconButton(glyph, tip, $"Download {modelName}", () =>
+        {
+            int rc = Interop.DimmyNative.dimmy_model_download_enqueue(id);
+            if (rc < 0) App.Log($"[Providers] download enqueue refused for {id} rc={rc}", "Providers");
+        });
+    }
+
+    /// <summary>Trash button for whatever of this model is on disk: the full
+    /// model, or the partial file a cancelled / failed download leaves for a
+    /// resume. Null while a download runs (cancel first) and for the Neural
+    /// Engine Qwen rows, whose files FluidAudio owns.</summary>
+    private FrameworkElement? BuildDeleteButton(string id, string modelName, ModelDownloadJob? job)
+    {
+        if (job is { IsActive: true } || id.StartsWith("qwen:fluid:", StringComparison.Ordinal)) return null;
+        bool complete = job?.State == "done" || job?.State != "deleted" && IsLocallyPresent(id);
+        bool partial = !complete && job?.State is "cancelled" or "failed";
+        if (!complete && !partial) return null;
+
+        var glyph = new FontIcon
+        {
+            Glyph = "", // Delete
+            FontSize = 12,
+            Foreground = ThemeBrush("TextFillColorSecondaryBrush"),
+        };
+        string what = complete ? "Delete" : "Discard partial download";
+        return IconButton(glyph, what, $"{what} of {modelName}", () => ConfirmDeleteModel(id, modelName, complete));
+    }
+
+    private async void ConfirmDeleteModel(string id, string modelName, bool complete)
+    {
+        var confirm = new ContentDialog
+        {
+            RequestedTheme = Dimmy.Windows.Helpers.ThemeHelper.ResolvedElementTheme(),
+            Title = complete ? $"Delete {modelName}?" : $"Discard the partial download of {modelName}?",
+            Content = complete
+                ? "The model is removed from this PC. You can download it again at any time."
+                : "The part already downloaded is removed; the next download starts from zero.",
+            PrimaryButtonText = complete ? "Delete" : "Discard",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = (this.Content as FrameworkElement)?.XamlRoot,
+        };
+        if ((await confirm.ShowAsync()) != ContentDialogResult.Primary) return;
+
+        // Blocking in the core: a loaded copy is dropped first, after any
+        // inference in progress. The row updates from the `deleted` event.
+        int rc = await System.Threading.Tasks.Task.Run(() => Interop.DimmyNative.dimmy_model_delete(id));
+        App.Log($"[Providers] delete {id} rc={rc}", "Providers");
+        if (rc != -2) return;
+        await new ContentDialog
+        {
+            RequestedTheme = Dimmy.Windows.Helpers.ThemeHelper.ResolvedElementTheme(),
+            Title = "Couldn't delete the model",
+            Content = $"{modelName} is in use. Restart Dimmy and try again.",
+            CloseButtonText = "OK",
+            XamlRoot = (this.Content as FrameworkElement)?.XamlRoot,
+        }.ShowAsync();
+    }
+
+    private static Button IconButton(UIElement content, string tooltip, string automationName, Action onClick)
+    {
+        var btn = new Button
+        {
+            Content = content,
+            Padding = new Thickness(4),
+            MinWidth = 0,
+            MinHeight = 0,
+            Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
+            BorderThickness = new Thickness(0),
+        };
+        ToolTipService.SetToolTip(btn, tooltip);
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(btn, automationName);
+        btn.Click += (_, _) => onClick();
+        return btn;
+    }
+
+    private static string FormatDownloadedMb(long bytes) => $"{bytes / (1024.0 * 1024.0):F0} MB";
+
+    /// <summary>A model landed: the Voice / Output pickers mark downloaded
+    /// models, and the Download button under them depends on it. Selection
+    /// handlers are muted — re-selecting the same item must not re-run the
+    /// "user picked a backend" side effects (it turns chunk streaming on).</summary>
+    private void RefreshDownloadedPickers()
+    {
+        bool wasLoaded = _loaded;
+        _loaded = false;
+        try
+        {
+            PopulateLocalModels();
+            PopulateLocalLlmModels();
+        }
+        finally { _loaded = wasLoaded; }
+        CheckModelStatus();
+        CheckLlmModelStatus();
     }
 
     /// <summary>On-disk presence for a local-provider model. Whisper files go
