@@ -331,12 +331,18 @@ struct MacProvidersPage: View {
                 DimmyCore.shared.cancelModelDownload(id)
             } label: {
                 HStack(spacing: 4) {
-                    if let f = job.fraction, job.state == "downloading" {
-                        ProgressView(value: f)
-                            .progressViewStyle(.circular)
-                            .controlSize(.mini)
-                    } else {
-                        ProgressView().controlSize(.mini)
+                    ZStack {
+                        if let f = job.fraction, job.state == "downloading" {
+                            ProgressView(value: f)
+                                .progressViewStyle(.circular)
+                                .controlSize(.mini)
+                        } else {
+                            ProgressView().controlSize(.mini)
+                        }
+                        // Stop square inside the ring, so the ring reads as a button.
+                        RoundedRectangle(cornerRadius: 1)
+                            .fill(Color.macTextSecondary)
+                            .frame(width: 4, height: 4)
                     }
                     Text(status)
                         .font(.system(size: 10))
