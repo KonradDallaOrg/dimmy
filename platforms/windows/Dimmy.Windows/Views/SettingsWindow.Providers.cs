@@ -379,7 +379,21 @@ public sealed partial class SettingsWindow
         public ActiveDownload(string id, string modelName, ModelDownloadJob job, Brush statusBrush)
         {
             _status.Foreground = statusBrush;
-            _cancel = IconButton(_ring, "", $"Cancel download of {modelName}", () =>
+            // Stop square inside the ring, so the ring reads as a button.
+            var stop = new Rectangle
+            {
+                Width = 6,
+                Height = 6,
+                RadiusX = 1,
+                RadiusY = 1,
+                Fill = statusBrush,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            var ringWithStop = new Grid();
+            ringWithStop.Children.Add(_ring);
+            ringWithStop.Children.Add(stop);
+            _cancel = IconButton(ringWithStop, "", $"Cancel download of {modelName}", () =>
             {
                 int rc = Interop.DimmyNative.dimmy_model_download_cancel(id);
                 App.Log($"[Providers] cancel {id} rc={rc}", "Providers");
