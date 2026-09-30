@@ -7088,7 +7088,7 @@ pub unsafe extern "C" fn dimmy_download_model(filename_ptr: *const c_char) -> c_
 static MODEL_DOWNLOAD_SLOTS: OnceLock<Mutex<std::collections::HashMap<String, Arc<Mutex<()>>>>> =
     OnceLock::new();
 
-fn model_download_slot(filename: &str) -> Arc<Mutex<()>> {
+pub(crate) fn model_download_slot(filename: &str) -> Arc<Mutex<()>> {
     let map = MODEL_DOWNLOAD_SLOTS.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
     let mut guard = map.lock().unwrap_or_else(|e| e.into_inner());
     Arc::clone(
@@ -7283,6 +7283,12 @@ pub unsafe extern "C" fn dimmy_download_llm_model(filename_ptr: *const c_char) -
         }
     };
 
+    let slot = model_download_slot(&filename);
+    let _busy = slot.lock().unwrap_or_else(|e| e.into_inner());
+    if crate::local_llm::model_exists(&filename) {
+        return 0;
+    }
+
     let fname_clone = filename.clone();
     let rt = tokio::runtime::Runtime::new().unwrap();
     let result = rt.block_on(crate::local_llm::download_model(
@@ -7361,6 +7367,11 @@ pub extern "C" fn dimmy_parakeet_bundle_present() -> c_int {
 /// on -1 also emits an `error` event with a short message.
 #[no_mangle]
 pub extern "C" fn dimmy_parakeet_download_bundle() -> c_int {
+    let slot = model_download_slot(crate::download_center::PARAKEET_ID);
+    let _busy = slot.lock().unwrap_or_else(|e| e.into_inner());
+    if crate::parakeet::active_bundle_present() {
+        return 0;
+    }
     let Ok(rt) = tokio::runtime::Runtime::new() else {
         return -1;
     };
@@ -7546,6 +7557,11 @@ pub unsafe extern "C" fn dimmy_qwen_asr_download(model_ptr: *const c_char) -> c_
         return -1;
     };
     let model = model.to_string();
+    let slot = model_download_slot(&format!("qwen:{}", model));
+    let _busy = slot.lock().unwrap_or_else(|e| e.into_inner());
+    if crate::qwen_asr::bundle_present(&model) {
+        return 0;
+    }
     let reported = model.clone();
     let Ok(rt) = tokio::runtime::Runtime::new() else {
         return -1;
@@ -7572,6 +7588,61 @@ pub unsafe extern "C" fn dimmy_qwen_asr_download(model_ptr: *const c_char) -> c_
             -1
         }
     }
+}
+
+// -- Download center (one queue for every on-device model) ------------
+
+/// Queue a download of the on-device model `id` (the On-device row id: a
+/// whisper `.bin`, an LLM `.gguf`, `parakeet:fp32` or `qwen:<file>`).
+/// Non-blocking. State arrives as `model_download` events
+/// (`{"id","state","done","total","error"?}`). rc: 0 queued, 1 already
+/// queued or downloading, -1 bad or unknown id.
+///
+/// # Safety
+/// `id_ptr` must be a valid null-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_model_download_enqueue(id_ptr: *const c_char) -> c_int {
+    if id_ptr.is_null() {
+        return -1;
+    }
+    let Ok(id) = CStr::from_ptr(id_ptr).to_str() else {
+        return -1;
+    };
+    if !crate::download_center::is_known_id(id) {
+        return -1;
+    }
+    match crate::download_center::global().enqueue(id) {
+        crate::download_center::Enqueued::New => 0,
+        crate::download_center::Enqueued::AlreadyActive => 1,
+    }
+}
+
+/// Cancel a queued or running download. The partial file stays, so a later
+/// enqueue resumes it. rc: 0 cancelled, -1 nothing to cancel under `id`.
+///
+/// # Safety
+/// `id_ptr` must be a valid null-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_model_download_cancel(id_ptr: *const c_char) -> c_int {
+    if id_ptr.is_null() {
+        return -1;
+    }
+    let Ok(id) = CStr::from_ptr(id_ptr).to_str() else {
+        return -1;
+    };
+    if id.is_empty() || !crate::download_center::global().cancel(id) {
+        return -1;
+    }
+    0
+}
+
+/// Every job the center knows, as a JSON array of `model_download` payloads.
+/// Read once when a page opens; the events keep it current afterwards.
+/// rc: bytes written, -1 bad buffer.
+#[no_mangle]
+pub extern "C" fn dimmy_model_download_snapshot_json(buf: *mut c_char, buf_len: c_int) -> c_int {
+    let json = crate::download_center::global().snapshot_json();
+    write_to_buf(&json, buf, buf_len)
 }
 
 /// Transcribe a 16 kHz mono f32 PCM buffer with Parakeet. Writes the

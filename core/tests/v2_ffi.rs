@@ -42,7 +42,8 @@ use dimmy_lib::ffi::{
     dimmy_history_update_enhanced, dimmy_history_update_word_timestamps,
     dimmy_hotkey_combos_conflict, dimmy_hotkey_set_command, dimmy_hotkey_take_command_event,
     dimmy_init, dimmy_llm_call_raw, dimmy_meeting_is_active, dimmy_meeting_save_post_process,
-    dimmy_model_catalog_json, dimmy_push_loopback_audio, dimmy_set_app_context,
+    dimmy_model_catalog_json, dimmy_model_download_cancel, dimmy_model_download_enqueue,
+    dimmy_model_download_snapshot_json, dimmy_push_loopback_audio, dimmy_set_app_context,
     dimmy_set_config_json, dimmy_set_loopback_sample_rate, dimmy_transcribe_file,
     dimmy_user_dict_add, dimmy_user_dict_list_json, dimmy_user_dict_remove,
 };
@@ -1619,5 +1620,41 @@ fn hardware_json_truncates_safely_into_a_buffer_too_small_to_hold_it() {
     assert!(
         serde_json::from_str::<serde_json::Value>(partial).is_err(),
         "a truncated payload must not parse as JSON: {partial}"
+    );
+}
+
+#[test]
+#[serial]
+fn model_download_center_refuses_what_it_cannot_download() {
+    // No real download here: every path below is refused before the queue.
+    ensure_init();
+    let unknown = CString::new("../../not-a-model.bin").unwrap();
+    assert_eq!(
+        unsafe { dimmy_model_download_enqueue(unknown.as_ptr()) },
+        -1
+    );
+    assert_eq!(
+        unsafe { dimmy_model_download_enqueue(std::ptr::null()) },
+        -1
+    );
+    assert_eq!(unsafe { dimmy_model_download_cancel(unknown.as_ptr()) }, -1);
+    assert_eq!(unsafe { dimmy_model_download_cancel(std::ptr::null()) }, -1);
+
+    let mut buf = vec![0u8; 4096];
+    let rc =
+        dimmy_model_download_snapshot_json(buf.as_mut_ptr() as *mut c_char, buf.len() as c_int);
+    assert!(rc >= 2, "snapshot rc {rc}");
+    let json = unsafe { CStr::from_ptr(buf.as_ptr() as *const c_char) }
+        .to_str()
+        .unwrap();
+    let snap: serde_json::Value = serde_json::from_str(json).expect("snapshot is JSON");
+    assert!(snap
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|j| j["id"] != "../../not-a-model.bin"));
+    assert_eq!(
+        dimmy_model_download_snapshot_json(std::ptr::null_mut(), 0),
+        -1
     );
 }

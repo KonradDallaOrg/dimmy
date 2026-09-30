@@ -28,6 +28,7 @@ pub mod dfn;
 pub mod dfn3;
 pub mod diarize;
 pub mod download;
+pub mod download_center;
 pub mod error;
 pub mod ffi;
 pub mod filler;
