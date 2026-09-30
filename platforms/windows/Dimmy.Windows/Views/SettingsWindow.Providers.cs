@@ -306,9 +306,19 @@ public sealed partial class SettingsWindow
         {
             var slot = new ContentControl { VerticalAlignment = VerticalAlignment.Center };
             var deleteSlot = new ContentControl { VerticalAlignment = VerticalAlignment.Center };
+            ActiveDownload? active = null;
             void Render(ModelDownloadJob? job)
             {
-                slot.Content = BuildDownloadIndicator(file, m.Name, job);
+                // Progress arrives up to once per percent, every ~100 ms on a
+                // fast link. Rebuilding the cancel button that often swaps it
+                // out between press and release, so its click never lands.
+                if (job is { IsActive: true } && active is not null)
+                {
+                    active.Update(job);
+                    return;
+                }
+                active = job is { IsActive: true } ? new ActiveDownload(file, m.Name, job, ThemeBrush("TextFillColorSecondaryBrush")) : null;
+                slot.Content = active?.Root ?? BuildDownloadIndicator(file, m.Name, job);
                 deleteSlot.Content = BuildDeleteButton(file, m.Name, job);
             }
             Render(ModelDownloadCenter.Instance.Get(file));
@@ -344,9 +354,55 @@ public sealed partial class SettingsWindow
         return row;
     }
 
-    /// <summary>The leading control of an On-device row for one download
-    /// state: check (on disk), download button (absent or cancelled), ring +
-    /// percent with click-to-cancel (queued / downloading), retry (failed).</summary>
+    /// <summary>Ring + percent with click-to-cancel for a queued / downloading
+    /// model. Built once per download and updated in place.</summary>
+    private sealed class ActiveDownload
+    {
+        private readonly ProgressRing _ring = new()
+        {
+            Width = 16,
+            Height = 16,
+            MinWidth = 16,
+            MinHeight = 16,
+            IsActive = true,
+        };
+        private readonly TextBlock _status = new()
+        {
+            FontSize = 11,
+            MinWidth = 30,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        private readonly Button _cancel;
+
+        public StackPanel Root { get; } = new() { Orientation = Orientation.Horizontal, Spacing = 6 };
+
+        public ActiveDownload(string id, string modelName, ModelDownloadJob job, Brush statusBrush)
+        {
+            _status.Foreground = statusBrush;
+            _cancel = IconButton(_ring, "", $"Cancel download of {modelName}", () =>
+            {
+                int rc = Interop.DimmyNative.dimmy_model_download_cancel(id);
+                App.Log($"[Providers] cancel {id} rc={rc}", "Providers");
+            });
+            Root.Children.Add(_cancel);
+            Root.Children.Add(_status);
+            Update(job);
+        }
+
+        public void Update(ModelDownloadJob job)
+        {
+            _ring.IsIndeterminate = job.State == "queued" || job.Percent is null;
+            _ring.Value = job.Percent ?? 0;
+            _status.Text = job.State == "queued" ? "Queued"
+                : job.Percent is double pct ? $"{pct:F0}%"
+                : FormatDownloadedMb(job.Done);
+            ToolTipService.SetToolTip(_cancel, $"{_status.Text} · click to cancel");
+        }
+    }
+
+    /// <summary>The leading control of an On-device row when no download is
+    /// running: check (on disk), download button (absent or cancelled),
+    /// retry (failed).</summary>
     private FrameworkElement BuildDownloadIndicator(string id, string modelName, ModelDownloadJob? job)
     {
         bool failed = job?.State == "failed";
@@ -362,36 +418,6 @@ public sealed partial class SettingsWindow
             ToolTipService.SetToolTip(check, "Downloaded");
             Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(check, $"{modelName} downloaded");
             return check;
-        }
-
-        if (job is { IsActive: true })
-        {
-            var ring = new ProgressRing
-            {
-                Width = 16,
-                Height = 16,
-                MinWidth = 16,
-                MinHeight = 16,
-                IsActive = true,
-                IsIndeterminate = job.State == "queued" || job.Percent is null,
-                Value = job.Percent ?? 0,
-            };
-            string status = job.State == "queued" ? "Queued"
-                : job.Percent is double pct ? $"{pct:F0}%"
-                : FormatDownloadedMb(job.Done);
-            var cancel = IconButton(ring, $"{status} · click to cancel", $"Cancel download of {modelName}",
-                () => Interop.DimmyNative.dimmy_model_download_cancel(id));
-            var panel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
-            panel.Children.Add(cancel);
-            panel.Children.Add(new TextBlock
-            {
-                Text = status,
-                FontSize = 11,
-                MinWidth = 30,
-                VerticalAlignment = VerticalAlignment.Center,
-                Foreground = ThemeBrush("TextFillColorSecondaryBrush"),
-            });
-            return panel;
         }
 
         var glyph = new FontIcon
@@ -423,7 +449,7 @@ public sealed partial class SettingsWindow
 
         var glyph = new FontIcon
         {
-            Glyph = "", // Delete
+            Glyph = "", // Delete
             FontSize = 12,
             Foreground = ThemeBrush("TextFillColorSecondaryBrush"),
         };
