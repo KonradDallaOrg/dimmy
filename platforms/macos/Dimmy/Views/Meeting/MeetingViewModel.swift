@@ -46,8 +46,14 @@ final class MeetingViewModel: ObservableObject {
     @Published var chunkSummary: String = ""
     @Published var isPaused: Bool = false
     static let liveAmplitudeBarCount: Int = 56
-    @Published var liveAmplitudeBars: [MeetingAmplitudeSample] =
-        Array(repeating: .zero, count: MeetingViewModel.liveAmplitudeBarCount)
+    /// The live waveform, in an object of its own: it changes 12 times a
+    /// second, and as a @Published of this view model every tick re-laid out
+    /// the whole meeting window (a fifth of the main thread, measured).
+    let liveAmplitude = LiveAmplitude(count: MeetingViewModel.liveAmplitudeBarCount)
+    var liveAmplitudeBars: [MeetingAmplitudeSample] {
+        get { liveAmplitude.bars }
+        set { liveAmplitude.bars = newValue }
+    }
 
     // ── Sidebar ────────────────────────────────────────────────────
     @Published var historyRows: [MeetingHistoryRow] = []
@@ -457,9 +463,7 @@ final class MeetingViewModel: ObservableObject {
     /// system-audio level. Used to gate the second band in the recording
     /// view: mic-only meetings stay single-band rather than rendering an
     /// always-empty lower half.
-    var systemAudioActive: Bool {
-        liveAmplitudeBars.contains { $0.system > 0.001 }
-    }
+    var systemAudioActive: Bool { liveAmplitude.systemActive }
 
     // MARK: - Lifecycle: window opens / re-opens
 
@@ -1861,4 +1865,18 @@ enum MeetingConsentFlow {
         announce(announcement, lang: lang, variant: picked.variant)
         return true
     }
+}
+
+/// The meeting window's live waveform. Only the waveform row observes it.
+@MainActor
+final class LiveAmplitude: ObservableObject {
+    @Published var bars: [MeetingAmplitudeSample]
+
+    init(count: Int) {
+        bars = Array(repeating: .zero, count: count)
+    }
+
+    /// Any system-audio level in the buffer: mic-only meetings stay
+    /// single-band rather than rendering an always-empty lower half.
+    var systemActive: Bool { bars.contains { $0.system > 0.001 } }
 }

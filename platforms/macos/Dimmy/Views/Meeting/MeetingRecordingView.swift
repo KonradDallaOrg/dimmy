@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // MARK: - MeetingRecordingView
@@ -147,43 +148,10 @@ struct MeetingRecordingView: View {
     // MARK: Waveform card
 
     private var waveformCard: some View {
-        HStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    Image(systemName: "mic.fill")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(DualBandWaveform.micColor)
-                    Text("Mic")
-                        .font(.system(size: 12, weight: .medium))
-                }
-                if vm.systemAudioActive {
-                    HStack(spacing: 6) {
-                        Image(systemName: "speaker.wave.2.fill")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(DualBandWaveform.systemColor)
-                        Text("System")
-                            .font(.system(size: 12, weight: .medium))
-                    }
-                }
-            }
-            .foregroundStyle(Color.macTextSecondary)
-            .frame(width: 64, alignment: .leading)
-
-            // Live amplitude bars, VM updates 12× per second from the
-            // FFI peak (mic + system). Bars grow up from a centre line:
-            // mic above, system audio below (mirrored). When system is
-            // 0 across the buffer, the lower band collapses and we
-            // effectively show a single-band mic waveform.
-            DualBandWaveform(
-                samples: vm.liveAmplitudeBars,
-                paused: vm.isPaused
-            )
-            .frame(maxWidth: .infinity)
-            .frame(height: 44)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(panelBackground)
+        LiveWaveformRow(amp: vm.liveAmplitude, paused: vm.isPaused)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(panelBackground)
     }
 
     // MARK: Live transcript / Notes (tabbed)
@@ -230,26 +198,10 @@ struct MeetingRecordingView: View {
     }
 
     private var liveTranscriptScroll: some View {
-        ScrollView {
-            ScrollViewReader { proxy in
-                Text(vm.transcript.isEmpty
-                     ? "🎙️ Listening... first chunk lands in ~15 s."
-                     : vm.transcript)
-                    .font(.system(size: 13))
-                    .foregroundStyle(vm.transcript.isEmpty
-                                      ? Color.macTextSecondary
-                                      : Color.primary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
-                    .padding(14)
-                    .id("bottom")
-                    .onChange(of: vm.transcript) { _, _ in
-                        withAnimation(.easeOut(duration: 0.2)) {
-                            proxy.scrollTo("bottom", anchor: .bottom)
-                        }
-                    }
-            }
-        }
+        LiveTranscriptTextView(
+            text: vm.transcript,
+            placeholder: "🎙️ Listening... first chunk lands in ~15 s."
+        )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
@@ -375,39 +327,33 @@ struct DualBandWaveform: View {
     static let micColor = Color(red: 0.118, green: 0.565, blue: 1.000)
     static let systemColor = Color(red: 0.196, green: 0.804, blue: 0.196)
 
+    /// One Canvas, not two shapes per bar: the bars were 112 SwiftUI views
+    /// in an HStack with a 0.08 s animation restarted on every 12 Hz tick, so
+    /// SwiftUI re-laid out all of them on nearly every display frame for the
+    /// whole meeting. Same geometry as before: each column centred, mic rect
+    /// stacked on the system rect, trailing-aligned.
     var body: some View {
-        GeometryReader { proxy in
-            let centreY = proxy.size.height / 2
-            let halfHeight = max(2, centreY - 1)
-            let visible = visibleSamples(for: proxy.size.width)
-            HStack(alignment: .center, spacing: Self.barGap) {
-                ForEach(Array(visible.enumerated()), id: \.offset) { _, sample in
-                    barView(sample: sample, halfHeight: halfHeight)
-                }
+        Canvas { ctx, size in
+            let halfHeight = max(2, size.height / 2 - 1)
+            let visible = visibleSamples(for: size.width)
+            let cell = Self.barWidth + Self.barGap
+            var x = size.width - CGFloat(visible.count) * cell + Self.barGap
+            for sample in visible {
+                let mic = max(2, sample.mic * halfHeight)
+                let sys = max(2, sample.system * halfHeight)
+                let top = size.height / 2 - (mic + sys) / 2
+                ctx.fill(Self.bar(x: x, y: top, height: mic), with: .color(Self.micColor))
+                ctx.fill(Self.bar(x: x, y: top + mic, height: sys), with: .color(Self.systemColor))
+                x += cell
             }
-            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .trailing)
-            .opacity(paused ? 0.45 : 1.0)
-            .animation(.easeOut(duration: 0.08), value: samples)
-            .accessibilityHidden(true)
         }
+        .opacity(paused ? 0.45 : 1.0)
+        .accessibilityHidden(true)
     }
 
-    private func barView(sample: MeetingAmplitudeSample,
-                         halfHeight: CGFloat) -> some View {
-        // Two stacked rounded rects, mirrored: mic on top, system on
-        // bottom. Min-height of 2 keeps the bar visible even when the
-        // signal is silent so the waveform stays anchored.
-        VStack(spacing: 0) {
-            RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
-                .fill(Self.micColor)
-                .frame(width: Self.barWidth,
-                       height: max(2, sample.mic * halfHeight))
-            RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
-                .fill(Self.systemColor)
-                .frame(width: Self.barWidth,
-                       height: max(2, sample.system * halfHeight))
-        }
-        .frame(width: Self.barWidth, height: halfHeight * 2, alignment: .center)
+    private static func bar(x: CGFloat, y: CGFloat, height: CGFloat) -> Path {
+        Path(roundedRect: CGRect(x: x, y: y, width: barWidth, height: height),
+             cornerRadius: cornerRadius, style: .continuous)
     }
 
     /// Pick the trailing N samples that fit at fixed bar+gap pixel size.
@@ -419,5 +365,113 @@ struct DualBandWaveform: View {
         let maxBars = max(1, Int(width / cellWidth))
         if samples.count <= maxBars { return samples }
         return Array(samples.suffix(maxBars))
+    }
+}
+
+// MARK: - LiveTranscriptTextView
+
+/// The live transcript, appended to rather than redrawn.
+///
+/// It was one SwiftUI `Text` holding the whole transcript, so every chunk
+/// laid out the entire meeting so far again on the main thread, a cost that
+/// grows with the meeting. An NSTextView lays out only what is appended.
+struct LiveTranscriptTextView: NSViewRepresentable {
+    let text: String
+    let placeholder: String
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSTextView.scrollableTextView()
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        let tv = scroll.documentView as! NSTextView
+        tv.isEditable = false
+        tv.isSelectable = true
+        tv.isRichText = false
+        tv.drawsBackground = false
+        tv.textContainerInset = NSSize(width: 14, height: 14)
+        tv.textContainer?.lineFragmentPadding = 0
+        return scroll
+    }
+
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
+        guard let tv = scroll.documentView as? NSTextView,
+              let storage = tv.textStorage else { return }
+        let shown = context.coordinator.shown
+        if text.isEmpty {
+            guard shown != nil || storage.length == 0 else { return }
+            storage.setAttributedString(Self.styled(placeholder, secondary: true))
+            context.coordinator.shown = nil
+            return
+        }
+        guard text != shown else { return }
+        if let shown, !shown.isEmpty, text.utf8.starts(with: shown.utf8) {
+            let tail = String(decoding: text.utf8.dropFirst(shown.utf8.count), as: UTF8.self)
+            storage.append(Self.styled(tail, secondary: false))
+        } else {
+            storage.setAttributedString(Self.styled(text, secondary: false))
+        }
+        context.coordinator.shown = text
+        tv.scrollToEndOfDocument(nil)
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    /// What the view holds, or nil while it shows the placeholder.
+    final class Coordinator {
+        var shown: String?
+    }
+
+    private static func styled(_ s: String, secondary: Bool) -> NSAttributedString {
+        NSAttributedString(string: s, attributes: [
+            .font: NSFont.systemFont(ofSize: 13),
+            .foregroundColor: secondary ? NSColor.secondaryLabelColor : NSColor.labelColor,
+        ])
+    }
+}
+
+// MARK: - LiveWaveformRow
+
+/// Mic / System labels and the live bars. The only view that observes the
+/// 12 Hz amplitude, so a tick redraws this row and nothing else.
+private struct LiveWaveformRow: View {
+    @ObservedObject var amp: LiveAmplitude
+    let paused: Bool
+
+    var body: some View {
+        HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Image(systemName: "mic.fill")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(DualBandWaveform.micColor)
+                    Text("Mic")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                if amp.systemActive {
+                    HStack(spacing: 6) {
+                        Image(systemName: "speaker.wave.2.fill")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(DualBandWaveform.systemColor)
+                        Text("System")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                }
+            }
+            .foregroundStyle(Color.macTextSecondary)
+            .frame(width: 64, alignment: .leading)
+
+            // Live amplitude bars, VM updates 12× per second from the
+            // FFI peak (mic + system). Bars grow up from a centre line:
+            // mic above, system audio below (mirrored). When system is
+            // 0 across the buffer, the lower band collapses and we
+            // effectively show a single-band mic waveform.
+            DualBandWaveform(
+                samples: amp.bars,
+                paused: paused
+            )
+            .frame(maxWidth: .infinity)
+            .frame(height: 44)
+        }
     }
 }
