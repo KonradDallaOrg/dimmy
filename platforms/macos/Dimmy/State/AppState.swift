@@ -44,10 +44,29 @@ final class PermissionsManager: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.refresh() }
+            Task { @MainActor in self?.refreshOffMain() }
         }
         pollTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refresh() }
+            Task { @MainActor in self?.refreshOffMain() }
+        }
+    }
+
+    /// The same three reads, asked off the main thread. Each is a round trip
+    /// to tccd, ~80 ms together under a meeting's load (sampled), and the
+    /// 5 s poll paid that on the main thread for as long as the app ran.
+    private func refreshOffMain() {
+        DispatchQueue.global(qos: .utility).async {
+            let mic = AVCaptureDevice.authorizationStatus(for: .audio)
+            let ax = AXIsProcessTrustedWithOptions(nil)
+            let im = IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    let pm = PermissionsManager.shared
+                    if mic != pm.microphone { pm.microphone = mic }
+                    if ax != pm.accessibility { pm.accessibility = ax }
+                    if im != pm.inputMonitoring { pm.inputMonitoring = im }
+                }
+            }
         }
     }
 
