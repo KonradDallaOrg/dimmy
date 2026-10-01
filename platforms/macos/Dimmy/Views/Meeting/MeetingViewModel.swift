@@ -299,7 +299,17 @@ final class MeetingViewModel: ObservableObject {
         // second time, racing the pill-side stop. Flip to `.processing`
         // here; `loadDoneFromDisk` (called by `meetingRecapSaved`)
         // lands us in `.done` once the recap is on disk.
+        //
+        // `dropFirst`: the subscription replays the current value, and
+        // `receive(on:)` delivers that replay a main-queue turn later. The
+        // call-detect auto-record creates this view model and calls start()
+        // in the same turn, so the replayed `false` arrived AFTER the phase
+        // had become .recording and read as an external stop: the window
+        // went to "Wrapping up..." with the core still recording, and its
+        // Stop did nothing. The replay never matters otherwise (the phase is
+        // always .idle at init; onWindowShown attaches to a live meeting).
         AppState.shared.$meetingActive
+            .dropFirst()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] active in
                 guard let self else { return }
@@ -709,7 +719,10 @@ final class MeetingViewModel: ObservableObject {
     // MARK: - Stop
 
     func stopAndProcess() {
-        guard phase == .recording, !isWorking else { return }
+        guard phase == .recording, !isWorking else {
+            dimmyHostLog("[Meeting] stop ignored: phase=\(phase) busy=\(isWorking) active=\(DimmyCore.shared.meetingIsActive)")
+            return
+        }
         isWorking = true
         phase = .processing
         processingStep = .saving
