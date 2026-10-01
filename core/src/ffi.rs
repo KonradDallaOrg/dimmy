@@ -3288,6 +3288,10 @@ pub unsafe extern "C" fn dimmy_push_loopback_audio(
     if samples.is_null() || count <= 0 {
         return -1;
     }
+    #[cfg(feature = "sim-audio")]
+    if crate::sim_audio::system_active() {
+        return 0;
+    }
     if sample_rate > 0 {
         let rate = sample_rate as u32;
         if (8_000..=192_000).contains(&rate) {

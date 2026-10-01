@@ -85,6 +85,8 @@ pub mod provider;
 pub mod qwen_asr;
 pub mod qwen_fluid;
 pub mod silero;
+#[cfg(feature = "sim-audio")]
+pub mod sim_audio;
 pub mod telegram;
 pub mod telemetry;
 pub mod transcribe;

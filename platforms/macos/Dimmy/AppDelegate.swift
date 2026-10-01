@@ -355,6 +355,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 // Settings shooter once core init + main loop are up.
                 // No-op when the env var is unset.
                 SettingsScreenshotter.runIfRequested()
+                #if DEBUG
+                MeetingSimulation.runIfRequested()
+                #endif
 
                 // Secondary global hotkey for "add selected text to
                 // dictionary" (Wispr Flow-style). Independent CGEventTap
@@ -993,3 +996,89 @@ private func crashHandleSignal(_ sig: Int32) {
     signal(sig, SIG_DFL)
     raise(sig)
 }
+
+#if DEBUG
+/// Local-build test harness: a whole meeting with nobody at the keyboard.
+///
+///   DIMMY_SIM_MEETING_SECS=N   open the meeting window, start recording,
+///                              stop after N s (audio comes from the core's
+///                              `sim-audio` feature, DIMMY_SIM_MIC_WAV / _SYSTEM_WAV)
+///   DIMMY_SIM_NO_RECAP=1       skip the recap at stop
+///   DIMMY_SIM_PROBE_OUT=path   main-thread lag CSV (see MainLagProbe)
+///
+/// Debug only: a release build never compiles it.
+@MainActor
+enum MeetingSimulation {
+    static func runIfRequested() {
+        let env = ProcessInfo.processInfo.environment
+        if let out = env["DIMMY_SIM_PROBE_OUT"] {
+            MainLagProbe.start(csvPath: out, runLoop: CFRunLoopGetMain())
+        }
+        guard let secs = env["DIMMY_SIM_MEETING_SECS"].flatMap(Double.init), secs > 0 else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+            let wc = MeetingWindowController.shared
+            wc.show()
+            if env["DIMMY_SIM_NO_RECAP"] == "1" { wc.viewModel.generateRecap = false }
+            let ok = wc.viewModel.start(consent: .announceOnly)
+            hkLog("[Sim] meeting start requested ok=\(ok), stop in \(Int(secs)) s")
+            DispatchQueue.main.asyncAfter(deadline: .now() + secs) {
+                hkLog("[Sim] stopping meeting phase=\(wc.viewModel.phase)")
+                wc.viewModel.stopAndProcess()
+                // The window refused: end it in the core so the run finishes.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 20) {
+                    guard DimmyCore.shared.meetingIsActive else { return }
+                    hkLog("[Sim] window did not stop the meeting — stopping it in the core")
+                    DispatchQueue.global().async { _ = DimmyCore.shared.meetingStop() }
+                }
+            }
+        }
+    }
+}
+
+/// How long a run loop keeps a waiting event waiting.
+///
+/// Dimmy's keyboard taps are run-loop sources on the main thread, so every
+/// keystroke on the Mac waits for Dimmy's main thread to come back to its run
+/// loop. This measures exactly that wait: every 5 ms a block is queued on the
+/// main run loop (common modes, like the taps) and the delay until it runs is
+/// recorded. Every 5 s one CSV line: t, p50, p95, p99, max, n>16ms, n>50ms,
+/// n>100ms (milliseconds).
+enum MainLagProbe {
+    nonisolated static func start(csvPath: String, runLoop: CFRunLoop) {
+        FileManager.default.createFile(atPath: csvPath, contents: nil)
+        guard let fh = FileHandle(forWritingAtPath: csvPath) else { return }
+        fh.write("t,p50,p95,p99,max,over16,over50,over100\n".data(using: .utf8)!)
+        nonisolated(unsafe) let main = runLoop
+        Thread.detachNewThread {
+            Thread.current.qualityOfService = .userInteractive
+            var samples: [Double] = []
+            let begin = Date()
+            var lastFlush = Date()
+            let done = DispatchSemaphore(value: 0)
+            while true {
+                let t0 = DispatchTime.now().uptimeNanoseconds
+                var lag = 0.0
+                CFRunLoopPerformBlock(main, CFRunLoopMode.commonModes.rawValue) {
+                    lag = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e6
+                    done.signal()
+                }
+                CFRunLoopWakeUp(main)
+                done.wait()
+                samples.append(lag)
+                usleep(5000)
+                if Date().timeIntervalSince(lastFlush) >= 5 {
+                    let s = samples.sorted()
+                    func p(_ q: Double) -> Double { s[min(s.count - 1, Int(Double(s.count) * q))] }
+                    let line = String(format: "%.0f,%.2f,%.2f,%.2f,%.2f,%d,%d,%d\n",
+                                      Date().timeIntervalSince(begin), p(0.5), p(0.95), p(0.99), s.last ?? 0,
+                                      s.filter { $0 > 16 }.count, s.filter { $0 > 50 }.count,
+                                      s.filter { $0 > 100 }.count)
+                    fh.write(line.data(using: .utf8)!)
+                    samples.removeAll()
+                    lastFlush = Date()
+                }
+            }
+        }
+    }
+}
+#endif
