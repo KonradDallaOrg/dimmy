@@ -197,6 +197,9 @@ local-llm-vulkan = ["local-llm", "llama-cpp-4/vulkan", "llama-cpp-4/dynamic-link
 # PCM samples directly into the audio buffer. Never enabled in release builds.
 # Used only by integration tests under core/tests/.
 test-ffi = []
+# Local test builds only: a meeting's mic and system tracks from WAV files,
+# paced like hardware (see `sim_audio`). Never in a release feature line.
+sim-audio = []
 # smoke-test: gates the dimmy_smoke binary that runtime-loads the installed
 # dimmy_lib.dll via libloading. Used by the installer-ffi-smoke CI job.
 smoke-test = ["dep:libloading"]

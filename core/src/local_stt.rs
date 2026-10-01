@@ -1223,10 +1223,17 @@ mod whisper_cache {
             single_segment,
             samples.len()
         ));
+        let t_full = std::time::Instant::now();
         let full_result = state.full(params, samples);
+        let full_ms = t_full.elapsed().as_millis();
         match &full_result {
-            Ok(_) => crate::log("[LocalSTT] whisper_full returned Ok"),
-            Err(e) => crate::log(&format!("[LocalSTT] whisper_full returned Err: {}", e)),
+            Ok(_) => crate::log(&format!(
+                "[LocalSTT] whisper_full returned Ok in {full_ms} ms"
+            )),
+            Err(e) => crate::log(&format!(
+                "[LocalSTT] whisper_full returned Err after {full_ms} ms: {}",
+                e
+            )),
         }
         full_result.map_err(|e| {
             crate::error::TranscribeError::LocalModel(format!("whisper inference failed: {}", e))

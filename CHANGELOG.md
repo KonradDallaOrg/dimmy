@@ -6,6 +6,26 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Mac: typing in any other app lagged and stuttered while a meeting was
+  being transcribed live. Both global keyboard taps ran on Dimmy's main run
+  loop, so every keystroke waited for the meeting window to redraw. They now
+  run on their own thread with the same shortcut logic. Simulated 6-minute
+  meeting (whisper turbo on GPU, mic + system, 30 s windows): keystrokes
+  held over 16 ms went from 6571 to 9, the worst from 457 ms to 74 ms, and
+  Dimmy's CPU from 150% to 80%.
+- Mac meeting window: the waveform is drawn in one pass, the live transcript
+  only appends new text, and the 5 s permission check asks TCC off the main
+  thread (it held it for ~80 ms).
+- Mac: the first meeting after launch, when it started by itself for a call
+  (auto-record or "Record now"), showed "Wrapping up…" while still recording
+  and Stop did nothing.
+
+### Changed
+
+- The log records how long each whisper pass takes.
+
 ## [0.7.12] - 2026-09-30
 
 ### Added

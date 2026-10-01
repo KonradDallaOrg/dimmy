@@ -379,6 +379,8 @@ pub fn spawn_audio_thread(
     loopback_gain: Arc<std::sync::atomic::AtomicU32>,
 ) -> mpsc::Sender<AudioCommand> {
     let (tx, rx) = mpsc::channel::<AudioCommand>();
+    #[cfg(feature = "sim-audio")]
+    let sim_tx = tx.clone();
 
     // ── AEC plumbing ─────────────────────────────────────────────
     // Mix mode routes mic and loopback through these per-stream rings.
@@ -405,6 +407,8 @@ pub fn spawn_audio_thread(
             // streams are held alive to keep recording; dropping/replacing
             // stops/starts. `Mix` mode keeps two streams alive in parallel.
             let mut streams: Vec<cpal::Stream> = Vec::new();
+            #[cfg(feature = "sim-audio")]
+            let mut sim_feed: Option<crate::sim_audio::SimFeed> = None;
 
             // Last successful Start params — used by the device-change
             // auto-recovery path. When the cpal stream error_callback
@@ -766,6 +770,38 @@ pub fn spawn_audio_thread(
                             None
                         };
 
+                        #[cfg(feature = "sim-audio")]
+                        {
+                            sim_feed = None;
+                            if want_mic && crate::sim_audio::configured() {
+                                ACTIVE_MIC_SAMPLE_RATE
+                                    .store(MEETING_CANONICAL_RATE, Ordering::Relaxed);
+                                ACTIVE_MIC_DEVICE_RATE
+                                    .store(MEETING_CANONICAL_RATE, Ordering::Relaxed);
+                                AUDIO_STREAM_DEAD.store(false, Ordering::Relaxed);
+                                if !is_recovery_start {
+                                    for b in
+                                        [&buffer, &buffer_secondary, &aec_mic_ring, &aec_ref_ring]
+                                    {
+                                        if let Ok(mut b) = b.lock() {
+                                            b.clear();
+                                        }
+                                    }
+                                }
+                                is_recovery_start = false;
+                                let mix = matches!(source, AudioSource::Mix);
+                                sim_feed = crate::sim_audio::start(
+                                    if mix {
+                                        aec_mic_ring.clone()
+                                    } else {
+                                        buffer.clone()
+                                    },
+                                    sim_tx.clone(),
+                                    mix,
+                                );
+                                continue;
+                            }
+                        }
                         let device = match primary {
                             Some(d) => {
                                 crate::log(&format!(
@@ -1093,6 +1129,10 @@ pub fn spawn_audio_thread(
                     AudioCommand::Stop => {
                         // Dropping the streams stops recording
                         streams.clear();
+                        #[cfg(feature = "sim-audio")]
+                        {
+                            sim_feed = None;
+                        }
                         // Explicit stop clears the recovery hint — we
                         // don't want a stale stream-dead flag to spin
                         // the recording back up after the user (or the
