@@ -45,9 +45,6 @@ final class HotkeyManager {
     // Re-install the tap after sleep/wake (macOS disables taps during sleep).
     private var wakeObserver: NSObjectProtocol?
 
-    // Track modifier state
-    private var controlOptionDown = false
-
     // Double-tap detection for toggle mode
     private var lastReleaseTime: Date?
     private var lastPressTime: Date?
@@ -62,7 +59,7 @@ final class HotkeyManager {
     private var appState: AppState?
 
     // Dedicated Command-Mode hotkey runs on the SAME CGEventTap as the
-    // dictation modifier-only shortcut — the tap mask now covers
+    // dictation modifier-only shortcut — the tap mask covers
     // .flagsChanged + .keyDown + .keyUp so a single hook sees both
     // modifier-only chords (e.g. ⌃⌥) AND modifier+key chords (e.g.
     // ⌃⇧X) AND the matching releases. The pattern mirrors the Win-side
@@ -71,19 +68,12 @@ final class HotkeyManager {
     // Rust low-level keyboard hook. Carbon `RegisterEventHotKey` had the
     // same limitations on Mac; this replaces it with a Swift state
     // machine that honours `appState.preferredMode` (toggle vs PTT).
-    private let commandComboState = CommandComboState()
     private var commandLastPressTime: Date?
 
-    // Dedicated meeting start/stop hotkey — same CGEventTap + combo matcher as
-    // the command hotkey, but TOGGLE-only (a meeting can't be push-to-talk):
-    // we act on the pressed edge and ignore the release.
-    private let meetingComboState = CommandComboState()
-
-    // Dictation, when the user bound a chord that carries a key (⌃⇧D).
-    // Modifier-only chords — including Fn, which HotkeyCombo cannot
-    // express — stay on `handleFlags` below, untouched. Nil combo ⇒ the
-    // machine ignores every event, so binding one costs nothing.
-    private let dictComboState = CommandComboState()
+    // What the tap decides with: the dictation chord and the three combo
+    // machines (dictation-with-a-key, command, meeting). It lives on the tap
+    // thread; see `KeyboardTapThread` for why it cannot live here.
+    private let tapState = HotkeyTapState()
 
     private init() {
         hkLog("[HotkeyManager] singleton init")
@@ -126,33 +116,32 @@ final class HotkeyManager {
         // machine itself drives press/release detection from the same
         // CGEventTap callback that handles dictation — no Carbon hotkey,
         // no polling.
-        commandComboState.setCombo(appState.commandHotkey)
+        tapState.setCommandCombo(appState.commandHotkey)
         appState.$commandHotkey
             .receive(on: DispatchQueue.main)
             .sink { [weak self] newValue in
-                self?.commandComboState.setCombo(newValue)
+                self?.tapState.setCommandCombo(newValue)
                 hkLog("[CmdHotkey] state machine rebound to \(newValue?.displayString ?? "<nil>")")
             }
             .store(in: &cancellables)
 
         // Same for the optional meeting start/stop hotkey.
-        meetingComboState.setCombo(appState.meetingHotkey)
+        tapState.setMeetingCombo(appState.meetingHotkey)
         appState.$meetingHotkey
             .receive(on: DispatchQueue.main)
             .sink { [weak self] newValue in
-                self?.meetingComboState.setCombo(newValue)
+                self?.tapState.setMeetingCombo(newValue)
                 hkLog("[MtgHotkey] state machine rebound to \(newValue?.displayString ?? "<nil>")")
             }
             .store(in: &cancellables)
 
-        // And for dictation, but only when the chord carries a key —
-        // `asHotkeyCombo` returns nil for the modifier-only and Fn forms,
-        // which keeps them on the original flags path.
-        dictComboState.setCombo(appState.shortcut.asHotkeyCombo)
+        // And the dictation chord: modifier-only (and Fn) forms on the flags
+        // path, a chord that carries a key through its own combo machine.
+        tapState.setDictationShortcut(appState.shortcut)
         appState.$shortcut
             .receive(on: DispatchQueue.main)
             .sink { [weak self] newValue in
-                self?.dictComboState.setCombo(newValue.asHotkeyCombo)
+                self?.tapState.setDictationShortcut(newValue)
                 hkLog("[HotkeyManager] dictation state machine rebound to \(newValue.displayString) (key=\(newValue.isModifierOnly ? "no" : "yes"))")
             }
             .store(in: &cancellables)
@@ -169,9 +158,7 @@ final class HotkeyManager {
             NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
         }
         wakeObserver = nil
-        commandComboState.reset()
-        meetingComboState.reset()
-        dictComboState.reset()
+        tapState.reset()
         cancellables.removeAll()
         appState?.hotkeyStatus = .uninstalled
     }
@@ -187,13 +174,13 @@ final class HotkeyManager {
     /// `ShortcutMode`. Suppressed while a meeting recording owns the
     /// cpal buffer (same gate as the dictation hotkey).
     @MainActor
-    private func handleCommandPress() {
+    private func handleCommandPress(at pressed: Date) {
         guard let appState else { return }
         if DimmyCore.shared.meetingIsActive {
             hkLog("[CmdHotkey] suppressed — meeting active")
             return
         }
-        commandLastPressTime = Date()
+        commandLastPressTime = pressed
 
         // Already-recording press → finish + command-transform regardless
         // of which mode started the recording. The one-shot flag drives
@@ -218,11 +205,11 @@ final class HotkeyManager {
     /// is released, with a minimum-hold guard so a stray tap doesn't
     /// transcribe accidental noise. Mirror of dictation `handleRelease`.
     @MainActor
-    private func handleCommandRelease() {
+    private func handleCommandRelease(at released: Date) {
         guard let appState else { return }
         guard case .recording(.pushToTalk) = appState.recordingState else { return }
         if let pressTime = commandLastPressTime,
-           Date().timeIntervalSince(pressTime) < minimumHoldDuration {
+           released.timeIntervalSince(pressTime) < minimumHoldDuration {
             // Too short — cancel, don't transcribe (and don't fire the
             // command-transform path either: oneShotCommandPending was
             // set on press; cancelRecording clears it via stopRecording
@@ -275,48 +262,44 @@ final class HotkeyManager {
         let mask: CGEventMask = (1 << CGEventType.flagsChanged.rawValue)
             | (1 << CGEventType.keyDown.rawValue)
             | (1 << CGEventType.keyUp.rawValue)
-        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
 
+        // Runs on the tap thread, for every key pressed anywhere on the Mac:
+        // decide, hand the actions to the main thread, return. Nothing here
+        // may wait for the main thread.
         let callback: CGEventTapCallBack = { _, type, event, userInfo in
             guard let userInfo = userInfo else { return Unmanaged.passUnretained(event) }
-            let manager = Unmanaged<HotkeyManager>.fromOpaque(userInfo).takeUnretainedValue()
+            let state = Unmanaged<HotkeyTapState>.fromOpaque(userInfo).takeUnretainedValue()
 
             // Re-enable if system suspended the tap (timeout or user input)
             if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
                 hkLog("[HotkeyManager] tap disabled type=\(type.rawValue) — re-enabling")
-                if let tap = MainActor.assumeIsolated({ manager.eventTap }) {
+                if let tap = state.tap {
                     CGEvent.tapEnable(tap: tap, enable: true)
                 }
                 return Unmanaged.passUnretained(event)
             }
 
+            let decision: HotkeyTapState.Decision
             switch type {
             case .flagsChanged:
-                hkLog("[HotkeyManager] TAP flagsChanged, rawFlags=0x\(String(event.flags.rawValue, radix: 16))")
-                let flags = NSEvent.ModifierFlags(cgFlags: event.flags)
-                let shouldConsume = MainActor.assumeIsolated {
-                    manager.handleFlagsAll(flags)
-                }
-                return shouldConsume ? nil : Unmanaged.passUnretained(event)
-
+                decision = state.flagsChanged(NSEvent.ModifierFlags(cgFlags: event.flags))
             case .keyDown:
-                let flags = NSEvent.ModifierFlags(cgFlags: event.flags)
-                let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
-                let shouldConsume = MainActor.assumeIsolated {
-                    manager.handleCommandKeyDown(keyCode: keyCode, flags: flags)
-                }
-                return shouldConsume ? nil : Unmanaged.passUnretained(event)
-
+                decision = state.keyDown(
+                    keyCode: UInt16(event.getIntegerValueField(.keyboardEventKeycode)),
+                    flags: NSEvent.ModifierFlags(cgFlags: event.flags))
             case .keyUp:
-                let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
-                let shouldConsume = MainActor.assumeIsolated {
-                    manager.handleCommandKeyUp(keyCode: keyCode)
-                }
-                return shouldConsume ? nil : Unmanaged.passUnretained(event)
-
+                decision = state.keyUp(
+                    keyCode: UInt16(event.getIntegerValueField(.keyboardEventKeycode)))
             default:
                 return Unmanaged.passUnretained(event)
             }
+            let actions = decision.actions
+            if !actions.isEmpty {
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated { HotkeyManager.shared.perform(actions) }
+                }
+            }
+            return decision.consume ? nil : Unmanaged.passUnretained(event)
         }
 
         // .cgSessionEventTap runs at login-session level (no root required, only Accessibility).
@@ -327,13 +310,14 @@ final class HotkeyManager {
             options: .defaultTap,
             eventsOfInterest: mask,
             callback: callback,
-            userInfo: selfPtr
+            userInfo: Unmanaged.passUnretained(tapState).toOpaque()
         ) else {
             return false
         }
 
-        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        tapState.tap = tap
+        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)!
+        KeyboardTapThread.shared.add(source)
         CGEvent.tapEnable(tap: tap, enable: true)
 
         self.eventTap = tap
@@ -346,109 +330,34 @@ final class HotkeyManager {
             CGEvent.tapEnable(tap: tap, enable: false)
         }
         if let source = runLoopSource {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+            KeyboardTapThread.shared.remove(source)
         }
+        tapState.tap = nil
         eventTap = nil
         runLoopSource = nil
     }
 
-    /// Top-level flagsChanged dispatcher. Forwards the event to BOTH the
-    /// dictation handler (which owns the modifier-only dictation chord)
-    /// AND the command-combo state machine (which needs to see modifier
-    /// transitions for modifier-only command chords AND to release a
-    /// mod+key chord when its modifiers drop). Consumes the event when
-    /// EITHER consumer wants to (a fired command chord should never
-    /// leak its modifier flag flip to the focused app, same as
-    /// dictation).
-    @discardableResult
-    private func handleFlagsAll(_ rawFlags: NSEvent.ModifierFlags) -> Bool {
-        let dictConsume = handleFlags(rawFlags)
-        // Dropping a modifier mid-chord releases a mod+key dictation
-        // chord too — same bail-out the command hotkey relies on.
-        let dictKeyConsume = dispatchDictationEvent(dictComboState.processFlags(rawFlags))
-        let cmdEvent = commandComboState.processFlags(rawFlags)
-        let cmdConsume = dispatchCommandEvent(cmdEvent)
-        let mtgConsume = dispatchMeetingEvent(meetingComboState.processFlags(rawFlags))
-        return dictConsume || dictKeyConsume || cmdConsume || mtgConsume
-    }
-
-    /// keyDown handler — feeds the command-combo state machine. Only the
-    /// command hotkey listens on keyDown; the dictation chord is
-    /// modifier-only and never fires here. Consumed when the chord
-    /// activates so the focused app never sees the letter (e.g. an X in
-    /// a text field while the user holds ⌃⇧X).
-    @discardableResult
-    private func handleCommandKeyDown(keyCode: UInt16, flags: NSEvent.ModifierFlags) -> Bool {
-        let event = commandComboState.processKeyDown(keyCode: keyCode, flags: flags)
-        let cmdConsume = dispatchCommandEvent(event)
-        let mtgConsume = dispatchMeetingEvent(meetingComboState.processKeyDown(keyCode: keyCode, flags: flags))
-        let dictConsume = dispatchDictationEvent(
-            dictComboState.processKeyDown(keyCode: keyCode, flags: flags))
-        return cmdConsume || mtgConsume || dictConsume
-    }
-
-    /// keyUp handler — also for the command-combo state machine. Fires
-    /// the release branch for Push-to-Talk command hotkeys whose
-    /// non-modifier key is being lifted while the modifiers are still
-    /// held. Consumes the event on release for symmetry with keyDown
-    /// consumption so a downstream app can't see half of the chord.
-    @discardableResult
-    private func handleCommandKeyUp(keyCode: UInt16) -> Bool {
-        let event = commandComboState.processKeyUp(keyCode: keyCode)
-        let cmdConsume = dispatchCommandEvent(event)
-        let mtgConsume = dispatchMeetingEvent(meetingComboState.processKeyUp(keyCode: keyCode))
-        let dictConsume = dispatchDictationEvent(dictComboState.processKeyUp(keyCode: keyCode))
-        return cmdConsume || mtgConsume || dictConsume
-    }
-
-    /// Map a dictation mod+key chord event onto the same press / release
-    /// handlers the modifier-only path uses, so both shapes of shortcut
-    /// honour Push-to-talk vs Toggle identically.
-    @discardableResult
-    private func dispatchDictationEvent(_ event: CommandComboState.Event) -> Bool {
-        switch event {
-        case .none:
-            return false
-        case .pressed:
-            lastPressTime = Date()
-            handlePress()
-            return true
-        case .released:
-            handleRelease()
-            return true
-        }
-    }
-
-    /// Map a `CommandComboState` event onto the press/release handlers
-    /// and return whether the OS event should be consumed.
-    @discardableResult
-    private func dispatchCommandEvent(_ event: CommandComboState.Event) -> Bool {
-        switch event {
-        case .none:
-            return false
-        case .pressed:
-            handleCommandPress()
-            return true
-        case .released:
-            handleCommandRelease()
-            return true
-        }
-    }
-
-    /// Map a meeting-combo event onto the toggle. TOGGLE-only: the pressed
-    /// edge fires the consent-gated start/stop; the release is consumed (for
-    /// chord symmetry so a downstream app never sees half a chord) but takes
-    /// no action — a meeting can't be push-to-talk.
-    @discardableResult
-    private func dispatchMeetingEvent(_ event: CommandComboState.Event) -> Bool {
-        switch event {
-        case .none:
-            return false
-        case .pressed:
-            handleMeetingToggle()
-            return true
-        case .released:
-            return true
+    /// What the tap decided, carried out in the order it decided it.
+    private func perform(_ actions: [HotkeyTapState.Action]) {
+        for action in actions {
+            switch action {
+            case .dictationPressed(let at):
+                hkLog("[HotkeyManager] dictation shortcut pressed")
+                lastPressTime = at
+                handlePress()
+            case .dictationReleased(let at):
+                hkLog("[HotkeyManager] dictation shortcut released")
+                handleRelease(at: at)
+            case .commandPressed(let at):
+                hkLog("[CmdHotkey] pressed")
+                handleCommandPress(at: at)
+            case .commandReleased(let at):
+                hkLog("[CmdHotkey] released")
+                handleCommandRelease(at: at)
+            case .meetingPressed:
+                hkLog("[MtgHotkey] pressed")
+                handleMeetingToggle()
+            }
         }
     }
 
@@ -458,31 +367,6 @@ final class HotkeyManager {
     private func handleMeetingToggle() {
         guard let appState else { return }
         MeetingShortcut.toggle(appState: appState)
-    }
-
-    /// Returns true if the event should be consumed (i.e. not forwarded to other apps).
-    @discardableResult
-    private func handleFlags(_ rawFlags: NSEvent.ModifierFlags) -> Bool {
-        let flags = rawFlags.intersection(.deviceIndependentFlagsMask)
-        guard let appState else { return false }
-        let onlyControlOption = appState.shortcut.matches(flags: flags)
-        hkLog("[HotkeyManager] flagsChanged raw=0x\(String(flags.rawValue, radix: 16)) fn=\(flags.contains(.function)) ctrl=\(flags.contains(.control)) opt=\(flags.contains(.option)) cmd=\(flags.contains(.command)) shift=\(flags.contains(.shift)) matchesShortcut=\(onlyControlOption) storedShortcut=\(appState.shortcut.displayString) controlOptionDown=\(controlOptionDown)")
-
-        // Consume if shortcut is either pressed-and-matching or being released from a pressed state
-        let consume = onlyControlOption || controlOptionDown
-
-        if onlyControlOption && !controlOptionDown {
-            // Shortcut just pressed
-            controlOptionDown = true
-            lastPressTime = Date()
-            handlePress()
-        } else if !onlyControlOption && controlOptionDown {
-            // Shortcut just released
-            controlOptionDown = false
-            handleRelease()
-        }
-
-        return consume
     }
 
     private func handlePress() {
@@ -505,13 +389,13 @@ final class HotkeyManager {
         }
     }
 
-    private func handleRelease() {
+    private func handleRelease(at released: Date) {
         guard let appState else { return }
 
         // Only stop push-to-talk on release (toggle stays active until next press)
         if case .recording(.pushToTalk) = appState.recordingState {
             // Check minimum hold duration to avoid accidental triggers
-            if let pressTime = lastPressTime, Date().timeIntervalSince(pressTime) < minimumHoldDuration {
+            if let pressTime = lastPressTime, released.timeIntervalSince(pressTime) < minimumHoldDuration {
                 // Too short — cancel, don't transcribe
                 cancelRecording()
                 return
@@ -1003,6 +887,191 @@ final class HotkeyManager {
     }
 }
 
+// MARK: - KeyboardTapThread
+
+/// The thread Dimmy's keyboard taps run on.
+///
+/// A tap's callback runs on the run loop its source was added to, and every
+/// keystroke on the Mac waits for that callback to return. The taps used to
+/// sit on the main run loop, so every keystroke waited for Dimmy's UI to be
+/// free: in a meeting the main thread spent a fifth of its time laying out
+/// the meeting window, with stalls up to a quarter of a second, and people
+/// typing in another app during a call saw their text arrive late and in
+/// bursts. Here the callback only runs
+/// the shortcut state machines and hands whatever they decide to the main
+/// thread, so a busy Dimmy can delay a Dimmy action but never a keystroke.
+final class KeyboardTapThread: @unchecked Sendable {
+    static let shared = KeyboardTapThread()
+
+    let runLoop: CFRunLoop
+
+    private init() {
+        final class Box: @unchecked Sendable { var loop: CFRunLoop? }
+        let box = Box()
+        let ready = DispatchSemaphore(value: 0)
+        let thread = Thread {
+            box.loop = CFRunLoopGetCurrent()
+            // A run loop with no source returns at once; the port keeps it alive.
+            RunLoop.current.add(NSMachPort(), forMode: .default)
+            ready.signal()
+            while true { RunLoop.current.run() }
+        }
+        thread.name = "dimmy-keyboard-tap"
+        thread.qualityOfService = .userInteractive
+        thread.start()
+        ready.wait()
+        runLoop = box.loop!
+    }
+
+    func add(_ source: CFRunLoopSource) {
+        CFRunLoopAddSource(runLoop, source, .commonModes)
+        CFRunLoopWakeUp(runLoop)
+    }
+
+    func remove(_ source: CFRunLoopSource) {
+        CFRunLoopRemoveSource(runLoop, source, .commonModes)
+    }
+}
+
+// MARK: - HotkeyTapState
+
+/// Everything `HotkeyManager`'s tap decides with, and nothing else.
+///
+/// The tap thread runs it on every key; the main thread only rebinds it
+/// (Settings) and resets it (stop). One lock, held for one decision, which is
+/// a handful of comparisons. The decision is the same one the main thread used
+/// to make: consume exactly the events it consumed, emit the press/release
+/// edges in the same order. Each edge carries the time of its event, so the
+/// push-to-talk minimum hold is measured on the keyboard, not on when a busy
+/// main thread got round to it.
+final class HotkeyTapState: @unchecked Sendable {
+    enum Action: Sendable, Equatable {
+        case dictationPressed(Date)
+        case dictationReleased(Date)
+        case commandPressed(Date)
+        case commandReleased(Date)
+        case meetingPressed
+    }
+
+    struct Decision: Equatable {
+        var consume = false
+        var actions: [Action] = []
+    }
+
+    private let lock = NSLock()
+    private var tapPort: CFMachPort?
+    private var dictationShortcut: ModifierShortcut?
+    /// The modifier-only dictation chord is held.
+    private var dictationDown = false
+    /// Dictation, when the bound chord carries a key (⌃⇧D). Nil combo for
+    /// the modifier-only and Fn forms, which the flags path above handles.
+    private let dictationCombo = CommandComboState()
+    private let commandCombo = CommandComboState()
+    /// TOGGLE-only: a meeting cannot be push-to-talk, so the release is
+    /// consumed (a downstream app never sees half a chord) and does nothing.
+    private let meetingCombo = CommandComboState()
+
+    var tap: CFMachPort? {
+        get { lock.lock(); defer { lock.unlock() }; return tapPort }
+        set { lock.lock(); defer { lock.unlock() }; tapPort = newValue }
+    }
+
+    func setDictationShortcut(_ shortcut: ModifierShortcut) {
+        lock.lock(); defer { lock.unlock() }
+        dictationShortcut = shortcut
+        dictationCombo.setCombo(shortcut.asHotkeyCombo)
+    }
+
+    func setCommandCombo(_ combo: HotkeyCombo?) {
+        lock.lock(); defer { lock.unlock() }
+        commandCombo.setCombo(combo)
+    }
+
+    func setMeetingCombo(_ combo: HotkeyCombo?) {
+        lock.lock(); defer { lock.unlock() }
+        meetingCombo.setCombo(combo)
+    }
+
+    func reset() {
+        lock.lock(); defer { lock.unlock() }
+        dictationCombo.reset()
+        commandCombo.reset()
+        meetingCombo.reset()
+    }
+
+    func flagsChanged(_ flags: NSEvent.ModifierFlags, at now: Date = Date()) -> Decision {
+        lock.lock(); defer { lock.unlock() }
+        var d = Decision()
+        // The modifier-only chord is consumed while held and on the event
+        // that releases it.
+        let matches = dictationShortcut?.matches(flags: flags) ?? false
+        d.consume = matches || dictationDown
+        if matches && !dictationDown {
+            dictationDown = true
+            d.actions.append(.dictationPressed(now))
+        } else if !matches && dictationDown {
+            dictationDown = false
+            d.actions.append(.dictationReleased(now))
+        }
+        // Dropping a modifier mid-chord releases a mod+key chord too.
+        d.add(dictation: dictationCombo.processFlags(flags), at: now)
+        d.add(command: commandCombo.processFlags(flags), at: now)
+        d.add(meeting: meetingCombo.processFlags(flags))
+        return d
+    }
+
+    /// Consumed when a chord activates, so the focused app never sees the
+    /// letter (an X in a text field while the user holds ⌃⇧X).
+    func keyDown(keyCode: UInt16, flags: NSEvent.ModifierFlags, at now: Date = Date()) -> Decision {
+        lock.lock(); defer { lock.unlock() }
+        var d = Decision()
+        d.add(command: commandCombo.processKeyDown(keyCode: keyCode, flags: flags), at: now)
+        d.add(meeting: meetingCombo.processKeyDown(keyCode: keyCode, flags: flags))
+        d.add(dictation: dictationCombo.processKeyDown(keyCode: keyCode, flags: flags), at: now)
+        return d
+    }
+
+    /// Consumed on release for symmetry with keyDown, so a downstream app
+    /// cannot see half of the chord.
+    func keyUp(keyCode: UInt16, at now: Date = Date()) -> Decision {
+        lock.lock(); defer { lock.unlock() }
+        var d = Decision()
+        d.add(command: commandCombo.processKeyUp(keyCode: keyCode), at: now)
+        d.add(meeting: meetingCombo.processKeyUp(keyCode: keyCode))
+        d.add(dictation: dictationCombo.processKeyUp(keyCode: keyCode), at: now)
+        return d
+    }
+}
+
+private extension HotkeyTapState.Decision {
+    mutating func add(dictation event: CommandComboState.Event, at t: Date) {
+        switch event {
+        case .none: return
+        case .pressed: actions.append(.dictationPressed(t))
+        case .released: actions.append(.dictationReleased(t))
+        }
+        consume = true
+    }
+
+    mutating func add(command event: CommandComboState.Event, at t: Date) {
+        switch event {
+        case .none: return
+        case .pressed: actions.append(.commandPressed(t))
+        case .released: actions.append(.commandReleased(t))
+        }
+        consume = true
+    }
+
+    mutating func add(meeting event: CommandComboState.Event) {
+        switch event {
+        case .none: return
+        case .pressed: actions.append(.meetingPressed)
+        case .released: break
+        }
+        consume = true
+    }
+}
+
 // MARK: - CommandComboState
 
 /// Swift port of the Win `Binding` state machine for the dedicated
@@ -1062,8 +1131,7 @@ final class CommandComboState {
     ///                   user lifted Shift mid-chord)
     ///   - `.none`     : no transition
     ///
-    /// `MainActor`-isolated by the calling tap callback, so concurrent
-    /// updates aren't a concern.
+    /// Only ever called under `HotkeyTapState`'s lock.
     func processFlags(_ rawFlags: NSEvent.ModifierFlags) -> Event {
         guard let combo else { return .none }
         let flags = rawFlags.intersection(.deviceIndependentFlagsMask)

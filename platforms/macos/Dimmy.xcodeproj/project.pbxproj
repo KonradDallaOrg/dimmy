@@ -49,6 +49,7 @@
 		AA000701 /* MeetingPostProcessServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000701 /* MeetingPostProcessServiceTests.swift */; };
 		AA000702 /* RecapModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000702 /* RecapModelTests.swift */; };
 		AA000730 /* TelegramReplyTextTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000730 /* TelegramReplyTextTests.swift */; };
+		AA000760 /* HotkeyTapStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000760 /* HotkeyTapStateTests.swift */; };
 		AA000703 /* MeetingHistoryRowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000703 /* MeetingHistoryRowTests.swift */; };
 		AA000704 /* AppStateRecapModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000704 /* AppStateRecapModelTests.swift */; };
 		AA00070A /* AppStateProviderFilterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00070A /* AppStateProviderFilterTests.swift */; };
@@ -210,6 +211,7 @@
 		AB000701 /* MeetingPostProcessServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingPostProcessServiceTests.swift; sourceTree = "<group>"; };
 		AB000702 /* RecapModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecapModelTests.swift; sourceTree = "<group>"; };
 		AB000730 /* TelegramReplyTextTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelegramReplyTextTests.swift; sourceTree = "<group>"; };
+		AB000760 /* HotkeyTapStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyTapStateTests.swift; sourceTree = "<group>"; };
 		AB000703 /* MeetingHistoryRowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingHistoryRowTests.swift; sourceTree = "<group>"; };
 		AB000704 /* AppStateRecapModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateRecapModelTests.swift; sourceTree = "<group>"; };
 		AB00070A /* AppStateProviderFilterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateProviderFilterTests.swift; sourceTree = "<group>"; };
@@ -348,6 +350,7 @@
 				AB000701 /* MeetingPostProcessServiceTests.swift */,
 				AB000702 /* RecapModelTests.swift */,
 				AB000730 /* TelegramReplyTextTests.swift */,
+				AB000760 /* HotkeyTapStateTests.swift */,
 				AB000703 /* MeetingHistoryRowTests.swift */,
 				AB000704 /* AppStateRecapModelTests.swift */,
 				AB00070A /* AppStateProviderFilterTests.swift */,
@@ -941,6 +944,7 @@ echo \"[gtcrn] bundled $(basename \"$GTCRN_SRC\") into Resources\"
 				AA000701 /* MeetingPostProcessServiceTests.swift in Sources */,
 				AA000702 /* RecapModelTests.swift in Sources */,
 				AA000730 /* TelegramReplyTextTests.swift in Sources */,
+				AA000760 /* HotkeyTapStateTests.swift in Sources */,
 				AA000703 /* MeetingHistoryRowTests.swift in Sources */,
 				AA000704 /* AppStateRecapModelTests.swift in Sources */,
 				AA00070A /* AppStateProviderFilterTests.swift in Sources */,

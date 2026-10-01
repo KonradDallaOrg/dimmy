@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import Carbon.HIToolbox
+import Combine
 import CoreGraphics
 
 /// Secondary global hotkey dedicated to "add selected text to user
@@ -46,6 +47,10 @@ final class DictHotkeyManager {
 
     private weak var appState: AppState?
 
+    /// The bound combo, as the tap thread reads it. See `KeyboardTapThread`.
+    private let tapState = DictTapState()
+    private var comboSubscription: AnyCancellable?
+
     private init() {}
 
     /// Stand up the trigger. Idempotent — second call no-ops.
@@ -55,6 +60,10 @@ final class DictHotkeyManager {
         if eventTap != nil || carbonHotKeyRef != nil { return }
 
         if AXIsProcessTrustedWithOptions(nil) {
+            tapState.combo = appState.dictHotkey
+            comboSubscription = appState.$dictHotkey
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] combo in self?.tapState.combo = combo }
             installEventTap()
             NSLog("[Dict] CGEventTap path active (Accessibility granted)")
 
@@ -80,8 +89,11 @@ final class DictHotkeyManager {
     func stop() {
         if let tap = eventTap { CGEvent.tapEnable(tap: tap, enable: false) }
         if let source = runLoopSource {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+            KeyboardTapThread.shared.remove(source)
         }
+        comboSubscription = nil
+        tapState.tap = nil
+        tapState.combo = nil
         eventTap = nil
         runLoopSource = nil
         if let observer = wakeObserver {
@@ -101,28 +113,37 @@ final class DictHotkeyManager {
 
     private func installEventTap() {
         let mask: CGEventMask = (1 << CGEventType.keyDown.rawValue)
-        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
 
+        // Runs on the tap thread for every key pressed on the Mac; see
+        // `KeyboardTapThread`. Nothing here may wait for the main thread.
         let callback: CGEventTapCallBack = { _, type, event, userInfo in
             guard let userInfo = userInfo else { return Unmanaged.passUnretained(event) }
-            let manager = Unmanaged<DictHotkeyManager>.fromOpaque(userInfo).takeUnretainedValue()
+            let state = Unmanaged<DictTapState>.fromOpaque(userInfo).takeUnretainedValue()
 
             if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-                if let tap = MainActor.assumeIsolated({ manager.eventTap }) {
+                if let tap = state.tap {
                     CGEvent.tapEnable(tap: tap, enable: true)
                 }
                 return Unmanaged.passUnretained(event)
             }
 
-            guard type == .keyDown else { return Unmanaged.passUnretained(event) }
+            guard type == .keyDown,
+                  let combo = state.combo,
+                  combo.matches(flags: NSEvent.ModifierFlags(cgFlags: event.flags),
+                                keyCode: UInt16(event.getIntegerValueField(.keyboardEventKeycode)))
+            else { return Unmanaged.passUnretained(event) }
 
-            let flags = NSEvent.ModifierFlags(cgFlags: event.flags)
-            let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
-
-            let shouldConsume = MainActor.assumeIsolated {
-                manager.handleKeyDown(flags: flags, keyCode: keyCode)
+            // Match — fire the dict-add flow. We consume the event so the
+            // focused app doesn't see Cmd+Shift+D (which Notion / Photoshop
+            // / etc. may have their own binding for). The flow touches the
+            // pasteboard + Rust FFI, so it runs on the main actor, after the
+            // tap has returned.
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    _ = Task { await AddToDictionaryFlow.run(combo: combo) }
+                }
             }
-            return shouldConsume ? nil : Unmanaged.passUnretained(event)
+            return nil
         }
 
         guard let tap = CGEvent.tapCreate(
@@ -131,27 +152,15 @@ final class DictHotkeyManager {
             options: .defaultTap,
             eventsOfInterest: mask,
             callback: callback,
-            userInfo: selfPtr
+            userInfo: Unmanaged.passUnretained(tapState).toOpaque()
         ) else { return }
 
-        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        tapState.tap = tap
+        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)!
+        KeyboardTapThread.shared.add(source)
         CGEvent.tapEnable(tap: tap, enable: true)
         self.eventTap = tap
         self.runLoopSource = source
-    }
-
-    private func handleKeyDown(flags: NSEvent.ModifierFlags, keyCode: UInt16) -> Bool {
-        guard let appState else { return false }
-        let combo = appState.dictHotkey
-        if !combo.matches(flags: flags, keyCode: keyCode) { return false }
-        // Match — fire the dict-add flow. We consume the event so the
-        // focused app doesn't see Cmd+Shift+D (which Notion / Photoshop
-        // / etc. may have their own binding for). The flow runs async
-        // via a Task because it touches the pasteboard + Rust FFI;
-        // returning to the OS quickly keeps the tap responsive.
-        Task { await AddToDictionaryFlow.run(combo: combo) }
-        return true
     }
 
     // MARK: - Carbon RegisterEventHotKey fallback
@@ -599,5 +608,23 @@ enum SelectionCaptureFlow {
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.setString(text, forType: .string)
+    }
+}
+
+/// What `DictHotkeyManager`'s tap reads on the tap thread. The main thread
+/// writes it when the binding changes.
+final class DictTapState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var tapPort: CFMachPort?
+    private var bound: HotkeyCombo?
+
+    var tap: CFMachPort? {
+        get { lock.lock(); defer { lock.unlock() }; return tapPort }
+        set { lock.lock(); defer { lock.unlock() }; tapPort = newValue }
+    }
+
+    var combo: HotkeyCombo? {
+        get { lock.lock(); defer { lock.unlock() }; return bound }
+        set { lock.lock(); defer { lock.unlock() }; bound = newValue }
     }
 }

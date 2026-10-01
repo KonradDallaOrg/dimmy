@@ -1013,6 +1013,9 @@ enum MeetingSimulation {
         let env = ProcessInfo.processInfo.environment
         if let out = env["DIMMY_SIM_PROBE_OUT"] {
             MainLagProbe.start(csvPath: out, runLoop: CFRunLoopGetMain())
+            // Where keystrokes wait now; see KeyboardTapThread.
+            MainLagProbe.start(csvPath: out.replacingOccurrences(of: "main.csv", with: "tap.csv"),
+                               runLoop: KeyboardTapThread.shared.runLoop)
         }
         guard let secs = env["DIMMY_SIM_MEETING_SECS"].flatMap(Double.init), secs > 0 else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
