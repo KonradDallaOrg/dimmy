@@ -108,6 +108,16 @@ static GEMINI_LAST_ERROR: Mutex<String> = Mutex::new(String::new());
 /// Wraps the pure decision in `transcribe::resolve_local_backend` with the
 /// disk checks, and tells the host when the answer is not what the user
 /// picked so it can say so rather than quietly using a different engine.
+/// History needs a language label; auto-detect is an empty language,
+/// which `HistoryStore::save` rejects with an assert.
+fn history_language(language: &str) -> &str {
+    if language.trim().is_empty() {
+        "auto"
+    } else {
+        language
+    }
+}
+
 fn effective_local_backend(selected: &str) -> &'static str {
     let whisper_model = state()
         .local_model
@@ -9033,7 +9043,9 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
         if let Ok(guard) = st.history_store.lock() {
             if let Some(ref store) = *guard {
                 let duration = raw_sample_count as f64 / sample_rate as f64;
-                let saved_id = store.save(&text, &language, duration).ok();
+                let saved_id = store
+                    .save(&text, history_language(&language), duration)
+                    .ok();
                 // Attach word timestamps when the parakeet path produced
                 // them. Whisper backend leaves word_ts_acc empty → no-op.
                 if let (Some(id), false) = (saved_id, word_ts_acc.is_empty()) {
@@ -11389,6 +11401,23 @@ mod tests {
         // The next call already started recording: its audio is not ours
         // to clear, and clearing it would lose real recorded speech.
         assert!(!stop_owns_shared_audio(7, 8));
+    }
+
+    // ── file load → history ──────────────────────────────────────
+
+    #[test]
+    fn auto_detect_file_load_saves_to_history_without_panicking() {
+        // Auto-detect is an empty language. The file path transcribed a
+        // 12-minute Telegram voice note, then aborted the whole app on
+        // history.save()'s empty-language assert.
+        assert_eq!(history_language(""), "auto");
+        assert_eq!(history_language("  "), "auto");
+        assert_eq!(history_language("it"), "it");
+
+        let store = crate::history::HistoryStore::new(std::path::Path::new(":memory:")).unwrap();
+        store
+            .save("ciao a tutti", history_language(""), 728.2)
+            .unwrap();
     }
 
     // ── model downloads ──────────────────────────────────────────
