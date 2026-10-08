@@ -6,7 +6,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.7.12] - 2026-10-01
+## [0.7.12] - 2026-10-08
 
 ### Added
 
@@ -52,6 +52,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- File load (Telegram inbox and "Transcribe a file") aborted the whole app
+  after a successful local transcription when the language was Auto-detect.
+  `dimmy_transcribe_file` passed the empty auto-detect language straight to
+  `HistoryStore::save`, whose empty-language `assert!` panicked inside an
+  `extern "C"` fn, which cannot unwind. The fallback to "en" had been removed
+  in b7cc212 (0.6.71) so the STT would auto-detect, and the history label
+  lost it with it. The STT still receives the empty language; only the
+  history label falls back to "auto". Telegram files left unprocessed in the
+  inbox re-crashed the app on every launch.
 - Mac: typing in any other app lagged and stuttered while a meeting was
   being transcribed live. Both global keyboard taps ran on Dimmy's main run
   loop, so every keystroke waited for the meeting window to redraw. They now
