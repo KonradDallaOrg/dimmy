@@ -45,9 +45,16 @@ struct TryItStepView: View {
         }
         .padding(.horizontal, 32)
         .onAppear {
-            modelReady = appState.localSttBackend == "parakeet"
-                ? DimmyCore.shared.parakeetBundlePresent()
-                : DimmyCore.shared.modelExists(appState.localModel)
+            switch appState.localSttBackend {
+            case "parakeet":
+                modelReady = DimmyCore.shared.parakeetBundlePresent()
+            case "whistle":
+                modelReady = DimmyCore.shared.whistleStatus() == 1
+            case "qwen":
+                modelReady = DimmyCore.shared.qwenAsrBundlePresent(appState.qwenAsrModel)
+            default:
+                modelReady = DimmyCore.shared.modelExists(appState.localModel)
+            }
         }
         .onChange(of: appState.recordingState) { _, newState in
             // Show the transcript and a result marker, but DON'T auto-jump to
