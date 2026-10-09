@@ -739,6 +739,16 @@ pub fn transcribe_audio_local_whistle(
     language: &str,
     keywords: &[String],
 ) -> Result<String, crate::error::TranscribeError> {
+    transcribe_audio_local_whistle_words(audio, language, keywords).map(|(text, _)| text)
+}
+
+/// [`transcribe_audio_local_whistle`], plus the word timestamps (seconds
+/// from the start of `audio`) that speaker attribution needs.
+pub fn transcribe_audio_local_whistle_words(
+    audio: &crate::audio::ProcessedAudio,
+    language: &str,
+    keywords: &[String],
+) -> Result<(String, Vec<crate::diarize::Word>), crate::error::TranscribeError> {
     assert!(
         !audio.samples.is_empty(),
         "transcribe_audio_local_whistle: audio samples must not be empty"
@@ -754,11 +764,27 @@ pub fn transcribe_audio_local_whistle(
         "transcribe_audio_local_whistle: downsampled samples must not be empty"
     );
 
-    let text = crate::whistle::transcribe(&samples_16k, language, keywords)?;
+    let (text, words) = crate::whistle::transcribe_words(&samples_16k, language, keywords)?;
     if text.trim().is_empty() {
         return Err(crate::error::TranscribeError::Empty);
     }
-    Ok(text)
+    Ok((text, whistle_words(words, 0.0)))
+}
+
+/// Whistle's words in the shape speaker attribution takes, shifted by
+/// `offset_secs`.
+pub fn whistle_words(
+    words: Vec<crate::whistle::Word>,
+    offset_secs: f64,
+) -> Vec<crate::diarize::Word> {
+    words
+        .into_iter()
+        .map(|w| crate::diarize::Word {
+            start: w.start + offset_secs,
+            end: w.end + offset_secs,
+            text: w.text,
+        })
+        .collect()
 }
 
 /// Transcribe ProcessedAudio, automatically chunking if it exceeds the provider's

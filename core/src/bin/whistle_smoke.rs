@@ -6,16 +6,21 @@
 //! after the first reports the warm cost.
 //!
 //! Usage:
-//!   whistle_smoke [--lang it] [--keywords "Dimmy,Cactus Compute"] <audio.wav> [more.wav ...]
+//!   whistle_smoke [--lang it] [--keywords "Dimmy,Cactus Compute"] [--words] <audio> [more ...]
+//!
+//! `--words` prints each word with its start, end and probability instead of
+//! the text. Anything that is not a .wav goes through the meeting decoder.
 
 fn main() {
     let mut language = String::new();
     let mut keywords: Vec<String> = Vec::new();
     let mut files: Vec<String> = Vec::new();
+    let mut show_words = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--lang" => language = args.next().unwrap_or_default(),
+            "--words" => show_words = true,
             "--keywords" => {
                 keywords = args
                     .next()
@@ -57,6 +62,24 @@ fn main() {
         };
         let secs = audio.samples.len() as f64 / f64::from(audio.sample_rate);
         let started = std::time::Instant::now();
+        if show_words {
+            let pcm = dimmy_lib::preprocess::downsample_to_16k(&audio.samples, audio.sample_rate);
+            match dimmy_lib::whistle::transcribe_words(&pcm, &language, &keywords) {
+                Ok((_, words)) => {
+                    for w in words {
+                        println!(
+                            "{:7.2} {:7.2} {:.3} {}",
+                            w.start, w.end, w.probability, w.text
+                        );
+                    }
+                }
+                Err(e) => {
+                    println!("{path}: FAILED {e}");
+                    failures += 1;
+                }
+            }
+            continue;
+        }
         match dimmy_lib::transcribe::transcribe_audio_local_whistle(&audio, &language, &keywords) {
             Ok(text) => {
                 let took = started.elapsed().as_secs_f64();
@@ -75,6 +98,14 @@ fn main() {
 }
 
 fn read_mono(path: &str) -> Option<dimmy_lib::audio::ProcessedAudio> {
+    if !path.to_ascii_lowercase().ends_with(".wav") {
+        // Meeting tracks are ogg: same decoder the app uses for them.
+        let (samples, sample_rate) = dimmy_lib::ffi::decode_via_symphonia(path).ok()?;
+        return (!samples.is_empty()).then_some(dimmy_lib::audio::ProcessedAudio {
+            samples,
+            sample_rate,
+        });
+    }
     let mut reader = hound::WavReader::open(path).ok()?;
     let spec = reader.spec();
     let interleaved: Vec<f32> = match spec.sample_format {

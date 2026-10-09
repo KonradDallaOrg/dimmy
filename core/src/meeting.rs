@@ -996,8 +996,11 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
                 }
             }
         } else if ctx.stt.local_backend == "whistle" {
-            match crate::whistle::transcribe(&pcm_16k, &ctx.language, &[]) {
-                Ok(t) => (t, None),
+            match crate::whistle::transcribe_words(&pcm_16k, &ctx.language, &[]) {
+                Ok((t, words)) => (
+                    t,
+                    want_words.then(|| crate::transcribe::whistle_words(words, 0.0)),
+                ),
                 Err(e) => {
                     crate::log(&format!("[Meeting] whistle error: {}", e));
                     (String::new(), None)

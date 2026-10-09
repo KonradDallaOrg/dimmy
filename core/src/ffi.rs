@@ -9408,12 +9408,25 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
                     )
                     .unwrap_or_default()
                 } else if backend == "whistle" {
-                    crate::transcribe::transcribe_audio_local_whistle(
+                    match crate::transcribe::transcribe_audio_local_whistle_words(
                         &window,
                         &language,
                         &whistle_keywords(),
-                    )
-                    .unwrap_or_default()
+                    ) {
+                        Ok((t, words)) => {
+                            if diarize_on {
+                                band_words.extend(words.into_iter().map(|w| {
+                                    crate::diarize::Word {
+                                        start: w.start + offset_secs,
+                                        end: w.end + offset_secs,
+                                        text: w.text,
+                                    }
+                                }));
+                            }
+                            t
+                        }
+                        Err(_) => String::new(),
+                    }
                 } else if backend == "parakeet" {
                     match crate::transcribe::transcribe_audio_local_parakeet_with_word_ts(&window) {
                         Ok((t, ts_json)) => {

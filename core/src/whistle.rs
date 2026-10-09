@@ -267,10 +267,36 @@ fn chunk_ranges(pcm: &[f32]) -> Vec<Range<usize>> {
     out
 }
 
-/// The transcript out of the engine's JSON answer.
-fn parse_output(json: &str) -> Option<String> {
+/// One word with its place in the audio (seconds) and the model's own
+/// confidence in it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Word {
+    pub text: String,
+    pub start: f64,
+    pub end: f64,
+    pub probability: f32,
+}
+
+/// Transcript and words out of the engine's JSON answer.
+fn parse_output(json: &str) -> Option<(String, Vec<Word>)> {
     let v: serde_json::Value = serde_json::from_str(json.trim()).ok()?;
-    Some(v["text"].as_str()?.trim().to_string())
+    let text = v["text"].as_str()?.trim().to_string();
+    let words = v["words"]
+        .as_array()
+        .map(|ws| {
+            ws.iter()
+                .filter_map(|w| {
+                    Some(Word {
+                        text: w["word"].as_str()?.to_string(),
+                        start: w["start"].as_f64()?,
+                        end: w["end"].as_f64()?,
+                        probability: w["probability"].as_f64()? as f32,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Some((text, words))
 }
 
 type TranscribeFn = unsafe extern "C" fn(
@@ -365,14 +391,14 @@ impl Engine {
         pcm: &[f32],
         language: Option<&CStr>,
         keywords: Option<&CStr>,
-    ) -> Result<String, TranscribeError> {
+    ) -> Result<(String, Vec<Word>), TranscribeError> {
         assert!(
             !pcm.is_empty() && pcm.len() <= MAX_CHUNK,
             "whistle: one call takes 1..={} samples, got {}",
             MAX_CHUNK,
             pcm.len()
         );
-        let mut out = vec![0u8; 16 * 1024];
+        let mut out = vec![0u8; 64 * 1024];
         // SAFETY: `pcm` and `out` are valid for the lengths passed, the
         // strings are NUL-terminated or NULL, and the mutex held by the
         // caller makes this the only call into the engine.
@@ -382,7 +408,7 @@ impl Engine {
                 pcm.len() as c_int,
                 language.map_or(std::ptr::null(), CStr::as_ptr),
                 keywords.map_or(std::ptr::null(), CStr::as_ptr),
-                0,
+                1,
                 out.as_mut_ptr().cast(),
                 out.len() as c_int,
             )
@@ -410,6 +436,16 @@ pub fn transcribe(
     language: &str,
     keywords: &[String],
 ) -> Result<String, TranscribeError> {
+    transcribe_words(pcm_16k, language, keywords).map(|(text, _)| text)
+}
+
+/// [`transcribe`], plus every word with its time from the start of
+/// `pcm_16k` and the model's confidence.
+pub fn transcribe_words(
+    pcm_16k: &[f32],
+    language: &str,
+    keywords: &[String],
+) -> Result<(String, Vec<Word>), TranscribeError> {
     assert!(!pcm_16k.is_empty(), "whistle: pcm must not be empty");
     assert!(
         pcm_16k.iter().all(|s| s.is_finite()),
@@ -445,16 +481,33 @@ pub fn transcribe(
     let engine = state.as_ref().expect("loaded above");
 
     let mut text = String::new();
+    let mut words = Vec::new();
     for range in chunk_ranges(pcm_16k) {
-        let piece = engine.transcribe(&pcm_16k[range], language.as_deref(), keywords.as_deref())?;
+        let offset = range.start as f64 / SAMPLE_RATE as f64;
+        let chunk = &pcm_16k[range];
+        // A chunk without speech never reaches the model. Whistle returns
+        // nothing for digital silence, but on room tone it signs off like
+        // whisper does: a 246 s meeting mic track holding one spoken
+        // sentence came back with twelve "Grazie a tutti" (2026-10-10).
+        // `None` is "no VAD available", and then the chunk goes through.
+        if crate::silero::speech_present(chunk) == Some(false) {
+            continue;
+        }
+        let (piece, chunk_words) =
+            engine.transcribe(chunk, language.as_deref(), keywords.as_deref())?;
         if !piece.is_empty() {
             if !text.is_empty() {
                 text.push(' ');
             }
             text.push_str(&piece);
         }
+        words.extend(chunk_words.into_iter().map(|w| Word {
+            start: w.start + offset,
+            end: w.end + offset,
+            ..w
+        }));
     }
-    Ok(text)
+    Ok((text, words))
 }
 
 #[cfg(test)]
@@ -505,13 +558,21 @@ mod tests {
     #[test]
     fn output_is_the_text_field() {
         let out = r#"{"text":" ciao a tutti ","language":"it","ttft_ms":1.0,"decode_tps":2.0}"#;
-        assert_eq!(parse_output(out).as_deref(), Some("ciao a tutti"));
+        assert_eq!(
+            parse_output(out),
+            Some(("ciao a tutti".to_string(), vec![]))
+        );
         // Silence is an empty transcript, not a failure.
         assert_eq!(
-            parse_output(r#"{"text":"","language":""}"#).as_deref(),
-            Some("")
+            parse_output(r#"{"text":"","language":""}"#),
+            Some((String::new(), vec![]))
         );
         assert_eq!(parse_output(""), None);
+        let out = r#"{"text":"ciao","words":[{"word":"ciao","start":0.4,"end":0.64,"probability":0.884}]}"#;
+        let (_, words) = parse_output(out).unwrap();
+        assert_eq!(words.len(), 1);
+        assert_eq!(words[0].text, "ciao");
+        assert!((words[0].end - 0.64).abs() < 1e-9);
     }
 
     #[test]
