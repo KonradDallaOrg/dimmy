@@ -303,18 +303,24 @@ pub fn default_name(n: usize) -> String {
 
 /// Turn per-track turns into transcript lines `(ms, label, text)` and the
 /// speaker list. The system track (the other side of a call) is numbered
-/// first; the mic track keeps its `mic` label unless the diarizer heard more
-/// than one person on it â€” an in-person meeting â€” in which case its voices
-/// get speaker ids too. `prior` carries names from an earlier run, by id.
+/// first. The mic track keeps its `mic` label: which track a voice came in
+/// on is a fact, and with a call on loudspeakers the far side leaks into
+/// the microphone and reads as a second voice. Only a meeting with nobody
+/// on the system track (people in one room) has its mic voices numbered.
+/// `prior` carries names from an earlier run, by id.
 pub fn label_bands(
     mut bands: Vec<BandTurns>,
     prior: &[SpeakerInfo],
 ) -> (Vec<(u128, String, String)>, Vec<SpeakerInfo>) {
     bands.sort_by_key(|b| if b.band == "system" { 0 } else { 1 });
+    let call_has_voices = bands
+        .iter()
+        .any(|b| b.band == "system" && !b.turns.is_empty());
     let mut lines = Vec::new();
     let mut speakers: Vec<SpeakerInfo> = Vec::new();
     for b in bands {
-        let keep_band_label = b.band != "system" && b.diar.speakers(1.0).len() <= 1;
+        let keep_band_label =
+            b.band != "system" && (call_has_voices || b.diar.speakers(1.0).len() <= 1);
         let segments = b.diar.segments();
         let has_turns = !b.turns.is_empty();
         let mut local_to_global: Vec<(usize, usize)> = Vec::new();
@@ -1363,6 +1369,28 @@ mod tests {
 "
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// With the call on loudspeakers the far side leaks into the microphone
+    /// and the diarizer hears it as a second voice. Numbering it took the
+    /// `mic` lane away and filed the user under "Speaker 3" (2026-10-10).
+    /// The track a voice came in on is known; it is not for the diarizer to
+    /// overrule while there is a call it could be echoing.
+    #[test]
+    fn a_second_voice_on_the_mic_during_a_call_stays_mic() {
+        let sys = band("system", &[(0, 400)], &[(0, Some(0), "buongiorno")]);
+        let mic = band(
+            "mic",
+            &[(0, 200), (1, 200)],
+            &[(0, Some(0), "eco"), (2000, Some(1), "eccomi")],
+        );
+        let (lines, speakers) = label_bands(vec![mic, sys], &[]);
+        let labels: Vec<&str> = lines.iter().map(|l| l.1.as_str()).collect();
+        assert_eq!(labels, vec!["Speaker 1", "mic", "mic"]);
+        assert_eq!(speakers.len(), 2);
+        let m = &speakers[1];
+        assert_eq!((m.id.as_str(), m.band.as_str()), ("mic", "mic"));
+        assert!((m.talk_secs - 4.0).abs() < 0.02);
     }
 
     #[test]

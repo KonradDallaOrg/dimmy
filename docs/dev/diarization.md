@@ -34,8 +34,10 @@ audio inside `dimmy_meeting_retranscribe`:
    groups turns; `diarize::label_bands` numbers speakers (system track first) and
    writes `speakers.json`.
 4. `transcripts.txt` keeps its format; the label is the speaker's NAME:
-   `[00:01:23] [Speaker 2] …`. The mic track stays `[mic]` unless the diarizer hears
-   more than one person on it (an in-person meeting).
+   `[00:01:23] [Speaker 2] …`. The mic track stays `[mic]` whenever the system
+   track has voices: with a call on loudspeakers the far side leaks into the microphone and
+   reads as a second voice. Only with nobody on the system track (people in one room) are
+   the mic voices numbered.
 
 The Windows and Mac hosts run it automatically after a meeting stops **only with local STT**
 (Win `Services/DiarizationService.cs`, Mac `DiarizationService` in `Views/Meeting/MeetingSpeakers.swift`): with cloud STT it would upload the whole meeting a

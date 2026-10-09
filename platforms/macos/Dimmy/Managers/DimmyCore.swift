@@ -1021,6 +1021,28 @@ final class DimmyCore {
         dimmy_model_delete(id)
     }
 
+    // MARK: - Whistle (CPU-only local STT backend)
+
+    /// 1 = on disk, 0 = not downloaded, -1 = no engine for this Mac.
+    func whistleStatus() -> Int {
+        Int(dimmy_whistle_status())
+    }
+
+    func whistleSizeMb() -> Int {
+        Int(dimmy_whistle_size_mb())
+    }
+
+    /// BLOCKING — call from a background thread. Progress arrives as
+    /// "whistle_download_progress" events on the global handler.
+    @discardableResult
+    func downloadWhistle() -> Bool {
+        let result = dimmy_whistle_download()
+        if result != 0 {
+            print("[DimmyCore] ERROR: downloadWhistle failed with code \(result)")
+        }
+        return result == 0
+    }
+
     // MARK: - Parakeet (alternative local STT backend)
 
     /// 1 = bundle complete on disk, 0 = missing or partial.
@@ -1396,6 +1418,7 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
             switch requested {
             case "parakeet": name = "Parakeet"
             case "qwen": name = "Qwen3-ASR"
+            case "whistle": name = "Whistle"
             default: name = requested
             }
             DictToastWindow.show(
@@ -1476,7 +1499,8 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
             appState.llmModelDownloadFilename = payload["filename"] as? String ?? ""
         }
 
-    case "parakeet_bundle_download_progress":
+    // Whistle reports the same {downloaded,total} and drives the same bar.
+    case "parakeet_bundle_download_progress", "whistle_download_progress":
         if let downloaded = payload["downloaded"] as? Int,
            let total = payload["total"] as? Int,
            total > 0 {

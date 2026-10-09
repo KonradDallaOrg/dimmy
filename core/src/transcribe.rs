@@ -608,7 +608,7 @@ pub fn transcribe_audio_local_parakeet_with_word_ts(
 /// choice and the original error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LocalBackendChoice {
-    /// `"whisper"`, `"parakeet"` or `"qwen"`.
+    /// `"whisper"`, `"parakeet"`, `"qwen"` or `"whistle"`.
     pub backend: &'static str,
     /// True when this is not what the user picked.
     pub fell_back: bool,
@@ -618,16 +618,19 @@ pub fn resolve_local_backend(
     selected: &str,
     parakeet_ready: bool,
     qwen_ready: bool,
+    whistle_ready: bool,
     whisper_ready: bool,
 ) -> LocalBackendChoice {
     let ready = match selected {
         "parakeet" => parakeet_ready,
         "qwen" => qwen_ready,
+        "whistle" => whistle_ready,
         _ => whisper_ready,
     };
     let canonical = match selected {
         "parakeet" => "parakeet",
         "qwen" => "qwen",
+        "whistle" => "whistle",
         _ => "whisper",
     };
     if ready || !whisper_ready {
@@ -648,19 +651,23 @@ mod backend_resolution {
 
     #[test]
     fn a_ready_engine_is_used_as_chosen() {
-        assert_eq!(r("parakeet", true, false, true).backend, "parakeet");
-        assert_eq!(r("qwen", false, true, true).backend, "qwen");
-        assert_eq!(r("whisper", false, false, true).backend, "whisper");
-        assert!(!r("parakeet", true, false, true).fell_back);
+        assert_eq!(r("parakeet", true, false, false, true).backend, "parakeet");
+        assert_eq!(r("qwen", false, true, false, true).backend, "qwen");
+        assert_eq!(r("whistle", false, false, true, true).backend, "whistle");
+        assert_eq!(r("whisper", false, false, false, true).backend, "whisper");
+        assert!(!r("parakeet", true, false, false, true).fell_back);
     }
 
     #[test]
     fn a_missing_engine_falls_back_to_whisper() {
         // This is the Sentry case: parakeet selected, never downloaded.
-        let c = r("parakeet", false, false, true);
+        let c = r("parakeet", false, false, false, true);
         assert_eq!(c.backend, "whisper");
         assert!(c.fell_back);
-        let c = r("qwen", false, false, true);
+        let c = r("qwen", false, false, false, true);
+        assert_eq!(c.backend, "whisper");
+        assert!(c.fell_back);
+        let c = r("whistle", false, false, false, true);
         assert_eq!(c.backend, "whisper");
         assert!(c.fell_back);
     }
@@ -669,7 +676,7 @@ mod backend_resolution {
     fn nothing_on_disk_keeps_the_choice_and_its_error() {
         // Falling back to a whisper that is also missing would only move
         // the failure, and hide which engine the user actually picked.
-        let c = r("parakeet", false, false, false);
+        let c = r("parakeet", false, false, false, false);
         assert_eq!(c.backend, "parakeet");
         assert!(!c.fell_back);
     }
@@ -678,8 +685,11 @@ mod backend_resolution {
     fn an_unknown_value_is_treated_as_whisper() {
         // `dimmy_set_config_json` allow-lists the field, but a config written
         // by a newer build can still reach an older one.
-        assert_eq!(r("parakeet-v9", false, false, true).backend, "whisper");
-        assert!(!r("", false, false, true).fell_back);
+        assert_eq!(
+            r("parakeet-v9", false, false, false, true).backend,
+            "whisper"
+        );
+        assert!(!r("", false, false, false, true).fell_back);
     }
 }
 
@@ -718,6 +728,63 @@ pub fn transcribe_audio_local_qwen(
         return Err(crate::error::TranscribeError::Empty);
     }
     Ok(transcript.text)
+}
+
+/// Transcribe with Whistle, the CPU-only fourth local backend.
+///
+/// Same contract as the two entries above. `keywords` is the user's custom
+/// dictionary: the engine biases its search toward those terms.
+pub fn transcribe_audio_local_whistle(
+    audio: &crate::audio::ProcessedAudio,
+    language: &str,
+    keywords: &[String],
+) -> Result<String, crate::error::TranscribeError> {
+    transcribe_audio_local_whistle_words(audio, language, keywords).map(|(text, _)| text)
+}
+
+/// [`transcribe_audio_local_whistle`], plus the word timestamps (seconds
+/// from the start of `audio`) that speaker attribution needs.
+pub fn transcribe_audio_local_whistle_words(
+    audio: &crate::audio::ProcessedAudio,
+    language: &str,
+    keywords: &[String],
+) -> Result<(String, Vec<crate::diarize::Word>), crate::error::TranscribeError> {
+    assert!(
+        !audio.samples.is_empty(),
+        "transcribe_audio_local_whistle: audio samples must not be empty"
+    );
+    assert!(
+        audio.sample_rate > 0,
+        "transcribe_audio_local_whistle: sample_rate must be positive"
+    );
+
+    let samples_16k = stt_input_16k(audio);
+    assert!(
+        !samples_16k.is_empty(),
+        "transcribe_audio_local_whistle: downsampled samples must not be empty"
+    );
+
+    let (text, words) = crate::whistle::transcribe_words(&samples_16k, language, keywords)?;
+    if text.trim().is_empty() {
+        return Err(crate::error::TranscribeError::Empty);
+    }
+    Ok((text, whistle_words(words, 0.0)))
+}
+
+/// Whistle's words in the shape speaker attribution takes, shifted by
+/// `offset_secs`.
+pub fn whistle_words(
+    words: Vec<crate::whistle::Word>,
+    offset_secs: f64,
+) -> Vec<crate::diarize::Word> {
+    words
+        .into_iter()
+        .map(|w| crate::diarize::Word {
+            start: w.start + offset_secs,
+            end: w.end + offset_secs,
+            text: w.text,
+        })
+        .collect()
 }
 
 /// Transcribe ProcessedAudio, automatically chunking if it exceeds the provider's

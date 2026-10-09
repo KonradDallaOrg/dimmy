@@ -40,6 +40,7 @@ struct MacVoicePage: View {
     /// users never saw the larger/faster models the core already supports.
     @State private var localModels: [[String: Any]] = []
     @State private var qwenModels: [[String: Any]] = []
+    @State private var whistleSizeMb: Int = 0
 
     /// Text-field state for the "add a word" row in the custom-dictionary
     /// section. Kept inline to avoid a parallel view-model class, the
@@ -52,6 +53,8 @@ struct MacVoicePage: View {
     /// Picker. Mirrors `ParakeetTag` in the Windows OnboardingWindow.xaml.cs
     /// so the two UIs round-trip the same selection through the Rust core.
     private static let parakeetTag = "parakeet:fp32"
+    /// Whistle entry. Mirrors `WhistleTag` in SettingsWindow.xaml.cs.
+    private static let whistleTag = "whistle"
 
     /// Qwen3-ASR rows carry the variant in the tag, because unlike
     /// Parakeet there is more than one of them. Mirrors QwenTagPrefix in
@@ -133,6 +136,18 @@ struct MacVoicePage: View {
                 .tag(qwenTagPrefix + file)
         } else {
             Text(label).tag(qwenTagPrefix + file)
+        }
+    }
+
+    @ViewBuilder
+    fileprivate static func whistlePickerItem(sizeMb: Int, present: Bool) -> some View {
+        let label = "Whistle · \(sizeMb) MB · CPU"
+        if present {
+            Label(label, systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+                .tag(whistleTag)
+        } else {
+            Text(label).tag(whistleTag)
         }
     }
 
@@ -507,7 +522,7 @@ struct MacVoicePage: View {
                 } else {
                     MacRow(
                         "Local model",
-                        hint: "Everything here runs offline. Whisper is the broadest, and moves onto the Neural Engine once its encoder is downloaded. Parakeet TDT v3 is the fastest and always runs on the Neural Engine. Qwen3-ASR is the strongest on conversational speech; its 0.6B variant also has a Neural Engine build.",
+                        hint: "Everything here runs offline. Whisper is the broadest, and moves onto the Neural Engine once its encoder is downloaded. Parakeet TDT v3 is the fastest and always runs on the Neural Engine. Qwen3-ASR is the strongest on conversational speech; its 0.6B variant also has a Neural Engine build. Whistle is a 17 MB model that runs on the CPU alone and covers English, Italian, German, French, Spanish, Dutch and Polish.",
                         hintURL: URL(string: "https://dimmy.app/help/whisper-models"),
                         showsDivider: !localModelReady || downloadInFlight || coremlRowVisible
                     ) {
@@ -531,6 +546,14 @@ struct MacVoicePage: View {
                             Section("Qwen3-ASR") {
                                 ForEach(qwenModels.indices, id: \.self) { i in
                                     Self.qwenPickerItem(qwenModels[i])
+                                }
+                            }
+                            if appState.whistleStatus >= 0 {
+                                Section("Whistle") {
+                                    Self.whistlePickerItem(
+                                        sizeMb: whistleSizeMb,
+                                        present: appState.whistleStatus == 1
+                                    )
                                 }
                             }
                         }
@@ -673,6 +696,10 @@ struct MacVoicePage: View {
         appState.localSttBackend == "qwen"
     }
 
+    private var localBackendIsWhistle: Bool {
+        appState.localSttBackend == "whistle"
+    }
+
     /// True when the currently-selected local backend has its data on
     /// disk and is ready to transcribe. Whisper: ggml file present.
     /// Parakeet: full CoreML bundle (about 466 MB) present.
@@ -682,6 +709,9 @@ struct MacVoicePage: View {
         }
         if localBackendIsParakeet {
             return appState.parakeetBundlePresent
+        }
+        if localBackendIsWhistle {
+            return appState.whistleStatus == 1
         }
         return localModelExists
     }
@@ -697,6 +727,9 @@ struct MacVoicePage: View {
                 if localBackendIsQwen {
                     return Self.qwenTagPrefix + appState.qwenAsrModel
                 }
+                if localBackendIsWhistle {
+                    return Self.whistleTag
+                }
                 return localBackendIsParakeet ? Self.parakeetTag : appState.localModel
             },
             set: { newValue in
@@ -706,6 +739,9 @@ struct MacVoicePage: View {
                     // Same convenience as the other two backends: the
                     // low-latency chunked path is the reason to run a
                     // local engine at all.
+                    appState.chunkStreamingEnabled = true
+                } else if newValue == Self.whistleTag {
+                    appState.localSttBackend = "whistle"
                     appState.chunkStreamingEnabled = true
                 } else if newValue == Self.parakeetTag {
                     appState.localSttBackend = "parakeet"
@@ -730,6 +766,7 @@ struct MacVoicePage: View {
             localModelExists = false
             appState.parakeetBundlePresent = false
             appState.qwenBundlePresent = false
+            appState.whistleStatus = -1
             return
         }
         // Move the FFI probes off the main thread. Each call is a
@@ -748,6 +785,8 @@ struct MacVoicePage: View {
             let models = DimmyCore.shared.listLocalModels() ?? []
             let qwen = DimmyCore.shared.qwenAsrBundlePresent(qwenName)
             let qwenList = DimmyCore.shared.listQwenAsrModels() ?? []
+            let whistle = DimmyCore.shared.whistleStatus()
+            let whistleMb = DimmyCore.shared.whistleSizeMb()
             let coremlStatus = DimmyCore.shared.coremlEncoderStatus(modelName)
             var ready = Set<String>()
             for m in models {
@@ -762,6 +801,8 @@ struct MacVoicePage: View {
                 self.coremlReady = ready
                 self.appState.parakeetBundlePresent = parakeet
                 self.appState.qwenBundlePresent = qwen
+                self.appState.whistleStatus = whistle
+                self.whistleSizeMb = whistleMb
                 if !qwenList.isEmpty { self.qwenModels = qwenList }
                 self.downloadFailed = nil
                 if !models.isEmpty { self.localModels = models }
@@ -792,6 +833,23 @@ struct MacVoicePage: View {
                         refreshLocalModelStatus()
                     } else {
                         downloadFailed = "Qwen3-ASR download failed. Check your connection and try again."
+                    }
+                }
+            }
+        } else if localBackendIsWhistle {
+            // Shares Parakeet's progress value: one bundle, one bar.
+            downloadingIsParakeet = true
+            downloadingTarget = "whistle"
+            downloadingLabel = "Whistle (\(whistleSizeMb) MB)"
+            appState.parakeetDownloadProgress = 0
+            DispatchQueue.global(qos: .userInitiated).async {
+                let ok = DimmyCore.shared.downloadWhistle()
+                DispatchQueue.main.async {
+                    downloadInFlight = false
+                    if ok {
+                        refreshLocalModelStatus()
+                    } else {
+                        downloadFailed = "Whistle download failed. Check your connection and try again."
                     }
                 }
             }
@@ -874,8 +932,8 @@ struct MacVoicePage: View {
     }
 
     private var coremlRowVisible: Bool {
-        !localBackendIsParakeet && !localBackendIsQwen && localModelReady
-            && !downloadInFlight && coreml.available
+        !localBackendIsParakeet && !localBackendIsQwen && !localBackendIsWhistle
+            && localModelReady && !downloadInFlight && coreml.available
     }
 
     /// Compile the already-downloaded bundle for this Mac. Preparation

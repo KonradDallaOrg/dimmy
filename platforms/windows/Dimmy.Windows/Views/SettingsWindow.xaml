@@ -456,7 +456,7 @@
               <StackPanel x:Name="LocalSttPanel" Spacing="4">
                 <controls:SettingCard Glyph="&#xE968;"
                                       Label="Local model"
-                                      InfoTip="Whisper sizes run fully offline. Parakeet TDT v3 is faster and strong on European languages, but it downloads once at about 2.5 GB."
+                                      InfoTip="Whisper sizes run fully offline. Parakeet TDT v3 is faster and strong on European languages, but it downloads once at about 2.5 GB. Whistle is a 17 MB model that needs no GPU and covers English, Italian, German, French, Spanish, Dutch and Polish."
                                       HelpUrl="https://dimmy.app/help/whisper-models">
                   <!-- Width is FIXED (not MinWidth) so long model names
                        like "ggml-large-v3-turbo-q5_0.bin" don't expand
@@ -2716,7 +2716,16 @@
                     <Flyout>
                       <StackPanel MaxWidth="320" Spacing="10">
                         <TextBlock TextWrapping="Wrap" FontSize="13"
-                                   Text="Log in with your own Telegram account. Then, from any phone, record an audio note and forward it to your Saved Messages - Dimmy picks it up, transcribes it, and writes a recap. No bot, no cloud drive." />
+                                   Text="1. Connect your own Telegram account below, with the QR code or your phone number." />
+                        <TextBlock TextWrapping="Wrap" FontSize="13"
+                                   Text="2. On your phone, record a voice message or pick any audio file." />
+                        <TextBlock TextWrapping="Wrap" FontSize="13"
+                                   Text="3. Send it to Saved Messages, your chat with yourself. Inside Telegram: touch and hold the audio, Forward, Saved Messages. From another app: Share, Telegram, Saved Messages." />
+                        <TextBlock TextWrapping="Wrap" FontSize="13"
+                                   Text="4. Dimmy on this PC picks it up, transcribes it and writes the recap." />
+                        <TextBlock TextWrapping="Wrap" FontSize="13"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   Text="Dimmy signs in as you through Telegram's official protocol and reads only the audio in Saved Messages. It never touches your other chats, and the login stays on this PC." />
                       </StackPanel>
                     </Flyout>
                   </Button.Flyout>

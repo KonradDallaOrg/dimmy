@@ -2788,6 +2788,7 @@ public sealed partial class SettingsWindow : Window
     /// Sentinel ComboBox tag identifying the Parakeet entry. Not a real
     /// whisper-model filename — distinguished from `*.bin` by prefix.
     private const string ParakeetTag = "parakeet:fp32";
+    private const string WhistleTag = "whistle";
     // Qwen3-ASR rows carry the variant in the tag, because unlike Parakeet
     // there is more than one of them.
     private const string QwenTagPrefix = "qwen:";
@@ -2914,6 +2915,7 @@ public sealed partial class SettingsWindow : Window
 
                 if (ViewModel.LocalSttBackend != "parakeet"
                     && ViewModel.LocalSttBackend != "qwen"
+                    && ViewModel.LocalSttBackend != "whistle"
                     && filename == ViewModel.LocalModel)
                     selectedIdx = idx;
                 idx++;
@@ -2932,6 +2934,23 @@ public sealed partial class SettingsWindow : Window
             if (ViewModel.LocalSttBackend == "parakeet")
                 selectedIdx = idx;
             idx++;
+
+            // Whistle: tiny, CPU-only. Hidden where the core has no engine.
+            int whistleStatus = -1;
+            try { whistleStatus = DimmyNative.dimmy_whistle_status(); }
+            catch { }
+            if (whistleStatus >= 0)
+            {
+                int whistleMb = DimmyNative.dimmy_whistle_size_mb();
+                var whistleLabel = whistleStatus == 1
+                    ? "Whistle: tiny, fast on any CPU, 7 languages"
+                    : $"Whistle: tiny, fast on any CPU, 7 languages ({whistleMb}MB)";
+                LocalModelComboBox.Items.Add(
+                    MakeLocalModelItem(whistleLabel, WhistleTag, whistleStatus == 1, whistleMb));
+                if (ViewModel.LocalSttBackend == "whistle")
+                    selectedIdx = idx;
+                idx++;
+            }
 
             // Qwen3-ASR: one row per variant. Each is a PAIR of files on
             // disk, so "downloaded" here means both halves are present.
@@ -2989,6 +3008,12 @@ public sealed partial class SettingsWindow : Window
                 // chunked path is the reason to run a local engine at all.
                 ViewModel.ChunkStreamingEnabled = true;
                 App.Log($"-> set LocalSttBackend=qwen, QwenAsrModel={ViewModel.QwenAsrModel}", "Settings");
+            }
+            else if (tag == WhistleTag)
+            {
+                ViewModel.LocalSttBackend = "whistle";
+                ViewModel.ChunkStreamingEnabled = true;
+                App.Log("-> set LocalSttBackend=whistle", "Settings");
             }
             else if (tag == ParakeetTag)
             {
@@ -3210,10 +3235,13 @@ public sealed partial class SettingsWindow : Window
     {
         bool isParakeet = ViewModel.LocalSttBackend == "parakeet";
         bool isQwen = ViewModel.LocalSttBackend == "qwen";
+        bool isWhistle = ViewModel.LocalSttBackend == "whistle";
         try
         {
             int exists = isQwen
                 ? DimmyNative.dimmy_qwen_asr_bundle_present(ViewModel.QwenAsrModel)
+                : isWhistle
+                    ? DimmyNative.dimmy_whistle_status()
                 : isParakeet
                     ? DimmyNative.dimmy_parakeet_bundle_present()
                     : DimmyNative.dimmy_model_exists(ViewModel.LocalModel);
@@ -3229,6 +3257,10 @@ public sealed partial class SettingsWindow : Window
                 {
                     var q = _localModels.Find(m => m.Filename == QwenTagPrefix + ViewModel.QwenAsrModel);
                     sizeInfo = q != null ? $" ({q.SizeMb}MB)" : "";
+                }
+                else if (isWhistle)
+                {
+                    sizeInfo = $" ({DimmyNative.dimmy_whistle_size_mb()}MB)";
                 }
                 else if (isParakeet)
                 {
@@ -3256,6 +3288,7 @@ public sealed partial class SettingsWindow : Window
     {
         bool isParakeet = ViewModel.LocalSttBackend == "parakeet";
         bool isQwen = ViewModel.LocalSttBackend == "qwen";
+        bool isWhistle = ViewModel.LocalSttBackend == "whistle";
         DownloadModelBtn.IsEnabled = false;
         DownloadModelBtn.Content = "Downloading...";
         DownloadProgress.IsIndeterminate = true;
@@ -3267,6 +3300,8 @@ public sealed partial class SettingsWindow : Window
         {
             int result = await Task.Run(() => isQwen
                 ? DimmyNative.dimmy_qwen_asr_download(ViewModel.QwenAsrModel)
+                : isWhistle
+                    ? DimmyNative.dimmy_whistle_download()
                 : isParakeet
                     ? DimmyNative.dimmy_parakeet_download_bundle()
                     : DimmyNative.dimmy_download_model(ViewModel.LocalModel));

@@ -11,6 +11,8 @@ struct ModelDownloadStepView: View {
     /// Qwen entries are tagged by file, like Settings does, so the picker can
     /// hold three families in one selection string.
     private static let qwenTagPrefix = "qwen:"
+    /// Whistle entry: the small CPU-only alternative, listed second.
+    private static let whistleTag = "whistle"
     private static let defaultWhisper = "ggml-base-q8_0.bin"
 
     /// Whisper catalog from the Rust core (`dimmy_list_local_models`) so
@@ -27,6 +29,10 @@ struct ModelDownloadStepView: View {
     /// Qwen3-ASR variants. Onboarding offered Whisper and Parakeet only, so a
     /// family Settings shows was invisible to anyone setting Dimmy up.
     @State private var qwenModels: [[String: Any]] = []
+    /// 1 = on disk, 0 = not downloaded, -1 = no engine for this Mac (hidden).
+    @State private var whistleStatus: Int = -1
+    @State private var whistleSizeMb: Int = 0
+    @State private var isDownloadingWhistle = false
 
     /// Two-card mode selector. Mirrors Windows `IsLocalSelected` /
     /// `IsCloudSelected`. Defaults to local on Mac (no key required to
@@ -77,6 +83,8 @@ struct ModelDownloadStepView: View {
         .onAppear {
             whisperModels = DimmyCore.shared.listLocalModels() ?? []
             qwenModels = DimmyCore.shared.listQwenAsrModels() ?? []
+            whistleStatus = DimmyCore.shared.whistleStatus()
+            whistleSizeMb = DimmyCore.shared.whistleSizeMb()
             persistSelectionToAppState()
             refreshFromCore()
             applyAutoPick()
@@ -133,6 +141,9 @@ struct ModelDownloadStepView: View {
 
                 Picker("", selection: $selection) {
                     parakeetPickerEntry
+                    if whistleStatus >= 0 {
+                        whistlePickerEntry
+                    }
                     ForEach(whisperModels.indices, id: \.self) { i in
                         whisperPickerEntry(whisperModels[i])
                     }
@@ -387,6 +398,7 @@ struct ModelDownloadStepView: View {
 
     private var isParakeet: Bool { selection == Self.parakeetTag }
     private var isQwen: Bool { selection.hasPrefix(Self.qwenTagPrefix) }
+    private var isWhistle: Bool { selection == Self.whistleTag }
     /// The model file behind a Qwen selection (one entry is two files on disk).
     private var qwenFile: String { String(selection.dropFirst(Self.qwenTagPrefix.count)) }
 
@@ -406,6 +418,18 @@ struct ModelDownloadStepView: View {
                 .tag(Self.qwenTagPrefix + file)
         } else {
             Text(label).tag(Self.qwenTagPrefix + file)
+        }
+    }
+
+    @ViewBuilder
+    private var whistlePickerEntry: some View {
+        let label = "Whistle · \(whistleSizeMb) MB · CPU"
+        if whistleStatus == 1 {
+            Label(label, systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+                .tag(Self.whistleTag)
+        } else {
+            Text(label).tag(Self.whistleTag)
         }
     }
 
@@ -450,11 +474,13 @@ struct ModelDownloadStepView: View {
 
     private var downloadButtonLabel: String {
         if isParakeet { return "Download Parakeet (466 MB)" }
+        if isWhistle { return "Download Whistle (\(whistleSizeMb) MB)" }
         return isQwen ? "Download model + projector" : "Download model"
     }
 
     private var currentProgress: Double {
-        if isParakeet { return appState.parakeetDownloadProgress }
+        // Whistle reports through the same bundle progress value.
+        if isParakeet || isWhistle { return appState.parakeetDownloadProgress }
         return isQwen ? appState.qwenDownloadProgress : appState.modelDownloadProgress
     }
 
@@ -466,6 +492,8 @@ struct ModelDownloadStepView: View {
     private func persistSelectionToAppState() {
         if isParakeet {
             appState.localSttBackend = "parakeet"
+        } else if isWhistle {
+            appState.localSttBackend = "whistle"
         } else if isQwen {
             appState.localSttBackend = "qwen"
             appState.qwenAsrModel = qwenFile
@@ -480,6 +508,9 @@ struct ModelDownloadStepView: View {
         let ready: Bool
         if isParakeet {
             ready = DimmyCore.shared.parakeetBundlePresent()
+        } else if isWhistle {
+            whistleStatus = DimmyCore.shared.whistleStatus()
+            ready = whistleStatus == 1
         } else if isQwen {
             ready = DimmyCore.shared.qwenAsrBundlePresent(qwenFile)
         } else {
@@ -493,7 +524,11 @@ struct ModelDownloadStepView: View {
             downloadState = .downloading
             return
         }
-        if !isParakeet && !isQwen && !ready && appState.isDownloadingModel {
+        if isWhistle && !ready && isDownloadingWhistle {
+            downloadState = .downloading
+            return
+        }
+        if !isParakeet && !isQwen && !isWhistle && !ready && appState.isDownloadingModel {
             downloadState = .downloading
             return
         }
@@ -509,12 +544,28 @@ struct ModelDownloadStepView: View {
             downloadState = .downloading
             return
         }
-        if !isParakeet && !isQwen && appState.isDownloadingModel {
+        if isWhistle && isDownloadingWhistle {
+            downloadState = .downloading
+            return
+        }
+        if !isParakeet && !isQwen && !isWhistle && appState.isDownloadingModel {
             downloadState = .downloading
             return
         }
         downloadState = .downloading
-        if isQwen {
+        if isWhistle {
+            appState.localSttBackend = "whistle"
+            appState.parakeetDownloadProgress = 0.0
+            isDownloadingWhistle = true
+            DispatchQueue.global(qos: .userInitiated).async {
+                let success = DimmyCore.shared.downloadWhistle()
+                DispatchQueue.main.async {
+                    isDownloadingWhistle = false
+                    whistleStatus = DimmyCore.shared.whistleStatus()
+                    downloadState = success ? .completed : .failed
+                }
+            }
+        } else if isQwen {
             let target = qwenFile
             appState.localSttBackend = "qwen"
             appState.qwenAsrModel = target

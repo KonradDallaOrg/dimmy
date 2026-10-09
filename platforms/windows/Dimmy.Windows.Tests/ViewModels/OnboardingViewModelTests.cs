@@ -10,7 +10,7 @@ public class OnboardingViewModelTests
     {
         var vm = new OnboardingViewModel();
         Assert.Equal(0, vm.CurrentStep);
-        Assert.Equal(4, vm.TotalSteps);
+        Assert.Equal(5, vm.TotalSteps);
     }
 
     [Fact]
@@ -29,7 +29,9 @@ public class OnboardingViewModelTests
         vm.NextStep();
         vm.NextStep();
         vm.NextStep();
-        Assert.Equal(3, vm.CurrentStep);
+        vm.NextStep();
+        Assert.Equal(4, vm.CurrentStep);
+        Assert.True(vm.IsStep4);
     }
 
     [Fact]
@@ -138,5 +140,18 @@ public class OnboardingViewModelTests
         var vm = new OnboardingViewModel();
         vm.IsTrialSuccess = true;
         Assert.True(vm.IsTrialSuccess);
+    }
+
+    [Fact]
+    public void UpdatesEmail_CanBeSentOnlyWhenValidAndIdle()
+    {
+        var vm = new OnboardingViewModel();
+        Assert.False(vm.CanSendUpdatesEmail);
+        vm.UpdatesEmail = "anna@";
+        Assert.False(vm.CanSendUpdatesEmail);
+        vm.UpdatesEmail = "anna@example.com";
+        Assert.True(vm.CanSendUpdatesEmail);
+        vm.UpdatesBusy = true;
+        Assert.False(vm.CanSendUpdatesEmail);
     }
 }

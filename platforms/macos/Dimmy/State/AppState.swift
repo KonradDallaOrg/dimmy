@@ -1087,6 +1087,8 @@ final class AppState: ObservableObject {
         switch backend {
         case "parakeet":
             return "Parakeet"
+        case "whistle":
+            return "Whistle"
         case "qwen":
             return qwenModel.hasPrefix("fluid:") ? "Qwen3-ASR · Neural Engine" : "Qwen3-ASR"
         default:
@@ -1099,6 +1101,8 @@ final class AppState: ObservableObject {
     @Published var parakeetDownloadProgress: Double = 0.0
     @Published var isDownloadingParakeet: Bool = false
     @Published var parakeetBundlePresent: Bool = false
+    /// 1 = on disk, 0 = not downloaded, -1 = no engine for this Mac.
+    @Published var whistleStatus: Int = -1
 
     /// Label meeting transcripts by speaker. Mirror of Rust
     /// Config::diarization_enabled (off by default) and of Win

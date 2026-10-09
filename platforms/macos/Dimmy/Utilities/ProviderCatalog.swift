@@ -88,6 +88,13 @@ enum ProviderCatalog {
         // Qwen3-ASR variants: same source-of-truth idea, their own FFI
         // because one entry is a pair of files rather than one.
         list.append(contentsOf: parseQwen(DimmyCore.shared.listQwenAsrModels()))
+        // Whistle: one model plus its engine, flagged by the "whistle" id the
+        // download center knows. Absent where there is no engine to run it.
+        if DimmyCore.shared.whistleStatus() >= 0 {
+            list.append(ProviderModel(
+                name: "Whistle, \(DimmyCore.shared.whistleSizeMb()) MB",
+                stt: true, llm: false, recap: false, localFilename: "whistle"))
+        }
         list.append(contentsOf: parseLocal(DimmyCore.shared.listLLMModels(), stt: false))
         return list
     }

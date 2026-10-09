@@ -40,6 +40,7 @@ pub fn local_provider(backend: &str) -> &'static str {
     match backend {
         "parakeet" => "local_parakeet",
         "qwen" => "local_qwen",
+        "whistle" => "local_whistle",
         _ => "local_whisper",
     }
 }
@@ -50,6 +51,7 @@ pub fn local_backend_tag(backend: &str) -> &'static str {
     match backend {
         "parakeet" => "parakeet",
         "qwen" => "qwen",
+        "whistle" => "whistle",
         _ => "whisper",
     }
 }
@@ -414,6 +416,7 @@ mod tests {
         assert_eq!(local_provider("whisper"), "local_whisper");
         assert_eq!(local_provider("parakeet"), "local_parakeet");
         assert_eq!(local_provider("qwen"), "local_qwen");
+        assert_eq!(local_provider("whistle"), "local_whistle");
         // Unrecognised falls to whisper, matching effective_local_backend.
         assert_eq!(local_provider(""), "local_whisper");
     }
@@ -422,7 +425,7 @@ mod tests {
     /// grouped by one contradicts a chart grouped by the other.
     #[test]
     fn local_provider_and_backend_tag_agree() {
-        for b in ["whisper", "parakeet", "qwen", "", "unknown"] {
+        for b in ["whisper", "parakeet", "qwen", "whistle", "", "unknown"] {
             assert_eq!(
                 local_provider(b),
                 format!("local_{}", local_backend_tag(b)),

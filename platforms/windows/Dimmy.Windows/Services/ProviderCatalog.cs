@@ -109,6 +109,15 @@ public static class ProviderCatalog
         // Qwen3-ASR variants: same source-of-truth idea, their own FFI because
         // one entry is a pair of files rather than one.
         list.AddRange(ParseQwenModels(SafeFfi(Interop.DimmyNative.QwenAsrModelsJson)));
+        // Whistle: one model plus its engine, flagged by the "whistle" id the
+        // download center knows. Absent where there is no engine to run it.
+        try
+        {
+            if (Interop.DimmyNative.dimmy_whistle_status() >= 0)
+                list.Add(new ProviderModel(
+                    $"Whistle · {Interop.DimmyNative.dimmy_whistle_size_mb()} MB", true, false, false, "whistle"));
+        }
+        catch { }
         list.AddRange(ParseLocalModels(SafeFfi(Interop.DimmyNative.ListLocalLlmModels), stt: false));
         return list;
     }

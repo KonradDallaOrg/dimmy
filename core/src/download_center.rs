@@ -7,7 +7,7 @@
 //! reads where things stand once from the snapshot.
 //!
 //! Job ids are the ones the On-device rows already carry: a whisper `.bin`,
-//! an LLM `.gguf`, `parakeet:fp32`, or `qwen:<file>.gguf`. One worker thread
+//! an LLM `.gguf`, `parakeet:fp32`, `whistle`, or `qwen:<file>.gguf`. One worker thread
 //! runs one job at a time — several multi-gigabyte downloads in parallel only
 //! make each of them slower — and exits when the queue is empty.
 //!
@@ -364,15 +364,20 @@ enum Kind<'a> {
     Llm(&'a str),
     Parakeet,
     Qwen(&'a str),
+    Whistle,
 }
 
 pub const PARAKEET_ID: &str = "parakeet:fp32";
+pub const WHISTLE_ID: &str = "whistle";
 
 /// Only ids of models Dimmy ships: the id becomes a path under the model
 /// directory, so anything outside the catalogs is refused.
 fn parse(id: &str) -> Option<Kind<'_>> {
     if id == PARAKEET_ID {
         return Some(Kind::Parakeet);
+    }
+    if id == WHISTLE_ID {
+        return crate::whistle::engine_available().then_some(Kind::Whistle);
     }
     if let Some(file) = id.strip_prefix("qwen:") {
         return crate::qwen_asr::find(file).map(|_| Kind::Qwen(file));
@@ -413,6 +418,7 @@ fn present(kind: Kind<'_>) -> bool {
         Kind::Llm(f) => crate::local_llm::model_exists(f),
         Kind::Parakeet => crate::parakeet::active_bundle_present(),
         Kind::Qwen(f) => crate::qwen_asr::bundle_present(f),
+        Kind::Whistle => crate::whistle::bundle_present(),
     }
 }
 
@@ -457,6 +463,12 @@ fn real_fetch(
                 Kind::Qwen(f) => (
                     "qwen-asr",
                     crate::qwen_asr::download_bundle(f, progress)
+                        .await
+                        .map_err(|e| e.to_string()),
+                ),
+                Kind::Whistle => (
+                    "whistle",
+                    crate::whistle::download_bundle(progress)
                         .await
                         .map_err(|e| e.to_string()),
                 ),
@@ -542,6 +554,12 @@ fn real_remove(id: &str) -> Result<bool, String> {
         // ONNX Runtime keeps its session for the process, so a loaded
         // Parakeet on Windows reports "in use" until Dimmy restarts.
         Kind::Parakeet => paths.extend(crate::parakeet::active_bundle_dir()),
+        // Same for a loaded Whistle engine library.
+        Kind::Whistle => {
+            for file in crate::whistle::bundle_files() {
+                paths.extend(with_partials(file));
+            }
+        }
     }
 
     let mut removed = false;
@@ -938,6 +956,13 @@ mod tests {
             .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
             .collect();
         assert_eq!(names, ["m.bin", "m.bin.part", "m.bin.part.etag"]);
+    }
+
+    #[test]
+    fn whistle_is_a_known_id_only_where_an_engine_exists() {
+        let available = crate::whistle::engine_available();
+        assert_eq!(is_known_id(WHISTLE_ID), available);
+        assert_eq!(is_deletable_id(WHISTLE_ID), available);
     }
 
     #[test]

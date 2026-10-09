@@ -202,7 +202,7 @@ test-ffi = []
 sim-audio = []
 # smoke-test: gates the dimmy_smoke binary that runtime-loads the installed
 # dimmy_lib.dll via libloading. Used by the installer-ffi-smoke CI job.
-smoke-test = ["dep:libloading"]
+smoke-test = []
 # telemetry-sentry: enables the Sentry crash + error pipeline. Default ON
 # in release builds, off in headless/local dev unless explicitly requested.
 # When off, the Sentry init is a no-op and no events are captured.
@@ -342,9 +342,11 @@ llama-cpp-4 = { git = "https://github.com/eugenehp/llama-cpp-rs", optional = tru
 rusqlite = { version = "0.31", features = ["bundled"] }
 regex = "1"
 tokio-stream = "0.1"
-# Used only by the dimmy_smoke binary (smoke-test feature) to runtime-load
-# the installed dimmy_lib.dll. Optional so default builds don't pull it in.
-libloading = { version = "0.8", optional = true }
+# Runtime-loads the Whistle engine (`whistle.rs`), and the installed
+# dimmy_lib.dll in the dimmy_smoke binary.
+libloading = "0.8"
+# Unpacks the Whistle engine out of the wheel it is published in.
+zip = { version = "2", default-features = false, features = ["deflate"] }
 # Sentry crash + manual capture + structured logs. Optional behind
 # telemetry-sentry feature.
 #

@@ -23,6 +23,8 @@ public sealed partial class OnboardingWindow : Window
     /// Sentinel tag for the Parakeet entry in OnboardingLocalModelComboBox.
     /// Distinguished from whisper filenames by prefix.
     private const string ParakeetTag = "parakeet:fp32";
+    /// Whistle entry: the small CPU-only alternative, listed second.
+    private const string WhistleTag = "whistle";
 
     private ModelPrefetchService _prefetch = new();
     private readonly DispatcherQueue _dq = DispatcherQueue.GetForCurrentThread();
@@ -43,6 +45,7 @@ public sealed partial class OnboardingWindow : Window
         1 => "provider",
         2 => "shortcut",
         3 => "try_it",
+        4 => "stay_updated",
         _ => "welcome",
     };
 
@@ -164,6 +167,24 @@ public sealed partial class OnboardingWindow : Window
             });
             int parakeetIdx = OnboardingLocalModelComboBox.Items.Count - 1;
 
+            // Whistle right after the recommended default: 17 MB against
+            // 2.5 GB, for a slow connection or a machine without a GPU.
+            // Hidden where the core has no engine to run it.
+            int whistleStatus = -1;
+            try { whistleStatus = DimmyNative.dimmy_whistle_status(); }
+            catch { }
+            if (whistleStatus >= 0)
+            {
+                var whistleSize = whistleStatus == 1
+                    ? "Ready"
+                    : $"{DimmyNative.dimmy_whistle_size_mb()}MB";
+                OnboardingLocalModelComboBox.Items.Add(new ComboBoxItem
+                {
+                    Content = $"Whistle, small and fast on any CPU ({whistleSize})",
+                    Tag = WhistleTag,
+                });
+            }
+
             // Parakeet TDT v3 is the recommended Local default — better
             // quality than Whisper base, runs well on CPU. When the
             // bundle is already present pick it outright; when it isn't,
@@ -214,6 +235,11 @@ public sealed partial class OnboardingWindow : Window
         {
             ViewModel.DownloadStatusText = "Starting Parakeet download...";
             StartParakeetDownload();
+        }
+        else if (tag == WhistleTag)
+        {
+            ViewModel.DownloadStatusText = "Starting Whistle download...";
+            StartWhistleDownload();
         }
         else
         {
@@ -290,13 +316,22 @@ public sealed partial class OnboardingWindow : Window
         }
     }
 
-    private void StartParakeetDownload()
+    private void StartParakeetDownload() =>
+        StartBundleDownload(DimmyNative.dimmy_parakeet_download_bundle, "Parakeet bundle download failed");
+
+    private void StartWhistleDownload() =>
+        StartBundleDownload(DimmyNative.dimmy_whistle_download, "Whistle download failed");
+
+    /// One blocking FFI download that reports through the shared bundle
+    /// progress event. The token keeps a download the user moved away from
+    /// from marking the model they picked next as ready.
+    private void StartBundleDownload(Func<int> download, string failure)
     {
         var cts = new CancellationTokenSource();
         _parakeetDownloadCts = cts;
         Task.Run(() =>
         {
-            int rc = DimmyNative.dimmy_parakeet_download_bundle();
+            int rc = download();
             _dq.TryEnqueue(() =>
             {
                 if (cts.IsCancellationRequested) return;
@@ -312,7 +347,7 @@ public sealed partial class OnboardingWindow : Window
                     ViewModel.IsLocalFailed = true;
                     ViewModel.IsLocalReady = false;
                     ViewModel.DownloadStatusText = "Download failed";
-                    ViewModel.LocalErrorText = "Parakeet bundle download failed";
+                    ViewModel.LocalErrorText = failure;
                 }
             });
         });
@@ -323,7 +358,8 @@ public sealed partial class OnboardingWindow : Window
         // Only update the onboarding UI while the user has Parakeet
         // selected — otherwise a stale event from a cancelled download
         // would clobber the whisper prefetch progress.
-        if (ViewModel.SelectedLocalModelTag != ParakeetTag) return;
+        if (ViewModel.SelectedLocalModelTag != ParakeetTag
+            && ViewModel.SelectedLocalModelTag != WhistleTag) return;
         // Always clear "ready" while the download is in flight,
         // regardless of whether `total` is known yet. Before the HEAD
         // requests resolve, total=0 and the previous code path was
@@ -583,6 +619,12 @@ public sealed partial class OnboardingWindow : Window
             ViewModel.DownloadStatusText = "Starting Parakeet download...";
             StartParakeetDownload();
         }
+        else if (ViewModel.SelectedLocalModelTag == WhistleTag)
+        {
+            _parakeetDownloadCts?.Cancel();
+            ViewModel.DownloadStatusText = "Starting Whistle download...";
+            StartWhistleDownload();
+        }
         else
         {
             ViewModel.DownloadStatusText = "Starting download...";
@@ -769,15 +811,16 @@ public sealed partial class OnboardingWindow : Window
             {
                 case ModelChoice.Local:
                     bool isParakeet = ViewModel.SelectedLocalModelTag == ParakeetTag;
+                    bool isWhistle = ViewModel.SelectedLocalModelTag == WhistleTag;
                     json = JsonSerializer.Serialize(new
                     {
                         stt_mode = "local",
-                        local_model = isParakeet
+                        local_model = isParakeet || isWhistle
                             ? ModelPaths.BaseModelFilename
                             : (string.IsNullOrEmpty(ViewModel.SelectedLocalModelTag)
                                 ? ModelPaths.BaseModelFilename
                                 : ViewModel.SelectedLocalModelTag),
-                        local_stt_backend = isParakeet ? "parakeet" : "whisper",
+                        local_stt_backend = isParakeet ? "parakeet" : isWhistle ? "whistle" : "whisper",
                     });
                     break;
                 case ModelChoice.Cloud:
@@ -831,12 +874,84 @@ public sealed partial class OnboardingWindow : Window
 
     private void HandOffToWizard(Func<Window> make)
     {
+        _wizardAfterFinish = make;
+        ContinueToUpdates_Click(this, new RoutedEventArgs());
+    }
+
+    /// Wizard picked on the success screen, opened once onboarding is done.
+    private Func<Window>? _wizardAfterFinish;
+
+    private void ContinueWithoutWizard_Click(object sender, RoutedEventArgs e)
+    {
+        // Back from the last step and Continue again: drop an earlier pick.
+        _wizardAfterFinish = null;
+        ContinueToUpdates_Click(sender, e);
+    }
+
+    /// <summary>Every way out of the wizard goes through the last step,
+    /// except for someone who already has a license or a running trial:
+    /// asking them for an email again would be asking for nothing.</summary>
+    private void ContinueToUpdates_Click(object sender, RoutedEventArgs e)
+    {
+        bool licensed = false;
+        try
+        {
+            var kind = Services.LicenseService.GetStatus().Kind;
+            licensed = kind is "Active" or "TrialActive";
+        }
+        catch (Exception ex) { App.Log($"license status exc: {ex.Message}", "Onboarding"); }
+        if (licensed)
+        {
+            UpdatesFinish_Click(sender, e);
+            return;
+        }
+        var leavingStep = OnboardingStepName(ViewModel.CurrentStep);
+        ViewModel.NextStep();
+        DimmyNative.TrackEvent("onboarding.step_completed", new { step = leavingStep });
+        UpdatesEmailBox.Focus(FocusState.Programmatic);
+    }
+
+    private void UpdatesEmailBox_KeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
+    {
+        if (e.Key == global::Windows.System.VirtualKey.Enter && ViewModel.CanSendUpdatesEmail)
+        {
+            e.Handled = true;
+            UpdatesSend_Click(sender, new RoutedEventArgs());
+        }
+    }
+
+    private async void UpdatesSend_Click(object sender, RoutedEventArgs e)
+    {
+        if (!ViewModel.CanSendUpdatesEmail) return;
+        ViewModel.UpdatesBusy = true;
+        ViewModel.UpdatesError = "";
+        try
+        {
+            var result = await Services.LicenseService.RequestTrialAsync(ViewModel.UpdatesEmail.Trim());
+            if (result.Ok)
+                ViewModel.UpdatesSent = true;
+            else
+                ViewModel.UpdatesError = "We could not send the email. Check your connection and try again, or skip: you can do this later in Settings, License.";
+            if (!result.Ok) App.Log($"trial request failed: {result.Error}", "Onboarding");
+        }
+        catch (Exception ex)
+        {
+            App.Log($"trial request exc: {ex.Message}", "Onboarding");
+            ViewModel.UpdatesError = "We could not send the email. You can do this later in Settings, License.";
+        }
+        finally { ViewModel.UpdatesBusy = false; }
+    }
+
+    private void UpdatesFinish_Click(object sender, RoutedEventArgs e)
+    {
+        var wizard = _wizardAfterFinish;
+        _wizardAfterFinish = null;
         try
         {
             FinishOnboarding_Click(this, new RoutedEventArgs());
-            make().Activate();
+            wizard?.Invoke().Activate();
         }
-        catch (Exception ex) { App.Log($"HandOffToWizard exc: {ex.Message}", "Onboarding"); }
+        catch (Exception ex) { App.Log($"UpdatesFinish exc: {ex.Message}", "Onboarding"); }
     }
 
     private void FinishOnboarding_Click(object sender, RoutedEventArgs e)

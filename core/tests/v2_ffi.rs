@@ -46,6 +46,7 @@ use dimmy_lib::ffi::{
     dimmy_model_download_enqueue, dimmy_model_download_snapshot_json, dimmy_push_loopback_audio,
     dimmy_set_app_context, dimmy_set_config_json, dimmy_set_loopback_sample_rate,
     dimmy_transcribe_file, dimmy_user_dict_add, dimmy_user_dict_list_json, dimmy_user_dict_remove,
+    dimmy_whistle_size_mb, dimmy_whistle_status,
 };
 
 // ── Fixture wiring (lifted from ffi_e2e to stay self-contained) ──────
@@ -1659,4 +1660,28 @@ fn model_download_center_refuses_what_it_cannot_download() {
         dimmy_model_download_snapshot_json(std::ptr::null_mut(), 0),
         -1
     );
+}
+
+/// Whistle is selectable exactly where the core can run it: the status says
+/// so, and the config setter refuses the backend on a platform without an
+/// engine instead of saving a choice that fails on every dictation.
+#[test]
+#[serial]
+fn whistle_status_and_backend_selection_agree() {
+    ensure_init();
+    let status = dimmy_whistle_status();
+    assert!((-1..=1).contains(&status), "status {status}");
+    assert!(dimmy_whistle_size_mb() >= 17);
+
+    let json = CString::new(r#"{"local_stt_backend":"whistle"}"#).unwrap();
+    assert_eq!(unsafe { dimmy_set_config_json(json.as_ptr()) }, 0);
+    let mut buf = vec![0u8; 64 * 1024];
+    let n = dimmy_get_config_json(buf.as_mut_ptr() as *mut c_char, buf.len() as c_int);
+    assert!(n > 0);
+    let cfg: serde_json::Value = serde_json::from_slice(&buf[..n as usize]).unwrap();
+    let expected = if status >= 0 { "whistle" } else { "whisper" };
+    assert_eq!(cfg["local_stt_backend"], expected);
+
+    let json = CString::new(r#"{"local_stt_backend":"whisper"}"#).unwrap();
+    assert_eq!(unsafe { dimmy_set_config_json(json.as_ptr()) }, 0);
 }
