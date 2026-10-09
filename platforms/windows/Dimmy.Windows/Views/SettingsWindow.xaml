@@ -456,7 +456,7 @@
               <StackPanel x:Name="LocalSttPanel" Spacing="4">
                 <controls:SettingCard Glyph="&#xE968;"
                                       Label="Local model"
-                                      InfoTip="Whisper sizes run fully offline. Parakeet TDT v3 is faster and strong on European languages, but it downloads once at about 2.5 GB."
+                                      InfoTip="Whisper sizes run fully offline. Parakeet TDT v3 is faster and strong on European languages, but it downloads once at about 2.5 GB. Whistle is a 17 MB model that needs no GPU and covers English, Italian, German, French, Spanish, Dutch and Polish."
                                       HelpUrl="https://dimmy.app/help/whisper-models">
                   <!-- Width is FIXED (not MinWidth) so long model names
                        like "ggml-large-v3-turbo-q5_0.bin" don't expand
