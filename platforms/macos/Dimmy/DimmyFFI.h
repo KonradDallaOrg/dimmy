@@ -134,6 +134,20 @@ int32_t dimmy_qwen_asr_bundle_present(const char * _Nonnull model_file);
 /// numbers cover the pair. Returns 0=OK, -1=error.
 int32_t dimmy_qwen_asr_download(const char * _Nonnull model_file);
 
+// ── Whistle (CPU-only local STT backend) ─────────────────────────────
+
+/// 1 = model and engine on disk, 0 = not downloaded, -1 = no engine for
+/// this platform (hide the entry).
+int32_t dimmy_whistle_status(void);
+
+/// Size of the download (model + engine) in MB.
+int32_t dimmy_whistle_size_mb(void);
+
+/// Download model and engine. BLOCKING — call from a background thread.
+/// Emits "whistle_download_progress" with {downloaded,total}.
+/// Returns 0=OK, -1=error.
+int32_t dimmy_whistle_download(void);
+
 // ── Download center (one queue for every on-device model) ───────────
 
 /// Queue a download of the On-device row `id` (whisper .bin, LLM .gguf,
