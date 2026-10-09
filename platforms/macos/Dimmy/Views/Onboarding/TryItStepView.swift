@@ -2,7 +2,9 @@ import SwiftUI
 
 struct TryItStepView: View {
     @ObservedObject var appState: AppState
-    let onComplete: () -> Void
+    /// Called on the way out, with the wizard picked on the success page
+    /// (nil for the plain button). The container opens it once done.
+    let onComplete: (WizardWindowController.Kind?) -> Void
 
     @State private var demoText: String = ""
     @State private var hasTriedRecording = false
@@ -239,10 +241,9 @@ struct TryItStepView: View {
             .frame(maxWidth: 420)
 
             Button(action: {
-                appState.showPillIntro = true
-                onComplete()
+                onComplete(nil)
             }) {
-                Text("Start Using Dimmy")
+                Text("Continue")
                     .font(.system(size: 14, weight: .semibold))
                     .frame(maxWidth: 200)
             }
@@ -251,13 +252,11 @@ struct TryItStepView: View {
         }
     }
 
-    /// Open a focused wizard from the last onboarding page, and finish
-    /// onboarding on the way out. Leaving this window open behind a second
-    /// wizard would keep the trial hotkey armed and leave the user with two
-    /// wizards stacked; the setup it did is already saved.
+    /// A focused wizard picked from the success page. It opens after the
+    /// last onboarding step, once this window is gone: leaving it open
+    /// behind a second wizard would keep the trial hotkey armed and leave
+    /// the user with two wizards stacked.
     private func handOff(_ kind: WizardWindowController.Kind) {
-        appState.showPillIntro = true
-        onComplete()
-        WizardWindowController.shared.show(kind, appState: appState)
+        onComplete(kind)
     }
 }

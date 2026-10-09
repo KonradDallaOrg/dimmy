@@ -269,11 +269,14 @@ enum SelfTests {
     // MARK: - Onboarding
 
     private static func testOnboardingStepCount() {
-        // 5 steps: Welcome, Permissions, Shortcut (with PTT/Toggle picker),
-        // ModelDownload, TryIt. Bumped from 4 when the ModelDownload step
-        // (Parakeet vs Whisper picker) landed. Update this number when
-        // adding/removing a step.
-        assert(OnboardingContainerView.totalSteps == 5, "Onboarding has 5 steps, got \(OnboardingContainerView.totalSteps)")
+        // 6 steps: Welcome, Permissions, Shortcut (with PTT/Toggle picker),
+        // ModelDownload, TryIt, StayUpdated (thank you + optional email).
+        // Update this number when adding/removing a step.
+        assert(OnboardingContainerView.totalSteps == 6, "Onboarding has 6 steps, got \(OnboardingContainerView.totalSteps)")
+        assert(EmailInput.looksValid("  anna.rossi+dimmy@mail.example.co.uk "), "a plain address is valid")
+        for bad in ["", "anna", "anna@", "@example.com", "anna@example", "anna@example.", "anna@.com", "anna@exa mple.com", "anna@@example.com", "anna@example..com"] {
+            assert(!EmailInput.looksValid(bad), "'\(bad)' is not an address")
+        }
     }
 
     // MARK: - Pill scroll-cycle (regression: see fix(mac) commit bca5c4a)

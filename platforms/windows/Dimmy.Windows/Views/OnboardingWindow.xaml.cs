@@ -43,6 +43,7 @@ public sealed partial class OnboardingWindow : Window
         1 => "provider",
         2 => "shortcut",
         3 => "try_it",
+        4 => "stay_updated",
         _ => "welcome",
     };
 
@@ -831,12 +832,84 @@ public sealed partial class OnboardingWindow : Window
 
     private void HandOffToWizard(Func<Window> make)
     {
+        _wizardAfterFinish = make;
+        ContinueToUpdates_Click(this, new RoutedEventArgs());
+    }
+
+    /// Wizard picked on the success screen, opened once onboarding is done.
+    private Func<Window>? _wizardAfterFinish;
+
+    private void ContinueWithoutWizard_Click(object sender, RoutedEventArgs e)
+    {
+        // Back from the last step and Continue again: drop an earlier pick.
+        _wizardAfterFinish = null;
+        ContinueToUpdates_Click(sender, e);
+    }
+
+    /// <summary>Every way out of the wizard goes through the last step,
+    /// except for someone who already has a license or a running trial:
+    /// asking them for an email again would be asking for nothing.</summary>
+    private void ContinueToUpdates_Click(object sender, RoutedEventArgs e)
+    {
+        bool licensed = false;
+        try
+        {
+            var kind = Services.LicenseService.GetStatus().Kind;
+            licensed = kind is "Active" or "TrialActive";
+        }
+        catch (Exception ex) { App.Log($"license status exc: {ex.Message}", "Onboarding"); }
+        if (licensed)
+        {
+            UpdatesFinish_Click(sender, e);
+            return;
+        }
+        var leavingStep = OnboardingStepName(ViewModel.CurrentStep);
+        ViewModel.NextStep();
+        DimmyNative.TrackEvent("onboarding.step_completed", new { step = leavingStep });
+        UpdatesEmailBox.Focus(FocusState.Programmatic);
+    }
+
+    private void UpdatesEmailBox_KeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
+    {
+        if (e.Key == global::Windows.System.VirtualKey.Enter && ViewModel.CanSendUpdatesEmail)
+        {
+            e.Handled = true;
+            UpdatesSend_Click(sender, new RoutedEventArgs());
+        }
+    }
+
+    private async void UpdatesSend_Click(object sender, RoutedEventArgs e)
+    {
+        if (!ViewModel.CanSendUpdatesEmail) return;
+        ViewModel.UpdatesBusy = true;
+        ViewModel.UpdatesError = "";
+        try
+        {
+            var result = await Services.LicenseService.RequestTrialAsync(ViewModel.UpdatesEmail.Trim());
+            if (result.Ok)
+                ViewModel.UpdatesSent = true;
+            else
+                ViewModel.UpdatesError = "We could not send the email. Check your connection and try again, or skip: you can do this later in Settings, License.";
+            if (!result.Ok) App.Log($"trial request failed: {result.Error}", "Onboarding");
+        }
+        catch (Exception ex)
+        {
+            App.Log($"trial request exc: {ex.Message}", "Onboarding");
+            ViewModel.UpdatesError = "We could not send the email. You can do this later in Settings, License.";
+        }
+        finally { ViewModel.UpdatesBusy = false; }
+    }
+
+    private void UpdatesFinish_Click(object sender, RoutedEventArgs e)
+    {
+        var wizard = _wizardAfterFinish;
+        _wizardAfterFinish = null;
         try
         {
             FinishOnboarding_Click(this, new RoutedEventArgs());
-            make().Activate();
+            wizard?.Invoke().Activate();
         }
-        catch (Exception ex) { App.Log($"HandOffToWizard exc: {ex.Message}", "Onboarding"); }
+        catch (Exception ex) { App.Log($"UpdatesFinish exc: {ex.Message}", "Onboarding"); }
     }
 
     private void FinishOnboarding_Click(object sender, RoutedEventArgs e)

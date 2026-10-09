@@ -35,7 +35,7 @@ public static class OnboardingPreselect
 
 public partial class OnboardingViewModel : ObservableObject
 {
-    public int TotalSteps => 4;
+    public int TotalSteps => 5;
 
     [ObservableProperty] private int _currentStep;
     [ObservableProperty] private string _shortcut = "Win+Alt";
@@ -127,14 +127,39 @@ public partial class OnboardingViewModel : ObservableObject
 
     [ObservableProperty] private string _cloudErrorText = "";
 
+    // Last step: the email that starts the trial (or activates a license
+    // the address already has). Optional by design.
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanSendUpdatesEmail))]
+    private string _updatesEmail = "";
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanSendUpdatesEmail))]
+    private bool _updatesBusy;
+
+    // True once the magic link is on its way: the form gives way to
+    // "check your inbox" and the only button left is the way out.
+    [ObservableProperty] private bool _updatesSent;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasUpdatesError))]
+    private string _updatesError = "";
+
+    public bool CanSendUpdatesEmail =>
+        !UpdatesBusy && Helpers.EmailInput.LooksValid(UpdatesEmail);
+
+    public bool HasUpdatesError => !string.IsNullOrEmpty(UpdatesError);
+
     public bool CanGoBack => CurrentStep > 0;
     public bool IsStep0 => CurrentStep == 0;
     public bool IsStep1 => CurrentStep == 1;
     public bool IsStep2 => CurrentStep == 2;
     public bool IsStep3 => CurrentStep == 3;
+    public bool IsStep4 => CurrentStep == 4;
     public bool Step1Reached => CurrentStep >= 1;
     public bool Step2Reached => CurrentStep >= 2;
     public bool Step3Reached => CurrentStep >= 3;
+    public bool Step4Reached => CurrentStep >= 4;
 
     public bool IsLocalSelected => Choice == ModelChoice.Local;
     public bool IsCloudSelected => Choice == ModelChoice.Cloud;
@@ -183,8 +208,10 @@ public partial class OnboardingViewModel : ObservableObject
         OnPropertyChanged(nameof(IsStep1));
         OnPropertyChanged(nameof(IsStep2));
         OnPropertyChanged(nameof(IsStep3));
+        OnPropertyChanged(nameof(IsStep4));
         OnPropertyChanged(nameof(Step1Reached));
         OnPropertyChanged(nameof(Step2Reached));
         OnPropertyChanged(nameof(Step3Reached));
+        OnPropertyChanged(nameof(Step4Reached));
     }
 }
