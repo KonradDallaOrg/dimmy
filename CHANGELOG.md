@@ -6,6 +6,49 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.13] - 2026-10-10
+
+### Added
+
+- Whistle (Cactus Compute, 16.9 MB, CPU only) as a fourth `local_stt_backend`.
+  The engine is not compiled in and not in the installer: Cactus publishes no
+  source, and their Windows static library is an llvm-mingw build that does
+  not link into the MSVC DLL. Their shared library has a plain C API, so it
+  is downloaded with the model (from the Python wheel, the only place it is
+  published), pinned to a repository revision and a SHA-256, and opened with
+  libloading. Measured 13.7x realtime on a 62.7 s Italian dictation, CPU only.
+- Whistle chunks its own input at 24 s, cutting in the quietest 200 ms of the
+  last 8 s. The engine accepts 30 s, but the same dictation that is clean at
+  25 s turned "aggiornati" into "è giornata" at 28 s.
+- Whistle takes the custom dictionary as keyword biasing and returns word
+  timestamps, which feed speaker attribution on the path Parakeet and whisper
+  already use.
+- Onboarding: Whistle in the local model list after Parakeet (Windows, Mac),
+  and a final step that asks once for an email through the existing trial
+  request. It is skipped when a license or trial is already active. Telemetry
+  step name `stay_updated` added to the onboarding allow-list.
+- Settings, Integrations: an info button on the Telegram group on Mac, and the
+  forwarding steps on both platforms.
+
+### Changed
+
+- The mic track keeps its `mic` label whenever the system track has voices.
+  It used to be numbered as soon as the diarizer heard two voices of 1 s or
+  more on it, which loudspeaker echo satisfies. Mic voices are numbered only
+  when the system track is silent.
+
+### Fixed
+
+- A chunk in which Silero finds no speech no longer reaches Whistle. On a
+  246 s meeting mic track holding one spoken sentence it wrote twelve
+  "Grazie a tutti"; the gate removes those on room tone. Those on loudspeaker
+  echo remain, because that is speech and no confidence or level threshold
+  separates it (hallucinated words score 0.95 to 1.00).
+- Mac onboarding: the Try-it step checked only Parakeet and whisper, so a
+  downloaded Qwen model was reported as missing.
+- `abi_exports.txt` had drifted by seven symbols (diarization, download
+  center); regenerated.
+
 ## [0.7.12] - 2026-10-08
 
 ### Added

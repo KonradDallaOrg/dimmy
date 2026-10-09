@@ -248,7 +248,7 @@ struct StayUpdatedStepView: View {
 
     private var askView: some View {
         VStack(spacing: 12) {
-            Text("One last thing, and it is optional. Leave your email to start the free 14-day trial: Dimmy then updates itself, new engines included.")
+            Text("Enter your email to start the free 14-day trial and get the latest updates automatically.")
                 .font(.system(size: 13))
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
@@ -272,20 +272,14 @@ struct StayUpdatedStepView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            Text("Already on a paid or company plan? Use that email and the link we send activates it here.")
-                .font(.system(size: 11))
-                .foregroundColor(Color(nsColor: .tertiaryLabelColor))
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Text("Without an email Dimmy stays free, on this version: it will not update itself. A newer one is always a download away on dimmy.app.")
+            Text("Or continue as you are: Dimmy stays free, on this version, until you update it yourself.")
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 6)
 
-            Button("Skip, stay on this version") { onFinish() }
+            Button("Continue without email") { onFinish() }
                 .buttonStyle(.bordered)
                 .controlSize(.regular)
         }
