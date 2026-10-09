@@ -58,6 +58,8 @@ dimmy_cycle_llm_style
 dimmy_cycle_llm_tone
 dimmy_decode_audio_to_wav
 dimmy_detect_audio_language
+dimmy_diarization_download
+dimmy_diarization_model_present
 dimmy_download_llm_model
 dimmy_download_model
 dimmy_gemini_cli_binary_path
@@ -121,6 +123,7 @@ dimmy_meeting_is_active
 dimmy_meeting_is_paused
 dimmy_meeting_list_orphans
 dimmy_meeting_pause
+dimmy_meeting_rename_speaker
 dimmy_meeting_resume
 dimmy_meeting_retranscribe
 dimmy_meeting_save_post_process
@@ -128,6 +131,10 @@ dimmy_meeting_start
 dimmy_meeting_stop
 dimmy_meetings_dir
 dimmy_model_catalog_json
+dimmy_model_delete
+dimmy_model_download_cancel
+dimmy_model_download_enqueue
+dimmy_model_download_snapshot_json
 dimmy_model_exists
 dimmy_notion_has_token
 dimmy_notion_search
@@ -180,3 +187,6 @@ dimmy_update_stats
 dimmy_user_dict_add
 dimmy_user_dict_list_json
 dimmy_user_dict_remove
+dimmy_whistle_download
+dimmy_whistle_size_mb
+dimmy_whistle_status

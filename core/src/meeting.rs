@@ -106,7 +106,7 @@ pub struct SttSnapshot {
     pub api_key: Option<String>, // None for local
     pub prompt: String,
     pub local_model: String, // whisper filename, looked up in models/ dir
-    /// Local STT backend: "whisper" | "parakeet". Mirrors the
+    /// Local STT backend: "whisper" | "parakeet" | "whistle". Mirrors the
     /// `local_stt_backend` config knob the dictation chunked path
     /// already honours. Defaults to "whisper" when missing.
     pub local_backend: String,
@@ -995,6 +995,14 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
                     }
                 }
             }
+        } else if ctx.stt.local_backend == "whistle" {
+            match crate::whistle::transcribe(&pcm_16k, &ctx.language, &[]) {
+                Ok(t) => (t, None),
+                Err(e) => {
+                    crate::log(&format!("[Meeting] whistle error: {}", e));
+                    (String::new(), None)
+                }
+            }
         } else {
             // Default = whisper. Routes through the cached
             // WhisperContext via local_stt::transcribe_local.
@@ -1853,6 +1861,8 @@ fn worker_loop(
                             "cloud"
                         } else if stt.local_backend == "parakeet" {
                             "parakeet"
+                        } else if stt.local_backend == "whistle" {
+                            "whistle"
                         } else {
                             "whisper"
                         };

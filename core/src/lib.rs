@@ -90,6 +90,7 @@ pub mod sim_audio;
 pub mod telegram;
 pub mod telemetry;
 pub mod transcribe;
+pub mod whistle;
 #[cfg(target_os = "windows")]
 mod win_paths;
 pub mod win_qos;
@@ -840,7 +841,7 @@ pub struct AppConfig {
     pub local_model: String, // e.g. "ggml-base-q8_0.bin"
     /// Which local STT backend to use when `stt_mode == "local"`:
     /// `"whisper"` (whisper.cpp via `local-stt`), `"parakeet"` (Parakeet
-    /// TDT v3 via `local-stt-parakeet`) or `"qwen"`. See
+    /// TDT v3 via `local-stt-parakeet`), `"qwen"` or `"whistle"`. See
     /// [`default_local_stt_backend`] for why the default is not the same
     /// on every OS. Old configs keep whatever they saved.
     pub local_stt_backend: String,

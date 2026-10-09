@@ -128,6 +128,7 @@ fn effective_local_backend(selected: &str) -> &'static str {
         selected,
         crate::parakeet::active_bundle_present(),
         crate::qwen_asr::bundle_present(&qwen_asr_variant()),
+        crate::whistle::bundle_present(),
         !whisper_model.is_empty() && crate::local_stt::model_exists(&whisper_model),
     );
     if choice.fell_back {
@@ -152,6 +153,15 @@ fn qwen_asr_variant() -> String {
         .lock()
         .map(|m| m.clone())
         .unwrap_or_else(|_| crate::qwen_asr::DEFAULT_MODEL.to_string())
+}
+
+/// The custom dictionary, which Whistle takes as keywords to favour.
+fn whistle_keywords() -> Vec<String> {
+    state()
+        .user_dict
+        .lock()
+        .map(|d| d.clone())
+        .unwrap_or_default()
 }
 
 fn state() -> &'static AppState {
@@ -1118,6 +1128,10 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
             Arc::new(move |pcm: &[f32]| {
                 crate::qwen_asr::transcribe(pcm, &variant, &language).map(|t| t.text)
             })
+        } else if local_backend == "whistle" {
+            let language = st.language.lock().map(|l| l.clone()).unwrap_or_default();
+            let keywords = whistle_keywords();
+            Arc::new(move |pcm: &[f32]| crate::whistle::transcribe(pcm, &language, &keywords))
         } else {
             let model_filename = st.local_model.lock().map(|m| m.clone()).unwrap_or_default();
             let model_path = crate::local_stt::model_path(&model_filename);
@@ -1604,6 +1618,13 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
                 variant
             ));
             crate::transcribe::transcribe_audio_local_qwen(&processed, &variant, &language)
+        } else if local_stt_backend == "whistle" {
+            log("[StopRec] Local STT mode — backend: whistle");
+            crate::transcribe::transcribe_audio_local_whistle(
+                &processed,
+                &language,
+                &whistle_keywords(),
+            )
         } else {
             log(&format!(
                 "[StopRec] Local STT mode — backend: whisper, model: {}",
@@ -1750,7 +1771,7 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
                 crate::telemetry::sanitize::provider_from_url(&api_url)
             };
             let llm_enabled_now = st.llm_enabled.lock().map(|e| *e).unwrap_or(false);
-            // local_backend categorical: "whisper" | "parakeet" | "qwen" | "" when cloud.
+            // local_backend categorical: "whisper" | "parakeet" | "qwen" | "whistle" | "" when cloud.
             let local_backend_static: &'static str = if stt_mode == "local" {
                 crate::telemetry::sanitize::local_backend_tag(&local_stt_backend)
             } else {
@@ -2679,10 +2700,11 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
             // A config written by a full build can reach a lean one. Coerce
             // rather than fail every chunk with "requires the cargo feature".
             "qwen" if !crate::qwen_asr::engine_available() => "whisper",
-            "whisper" | "parakeet" | "qwen" => s,
+            "whistle" if !crate::whistle::engine_available() => "whisper",
+            "whisper" | "parakeet" | "qwen" | "whistle" => s,
             _ => {
                 log(&format!(
-                    "[Config] WARN local_stt_backend '{}' not in {{whisper,parakeet,qwen}} — coerced to 'whisper'",
+                    "[Config] WARN local_stt_backend '{}' not in {{whisper,parakeet,qwen,whistle}} — coerced to 'whisper'",
                     s
                 ));
                 "whisper"
@@ -7604,10 +7626,61 @@ pub unsafe extern "C" fn dimmy_qwen_asr_download(model_ptr: *const c_char) -> c_
     }
 }
 
+// -- Whistle (CPU-only fourth local STT backend) ------------------------
+
+/// 1 when the Whistle model and engine are on disk, 0 when they are not,
+/// -1 when no engine exists for this platform (hosts hide the entry).
+#[no_mangle]
+pub extern "C" fn dimmy_whistle_status() -> c_int {
+    if !crate::whistle::engine_available() {
+        -1
+    } else {
+        crate::whistle::bundle_present() as c_int
+    }
+}
+
+/// Size of the Whistle download (model + engine) in MB, for the pickers.
+#[no_mangle]
+pub extern "C" fn dimmy_whistle_size_mb() -> c_int {
+    crate::whistle::size_mb() as c_int
+}
+
+/// Download the Whistle model and engine. BLOCKING -- call from a
+/// background thread. Emits `whistle_download_progress` as
+/// `{"downloaded":N,"total":N}`. Returns 0, or -1 on error.
+#[no_mangle]
+pub extern "C" fn dimmy_whistle_download() -> c_int {
+    let slot = model_download_slot(crate::download_center::WHISTLE_ID);
+    let _busy = slot.lock().unwrap_or_else(|e| e.into_inner());
+    if crate::whistle::bundle_present() {
+        return 0;
+    }
+    let Ok(rt) = tokio::runtime::Runtime::new() else {
+        return -1;
+    };
+    let result = rt.block_on(crate::whistle::download_bundle(|downloaded, total| {
+        let payload = format!(r#"{{"downloaded":{},"total":{}}}"#, downloaded, total);
+        emit_event("whistle_download_progress", &payload);
+    }));
+    crate::telemetry::track(crate::telemetry::Event::ModelDownloadCompleted {
+        kind: "whistle",
+        success: result.is_ok(),
+    });
+    match result {
+        Ok(()) => 0,
+        Err(e) => {
+            let msg: String = format!("{}", e).chars().take(200).collect();
+            log(&format!("[Whistle download] {}", msg));
+            emit_event("error", &message_error_payload(&msg));
+            -1
+        }
+    }
+}
+
 // -- Download center (one queue for every on-device model) ------------
 
 /// Queue a download of the on-device model `id` (the On-device row id: a
-/// whisper `.bin`, an LLM `.gguf`, `parakeet:fp32` or `qwen:<file>`).
+/// whisper `.bin`, an LLM `.gguf`, `parakeet:fp32`, `whistle` or `qwen:<file>`).
 /// Non-blocking. State arrives as `model_download` events
 /// (`{"id","state","done","total","error"?}`). rc: 0 queued, 1 already
 /// queued or downloading, -1 bad or unknown id.
@@ -8966,6 +9039,13 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
             // No word timestamps: the model returns text, not alignment.
             crate::transcribe::transcribe_audio_local_qwen(&chunk, &qwen_asr_variant(), &language)
                 .map(|t| (t, None))
+        } else if backend == "whistle" {
+            crate::transcribe::transcribe_audio_local_whistle(
+                &chunk,
+                &language,
+                &user_dict_snapshot,
+            )
+            .map(|t| (t, None))
         } else {
             crate::transcribe::transcribe_audio_local(&chunk, &language, &model, &composed_prompt)
                 .map(|t| (t, None))
@@ -9325,6 +9405,13 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
                         &window,
                         &qwen_asr_variant(),
                         &language,
+                    )
+                    .unwrap_or_default()
+                } else if backend == "whistle" {
+                    crate::transcribe::transcribe_audio_local_whistle(
+                        &window,
+                        &language,
+                        &whistle_keywords(),
                     )
                     .unwrap_or_default()
                 } else if backend == "parakeet" {

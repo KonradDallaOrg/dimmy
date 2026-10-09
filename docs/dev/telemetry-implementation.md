@@ -68,7 +68,7 @@ Current variants (V16+):
 | `transcription.completed` | mode, provider, local_backend, entry_point, audio_secs, processing_ms, word_count, language, success, had_filler_removal, had_llm, engine |
 | `transcription.failed` | mode, provider, error_category |
 
-**`provider` on local transcriptions** is `local_whisper` / `local_parakeet` / `local_qwen`, named after the engine that actually RAN (post-fallback). Until 2026-09-14 it was the constant `local_whisper` for every local engine, so any chart grouped by `provider` counted Parakeet and Qwen as whisper. Historical `transcription.completed` events can be re-attributed through `local_backend` (present since 2026-05-12); historical `transcription.failed` events cannot, they never carried it.
+**`provider` on local transcriptions** is `local_whisper` / `local_parakeet` / `local_qwen` / `local_whistle`, named after the engine that actually RAN (post-fallback). Until 2026-09-14 it was the constant `local_whisper` for every local engine, so any chart grouped by `provider` counted Parakeet and Qwen as whisper. Historical `transcription.completed` events can be re-attributed through `local_backend` (present since 2026-05-12); historical `transcription.failed` events cannot, they never carried it.
 | `transcription.cancelled` | audio_secs |
 | `llm.applied` | mode, provider, style, tone, processing_ms, success |
 | `llm.failed` | mode, provider, error_category |

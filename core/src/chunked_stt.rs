@@ -371,7 +371,8 @@ pub fn chunk_secs_for_backend(local_backend: &str, visible_output: bool) -> f32 
     match local_backend {
         // Short enough to read as it appears; 5 s already recovers most of
         // what 3 s was throwing away (866 words vs 785).
-        "parakeet" => 5.0,
+        // Whistle has the same shape of cost: a second of CPU per window.
+        "parakeet" | "whistle" => 5.0,
         // Both pay a fixed encoder window per call, so a short chunk buys
         // responsiveness at several times the compute. Neither is a
         // realistic choice for live captions in the first place.
@@ -466,7 +467,14 @@ mod chunk_sizing {
     /// including the fallback an unknown backend string takes.
     #[test]
     fn every_backend_is_within_the_start_assertion() {
-        for b in ["parakeet", "qwen", "whisper", "", "something-new"] {
+        for b in [
+            "parakeet",
+            "qwen",
+            "whistle",
+            "whisper",
+            "",
+            "something-new",
+        ] {
             for visible in [true, false] {
                 let s = chunk_secs_for_backend(b, visible);
                 assert!(
@@ -482,7 +490,7 @@ mod chunk_sizing {
     /// slower, so a short window here would be paying for nothing.
     #[test]
     fn invisible_output_takes_the_measured_optimum() {
-        for b in ["parakeet", "whisper", "qwen", "anything"] {
+        for b in ["parakeet", "whisper", "qwen", "whistle", "anything"] {
             assert_eq!(chunk_secs_for_backend(b, false), 15.0, "{b}");
         }
     }
