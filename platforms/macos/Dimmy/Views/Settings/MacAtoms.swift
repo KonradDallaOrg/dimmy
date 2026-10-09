@@ -64,15 +64,23 @@ extension Color {
 
 struct MacGroupLabel: View {
     let text: String
+    /// Explanation behind an info button beside the label, the counterpart
+    /// of the info glyph on the Windows group headers.
+    var info: String? = nil
     var body: some View {
-        Text(text.uppercased())
-            .font(.system(size: 11, weight: .semibold))
-            .tracking(0.5)
-            .foregroundStyle(Color.macTextTertiary)
-            .padding(.top, MacTheme.groupLabelTopPadding)
-            .padding(.bottom, MacTheme.groupLabelBottomPadding)
-            .padding(.horizontal, 10)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        HStack(spacing: 6) {
+            Text(text.uppercased())
+                .font(.system(size: 11, weight: .semibold))
+                .tracking(0.5)
+                .foregroundStyle(Color.macTextTertiary)
+            if let info {
+                MacInfoButton(text: info)
+            }
+        }
+        .padding(.top, MacTheme.groupLabelTopPadding)
+        .padding(.bottom, MacTheme.groupLabelBottomPadding)
+        .padding(.horizontal, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

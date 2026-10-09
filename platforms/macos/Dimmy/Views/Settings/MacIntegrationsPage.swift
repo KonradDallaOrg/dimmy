@@ -204,7 +204,16 @@ struct MacIntegrationsPage: View {
             }
 
             Spacer().frame(height: 24)
-            MacGroupLabel(text: "Telegram")
+            MacGroupLabel(
+                text: "Telegram",
+                info: """
+                1. Connect your own Telegram account below, with the QR code or your phone number.
+                2. On your phone, record a voice message or pick any audio file.
+                3. Send it to Saved Messages, your chat with yourself. Inside Telegram: touch and hold the audio, Forward, Saved Messages. From another app: Share, Telegram, Saved Messages.
+                4. Dimmy on this Mac picks it up, transcribes it and writes the recap.
+
+                Dimmy signs in as you through Telegram's official protocol and reads only the audio in Saved Messages. It never touches your other chats, and the login stays on this Mac.
+                """)
             telegramCard
 
             // Auto-process toggle: skip the nudge and process every
@@ -240,13 +249,7 @@ struct MacIntegrationsPage: View {
             }
 
             Spacer().frame(height: 16)
-            HStack(spacing: 4) {
-                Text("Record on your phone, forward the audio to your own Saved Messages, and Dimmy transcribes + recaps it here.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                MacInfoButton(text: "Dimmy signs in as you via Telegram's official MTProto protocol and only reads audio you forward to your own Saved Messages. Nothing is posted; the login session stays on this Mac.")
-            }
-            .fixedSize(horizontal: false, vertical: true)
+            MacGroupFooter(text: "Record on your phone, forward the audio to your own Saved Messages, and Dimmy transcribes + recaps it here.")
 
             Spacer().frame(height: 24)
             MacGroupLabel(text: "Claude Desktop (MCP)")
