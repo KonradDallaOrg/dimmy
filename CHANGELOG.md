@@ -6,6 +6,21 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Claude Haiku 5.5 in the Anthropic model list for dictation and recap
+  (Windows, Mac). It takes the "fast" label from Haiku 4.5, which stays listed.
+
+### Fixed
+
+- Dictation through an Anthropic API key read the first content block of the
+  reply as the answer. Models that think by default (Sonnet 5, Opus 5, Fable,
+  Haiku 5.5) can open with a thinking block, and the enhancement then fell
+  back to the raw transcript without an error. The text block is now found by
+  type.
+- Haiku 5.5 is sent `thinking: disabled`, so it stays the fast option and a
+  reasoning pass cannot use up the token budget of a short dictation.
+
 ## [0.7.13] - 2026-10-10
 
 ### Added

@@ -842,7 +842,7 @@ async fn send_process_text_request(
 ) -> Result<(String, bool), crate::error::LlmError> {
     let model_lc = model.to_ascii_lowercase();
     let response = if is_anthropic {
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": model,
             "max_tokens": max_tokens,
             "system": system_prompt,
@@ -850,6 +850,9 @@ async fn send_process_text_request(
                 { "role": "user", "content": user_message },
             ],
         });
+        if anthropic_haiku_thinks_by_default(&model_lc) {
+            body["thinking"] = serde_json::json!({ "type": "disabled" });
+        }
         client
             .post(api_url)
             .header("x-api-key", api_key)
@@ -919,8 +922,17 @@ async fn send_process_text_request(
         // Anthropic: { "content": [{ "type": "text", "text": "..." }], "stop_reason": "..." }
         let result: serde_json::Value = response.json().await?;
         let truncated = result["stop_reason"].as_str() == Some("max_tokens");
-        let content = result["content"][0]["text"]
-            .as_str()
+        // By TYPE, not position: every model that thinks by default (Sonnet 5,
+        // Opus 5, Fable, Haiku 5.5) can open the reply with a `thinking`
+        // block, and `content[0].text` then silently yields the fallback.
+        let content = result["content"]
+            .as_array()
+            .and_then(|blocks| {
+                blocks
+                    .iter()
+                    .find(|b| b["type"] == "text")
+                    .and_then(|b| b["text"].as_str())
+            })
             .unwrap_or(fallback_text)
             .trim()
             .to_string();
@@ -1008,6 +1020,17 @@ fn anthropic_wants_thinking(model_lc: &str) -> bool {
         || model_lc.contains("sonnet-5")
         || model_lc.contains("sonnet-6")
         || model_lc.contains("fable")
+}
+
+/// Haiku 5.5 thinks by default where Haiku 4.5 never did. Dimmy offers Haiku
+/// as the FAST tier, so both request builders send `thinking: disabled` for
+/// it: a dictation cleanup must not wait on a reasoning pass, and thinking
+/// counts against `max_tokens`, so a tight budget could be spent before any
+/// text is written. `disabled` is accepted at the default effort (it 400s
+/// only at xhigh/max, which Dimmy never sets). "haiku-5" cannot false-match
+/// "claude-haiku-4-5": that id reads "haiku-4-5".
+fn anthropic_haiku_thinks_by_default(model_lc: &str) -> bool {
+    model_lc.contains("haiku-5")
 }
 
 /// True for Gemini models that benefit from extended thinking. Caller
@@ -1349,6 +1372,8 @@ async fn send_raw_prompt_request(
                     ANTHROPIC_THINKING_BUDGET, effective_max_tokens
                 ));
             }
+        } else if anthropic_haiku_thinks_by_default(&model_lc) {
+            body["thinking"] = serde_json::json!({ "type": "disabled" });
         }
         // Streamed for the same measured reason as the OpenAI branch, and
         // this is the branch that needed it most: `opus` recaps run over a
@@ -2612,6 +2637,12 @@ mod tests {
         // extended thinking entirely.
         assert!(!anthropic_wants_thinking("claude-haiku-4-5-20251001"));
         assert!(!anthropic_wants_thinking("claude-haiku-3-5"));
+        assert!(!anthropic_wants_thinking("claude-haiku-5-5"));
+        assert!(anthropic_haiku_thinks_by_default("claude-haiku-5-5"));
+        assert!(!anthropic_haiku_thinks_by_default(
+            "claude-haiku-4-5-20251001"
+        ));
+        assert!(!anthropic_haiku_thinks_by_default("claude-haiku-4-5"));
         assert!(!anthropic_wants_thinking("claude-sonnet-3-5"));
     }
 

@@ -914,3 +914,118 @@ async fn process_raw_prompt_openai_compat_for_recap_uses_messages_shape() {
         "raw prompt must NOT be wrapped in the [TRANSCRIPTION] dictation envelope"
     );
 }
+
+// ─────────────────────────── Haiku 5.5 ───────────────────────────
+
+/// Haiku 5.5 thinks by default (Haiku 4.5 never did), so a Messages reply
+/// can open with a `thinking` block. Reading `content[0].text` then finds
+/// nothing and the enhancement silently degrades to the raw transcript.
+#[tokio::test]
+async fn process_text_anthropic_reads_the_text_block_after_a_thinking_block() {
+    let server = boot().await;
+    let url = format!("{}/anthropic.com/v1/messages", server.uri());
+
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "msg_test",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-5-5",
+            "content": [
+                { "type": "thinking", "thinking": "", "signature": "sig" },
+                { "type": "text", "text": "Hello Thomas." }
+            ],
+            "stop_reason": "end_turn",
+            "usage": { "input_tokens": 1, "output_tokens": 1 }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let out = process_text(
+        &url,
+        "claude-haiku-5-5",
+        "k",
+        "hello thomas",
+        LlmStyle::Off,
+        LlmTone::None,
+        "",
+        "en",
+        "api_key",
+    )
+    .await
+    .unwrap();
+    assert_eq!(out, "Hello Thomas.");
+}
+
+/// The fast tier stays fast: Haiku 5.5 is sent `thinking: disabled`, so a
+/// dictation cleanup neither waits on a reasoning pass nor has its tight
+/// token budget eaten by one. Haiku 4.5 keeps the body it always had.
+#[tokio::test]
+async fn process_text_anthropic_haiku_5_disables_default_thinking() {
+    for (model, expect_disabled) in [("claude-haiku-5-5", true), ("claude-haiku-4-5", false)] {
+        let server = boot().await;
+        let url = format!("{}/anthropic.com/v1/messages", server.uri());
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(anthropic_response_body("ok")))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        process_text(
+            &url,
+            model,
+            "k",
+            "hello",
+            LlmStyle::Off,
+            LlmTone::None,
+            "",
+            "en",
+            "api_key",
+        )
+        .await
+        .unwrap();
+
+        let received = server.received_requests().await.unwrap();
+        let body = body_json(&received[0]);
+        if expect_disabled {
+            assert_eq!(body["thinking"]["type"], "disabled", "{model}");
+        } else {
+            assert!(body.get("thinking").is_none(), "{model}");
+        }
+        // Haiku 5.5 400s on any non-default sampling value.
+        assert!(body.get("temperature").is_none(), "{model}");
+    }
+}
+
+#[tokio::test]
+async fn process_raw_prompt_anthropic_haiku_5_disables_default_thinking() {
+    let server = boot().await;
+    let url = format!("{}/anthropic.com/v1/messages", server.uri());
+
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(anthropic_response_body("ok")))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    process_raw_prompt(
+        &url,
+        "claude-haiku-5-5",
+        "k",
+        "Quick summary.",
+        2048,
+        "api_key",
+    )
+    .await
+    .unwrap();
+
+    let received = server.received_requests().await.unwrap();
+    let body = body_json(&received[0]);
+    assert_eq!(body["thinking"]["type"], "disabled");
+    // `budget_tokens` 400s on Haiku 5.5, and no effort is set on purpose.
+    assert!(body["thinking"].get("budget_tokens").is_none());
+    assert!(body.get("output_config").is_none());
+    assert_eq!(body["max_tokens"], 2048);
+    assert!(body.get("temperature").is_none());
+}

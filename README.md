@@ -242,7 +242,7 @@ Linux always offer exactly the same models and cannot drift apart.
 | **OpenAI** | STT + LLM | gpt-transcribe, gpt-4o-transcribe, whisper-1, gpt-5.5, gpt-5.4-mini/nano | Pay as you go | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
 | **Deepgram** | STT (+ realtime WS) | Nova-3, Nova-2 | $200 free credits | [console.deepgram.com](https://console.deepgram.com/) |
 | **Google Gemini** | STT + LLM | gemini-3.5-flash, gemini-3.1-pro, gemini-2.5-flash/pro | Yes | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
-| **Anthropic** | LLM only | Claude Opus 4.8, Fable 5, Sonnet 5, Haiku 4.5 | No | [console.anthropic.com/keys](https://console.anthropic.com/settings/keys) |
+| **Anthropic** | LLM only | Claude Opus 5.5, Fable 5.1, Sonnet 5, Haiku 5.5 | No | [console.anthropic.com/keys](https://console.anthropic.com/settings/keys) |
 | **OpenRouter** | LLM only | Llama 3.3 70B, DeepSeek R1 | Yes (free models) | [openrouter.ai/keys](https://openrouter.ai/keys) |
 | **Together** | STT + LLM | Parakeet TDT, whisper-large-v3, Llama 3.3 70B | — | [api.together.xyz](https://api.together.xyz/settings/api-keys) |
 | **Fireworks** | LLM | Kimi K2 | — | [fireworks.ai](https://fireworks.ai/account/api-keys) |
