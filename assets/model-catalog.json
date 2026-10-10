@@ -52,7 +52,8 @@
         { "id": "claude-sonnet-5", "label": "Claude Sonnet 5", "tasks": ["llm", "recap"], "tier": "balanced" },
         { "id": "claude-opus-4-7", "label": "Claude Opus 4.7", "tasks": ["llm", "recap"] },
         { "id": "claude-sonnet-4-6", "label": "Claude Sonnet 4.6", "tasks": ["llm", "recap"] },
-        { "id": "claude-haiku-4-5-20251001", "label": "Claude Haiku 4.5", "tasks": ["llm", "recap"], "tier": "fast" }
+        { "id": "claude-haiku-5-5", "label": "Claude Haiku 5.5", "tasks": ["llm", "recap"], "tier": "fast" },
+        { "id": "claude-haiku-4-5-20251001", "label": "Claude Haiku 4.5", "tasks": ["llm", "recap"] }
       ]
     },
     {
