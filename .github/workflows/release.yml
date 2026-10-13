@@ -1813,6 +1813,54 @@ jobs:
     with:
       tag: ${{ github.ref_name }}
 
+  # ── Launch the shipped DMG on the oldest macOS we claim ────────────
+  # build-macos runs on macos-latest (macOS 26). v0.7.x shipped llama/ggml
+  # built for macOS 26 and the app died at launch on Sonoma, which no check
+  # on a macOS 26 runner can see. This opens the DMG that users download on
+  # older macOS, with Homebrew moved away, and requires it to stay up 8 s.
+  # It gates publish: a release that cannot start on 14 must not go public.
+  launch-macos-older:
+    name: Launch on ${{ matrix.os }}
+    needs: build-macos
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Download the DMG from the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sw_vers
+          gh release download "${{ github.ref_name }}" -R "${{ github.repository }}" -p Dimmy-macos-arm64.dmg -D "$RUNNER_TEMP"
+
+      - name: Launch it without Homebrew (it must survive 8 s)
+        run: |
+          set -euo pipefail
+          MNT="$RUNNER_TEMP/dimmy-dmg"
+          hdiutil attach -nobrowse -readonly -mountpoint "$MNT" "$RUNNER_TEMP/Dimmy-macos-arm64.dmg"
+          APP=$(find "$MNT" -maxdepth 1 -name '*.app' | head -1)
+          [ -n "$APP" ] || { echo "::error::no .app in the DMG"; exit 1; }
+          EXE="$APP/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Contents/Info.plist")"
+          sudo mv /opt/homebrew /opt/homebrew.hidden
+          trap 'sudo mv /opt/homebrew.hidden /opt/homebrew; hdiutil detach "$MNT" || true' EXIT
+          LOG="$RUNNER_TEMP/dimmy-launch.log"
+          "$EXE" > "$LOG" 2>&1 &
+          PID=$!
+          sleep 8
+          if kill -0 "$PID" 2>/dev/null; then
+            kill "$PID" 2>/dev/null || true
+            wait "$PID" 2>/dev/null || true
+            echo "the app was still alive after 8 s on $(sw_vers -productVersion)"
+          else
+            wait "$PID" 2>/dev/null || RC=$?
+            echo "::error::the app exited within 8 s on macOS $(sw_vers -productVersion) (rc=${RC:-?}) - users on this macOS cannot open it"
+            echo "--- last 40 lines of its output ---"
+            tail -40 "$LOG" || true
+            exit 1
+          fi
+
   # ── Publish (waits for all jobs including test-install) ─────────────
   publish-release:
     name: Publish Release
@@ -1820,7 +1868,7 @@ jobs:
     # and only flipped to public here, so it never goes live with unsigned
     # Windows assets. If signing fails (SimplySign not logged in), the release
     # stays draft — log into SimplySign and re-run the failed jobs.
-    needs: [rust-check, create-release, build-macos, build-windows, build-linux, test-install, sign-windows]
+    needs: [rust-check, create-release, build-macos, launch-macos-older, build-windows, build-linux, test-install, sign-windows]
     runs-on: ubuntu-latest
     steps:
       - name: Publish release
