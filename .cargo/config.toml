@@ -1,0 +1,6 @@
+# Mac target only: keep Homebrew's OpenSSL out of llama.cpp.
+# See core/cmake/macos-no-openssl.cmake. The target-suffixed name is read by
+# the cmake crate for aarch64-apple-darwin alone, so Windows and Linux builds
+# never see it.
+[env]
+CMAKE_TOOLCHAIN_FILE_aarch64_apple_darwin = { value = "core/cmake/macos-no-openssl.cmake", relative = true }
