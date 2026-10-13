@@ -1,23 +1,34 @@
 #!/usr/bin/env bash
-# Fail if any Mach-O inside a Dimmy.app links a library that only exists on
-# the build machine.
+# Fail if any Mach-O inside a Dimmy.app needs something a user's Mac may not
+# have: a library that only exists on the build machine, or a newer macOS than
+# the app declares.
 #
-# A library a user's Mac does not have kills the app in dyld, before main():
-# no window, no message, nothing in Sentry or PostHog. v0.7.x shipped
-# libllama-common linked to /opt/homebrew/opt/openssl@3/lib/libssl.3.dylib.
-# It launched on every machine with Homebrew (the CI runner, the developer's
-# Mac) and on no other. The @rpath check and the 8 s launch both passed,
-# because the runner HAS Homebrew.
+# Either one kills the app in dyld, before main(): no window, no message,
+# nothing in Sentry or PostHog. v0.7.x shipped both:
+#   - libllama-common linked to /opt/homebrew/opt/openssl@3/lib/libssl.3.dylib.
+#     It launched on every machine with Homebrew (the CI runner, the
+#     developer's Mac) and on no other.
+#   - every llama/ggml dylib was built for macOS 26.5 (CMake defaults to the
+#     SDK of the build machine), and libllama-common imported
+#     posix_spawn_file_actions_addchdir, which exists only from macOS 26.
+#     The app declares 14.0, so Sonoma installed it and could not run it.
+# The @rpath check and the 8 s launch both passed, because the runner HAS
+# Homebrew and IS on macOS 26.
 #
-# Allowed: @rpath/@executable_path/@loader_path (resolved inside the bundle),
-# /usr/lib and /System/Library (ship with macOS). Anything else is a path on
-# the build machine.
+# Allowed dependencies: @rpath/@executable_path/@loader_path (resolved inside
+# the bundle), /usr/lib and /System/Library (ship with macOS). Allowed minimum
+# macOS: at most the app's LSMinimumSystemVersion.
 #
 # Usage: scripts/check-mac-bundle-deps.sh path/to/Dimmy.app
 set -euo pipefail
 
 APP="${1:?usage: $0 path/to/Dimmy.app}"
 [ -d "$APP/Contents" ] || { echo "::error::$APP is not an app bundle"; exit 1; }
+APP_MIN=$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$APP/Contents/Info.plist")
+[ -n "$APP_MIN" ] || { echo "::error::$APP has no LSMinimumSystemVersion"; exit 1; }
+
+# True when version $1 is greater than version $2.
+newer_than() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1)" = "$1" ]; }
 
 CHECKED=0
 BAD=0
@@ -25,6 +36,8 @@ while IFS= read -r -d '' f; do
   [ -L "$f" ] && continue
   file -b "$f" | grep -q 'Mach-O' || continue
   CHECKED=$((CHECKED + 1))
+  rel="${f#"$APP"/}"
+
   # Dependencies are the tab-indented lines; the unindented ones name the file
   # (once per architecture in a universal binary, e.g. Sparkle). A dylib also
   # lists its own install name (LC_ID_DYLIB), which is not a dependency.
@@ -35,11 +48,22 @@ while IFS= read -r -d '' f; do
     case "$dep" in
       @rpath/*|@executable_path/*|@loader_path/*|/usr/lib/*|/System/Library/*) ;;
       *)
-        echo "::error::${f#"$APP"/} links $dep - that path exists only on the build machine; the app will not launch on a Mac without it"
+        echo "::error::$rel links $dep - that path exists only on the build machine; the app will not launch on a Mac without it"
         BAD=1
         ;;
     esac
   done < <(otool -L "$f" | awk '/^\t/ {print $1}')
+
+  # LC_BUILD_VERSION carries `minos`, the older LC_VERSION_MIN_MACOSX `version`.
+  while read -r minos; do
+    if newer_than "$minos" "$APP_MIN"; then
+      echo "::error::$rel is built for macOS $minos but the app declares $APP_MIN - it will not launch on anything older than $minos"
+      BAD=1
+    fi
+  done < <(otool -l "$f" | awk '
+    / cmd LC_BUILD_VERSION/      { want = "minos" }
+    / cmd LC_VERSION_MIN_MACOSX/ { want = "version" }
+    want != "" && $1 == want     { print $2; want = "" }')
 done < <(find "$APP/Contents" -type f -print0)
 
 # A check that looked at nothing prints reassurance it has not earned.
@@ -48,4 +72,4 @@ if [ "$CHECKED" -eq 0 ]; then
   exit 1
 fi
 [ "$BAD" -eq 0 ] || exit 1
-echo "all $CHECKED Mach-O files link only bundled or system libraries"
+echo "all $CHECKED Mach-O files link only bundled or system libraries and run on macOS $APP_MIN"

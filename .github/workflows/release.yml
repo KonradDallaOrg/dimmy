@@ -673,8 +673,9 @@ jobs:
           echo "all @rpath dependencies resolve inside the bundle"
 
           # Every Mach-O in the bundle, not just the executable: v0.7.x
-          # shipped libllama-common linked to Homebrew's libssl, two hops
-          # from the executable, and only Macs with Homebrew could open it.
+          # shipped libllama-common linked to Homebrew's libssl and built for
+          # macOS 26, two hops from the executable. This runner has Homebrew
+          # and is on macOS 26, so the launch below could not see either.
           bash scripts/check-mac-bundle-deps.sh "$APP"
 
           # Then actually run it. Catches what static analysis cannot: a

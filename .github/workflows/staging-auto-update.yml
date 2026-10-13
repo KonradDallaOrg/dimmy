@@ -378,9 +378,10 @@ jobs:
           chmod +x "$RESOURCES_DIR/dimmy-mcp"
           codesign --force --sign - "$RESOURCES_DIR/dimmy-mcp"
 
-      # A library that exists only on this runner (Homebrew) kills the app in
-      # dyld on a user's Mac. See the script.
-      - name: Check the bundle links only bundled or system libraries
+      # A library that exists only on this runner (Homebrew), or a dylib built
+      # for a newer macOS than the app declares, kills the app in dyld on a
+      # user's Mac. See the script.
+      - name: Check the bundle runs on a Mac that is not this runner
         run: bash scripts/check-mac-bundle-deps.sh "platforms/macos/build/derived/Build/Products/Release/Dimmy.app"
 
       - name: Generate DMG background (SVG → Retina PNG)

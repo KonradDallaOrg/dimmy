@@ -370,6 +370,15 @@ jobs:
           chmod +x "$RESOURCES_DIR/dimmy-mcp"
           codesign --force --sign - "$RESOURCES_DIR/dimmy-mcp"
 
+      # A library that exists only on this runner (Homebrew), or a dylib built
+      # for a newer macOS than the app declares, kills the app in dyld on a
+      # user's Mac. See the script.
+      - name: Check the bundle runs on a Mac that is not this runner
+        run: |
+          APP_PATH="platforms/macos/build/derived/Build/Products/Release/Dimmy Staging.app"
+          [ -d "$APP_PATH" ] || APP_PATH="platforms/macos/build/derived/Build/Products/Release/Dimmy.app"
+          bash scripts/check-mac-bundle-deps.sh "$APP_PATH"
+
       # Re-sign inside-out with the Developer ID identity + secure timestamp.
       # The Xcode build phases bundle the ML dylibs but sign them with
       # `--timestamp=none`, and dimmy-mcp is injected *after* xcodebuild — so
