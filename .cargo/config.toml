@@ -1,6 +1,12 @@
-# Mac target only: keep Homebrew's OpenSSL out of llama.cpp.
-# See core/cmake/macos-no-openssl.cmake. The target-suffixed name is read by
-# the cmake crate for aarch64-apple-darwin alone, so Windows and Linux builds
-# never see it.
+# Mac target only. Every key here is ignored when building for Windows/Linux.
 [env]
+# Keep Homebrew's OpenSSL out of llama.cpp: see core/cmake/macos-no-openssl.cmake.
+# The target-suffixed name is read by the cmake crate for aarch64-apple-darwin alone.
 CMAKE_TOOLCHAIN_FILE_aarch64_apple_darwin = { value = "core/cmake/macos-no-openssl.cmake", relative = true }
+# Build every native library for the macOS the app declares
+# (MACOSX_DEPLOYMENT_TARGET in Dimmy.xcodeproj, LSMinimumSystemVersion). Unset,
+# CMake targets the build machine's own SDK: v0.7.x shipped llama/ggml built
+# for macOS 26.5, importing posix_spawn_file_actions_addchdir (macOS 26 only),
+# so the app died at launch on Sonoma. rustc, cc and CMake all read this, and
+# only for Apple targets.
+MACOSX_DEPLOYMENT_TARGET = "14.0"
