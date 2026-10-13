@@ -123,7 +123,7 @@ jobs:
             echo "|----------|------|--------------|"
             echo "| Windows (installer) | \`Dimmy-win-Setup.exe\` | None (installs .NET 8 automatically) |"
             echo "| Windows (portable) | \`Dimmy-win-Portable.zip\` | [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0) |"
-            echo "| macOS (Apple Silicon) | \`Dimmy-macos-arm64.dmg\` | macOS 12+ |"
+            echo "| macOS (Apple Silicon) | \`Dimmy-macos-arm64.dmg\` | macOS 14+ |"
             echo "| Linux | \`Dimmy-linux-x86_64.AppImage\` | None (GTK4 bundled) |"
             echo ""
             echo "## Installation Notes"
@@ -626,7 +626,7 @@ jobs:
       # Runs on the SIGNED bundle, before notarisation, and touches nothing
       # inside it — editing Info.plist here would invalidate the signature
       # we just made.
-      - name: Launch the signed app (it must survive 8 s)
+      - name: Launch the signed app without Homebrew (it must survive 8 s)
         run: |
           set -euo pipefail
           APP="platforms/macos/build/derived/Build/Products/Release/Dimmy.app"
@@ -672,8 +672,18 @@ jobs:
           [ "$MISSING" -eq 0 ] || exit 1
           echo "all @rpath dependencies resolve inside the bundle"
 
+          # Every Mach-O in the bundle, not just the executable: v0.7.x
+          # shipped libllama-common linked to Homebrew's libssl, two hops
+          # from the executable, and only Macs with Homebrew could open it.
+          bash scripts/check-mac-bundle-deps.sh "$APP"
+
           # Then actually run it. Catches what static analysis cannot: a
           # SelfTests fatalError, a missing resource, an early abort.
+          # Homebrew is moved out of the way first: the runner has it and a
+          # user's Mac usually does not, which is exactly why the Homebrew
+          # OpenSSL dependency launched fine here and nowhere else.
+          sudo mv /opt/homebrew /opt/homebrew.hidden
+          trap 'sudo mv /opt/homebrew.hidden /opt/homebrew' EXIT
           LOG="$RUNNER_TEMP/dimmy-launch.log"
           "$EXE" > "$LOG" 2>&1 &
           PID=$!

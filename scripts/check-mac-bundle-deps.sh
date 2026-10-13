@@ -39,7 +39,7 @@ while IFS= read -r -d '' f; do
         BAD=1
         ;;
     esac
-  done < <(otool -L "$f" | awk '/^	/ {print $1}')
+  done < <(otool -L "$f" | awk '/^\t/ {print $1}')
 done < <(find "$APP/Contents" -type f -print0)
 
 # A check that looked at nothing prints reassurance it has not earned.
