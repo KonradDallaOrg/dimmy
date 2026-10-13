@@ -20,6 +20,28 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   type.
 - Haiku 5.5 is sent `thinking: disabled`, so it stays the fast option and a
   reasoning pass cannot use up the token budget of a short dictation.
+- Mac: every llama.cpp/ggml dylib was built with minos 26.5. No deployment
+  target was set, so CMake targeted the SDK of the macos-latest runner, and
+  libllama-common imported posix_spawn_file_actions_addchdir, which exists
+  only from macOS 26 (earlier releases have the _np name). dyld killed the
+  app at launch on 14 and 15 while Info.plist declared 14.0.
+  MACOSX_DEPLOYMENT_TARGET=14.0 is now set in .cargo/config.toml for rustc,
+  cc and CMake, matching the Xcode project.
+- Mac: libllama-common linked /opt/homebrew/opt/openssl@3/lib/libssl.3.dylib
+  and libcrypto.3.dylib by absolute path, because CMake found Homebrew's
+  OpenSSL on the runner. The app died in dyld on any Mac without Homebrew.
+  OpenSSL only served llama.cpp's HuggingFace downloader, which Dimmy never
+  calls; LLAMA_OPENSSL is now forced off through a Mac-only CMake toolchain
+  file. Neither failure reached Sentry or PostHog: dyld kills the process
+  before main(), and on Mac the core starts telemetry only after onboarding.
+
+### Changed
+
+- The documented macOS minimum is 14 Sonoma (it was stated as 12), Apple
+  Silicon only. CI now rejects a bundle in which any Mach-O links outside the
+  bundle or the system, or needs a newer macOS than LSMinimumSystemVersion,
+  and release.yml launches the shipped DMG on macos-14 and macos-15 runners
+  without Homebrew before publishing.
 
 ## [0.7.13] - 2026-10-10
 
