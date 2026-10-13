@@ -92,7 +92,7 @@ Learn more at **[dimmy.app](https://dimmy.app)**.
 | Platform | File | Requirements |
 |----------|------|--------------|
 | **Windows** | [`Dimmy-Setup.exe`](https://github.com/KonradDallaOrg/dimmy/releases/latest) | Windows 10 or newer. VC++ Redistributable is installed automatically by the installer. |
-| **macOS** | [`Dimmy-macos-arm64.dmg`](https://github.com/KonradDallaOrg/dimmy/releases/latest) | macOS 12 Monterey or newer, Apple Silicon (M1/M2/M3/M4). |
+| **macOS** | [`Dimmy-macos-arm64.dmg`](https://github.com/KonradDallaOrg/dimmy/releases/latest) | macOS 14 Sonoma or newer, Apple Silicon (M1/M2/M3/M4). Intel Macs are not supported. |
 | **Linux** | [`Dimmy-linux-x86_64.AppImage`](https://github.com/KonradDallaOrg/dimmy/releases/latest) | GTK4 runtime (bundled inside the AppImage). |
 
 <details>

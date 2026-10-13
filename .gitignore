@@ -10,6 +10,10 @@ dist/
 *.AppImage
 *.deb
 .cargo/
+# ...except the repo's own cargo config (Mac OpenSSL toolchain, see inside).
+!/.cargo/
+/.cargo/*
+!/.cargo/config.toml
 .env
 .env.*
 !.env.example
