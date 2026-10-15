@@ -10,6 +10,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Claude Haiku 5.5 in the Anthropic model list for dictation and recap
   (Windows, Mac). It takes the "fast" label from Haiku 4.5, which stays listed.
+- Hidden tester switch: an empty file named mute-consent-audio in the config
+  dir keeps the spoken recording notice silent at meeting start (recorded take
+  and system-voice fallback alike); the consent dialog, the chat text and the
+  audit log stay, and the log records "announce_muted". A file, not an env
+  var, because launchctl setenv on macOS is lost at every reboot. Honoured
+  only by staging, rc and local builds (crate::is_prerelease_build); a stable
+  build ignores it. The DLL-reuse cache key now includes whether the tag is an
+  rc, because a stable release reusing its rc's DLL would inherit the rc build
+  id and with it the switch.
 
 ### Fixed
 
