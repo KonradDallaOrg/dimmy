@@ -235,6 +235,12 @@ public static class ConsentFlow
     /// working audio decoding still has to tell the room it is recording.
     private static async Task AnnounceAsync(string text, string lang, int variant)
     {
+        if (DimmyNative.ConsentAudioMuted())
+        {
+            App.Log("spoken notice muted by the mute-consent-audio file", "Consent");
+            DimmyNative.ConsentLogEvent("announce_muted", lang);
+            return;
+        }
         if (TryPlayRecordedTake(lang, variant))
         {
             DimmyNative.ConsentLogEvent("announced", lang);

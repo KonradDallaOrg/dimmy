@@ -1789,6 +1789,11 @@ enum MeetingConsentFlow {
     /// voice otherwise. The fallback is not decoration. A machine that cannot
     /// decode the MP3 still has to tell the room it is recording.
     private static func announce(_ text: String, lang: String, variant: Int32) {
+        if DimmyCore.shared.consentAudioMuted() {
+            NSLog("[Consent] spoken notice muted by the mute-consent-audio file")
+            DimmyCore.shared.consentLogEvent(kind: "announce_muted", lang: lang)
+            return
+        }
         // play() returning false means silence with no error, while the audit
         // log would still say the room was told — fall back to the system
         // voice instead. Mirror of Win ConsentFlow's detach fix (dcf16ef).

@@ -155,6 +155,22 @@ pub fn is_staging_build() -> bool {
     build_flavor() == "staging"
 }
 
+/// True for every build that is not a stable release: staging, an rc, or a
+/// local dev build. Hidden switches meant for testers gate on this, so a
+/// stable binary never honours them.
+pub fn is_prerelease_build() -> bool {
+    is_staging_build() || build_id_is_prerelease(env!("DIMMY_BUILD_ID"))
+}
+
+/// `DIMMY_BUILD_ID` is the tag on a tag build (`v0.7.13-rc.4`, `v0.7.13`)
+/// and "local" off CI. `scripts/dev/core-build-hash.sh` folds the same rc
+/// test into the DLL-reuse key: without it a stable release would reuse its
+/// rc's DLL, and with it the rc's build id.
+fn build_id_is_prerelease(build_id: &str) -> bool {
+    assert!(!build_id.is_empty(), "DIMMY_BUILD_ID must never be empty");
+    build_id == "local" || build_id.contains("-rc")
+}
+
 /// Compose the final initial-prompt / `prompt` form-field value for an
 /// STT call from the user's free-form prompt + their curated user_dict
 /// list. Both are user-controlled vocab biasing; we just join them
@@ -2433,6 +2449,15 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_stable_tags_are_not_prerelease() {
+        assert!(build_id_is_prerelease("local"));
+        assert!(build_id_is_prerelease("v0.7.13-rc.4"));
+        assert!(build_id_is_prerelease("v0.6.73-rc11"));
+        assert!(!build_id_is_prerelease("v0.7.13"));
+        assert!(!build_id_is_prerelease("v0.7.12"));
+    }
 
     // ── Retired-model migration ─────────────────────────────────
     //
