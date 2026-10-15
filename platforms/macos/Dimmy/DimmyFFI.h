@@ -338,6 +338,10 @@ const uint8_t * _Nullable dimmy_consent_audio(const char * _Nonnull lang,
                                               int32_t variant,
                                               int32_t * _Nonnull out_len);
 
+/// 1 when the tester marker file mute-consent-audio is in the config dir on a staging /
+/// rc build: the host plays nothing, not even the system voice. 0 otherwise.
+int32_t dimmy_consent_audio_muted(void);
+
 /// Which language is SPOKEN in an audio file, as its English name ("Italian")
 /// ready to drop into a prompt. Writes 0 bytes when it cannot be established
 /// — no detection model on disk, unreadable or short audio, or sampled

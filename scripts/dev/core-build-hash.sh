@@ -55,6 +55,13 @@ feat="${1:?usage: core-build-hash.sh \"<feature-string>\"}"
   #    emitted in the clear; only the final 16-hex digest leaves this script.
   echo "license_url=${DIMMY_LICENSE_SERVER_URL:-}"
   echo "flavor=${DIMMY_BUILD_FLAVOR:-}"
+  # The tag is baked in as DIMMY_BUILD_ID, and an rc tag unlocks the tester
+  # switches (crate::is_prerelease_build). Same test as build_id_is_prerelease:
+  # a stable release must never reuse its rc's DLL.
+  case "${DIMMY_BUILD_ID:-${GITHUB_REF_NAME:-}}" in
+    *-rc*) echo "prerelease=rc" ;;
+    *)     echo "prerelease=" ;;
+  esac
   echo "namespace=${DIMMY_CONFIG_NAMESPACE:-}"
   printf 'pubkey=%s\n'  "$(printf '%s' "${DIMMY_LICENSE_PUBKEY:-}" | sha256sum)"
   printf 'posthog=%s\n' "$(printf '%s' "${POSTHOG_API_KEY:-}"      | sha256sum)"

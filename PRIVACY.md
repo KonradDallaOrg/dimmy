@@ -61,7 +61,7 @@ We do **not** track changes to: prompt text, custom LLM prompt, microphone devic
 - `feature.hotkey_triggered` — when the global hotkey starts a recording (helps us understand whether users prefer hotkey or button).
 - `feature.api_key_set` — when you save an API key, we log which scope (`stt` / `llm`) and which provider (categorical). **The key value never leaves your computer.**
 - `model.download_completed` — when a local model finishes downloading: which kind (`whisper` / `llm` / `parakeet` — categorical) and whether it succeeded (boolean). Never the model path or filename.
-- `consent.logged` — when the meeting recording-consent gate fires: which kind of consent moment (`shown` / `accepted` / `cancelled` / `announced` / `declined` — categorical). Never the participant names, the spoken announcement, or any meeting content.
+- `consent.logged` — when the meeting recording-consent gate fires: which kind of consent moment (`shown` / `accepted` / `cancelled` / `announced` / `announce_muted` / `declined` — categorical). Never the participant names, the spoken announcement, or any meeting content.
 
 ### Claude Code subscription backend
 If you pick the **Claude-Code** provider in Settings (uses your Anthropic Pro / Team / Max plan via the local `claude` CLI instead of an API key):

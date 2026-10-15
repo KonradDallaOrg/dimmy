@@ -295,6 +295,12 @@ extension DimmyCore {
         return (String(cString: buffer), variant)
     }
 
+    /// True when the tester marker file mute-consent-audio is in the config dir on a
+    /// staging / rc build: nothing is spoken, not even the system voice.
+    func consentAudioMuted() -> Bool {
+        dimmy_consent_audio_muted() == 1
+    }
+
     /// The recorded take as MP3 bytes, or nil when the core has none. The
     /// native pointer is static read-only data, so it is copied out here and
     /// never freed.

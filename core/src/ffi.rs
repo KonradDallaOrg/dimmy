@@ -6879,6 +6879,15 @@ pub unsafe extern "C" fn dimmy_consent_audio(
     audio.as_ptr()
 }
 
+/// 1 when the spoken notice must stay silent (see
+/// [`crate::consent::announcement_audio_muted`]), 0 otherwise. The host
+/// checks it before playing anything, the system-voice fallback included,
+/// and logs "announce_muted" instead of "announced".
+#[no_mangle]
+pub extern "C" fn dimmy_consent_audio_muted() -> c_int {
+    crate::consent::announcement_audio_muted() as c_int
+}
+
 /// Separate from `dimmy_consent_text` on purpose: that one is the
 /// recording-consent dialog, a different obligation to a different audience.
 /// Sharing an FFI entry between them would be convenient and wrong.
@@ -6941,6 +6950,7 @@ pub unsafe extern "C" fn dimmy_consent_log_event(
         "accepted" => "accepted",
         "cancelled" => "cancelled",
         "announced" => "announced",
+        "announce_muted" => "announce_muted",
         "declined" => "declined",
         _ => "other",
     };

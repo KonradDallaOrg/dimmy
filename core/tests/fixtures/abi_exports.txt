@@ -49,6 +49,7 @@ dimmy_confluence_spaces
 dimmy_confluence_test_connection
 dimmy_consent_announcement
 dimmy_consent_audio
+dimmy_consent_audio_muted
 dimmy_consent_log_event
 dimmy_consent_text
 dimmy_coreml_encoder_download

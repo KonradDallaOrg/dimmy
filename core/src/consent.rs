@@ -217,6 +217,28 @@ pub fn next_announcement_variant() -> usize {
     v
 }
 
+/// Hidden tester switch: an empty file named `mute-consent-audio` in the
+/// config dir keeps the spoken notice silent while the dialog, the chat text
+/// and the audit log stay as they are. Not in the UI and ignored by stable
+/// builds: telling the room it is being recorded is the point of the notice,
+/// and only someone testing meeting starts all day has a reason to skip it.
+///
+/// A file rather than an environment variable because on macOS
+/// `launchctl setenv` is lost at every reboot, and a login-item Dimmy can
+/// start before a LaunchAgent restores it.
+pub fn announcement_audio_muted() -> bool {
+    match crate::config_dir_path() {
+        Some(dir) => announcement_audio_muted_in(crate::is_prerelease_build(), &dir),
+        None => false,
+    }
+}
+
+pub const MUTE_AUDIO_MARKER: &str = "mute-consent-audio";
+
+fn announcement_audio_muted_in(prerelease: bool, config_dir: &std::path::Path) -> bool {
+    prerelease && config_dir.join(MUTE_AUDIO_MARKER).is_file()
+}
+
 /// Localized UI chrome for the recording-consent dialog (title, the helper
 /// line above the announcement, and the two button labels). Kept here so every
 /// platform renders the SAME wording instead of hardcoding English host-side
@@ -311,6 +333,27 @@ pub fn append_event(kind: &str, lang: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn audio_mute_needs_prerelease_and_the_marker_file() {
+        let dir = std::env::temp_dir().join(format!("dimmy-mute-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let marker = dir.join(MUTE_AUDIO_MARKER);
+        let _ = std::fs::remove_file(&marker);
+        assert!(!announcement_audio_muted_in(true, &dir));
+
+        std::fs::write(&marker, b"").unwrap();
+        assert!(announcement_audio_muted_in(true, &dir));
+        assert!(!announcement_audio_muted_in(false, &dir));
+
+        std::fs::remove_file(&marker).unwrap();
+        std::fs::create_dir(&marker).unwrap();
+        assert!(
+            !announcement_audio_muted_in(true, &dir),
+            "a directory is not the marker"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn modal_text_localizes_and_falls_back_to_english() {

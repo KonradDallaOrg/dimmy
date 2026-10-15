@@ -153,6 +153,15 @@ public static class DimmyNative
         [MarshalAs(UnmanagedType.LPUTF8Str)] string lang,
         int variant, out int outLen);
 
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int dimmy_consent_audio_muted();
+
+    /// <summary>
+    /// True when the tester marker file mute-consent-audio is in the config dir on a
+    /// staging / rc build: nothing is spoken, not even the system voice.
+    /// </summary>
+    public static bool ConsentAudioMuted() => dimmy_consent_audio_muted() == 1;
+
     /// <summary>
     /// The participant announcement for this meeting, plus the variant the
     /// core picked. Pass that variant to <see cref="ConsentAudio"/> so the
