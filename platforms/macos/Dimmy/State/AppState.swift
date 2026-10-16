@@ -1664,10 +1664,27 @@ final class AppState: ObservableObject {
         return languageMap.contains(where: { $0.code == code }) ? code : ""
     }
 
+    /// `Dimmy --setup onboarding done` (an AI assistant set Dimmy up from
+    /// the terminal) writes the same `.onboarding_done` marker Windows reads.
+    /// The Mac keeps its own flag in UserDefaults, so the marker is taken
+    /// once and removed: "Reset onboarding" must still work afterwards.
+    private static func consumeSetupOnboardingMarker() -> Bool {
+        guard let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        else { return false }
+        let marker = base
+            .appendingPathComponent(DimmyCore.shared.configDirName, isDirectory: true)
+            .appendingPathComponent(".onboarding_done")
+        guard FileManager.default.fileExists(atPath: marker.path) else { return false }
+        UserDefaults.standard.set(true, forKey: "isOnboardingComplete")
+        try? FileManager.default.removeItem(at: marker)
+        return true
+    }
+
     // MARK: - Init
 
     private init() {
         self.isOnboardingComplete = UserDefaults.standard.bool(forKey: "isOnboardingComplete")
+            || AppState.consumeSetupOnboardingMarker()
         self.showInDock = UserDefaults.standard.bool(forKey: "showInDock")
         // Default true: a fresh user sees the menu-bar icon, so they can
         // always find the app even if Dock is hidden.

@@ -1023,4 +1023,8 @@ int32_t dimmy_telegram_status(char * _Nonnull out_buf, int32_t buf_len);
 /// JSON array of pending audio {msg_id,filename,date,size}. "[]" when empty.
 int32_t dimmy_telegram_pending(char * _Nonnull out_buf, int32_t buf_len);
 
+/// Terminal setup tool for AI assistants (`Dimmy --setup ...`). argv[0] is
+/// the program name. Prints JSON to stdout; returns the process exit code.
+int32_t dimmy_setup_cli(int32_t argc, const char * _Nonnull const * _Nonnull argv);
+
 #endif /* DimmyFFI_h */
