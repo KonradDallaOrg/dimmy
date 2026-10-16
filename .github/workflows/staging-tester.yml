@@ -875,6 +875,16 @@ jobs:
           # the same System32 VC redist Velopack installs via --framework.
           cargo build --release --manifest-path mcp-server/Cargo.toml
           Copy-Item "mcp-server/target/release/dimmy-mcp.exe" "$pubDir/" -Force
+          # dimmy-setup.exe: the terminal tool an AI assistant runs to install
+          # and configure Dimmy (docs/dev/agent-setup.md). It loads
+          # dimmy_lib.dll from its own folder, so it needs none of the engine
+          # features. Own target dir, so this featureless build of the crate
+          # never overwrites the dimmy_lib.dll in D:\t.
+          cargo build --release --manifest-path core/Cargo.toml --bin dimmy_setup --no-default-features --features setup-launcher --target-dir D:\ts
+          Copy-Item "D:\ts\release\dimmy_setup.exe" "$pubDir/dimmy-setup.exe" -Force
+          if (-not (Test-Path "$pubDir/dimmy-setup.exe")) {
+            throw "dimmy-setup.exe missing from publish dir -- an AI-assisted install could not configure Dimmy"
+          }
           Get-ChildItem "$pubDir" -Filter "*.pdb" -Recurse | Remove-Item -ErrorAction SilentlyContinue
 
       # The self-hosted `sign-windows` job below consumes this to Authenticode-
@@ -956,7 +966,7 @@ jobs:
 
           # Sign only Dimmy-owned binaries (Microsoft's runtime DLLs are already
           # signed — re-signing them would be pointless and replace MS's sig).
-          $mine = @("Dimmy.Windows.exe", "Dimmy.Windows.dll", "dimmy_lib.dll", "dimmy-mcp.exe")
+          $mine = @("Dimmy.Windows.exe", "Dimmy.Windows.dll", "dimmy_lib.dll", "dimmy-mcp.exe", "dimmy-setup.exe")
           foreach ($name in $mine) {
             $f = Join-Path $pubDir $name
             if (Test-Path $f) {
