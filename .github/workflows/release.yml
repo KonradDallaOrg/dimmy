@@ -403,7 +403,14 @@ jobs:
           # unique per build, so it becomes CFBundleVersion (and the
           # appcast's sparkle:version) while VERSION stays
           # CFBundleShortVersionString for display.
-          BUILD_VERSION="${GITHUB_REF_NAME#v}"
+          #
+          # Not the tag itself, though: Sparkle stops reading a version at
+          # the first '-', so "0.7.13-rc.5" and "0.7.13-rc.3" compared EQUAL
+          # and no rc ever updated to the next rc or to its stable (a tester
+          # stuck on rc.3 with rc.5 out, 2026-10-16). All-numeric instead:
+          # rc N -> X.Y.Z.0.N, stable -> X.Y.Z.1. See the script.
+          python3 scripts/ci/test_mac_bundle_version.py
+          BUILD_VERSION="$(python3 scripts/ci/mac_bundle_version.py "$GITHUB_REF_NAME")"
           if [ -z "$BUILD_VERSION" ]; then echo "::error::could not derive build version from tag"; exit 1; fi
           echo "BUILD_VERSION=$BUILD_VERSION" >> "$GITHUB_ENV"
           echo "Mac build version: $VERSION (build $BUILD_VERSION)"
