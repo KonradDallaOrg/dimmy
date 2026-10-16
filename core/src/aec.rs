@@ -30,7 +30,7 @@ const POLL_SLEEP: Duration = Duration::from_millis(5);
 /// Per-stream ring buffers. The cpal callbacks PUSH samples; the AEC
 /// worker DRAINS 480-sample frames. Capped at MAX_RING_SAMPLES to stop
 /// pathological growth if one callback stalls.
-const MAX_RING_SAMPLES: usize = 48_000; // 1 s headroom
+pub(crate) const MAX_RING_SAMPLES: usize = 48_000; // 1 s headroom
 
 /// Push samples to a ring buffer with overflow guard. If the ring
 /// exceeds MAX_RING_SAMPLES the OLDEST samples are dropped — better
