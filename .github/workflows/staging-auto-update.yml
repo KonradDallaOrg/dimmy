@@ -347,15 +347,10 @@ jobs:
           mkdir -p "$FRAMEWORKS_DIR"
           RELEASE_DIR="core/target/aarch64-apple-darwin/release"
 
-          # Copy dylibs dereferencing symlinks so every file is a real binary
-          for name in libllama libggml libggml-base libggml-cpu libggml-metal libmtmd; do
-            for dylib in "$RELEASE_DIR"/${name}*.dylib; do
-              [ -e "$dylib" ] || continue
-              DEST="$FRAMEWORKS_DIR/$(basename "$dylib")"
-              cp -RL "$dylib" "$DEST"
-              install_name_tool -id "@rpath/$(basename "$dylib")" "$DEST" 2>/dev/null || true
-            done
-          done
+          # One file per library, every load command pointed at it. Copying
+          # each name of the versioned chain made dyld load ggml twice. See
+          # the script.
+          bash scripts/macos/bundle-llama-dylibs.sh "$FRAMEWORKS_DIR" "$RELEASE_DIR" - "$APP_PATH"/Contents/MacOS/*
 
           # Re-sign all dylibs
           codesign --force --sign - "$FRAMEWORKS_DIR"/*.dylib
