@@ -61,6 +61,9 @@ pub fn bundle_present() -> bool {
     })
 }
 
+/// What the v3 bundle expands to on disk, measured.
+pub const BUNDLE_SIZE_MB: u32 = 466;
+
 #[cfg(feature = "local-stt-parakeet-fluid")]
 pub use inference::{download_bundle, transcribe, warmup};
 
@@ -132,7 +135,7 @@ mod inference {
     /// (pinned as a const so a future bundle revision trips an obvious
     /// "stuck at 80 %" instead of silently mis-reporting).
     pub fn download_bundle(mut progress: impl FnMut(u64, u64)) -> Result<(), TranscribeError> {
-        const TOTAL_BYTES: u64 = 466 * 1024 * 1024;
+        const TOTAL_BYTES: u64 = BUNDLE_SIZE_MB as u64 * 1024 * 1024;
         const POLL_MS: u64 = 200;
 
         progress(0, TOTAL_BYTES);

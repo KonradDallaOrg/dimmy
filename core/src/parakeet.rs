@@ -189,6 +189,30 @@ pub fn active_bundle_present() -> bool {
     bundle_present()
 }
 
+/// Download size of the active backend's bundle: the Mac's FluidAudio Core
+/// ML bundle is a fifth of the ONNX one.
+pub fn active_bundle_size_mb() -> u32 {
+    #[cfg(all(
+        feature = "local-stt-parakeet-fluid",
+        target_os = "macos",
+        target_arch = "aarch64"
+    ))]
+    {
+        return crate::parakeet_fluid::BUNDLE_SIZE_MB;
+    }
+    #[allow(unreachable_code)]
+    BUNDLE_SIZE_MB
+}
+
+/// True when the active backend is the Mac's FluidAudio (Core ML) one.
+pub fn active_is_fluid() -> bool {
+    cfg!(all(
+        feature = "local-stt-parakeet-fluid",
+        target_os = "macos",
+        target_arch = "aarch64"
+    ))
+}
+
 /// Where the active backend's bundle lives; the folder a delete removes.
 pub fn active_bundle_dir() -> Option<PathBuf> {
     #[cfg(all(

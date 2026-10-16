@@ -21,6 +21,7 @@
 		AA00DD01 /* LocalLlmCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00DD01 /* LocalLlmCatalog.swift */; };
 		AA000504 /* MeetingWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000504 /* MeetingWindowController.swift */; };
 		AA00E001 /* WizardWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00E001 /* WizardWindowController.swift */; };
+		AA00F0A1 /* PermissionGuideWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00F0A1 /* PermissionGuideWindowController.swift */; };
 		AA00E002 /* MacWizardCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00E002 /* MacWizardCard.swift */; };
 		AA00E003 /* CommandWizardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00E003 /* CommandWizardView.swift */; };
 		AA00E004 /* MeetingWizardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00E004 /* MeetingWizardView.swift */; };
@@ -167,6 +168,7 @@
 		AB00DD01 /* LocalLlmCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalLlmCatalog.swift; sourceTree = "<group>"; };
 		AB000504 /* MeetingWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingWindowController.swift; sourceTree = "<group>"; };
 		AB00E001 /* WizardWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WizardWindowController.swift; sourceTree = "<group>"; };
+		AB00F0A1 /* PermissionGuideWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionGuideWindowController.swift; sourceTree = "<group>"; };
 		AB00E002 /* MacWizardCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacWizardCard.swift; sourceTree = "<group>"; };
 		AB00E003 /* CommandWizardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandWizardView.swift; sourceTree = "<group>"; };
 		AB00E004 /* MeetingWizardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingWizardView.swift; sourceTree = "<group>"; };
@@ -465,6 +467,7 @@
 				AB000504 /* MeetingWindowController.swift */,
 				AB001102 /* CallNudgeWindowController.swift */,
 				AB00E001 /* WizardWindowController.swift */,
+				AB00F0A1 /* PermissionGuideWindowController.swift */,
 			);
 			path = Controllers;
 			sourceTree = "<group>";
@@ -893,6 +896,7 @@ echo \"[gtcrn] bundled $(basename \"$GTCRN_SRC\") into Resources\"
 				AA00DD01 /* LocalLlmCatalog.swift in Sources */,
 				AA000504 /* MeetingWindowController.swift in Sources */,
 				AA00E001 /* WizardWindowController.swift in Sources */,
+				AA00F0A1 /* PermissionGuideWindowController.swift in Sources */,
 				AA00E002 /* MacWizardCard.swift in Sources */,
 				AA00E003 /* CommandWizardView.swift in Sources */,
 				AA00E004 /* MeetingWizardView.swift in Sources */,

@@ -1,0 +1,321 @@
+name: Agent Setup Preview (macOS)
+
+# Test builds of the AI-assisted install (docs/dev/agent-setup.md), kept
+# apart from every real pipeline:
+#   - fires only on `agent-preview.N` tags; no other workflow matches them
+#     (release.yml wants `v*`, staging-tester.yml `v*-staging*`);
+#   - its own identity: "Dimmy Agent.app", bundle id com.dimmy.agent, config
+#     dir dimmy-agent, staging licensing (Stripe Test), so it installs next to
+#     a real Dimmy and shares nothing with it;
+#   - Sparkle automatic checks off: the stock SUFeedURL is the prod appcast,
+#     which would "update" this build into prod Dimmy.
+# macOS only. The Windows installer for the same preview is built and signed
+# locally (Velopack packId Dimmy-Agent, channel agent) and attached by hand.
+# Build steps mirror staging-tester.yml build-macos; keep them in step.
+
+on:
+  push:
+    tags:
+      - "agent-preview.*"
+
+permissions:
+  contents: write
+
+env:
+  APP_NAME: "Dimmy Agent"
+  BUNDLE_ID: com.dimmy.agent
+  DMG_NAME: Dimmy-Agent-macos-arm64.dmg
+
+jobs:
+  create-release:
+    name: Create preview release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write release notes
+        run: |
+          cat > notes.md <<'EOF'
+          **Test build of the AI-assisted install. Not for general use.**
+
+          Give your AI assistant (Claude Code, Codex, Gemini CLI) this one line:
+
+          > Install Dimmy following https://dimmy.app/install.md, using the test build at https://github.com/KonradDallaOrg/dimmy/releases/tag/${{ github.ref_name }}
+
+          ## For the AI assistant: what differs from install.md
+
+          | | Windows | macOS (Apple Silicon) |
+          |---|---|---|
+          | Download (step 3) | `Dimmy-Agent-agent-Setup.exe` from this page | `Dimmy-Agent-macos-arm64.dmg` from this page |
+          | Signature | Valid, `CN=Konrad Damian Dalla` | Notarized Developer ID, team `7CYV82BZ24` |
+          | Installed app | `%LOCALAPPDATA%\Dimmy-Agent\current\Dimmy.Windows.exe` | `/Applications/Dimmy Agent.app` (copy it with this name) |
+          | Setup tool (step 5) | `%LOCALAPPDATA%\Dimmy-Agent\current\dimmy-setup.exe` | `"/Applications/Dimmy Agent.app/Contents/MacOS/Dimmy Agent" --setup` |
+          | Data folder | `%APPDATA%\dimmy-agent` | `~/Library/Application Support/dimmy-agent` |
+          | Permissions (step 6, macOS) | | grant them to **Dimmy Agent** |
+
+          It installs next to a normal Dimmy and shares nothing with it. Licensing is the test environment: the free trial works, purchases are simulated. Automatic updates are off.
+          EOF
+
+      - name: Create release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "Dimmy agent setup preview (${{ github.ref_name }})"
+          body_path: notes.md
+          draft: false
+          prerelease: true
+
+  build-macos:
+    name: Build macOS (agent preview)
+    needs: create-release
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Install CMake
+        run: |
+          brew list cmake >/dev/null 2>&1 || brew install cmake
+          cmake --version
+
+      - name: Verify Swift toolchain
+        run: |
+          swift --version
+          xcodebuild -version | head -2
+
+      - name: Fetch onnxruntime arm64 dylib
+        run: scripts/download-onnxruntime.sh
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+          shared-key: macos-agent-preview
+
+      - name: Build Rust static library
+        working-directory: core
+        env:
+          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          DIMMY_LICENSE_PUBKEY: ${{ secrets.DIMMY_LICENSE_PUBKEY_STAGING }}
+          DIMMY_LICENSE_SERVER_URL: https://license-staging.dimmy.app
+          DIMMY_BUILD_FLAVOR: staging
+          DIMMY_CONFIG_NAMESPACE: dimmy-agent
+          DIMMY_BUILD_ID: ${{ github.ref_name }}
+          DIMMY_TELEGRAM_API_ID: ${{ secrets.DIMMY_TELEGRAM_API_ID }}
+          DIMMY_TELEGRAM_API_HASH: ${{ secrets.DIMMY_TELEGRAM_API_HASH }}
+        run: |
+          cargo build --lib --release --target aarch64-apple-darwin \
+            --features local-stt-metal,local-stt-coreml,local-llm-metal,local-stt-parakeet-coreml,local-stt-parakeet-fluid,local-dfn,license-client,telegram,local-stt-qwen
+
+      - name: Verify static library
+        run: |
+          ls -lh core/target/aarch64-apple-darwin/release/libdimmy_lib.a
+          rm -f core/target/aarch64-apple-darwin/release/libdimmy_lib.dylib
+          rm -f core/target/aarch64-apple-darwin/release/deps/libdimmy_lib.dylib
+          TGT="core/target/aarch64-apple-darwin/release"
+          for src in core/target/release/libllama*.dylib core/target/release/libggml*.dylib core/target/release/libmtmd*.dylib; do
+            [ -e "$src" ] || continue
+            cp -RLf "$src" "$TGT/" 2>/dev/null || true
+          done
+          missing=""
+          for lib in libllama libllama-common libggml libggml-base libggml-cpu libggml-metal libmtmd; do
+            path="$TGT/$lib.dylib"
+            [ -e "$path" ] || missing="$missing $lib(absent)"
+            [ -e "$path" ] && [ ! -r "$path" ] && missing="$missing $lib(dangling)"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::llama/ggml dylibs unusable:$missing"
+            exit 1
+          fi
+
+      - name: Import Apple Developer ID certificate
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MACOS_CERT_P12:-}" ]; then
+            echo "::error::MACOS_CERT_P12 not set. An unsigned preview would fail install.md's signature check."
+            exit 1
+          fi
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+          KEYCHAIN_PW="$(openssl rand -base64 24)"
+          security create-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN_PATH"
+          echo "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -P "$MACOS_CERT_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PW" "$KEYCHAIN_PATH" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN_PATH" \
+            $(security list-keychains -d user | sed 's/"//g')
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" \
+            | grep 'Developer ID Application' | head -1 | sed -E 's/.*"(.*)".*/\1/')"
+          if [ -z "$IDENTITY" ]; then
+            echo "::error::Developer ID Application identity not found in the imported .p12"
+            exit 1
+          fi
+          SIGN_TEAM="$(printf '%s' "$IDENTITY" | sed -E 's/.*\(([A-Z0-9]+)\)$/\1/')"
+          echo "SIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+          echo "SIGN_TEAM=$SIGN_TEAM" >> "$GITHUB_ENV"
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+          rm -f "$RUNNER_TEMP/cert.p12"
+
+      - name: Build Xcode project (agent bundle id)
+        working-directory: platforms/macos
+        run: |
+          set -euo pipefail
+          xcodebuild -project Dimmy.xcodeproj \
+            -scheme Dimmy \
+            -configuration Release \
+            -derivedDataPath build/derived \
+            PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
+            PRODUCT_NAME="$APP_NAME" \
+            build \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="$SIGN_IDENTITY" \
+            DEVELOPMENT_TEAM="$SIGN_TEAM" \
+            ENABLE_HARDENED_RUNTIME=YES \
+            OTHER_CODE_SIGN_FLAGS="--timestamp --options runtime"
+          echo "APP_PATH=$PWD/build/derived/Build/Products/Release/$APP_NAME.app" >> "$GITHUB_ENV"
+
+      - name: Turn off Sparkle automatic checks
+        run: |
+          set -euo pipefail
+          PLIST="$APP_PATH/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :SUEnableAutomaticChecks false" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Set :SUFeedURL https://dimmy.app/agent-preview-has-no-updates.xml" "$PLIST"
+
+      - name: Bundle llama.cpp dylibs
+        run: |
+          FRAMEWORKS_DIR="$APP_PATH/Contents/Frameworks"
+          mkdir -p "$FRAMEWORKS_DIR"
+          RELEASE_DIR="core/target/aarch64-apple-darwin/release"
+          # One file per library, as in staging-tester.yml: copying each name
+          # of the versioned chain made dyld load ggml twice.
+          bash scripts/macos/bundle-llama-dylibs.sh "$FRAMEWORKS_DIR" "$RELEASE_DIR" - "$APP_PATH"/Contents/MacOS/*
+
+      - name: Verify Silero VAD model is bundled
+        run: |
+          MODEL="$APP_PATH/Contents/Resources/ggml-silero-v6.2.0.bin"
+          [ -f "$MODEL" ] || { echo "error: Silero VAD model missing from the app bundle" >&2; exit 1; }
+
+      - name: Build dimmy-mcp
+        working-directory: mcp-server
+        run: cargo build --release --target aarch64-apple-darwin
+
+      - name: Copy dimmy-mcp into Resources
+        run: |
+          cp "mcp-server/target/aarch64-apple-darwin/release/dimmy-mcp" "$APP_PATH/Contents/Resources/dimmy-mcp"
+          chmod +x "$APP_PATH/Contents/Resources/dimmy-mcp"
+
+      - name: Check the bundle runs on a Mac that is not this runner
+        run: bash scripts/check-mac-bundle-deps.sh "$APP_PATH"
+
+      - name: Sign app for Developer ID + hardened runtime
+        run: |
+          set -euo pipefail
+          ENTITLEMENTS="platforms/macos/Dimmy/Dimmy.entitlements"
+          sign() { codesign --force --options runtime --timestamp \
+            --keychain "$KEYCHAIN_PATH" --sign "$SIGN_IDENTITY" "$@"; }
+          while IFS= read -r -d '' f; do sign "$f"; done \
+            < <(find "$APP_PATH/Contents/Frameworks" -type f -name '*.dylib' -print0 2>/dev/null)
+          SPK="$APP_PATH/Contents/Frameworks/Sparkle.framework"
+          if [ -d "$SPK" ]; then
+            for vd in "$SPK"/Versions/*/; do
+              case "$vd" in */Current/) continue;; esac
+              for item in "$vd"XPCServices/*.xpc "$vd"Autoupdate "$vd"Updater.app; do
+                [ -e "$item" ] && sign "$item"
+              done
+            done
+            sign "$SPK"
+          fi
+          sign "$APP_PATH/Contents/Resources/dimmy-mcp"
+          sign --entitlements "$ENTITLEMENTS" "$APP_PATH"
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+
+      # The two things this preview exists to prove on a real Mac binary:
+      # the Swift `--setup` entry reaches the core and answers JSON, and the
+      # app itself still starts (SelfTests run at launch).
+      - name: Smoke test the setup tool
+        run: |
+          set -euo pipefail
+          BIN="$APP_PATH/Contents/MacOS/$APP_NAME"
+          OUT="$("$BIN" --setup --config-dir "$RUNNER_TEMP/setup-smoke" info)"
+          echo "$OUT"
+          echo "$OUT" | grep -q '"ok":true'
+          "$BIN" --setup --config-dir "$RUNNER_TEMP/setup-smoke" schema | grep -q '"ok":true'
+          "$BIN" --setup --config-dir "$RUNNER_TEMP/setup-smoke" profile apply --use meeting --lang it --stt local --recap claude-sub --dry-run | grep -q '"ok":true'
+          set +e
+          "$BIN" --setup --config-dir "$RUNNER_TEMP/setup-smoke" config set stt_mode=nowhere
+          RC=$?
+          set -e
+          [ "$RC" = "2" ] || { echo "::error::invalid setting must exit 2, got $RC"; exit 1; }
+
+      - name: Smoke test the app starts
+        run: |
+          BIN="$APP_PATH/Contents/MacOS/$APP_NAME"
+          "$BIN" &
+          PID=$!
+          sleep 8
+          if ! kill -0 "$PID" 2>/dev/null; then
+            echo "::error::the app exited within 8 s of launch"
+            exit 1
+          fi
+          kill "$PID" || true
+
+      - name: Notarize and staple .app
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          KEY_FILE="$RUNNER_TEMP/AuthKey.p8"
+          echo "$APPLE_API_KEY_P8" | base64 --decode > "$KEY_FILE"
+          trap 'rm -f "$KEY_FILE"' EXIT
+          ZIP="$RUNNER_TEMP/Dimmy-Agent.zip"
+          /usr/bin/ditto -c -k --keepParent "$APP_PATH" "$ZIP"
+          xcrun notarytool submit "$ZIP" \
+            --key "$KEY_FILE" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID" \
+            --wait --timeout 2h
+          xcrun stapler staple "$APP_PATH"
+          xcrun stapler validate "$APP_PATH"
+
+      - name: Create DMG
+        working-directory: platforms/macos
+        run: |
+          set -euo pipefail
+          mkdir -p build/dmg-contents
+          rm -rf "build/dmg-contents/$APP_NAME.app"
+          cp -R "$APP_PATH" build/dmg-contents/
+          ln -sf /Applications build/dmg-contents/Applications
+          hdiutil create -volname "$APP_NAME" -srcfolder build/dmg-contents -ov -format UDZO "build/$DMG_NAME"
+
+      - name: Notarize and staple DMG
+        working-directory: platforms/macos
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          KEY_FILE="$RUNNER_TEMP/AuthKey.p8"
+          echo "$APPLE_API_KEY_P8" | base64 --decode > "$KEY_FILE"
+          trap 'rm -f "$KEY_FILE"' EXIT
+          xcrun notarytool submit "build/$DMG_NAME" \
+            --key "$KEY_FILE" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID" \
+            --wait --timeout 2h
+          xcrun stapler staple "build/$DMG_NAME"
+          xcrun stapler validate "build/$DMG_NAME"
+          spctl -a -vv -t open --context context:primary-signature "build/$DMG_NAME" || true
+
+      - name: Upload DMG
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: platforms/macos/build/${{ env.DMG_NAME }}

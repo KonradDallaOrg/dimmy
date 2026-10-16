@@ -20,6 +20,11 @@ final class PermissionsManager: ObservableObject {
     @Published private(set) var microphone: AVAuthorizationStatus = .notDetermined
     @Published private(set) var accessibility: Bool = false
     @Published private(set) var inputMonitoring: IOHIDAccessType = kIOHIDAccessTypeUnknown
+    /// System audio has no status API: a Core Audio tap is created even
+    /// without the grant and just delivers silence. So this is what the
+    /// last meeting OBSERVED: "granted" when system audio arrived,
+    /// "denied" when none did, "unknown" before any meeting this run.
+    @Published private(set) var systemAudio: String = "unknown"
 
     /// True when the permissions strictly required for Dimmy's core loop are granted.
     /// Microphone (record) + Accessibility (active CGEventTap + paste via CGEvent).
@@ -39,6 +44,7 @@ final class PermissionsManager: ObservableObject {
 
     private init() {
         refresh()
+        writeSnapshot()
         didBecomeActiveObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification,
             object: nil,
@@ -54,17 +60,14 @@ final class PermissionsManager: ObservableObject {
     /// The same three reads, asked off the main thread. Each is a round trip
     /// to tccd, ~80 ms together under a meeting's load (sampled), and the
     /// 5 s poll paid that on the main thread for as long as the app ran.
-    private func refreshOffMain() {
+    func refreshOffMain() {
         DispatchQueue.global(qos: .utility).async {
             let mic = AVCaptureDevice.authorizationStatus(for: .audio)
             let ax = AXIsProcessTrustedWithOptions(nil)
             let im = IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    let pm = PermissionsManager.shared
-                    if mic != pm.microphone { pm.microphone = mic }
-                    if ax != pm.accessibility { pm.accessibility = ax }
-                    if im != pm.inputMonitoring { pm.inputMonitoring = im }
+                    PermissionsManager.shared.apply(mic: mic, ax: ax, im: im)
                 }
             }
         }
@@ -72,12 +75,63 @@ final class PermissionsManager: ObservableObject {
 
     /// Re-query TCC directly. Safe to call often; updates published properties only on change.
     func refresh() {
-        let newMic = AVCaptureDevice.authorizationStatus(for: .audio)
-        let newAx = AXIsProcessTrustedWithOptions(nil)
-        let newIm = IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)
-        if newMic != microphone { microphone = newMic }
-        if newAx != accessibility { accessibility = newAx }
-        if newIm != inputMonitoring { inputMonitoring = newIm }
+        apply(mic: AVCaptureDevice.authorizationStatus(for: .audio),
+              ax: AXIsProcessTrustedWithOptions(nil),
+              im: IOHIDCheckAccess(kIOHIDRequestTypeListenEvent))
+    }
+
+    private func apply(mic: AVAuthorizationStatus, ax: Bool, im: IOHIDAccessType) {
+        var changed = false
+        if mic != microphone { microphone = mic; changed = true }
+        if ax != accessibility { accessibility = ax; changed = true }
+        if im != inputMonitoring { inputMonitoring = im; changed = true }
+        if changed { writeSnapshot() }
+    }
+
+    /// Called by the meeting once it knows whether system audio arrives.
+    func noteSystemAudio(granted: Bool) {
+        let value = granted ? "granted" : "denied"
+        guard value != systemAudio else { return }
+        systemAudio = value
+        writeSnapshot()
+    }
+
+    /// `<config_dir>/permissions.json`, for `Dimmy --setup perm status`.
+    /// The CLI cannot ask macOS itself: TCC answers for the process
+    /// responsible for the caller, which for the CLI is the assistant that
+    /// launched it. Rewritten at launch and on every change; the atomic
+    /// write (temp file + rename) means a reader never sees half a file.
+    private func writeSnapshot() {
+        guard let dir = DimmyCore.shared.configDirURL else { return }
+        let micValue: String
+        switch microphone {
+        case .authorized: micValue = "granted"
+        case .denied: micValue = "denied"
+        case .restricted: micValue = "restricted"
+        case .notDetermined: micValue = "not_determined"
+        @unknown default: micValue = "not_determined"
+        }
+        let imValue: String
+        switch inputMonitoring {
+        case kIOHIDAccessTypeGranted: imValue = "granted"
+        case kIOHIDAccessTypeDenied: imValue = "denied"
+        default: imValue = "unknown"
+        }
+        let snapshot: [String: String] = [
+            "updated_at": ISO8601DateFormatter().string(from: Date()),
+            "platform": "macos",
+            "microphone": micValue,
+            "accessibility": accessibility ? "granted" : "denied",
+            "input_monitoring": imValue,
+            "system_audio": systemAudio,
+        ]
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let data = try JSONSerialization.data(withJSONObject: snapshot, options: [.sortedKeys])
+            try data.write(to: dir.appendingPathComponent("permissions.json"), options: .atomic)
+        } catch {
+            NSLog("[Permissions] could not write permissions.json: %@", error.localizedDescription)
+        }
     }
 
     /// Explicit refresh intended for user-action sites (button clicks, post-dialog).
@@ -1664,10 +1718,35 @@ final class AppState: ObservableObject {
         return languageMap.contains(where: { $0.code == code }) ? code : ""
     }
 
+    /// `Dimmy --setup onboarding done` (an AI assistant set Dimmy up from
+    /// the terminal) writes the same `.onboarding_done` marker Windows reads.
+    /// The Mac app never writes it itself (its own flag lives in
+    /// UserDefaults), so on a Mac the marker means "configured by an
+    /// assistant". It is kept, so `onboarding status` stays true after the
+    /// app starts; the "Reset onboarding" actions remove it.
+    private static var setupOnboardingMarker: URL? {
+        DimmyCore.shared.configDirURL?.appendingPathComponent(".onboarding_done")
+    }
+
+    static var configuredByAssistant: Bool {
+        guard let marker = setupOnboardingMarker else { return false }
+        return FileManager.default.fileExists(atPath: marker.path)
+    }
+
+    /// Run the full onboarding again: clears both the app's flag and the
+    /// assistant's marker, or the marker would mark it complete next launch.
+    func resetOnboarding() {
+        if let marker = AppState.setupOnboardingMarker {
+            try? FileManager.default.removeItem(at: marker)
+        }
+        isOnboardingComplete = false
+    }
+
     // MARK: - Init
 
     private init() {
         self.isOnboardingComplete = UserDefaults.standard.bool(forKey: "isOnboardingComplete")
+            || AppState.configuredByAssistant
         self.showInDock = UserDefaults.standard.bool(forKey: "showInDock")
         // Default true: a fresh user sees the menu-bar icon, so they can
         // always find the app even if Dock is hidden.

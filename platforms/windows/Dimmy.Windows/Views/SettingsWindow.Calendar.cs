@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
@@ -27,6 +28,7 @@ public sealed partial class SettingsWindow
     {
         [JsonPropertyName("available")] public bool Available { get; set; }
         [JsonPropertyName("reason")] public string Reason { get; set; } = "";
+        [JsonPropertyName("providers")] public List<string>? Providers { get; set; }
     }
 
     private bool _calendarStatusInFlight;
@@ -96,7 +98,10 @@ public sealed partial class SettingsWindow
 
             if (st is { Available: true })
             {
-                CalendarStatusText.Text = "Connected";
+                // Name what is linked, as the Mac card does.
+                CalendarStatusText.Text = st.Providers is { Count: > 0 } names
+                    ? "Connected: " + string.Join(" and ", names)
+                    : "Connected";
                 CalendarSetupRow.Visibility = Visibility.Collapsed;
                 return;
             }

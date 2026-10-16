@@ -215,6 +215,20 @@ impl HistoryStore {
         })
     }
 
+    /// Open an existing database without touching it: no schema, no
+    /// migration, no WAL switch. For `dimmy-setup last`, which may run
+    /// while the app holds the same file.
+    pub fn open_read_only(db_path: &Path) -> Result<Self, String> {
+        let conn = Connection::open_with_flags(
+            db_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|e| format!("sqlite open: {e}"))?;
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
+    }
+
     /// Add the v2 columns + drop+recreate the FTS5 virtual table to
     /// cover `text` and `enhanced_text`. Existing rows keep their
     /// content; new columns default to NULL and the FTS reindex
@@ -637,6 +651,26 @@ mod tests {
         assert_eq!(recent[0].text, "Hello world");
         assert_eq!(recent[0].language, "en");
         assert_eq!(recent[0].word_count, 2);
+    }
+
+    #[test]
+    fn read_only_open_reads_and_never_writes() {
+        let dir = std::env::temp_dir().join(format!("dimmy-history-ro-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("history.db");
+        {
+            let rw = HistoryStore::new(&db).unwrap();
+            rw.save("first", "en", 1.0).unwrap();
+            rw.save("second take", "en", 2.0).unwrap();
+        }
+        let ro = HistoryStore::open_read_only(&db).unwrap();
+        let last = ro.recent(1).unwrap();
+        assert_eq!(last[0].text, "second take");
+        assert!(ro.save("third", "en", 1.0).is_err());
+        drop(ro);
+        assert!(HistoryStore::open_read_only(&dir.join("missing.db")).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

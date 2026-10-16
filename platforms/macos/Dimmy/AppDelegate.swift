@@ -163,8 +163,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             // grants and causing an infinite reopen loop on every launch.
             // The yellow badge on the menubar icon plus Settings →
             // Permissions still surface the missing perm in Debug.
+            //
+            // When an AI assistant set Dimmy up from the terminal, everything
+            // but the grants is done: the small permission guide, not the
+            // whole wizard (which used to open twice in that flow).
+            if !permissionsGranted() && AppState.configuredByAssistant {
+                hkLog("[AppDelegate] configured by an assistant, permissions missing: permission guide")
+                PermissionGuideWindowController.shared.show()
+            }
             #if !DEBUG
-            if !permissionsGranted() {
+            if !permissionsGranted() && !AppState.configuredByAssistant {
                 hkLog("[AppDelegate] onboarding complete but permissions missing — reopening Permissions step")
                 showOnboarding(startStep: 1)
             }
@@ -178,6 +186,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             showOnboarding()
         }
         applyActivationPolicy()
+        PermissionGuideWindowController.shared.showIfRequested()
     }
 
     /// Reset TCC entries for any permission that the running process doesn't see as granted.
@@ -502,6 +511,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// activates the process but leaves the window hidden behind other apps.
     func applicationDidBecomeActive(_ notification: Notification) {
         onboardingWindow?.makeKeyAndOrderFront(nil)
+        PermissionGuideWindowController.shared.showIfRequested()
     }
 
     /// Handle `dimmy://` URLs delivered by the OS (clicking the magic

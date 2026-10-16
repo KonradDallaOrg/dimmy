@@ -685,11 +685,9 @@ final class MeetingViewModel: ObservableObject {
                     // stopped/replaced meeting can't fire a stale banner.
                     try? await Task.sleep(nanoseconds: 1_800_000_000)
                     guard self.sessionId == id else { return }
-                    if SystemAudioCaptureService.shared.isCapturingSystemAudio {
-                        self.systemAudioPermissionNeeded = false
-                    } else {
-                        self.systemAudioPermissionNeeded = true
-                    }
+                    let capturing = SystemAudioCaptureService.shared.isCapturingSystemAudio
+                    self.systemAudioPermissionNeeded = !capturing
+                    PermissionsManager.shared.noteSystemAudio(granted: capturing)
                 }
             }
         }
