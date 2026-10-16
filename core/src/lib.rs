@@ -33,9 +33,7 @@ pub mod error;
 pub mod ffi;
 pub mod filler;
 pub mod gemini_cli;
-#[cfg(any(feature = "local-stt", feature = "local-llm"))]
 pub mod gpu_diag;
-#[cfg(any(feature = "local-stt", feature = "local-llm"))]
 pub mod gpu_health;
 /// GTCRN speech enhancement (ICASSP 2024) — candidate replacement for the
 /// RNNoise suppressor. Gated: the whole module needs `ort` + `realfft`,

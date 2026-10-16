@@ -479,14 +479,8 @@ fn check() -> CmdResult {
     }))
 }
 
-#[cfg(any(feature = "local-stt", feature = "local-llm"))]
 fn gpu_known_bad() -> bool {
     crate::gpu_health::read_known_bad().is_some()
-}
-
-#[cfg(not(any(feature = "local-stt", feature = "local-llm")))]
-fn gpu_known_bad() -> bool {
-    false
 }
 
 fn license_kind(v: &Value) -> Value {
