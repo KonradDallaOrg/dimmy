@@ -441,7 +441,7 @@ fn check() -> CmdResult {
             "dedicated": gpu.dedicated,
             "apple_silicon": gpu.apple_silicon,
             "fitness": format!("{fitness:?}").to_ascii_lowercase(),
-            "known_bad": crate::gpu_health::read_known_bad().is_some(),
+            "known_bad": gpu_known_bad(),
         },
         "microphones": crate::audio::list_input_devices(),
         "local_stt_backends": setup::available_backends(),
@@ -451,6 +451,16 @@ fn check() -> CmdResult {
         "onboarding_done": onboarding_marker_exists(),
         "recommended_profile": rec.to_json(),
     }))
+}
+
+#[cfg(any(feature = "local-stt", feature = "local-llm"))]
+fn gpu_known_bad() -> bool {
+    crate::gpu_health::read_known_bad().is_some()
+}
+
+#[cfg(not(any(feature = "local-stt", feature = "local-llm")))]
+fn gpu_known_bad() -> bool {
+    false
 }
 
 fn license_kind(v: &Value) -> Value {
