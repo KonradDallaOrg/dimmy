@@ -451,6 +451,12 @@ fn parse_combo(combo: &str) -> Option<(u32, u32, u32)> {
     }
 }
 
+/// Whether `combo` is a shortcut the hook can bind, i.e. `set_shortcut` would
+/// not fall back to the platform default.
+pub(crate) fn is_valid_combo(combo: &str) -> bool {
+    parse_combo(combo).is_some()
+}
+
 /// Set the dictation shortcut combo. An unrecognised combo falls back to the
 /// platform default so the dictation hotkey is never left unbound.
 pub fn set_shortcut(combo: &str) {

@@ -118,7 +118,7 @@ fn history_language(language: &str) -> &str {
     }
 }
 
-fn effective_local_backend(selected: &str) -> &'static str {
+pub(crate) fn effective_local_backend(selected: &str) -> &'static str {
     let whisper_model = state()
         .local_model
         .lock()
@@ -147,7 +147,7 @@ fn effective_local_backend(selected: &str) -> &'static str {
 /// The selected Qwen3-ASR variant, or the catalog default. Four call
 /// sites read it -- dictation batch, dictation chunked, file load and
 /// meeting re-transcribe -- and they must not disagree.
-fn qwen_asr_variant() -> String {
+pub(crate) fn qwen_asr_variant() -> String {
     state()
         .qwen_asr_model
         .lock()
@@ -168,6 +168,52 @@ fn state() -> &'static AppState {
     GLOBAL_STATE
         .get()
         .expect("dimmy_init() must be called before any other function")
+}
+
+pub(crate) fn is_initialized() -> bool {
+    GLOBAL_STATE.get().is_some()
+}
+
+/// What `dimmy-setup` runs instead of `dimmy_init`: config and keystore,
+/// nothing else. No audio thread, no hotkeys, no telemetry, no history
+/// database, no key migration (a migration is a write, and most setup
+/// commands only read). Idempotent, so a host that calls the CLI twice in
+/// one process gets the state of the first call.
+pub(crate) fn init_headless() {
+    if GLOBAL_STATE.get().is_some() {
+        return;
+    }
+    let file_cfg = load_config_file();
+    let use_kr = file_cfg.use_keyring;
+    let key_store = KeyStore::new();
+    let stt_provider = Provider::from_url(&file_cfg.api_url);
+    let llm_provider = Provider::from_url(&file_cfg.llm_api_url);
+    let stored_key = load_key_any_scope(
+        &key_store,
+        stt_provider,
+        KeyringScope::Stt(stt_provider),
+        use_kr,
+    );
+    let stored_llm_key = load_key_any_scope(
+        &key_store,
+        llm_provider,
+        KeyringScope::Llm(llm_provider),
+        use_kr,
+    );
+    let st = AppState::from_config(file_cfg, key_store, stored_key, stored_llm_key, true);
+    let _ = GLOBAL_STATE.set(st);
+    assert!(
+        GLOBAL_STATE.get().is_some(),
+        "headless init must set the state"
+    );
+}
+
+/// The keystore and the keyring flag, for `dimmy-setup`. Never hands out a
+/// key: callers ask the store, they do not copy it.
+pub(crate) fn with_key_store<R>(f: impl FnOnce(&KeyStore, bool) -> R) -> R {
+    let st = state();
+    let use_kr = st.use_keyring.lock().map(|k| *k).unwrap_or(false);
+    f(&st.key_store, use_kr)
 }
 
 /// Non-panicking variant for host POLLERS (amplitude, recording state):
@@ -214,7 +260,11 @@ fn emit_meeting_state_event(active: bool, paused: bool) {
 /// cross-scope fallback (see `dimmy_process_with_llm` and the STT
 /// fallback in `dimmy_init_inner`). Returns true if any of the three
 /// scopes the provider supports has a non-empty key.
-fn has_any_scope_key(store: &crate::keystore::KeyStore, provider: Provider, use_kr: bool) -> bool {
+pub(crate) fn has_any_scope_key(
+    store: &crate::keystore::KeyStore,
+    provider: Provider,
+    use_kr: bool,
+) -> bool {
     if provider.supports_stt() && store.has_key(KeyringScope::Stt(provider), use_kr) {
         return true;
     }
@@ -428,6 +478,12 @@ fn dimmy_init_inner() -> c_int {
 
     log("=== Dimmy FFI starting ===");
     write_init_trace("P3: first log line written");
+
+    // Tells `dimmy-setup` the app is running, so it refuses to write the
+    // config under us. Never fatal: a second instance is stopped elsewhere.
+    if let Err(e) = crate::setup::hold_app_lock() {
+        log(&format!("[Setup] app lock not taken: {}", e));
+    }
 
     // Initialise telemetry (Sentry crash + error pipeline). No-op when
     // the build did not embed a DSN, or when telemetry-sentry feature
@@ -6616,7 +6672,7 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
 /// - -11 refusal — the model declined on safety grounds (Fable 5+
 ///   stop_reason=refusal). UI should suggest rewording; retrying
 ///   unchanged input cannot succeed.
-fn categorize_llm_error_to_rc(err: &crate::error::LlmError) -> c_int {
+pub(crate) fn categorize_llm_error_to_rc(err: &crate::error::LlmError) -> c_int {
     use crate::error::LlmError;
     match err {
         LlmError::Api { status, body } => {
@@ -6684,6 +6740,58 @@ fn local_failure_rc(msg: &str) -> c_int {
         -12
     } else {
         -13
+    }
+}
+
+/// `dimmy-setup` in-process: the Windows/Linux launcher and the macOS app's
+/// `--setup` mode both call this with their own argv (program name
+/// excluded). Prints JSON on stdout and returns the process exit code: 0 ok,
+/// 1 failed, 2 bad usage or invalid settings, 3 Dimmy is running and the
+/// command would write. Never call `dimmy_init` in the same process first:
+/// the CLI builds its own headless state.
+///
+/// # Safety
+/// `argv` must point to `argc` valid NUL-terminated UTF-8 C strings.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_setup_cli(argc: c_int, argv: *const *const c_char) -> c_int {
+    use std::io::Write;
+    assert!(argc >= 0, "dimmy_setup_cli: negative argc");
+    assert!(
+        argc == 0 || !argv.is_null(),
+        "dimmy_setup_cli: null argv with argc > 0"
+    );
+    crate::telemetry::set_enabled(false);
+    crate::telemetry::set_crash_enabled(false);
+    crate::set_log_to_stderr(false);
+    let mut args: Vec<String> = Vec::with_capacity(argc as usize);
+    for i in 0..argc as usize {
+        let p = *argv.add(i);
+        assert!(!p.is_null(), "dimmy_setup_cli: null argument {i}");
+        match CStr::from_ptr(p).to_str() {
+            Ok(s) => args.push(s.to_string()),
+            Err(_) => {
+                let v = serde_json::json!({ "ok": false, "error": {
+                    "code": "usage", "message": "arguments must be UTF-8", "fix": "" } });
+                let _ = writeln!(std::io::stdout(), "{v}");
+                return crate::setup_cli::EXIT_USAGE;
+            }
+        }
+    }
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::setup_cli::run(&args, &mut std::io::stdout())
+    }));
+    match result {
+        Ok(code) => {
+            assert!((0..=3).contains(&code), "exit code out of contract: {code}");
+            code
+        }
+        Err(_) => {
+            let v = serde_json::json!({ "ok": false, "error": {
+                "code": "internal", "message": "dimmy-setup hit an internal error",
+                "fix": "Run `dimmy-setup diag` and report it." } });
+            let _ = writeln!(std::io::stdout(), "{v}");
+            crate::setup_cli::EXIT_FAILED
+        }
     }
 }
 

@@ -84,6 +84,8 @@ pub mod process_loopback;
 pub mod provider;
 pub mod qwen_asr;
 pub mod qwen_fluid;
+pub mod setup;
+pub mod setup_cli;
 pub mod silero;
 #[cfg(feature = "sim-audio")]
 pub mod sim_audio;
@@ -220,7 +222,36 @@ pub fn config_dir_name() -> &'static str {
     }
 }
 
+static CONFIG_DIR_OVERRIDE: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// Point every config-derived path of THIS process at `dir`. Used by
+/// `dimmy-setup --config-dir` so an agent can dry-run setup on a machine
+/// that has a real install. Must happen before the core is initialised:
+/// state loaded from one dir and saved to another would mix two installs.
+pub fn set_config_dir_override(dir: std::path::PathBuf) {
+    assert!(
+        !dir.as_os_str().is_empty(),
+        "config dir override must not be empty"
+    );
+    assert!(
+        !ffi::is_initialized(),
+        "config dir override must be set before the core is initialised"
+    );
+    let stored = CONFIG_DIR_OVERRIDE.get_or_init(|| dir.clone());
+    assert!(
+        *stored == dir,
+        "config dir override already set to a different path"
+    );
+}
+
+pub fn config_dir_override() -> Option<&'static std::path::Path> {
+    CONFIG_DIR_OVERRIDE.get().map(|p| p.as_path())
+}
+
 pub fn config_dir_path() -> Option<std::path::PathBuf> {
+    if let Some(dir) = CONFIG_DIR_OVERRIDE.get() {
+        return Some(dir.clone());
+    }
     // Test isolation — under ANY test compilation (unit `cfg(test)` or the
     // integration-only `test-ffi` feature) the REAL user config dir is
     // UNREACHABLE. Tests must point DIMMY_TEST_CONFIG_DIR at a disposable
@@ -601,6 +632,14 @@ fn debug_transcription(msg: &str) {
     }
 }
 
+static LOG_TO_STDERR: AtomicBool = AtomicBool::new(true);
+
+/// `dimmy-setup` owns the terminal: its output is the JSON contract, so log
+/// lines go to the file only.
+pub fn set_log_to_stderr(on: bool) {
+    LOG_TO_STDERR.store(on, Ordering::Relaxed);
+}
+
 /// Write a log line to %APPDATA%/dimmy/dimmy.log (visible on Windows GUI apps)
 pub fn log(msg: &str) {
     use std::io::Write;
@@ -610,7 +649,9 @@ pub fn log(msg: &str) {
     // write error. Hitting that panic from inside dimmy_init aborts the
     // whole DLL via __fastfail (extern "C" no-unwind boundary). Use a
     // best-effort writeln! that swallows errors instead.
-    let _ = writeln!(std::io::stderr(), "{}", msg);
+    if LOG_TO_STDERR.load(Ordering::Relaxed) {
+        let _ = writeln!(std::io::stderr(), "{}", msg);
+    }
     if let Some(path) = log_path() {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -2015,6 +2056,22 @@ impl AppState {
             stored_key.is_some(), llm_provider, file_cfg.llm_enabled, file_cfg.llm_style.as_str()
         ));
 
+        Self::from_config(file_cfg, key_store, stored_key, stored_llm_key, false)
+    }
+
+    /// Build the state from an already-loaded config and keystore.
+    ///
+    /// `headless` is for `dimmy-setup`: no audio thread (its sender goes to
+    /// a dropped receiver, so a stray capture command is a no-op), no live
+    /// device enumeration and no history database. Everything that reads or
+    /// writes settings works exactly as in the app.
+    pub(crate) fn from_config(
+        file_cfg: AppConfig,
+        key_store: keystore::KeyStore,
+        stored_key: Option<String>,
+        stored_llm_key: Option<String>,
+        headless: bool,
+    ) -> Self {
         let audio_buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
         let audio_buffer_secondary = Arc::new(Mutex::new(Vec::<f32>::new()));
         let input_gain_atomic = Arc::new(std::sync::atomic::AtomicU32::new(
@@ -2023,12 +2080,21 @@ impl AppState {
         let loopback_gain_atomic = Arc::new(std::sync::atomic::AtomicU32::new(
             file_cfg.loopback_gain.to_bits(),
         ));
-        let audio_tx = audio::spawn_audio_thread(
-            audio_buffer.clone(),
-            audio_buffer_secondary.clone(),
-            input_gain_atomic.clone(),
-            loopback_gain_atomic.clone(),
-        );
+        let audio_tx = if headless {
+            std::sync::mpsc::channel::<AudioCommand>().0
+        } else {
+            audio::spawn_audio_thread(
+                audio_buffer.clone(),
+                audio_buffer_secondary.clone(),
+                input_gain_atomic.clone(),
+                loopback_gain_atomic.clone(),
+            )
+        };
+        let sample_rate = if headless {
+            audio::MEETING_CANONICAL_RATE
+        } else {
+            audio::device_sample_rate(&file_cfg.selected_device)
+        };
 
         let state = AppState {
             recording: Mutex::new(false),
@@ -2041,7 +2107,7 @@ impl AppState {
             shortcut_mode: Mutex::new(file_cfg.shortcut_mode),
             shortcut: Mutex::new(file_cfg.shortcut),
             selected_device: Mutex::new(file_cfg.selected_device.clone()),
-            audio_sample_rate: Mutex::new(audio::device_sample_rate(&file_cfg.selected_device)),
+            audio_sample_rate: Mutex::new(sample_rate),
             transcript: Mutex::new(String::new()),
             audio_buffer,
             audio_buffer_secondary,
@@ -2125,7 +2191,9 @@ impl AppState {
             stats_total_speaking_secs: Mutex::new(file_cfg.stats_total_speaking_secs),
             app_rules: Mutex::new(file_cfg.app_rules.clone()),
             current_app_context: Mutex::new(crate::app_rules::AppContext::default()),
-            history_store: Mutex::new({
+            history_store: Mutex::new(if headless {
+                None
+            } else {
                 let history_db = crate::config_dir_path()
                     .map(|p| p.join("history.db"))
                     .unwrap_or_else(|| std::path::PathBuf::from("history.db"));

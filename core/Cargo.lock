@@ -1162,6 +1162,7 @@ dependencies = [
  "grammers-session",
  "hound",
  "keyring",
+ "libc",
  "libloading",
  "llama-cpp-4",
  "ndarray",

@@ -44,6 +44,14 @@ required-features = ["smoke-test"]
 # request-trial, activate, status, refresh, simulate-purchase. Used end-
 # to-end against `licensing_server` so we can validate the architecture
 # without dragging in the WinUI / SwiftUI / GTK4 surfaces.
+# Agent setup launcher (`dimmy-setup.exe` in the Windows install): loads
+# dimmy_lib from the directory of the running exe and calls dimmy_setup_cli.
+# macOS runs the same entry point through `Dimmy --setup`.
+[[bin]]
+name = "dimmy_setup"
+path = "src/bin/dimmy_setup.rs"
+required-features = ["setup-launcher"]
+
 [[bin]]
 name = "license_cli"
 path = "src/bin/license_cli.rs"
@@ -200,6 +208,10 @@ test-ffi = []
 # Local test builds only: a meeting's mic and system tracks from WAV files,
 # paced like hardware (see `sim_audio`). Never in a release feature line.
 sim-audio = []
+# setup-launcher: gates the dimmy_setup console launcher, which loads the
+# installed dimmy_lib from its own folder and forwards argv to
+# dimmy_setup_cli. Pulls nothing but libloading (already a dependency).
+setup-launcher = []
 # smoke-test: gates the dimmy_smoke binary that runtime-loads the installed
 # dimmy_lib.dll via libloading. Used by the installer-ffi-smoke CI job.
 smoke-test = []
@@ -399,6 +411,11 @@ windows = { version = "0.62", features = [
     "Win32_Media_KernelStreaming",
     "Win32_Graphics_Dxgi",
 ] }
+
+# statvfs / sysctl / sysinfo for `dimmy-setup check` (free disk, RAM).
+# Already in the tree through cpal and friends; this only makes it direct.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 # CSPRNG for ed25519 keypair generation in tests. Pulled here (not into

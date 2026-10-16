@@ -576,20 +576,24 @@ fn real_remove(id: &str) -> Result<bool, String> {
     Ok(removed)
 }
 
+/// The real downloads, reporting each state change to `emit` instead of the
+/// host event channel. `dimmy-setup` prints them as progress lines.
+pub fn with_emit(emit: Box<Emit>) -> Arc<Center> {
+    Center::new(
+        Box::new(real_fetch),
+        Box::new(real_remove),
+        emit,
+        vec![
+            Duration::from_secs(2),
+            Duration::from_secs(8),
+            Duration::from_secs(30),
+        ],
+    )
+}
+
 pub fn global() -> &'static Arc<Center> {
     static CENTER: OnceLock<Arc<Center>> = OnceLock::new();
-    CENTER.get_or_init(|| {
-        Center::new(
-            Box::new(real_fetch),
-            Box::new(real_remove),
-            Box::new(|payload| crate::ffi::emit_event(EVENT, payload)),
-            vec![
-                Duration::from_secs(2),
-                Duration::from_secs(8),
-                Duration::from_secs(30),
-            ],
-        )
-    })
+    CENTER.get_or_init(|| with_emit(Box::new(|payload| crate::ffi::emit_event(EVENT, payload))))
 }
 
 #[cfg(test)]
