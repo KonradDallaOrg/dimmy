@@ -929,4 +929,6 @@ struct CalendarAssignmentReply: Decodable {
 struct CalendarConnectorStatus: Decodable {
     var available: Bool = false
     var reason: String = ""
+    /// "Microsoft 365", "Google Calendar"... absent from older cores.
+    var providers: [String]? = nil
 }

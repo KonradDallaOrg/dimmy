@@ -87,8 +87,11 @@ struct MacIntegrationsPage: View {
             // fixed, and never pretends to own the handshake.
             MacTile {
                 MacRow(
-                    "Link meetings to your calendar",
-                    hint: "When a meeting starts, Dimmy asks which appointment it is and offers to link it, so the recap can name who was invited. It uses the calendar connector in your own Claude subscription, so there is no separate login to Dimmy. Your appointments for that day are read through it."
+                    "Outlook or Google Calendar",
+                    description: "Links each meeting to its appointment, through the calendar connector in your Claude subscription.",
+                    hint: "When a meeting starts, Dimmy asks which appointment it is and offers to link it, so the recap can name who was invited. It uses the calendar connector in your own Claude subscription, so there is no separate login to Dimmy. Your appointments for that day are read through it.",
+                    icon: "calendar",
+                    iconBackground: Color(red: 0.0, green: 0.47, blue: 0.83)
                 ) {
                     Toggle("", isOn: Binding(
                         get: { appState.calendarContextEnabled },
@@ -394,6 +397,9 @@ struct MacIntegrationsPage: View {
         .onAppear {
             appState.refreshClaudeCodeStatus()
             refreshMcpStatus()
+            // The status row used to read "Off" on open even with the
+            // feature on, until "Check again". Windows checks on Loaded.
+            if appState.calendarContextEnabled { refreshCalendarStatus() }
             TelegramService.shared.refreshState(appState: appState)
             Task { claudeIconPath = await ClaudeIconExtractor.tryExtract() }
         }
@@ -732,7 +738,12 @@ struct MacIntegrationsPage: View {
 
             DispatchQueue.main.async {
                 if status?.available == true {
-                    calendarStatusText = "Connected"
+                    // Name what is linked: "Connected" alone left users
+                    // guessing whether it was Outlook, Google or nothing.
+                    let names = status?.providers ?? []
+                    calendarStatusText = names.isEmpty
+                        ? "Connected"
+                        : "Connected: " + names.joined(separator: " and ")
                     calendarNeedsSetup = false
                     return
                 }
