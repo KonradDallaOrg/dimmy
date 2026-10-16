@@ -1278,16 +1278,16 @@ pub fn spawn_audio_thread(
                         // Paused meeting: skip appends (gap-skip discards
                         // these at resume; keeping them only grows RAM).
                         if !meeting_capture_gated() {
-                            if let Ok(mut b) = buffer_secondary.lock() {
-                                for &s in &canonical {
-                                    b.push(s.clamp(-1.0, 1.0));
-                                }
-                            }
-                            if let Ok(mut r) = aec_ref_ring.lock() {
-                                for &s in &canonical {
-                                    r.push(s.clamp(-1.0, 1.0));
-                                }
-                            }
+                            let capture_wants_loopback = matches!(
+                                last_start_params,
+                                Some((_, AudioSource::Mix | AudioSource::System))
+                            );
+                            store_loopback_push(
+                                &canonical,
+                                capture_wants_loopback,
+                                &buffer_secondary,
+                                &aec_ref_ring,
+                            );
                         }
 
                         // Periodic 5 s diagnostic so the colleague's
@@ -1575,6 +1575,42 @@ fn snap_to_standard_loopback_rate(hz: f64) -> u32 {
         }
     }
     best
+}
+
+/// How much loopback audio survives while no capture wants it: enough for
+/// the level meter (`dimmy_get_loopback_amplitude` reads the last 800
+/// samples), nothing a leaked host stream can turn into gigabytes.
+const IDLE_LOOPBACK_TAIL_SAMPLES: usize = MEETING_CANONICAL_RATE as usize;
+
+/// Append one canonical-rate loopback push to the meeting's system buffer
+/// and to the AEC reference ring.
+///
+/// The reference ring goes through `aec::push_to_ring`, capped like the
+/// Windows loopback callback has always been. The AEC worker takes one
+/// reference frame per MIC frame, so any push rate above the mic's piles
+/// up there, and every `drain(..480)` moves the whole pile: at 590 M
+/// samples the AEC ran far slower than real time and the mic track fell
+/// to 46 % of the meeting (2026-10-16).
+///
+/// The system buffer is the meeting's to drain, so it is never trimmed
+/// while a Mix / System capture is running. With none running nobody
+/// drains it at all, and a host still pushing would grow it forever.
+fn store_loopback_push(
+    canonical: &[f32],
+    capture_wants_loopback: bool,
+    secondary: &Mutex<Vec<f32>>,
+    aec_ref: &Arc<Mutex<Vec<f32>>>,
+) {
+    let clamped: Vec<f32> = canonical.iter().map(|s| s.clamp(-1.0, 1.0)).collect();
+    if let Ok(mut b) = secondary.lock() {
+        b.extend_from_slice(&clamped);
+        if !capture_wants_loopback && b.len() > IDLE_LOOPBACK_TAIL_SAMPLES {
+            let excess = b.len() - IDLE_LOOPBACK_TAIL_SAMPLES;
+            b.drain(..excess);
+        }
+        assert!(capture_wants_loopback || b.len() <= IDLE_LOOPBACK_TAIL_SAMPLES);
+    }
+    crate::aec::push_to_ring(aec_ref, &clamped);
 }
 
 /// Pure decision: does the empirically MEASURED loopback delivery rate
@@ -2920,5 +2956,83 @@ mod diag_tests {
     fn peak_tracks_max_abs() {
         let samples = [0.0_f32, -0.3, 0.1, -0.95, 0.2];
         assert!((peak_for(&samples) - 0.95).abs() < f32::EPSILON);
+    }
+}
+
+#[cfg(test)]
+mod loopback_push_tests {
+    use super::*;
+
+    const RATE: usize = MEETING_CANONICAL_RATE as usize;
+
+    /// One 20 ms push from a 24 kHz tap after the 2x upsample, the shape of
+    /// every push in the 2026-10-16 log.
+    fn push_960(value: f32) -> Vec<f32> {
+        vec![value; 960]
+    }
+
+    /// 2026-10-16: three IO procs pushed at once, 144 000 canonical samples/s
+    /// against a mic running at 48 000. The AEC worker drains one reference
+    /// frame per MIC frame, so two thirds of every push stayed in the ring:
+    /// 590 M samples by the end of an 80-minute meeting. Every `drain(..480)`
+    /// then moved the whole ring, the AEC fell behind the mic, and the
+    /// meeting kept 2251 s of 4850. The ring must stay bounded however fast
+    /// the host pushes.
+    #[test]
+    fn aec_reference_stays_bounded_when_the_host_pushes_three_times_too_fast() {
+        let secondary = Mutex::new(Vec::new());
+        let aec_ref = Arc::new(Mutex::new(Vec::new()));
+        let pushes_per_second = 150; // 3 procs x 50 pushes/s
+        for _ in 0..(pushes_per_second * 60) {
+            store_loopback_push(&push_960(0.25), true, &secondary, &aec_ref);
+        }
+        let ref_len = aec_ref.lock().unwrap().len();
+        assert!(
+            ref_len <= crate::aec::MAX_RING_SAMPLES,
+            "AEC reference ring grew to {ref_len} samples after 60 s of 3x pushes"
+        );
+        // The meeting's system buffer belongs to the meeting worker, which
+        // drains it; the core never throws meeting audio away on its own.
+        assert_eq!(
+            secondary.lock().unwrap().len(),
+            pushes_per_second * 60 * 960
+        );
+    }
+
+    /// After that meeting stopped, the leaked IO procs kept pushing for 40
+    /// minutes with no recording at all: 822 M samples in the AEC ring and
+    /// 238 M in the system buffer, about 4 GB of RAM for audio nobody would
+    /// read. With no capture that wants system audio, only a short tail
+    /// survives (enough for the loopback level meter).
+    #[test]
+    fn pushes_with_no_capture_running_keep_only_a_short_tail() {
+        let secondary = Mutex::new(Vec::new());
+        let aec_ref = Arc::new(Mutex::new(Vec::new()));
+        let pushes = 100 * 60;
+        for i in 0..pushes {
+            let v = if i == pushes - 1 { 0.75 } else { 0.1 };
+            store_loopback_push(&push_960(v), false, &secondary, &aec_ref);
+        }
+        let sec = secondary.lock().unwrap();
+        assert!(
+            sec.len() <= RATE,
+            "idle system buffer grew to {} samples",
+            sec.len()
+        );
+        assert_eq!(
+            *sec.last().unwrap(),
+            0.75,
+            "the newest push must be the one kept"
+        );
+        assert!(aec_ref.lock().unwrap().len() <= crate::aec::MAX_RING_SAMPLES);
+    }
+
+    #[test]
+    fn pushes_are_clamped() {
+        let secondary = Mutex::new(Vec::new());
+        let aec_ref = Arc::new(Mutex::new(Vec::new()));
+        store_loopback_push(&[1.5, -2.0, 0.5], true, &secondary, &aec_ref);
+        assert_eq!(*secondary.lock().unwrap(), vec![1.0, -1.0, 0.5]);
+        assert_eq!(*aec_ref.lock().unwrap(), vec![1.0, -1.0, 0.5]);
     }
 }

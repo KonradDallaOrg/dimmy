@@ -263,6 +263,19 @@ final class SystemAudioProcessTap {
     /// "sheep bleating" meeting of 2026-09-29. A closed gate drops the stale
     /// proc's frames on the floor, whatever the HAL is doing.
     private var liveGate: OSAllocatedUnfairLock<Bool>?
+    /// Closed for good by `stop()` and `deinit`; every IO proc this instance
+    /// ever built checks it next to its own build gate.
+    ///
+    /// The build gate alone is not enough. `stop()` runs on the main actor
+    /// while a rebuild (`forceRebuild` / deferred promotion) runs on ioQueue,
+    /// so a rebuild can finish AFTER `stop()`: its gate is born open, the
+    /// capture service has already dropped this instance, and nothing is
+    /// left to close it. The IO proc block holds no reference to `self`, so
+    /// it outlives the instance and pushes into the core until Dimmy quits.
+    /// On 2026-10-16 three of them were pushing at once: an 80-minute
+    /// meeting got its system audio three times over, and after it stopped
+    /// two of them kept pushing silence for 40 minutes.
+    private let retired = OSAllocatedUnfairLock(initialState: false)
     private var sampleRate: Int32 = 48_000
     private var channelCount: Int = 1
     private var running = false
@@ -370,6 +383,7 @@ final class SystemAudioProcessTap {
     /// Only `.failed` should trigger SCStream fallback.
     @discardableResult
     func start() -> StartOutcome {
+        guard !retired.withLock({ $0 }) else { return .failed }
         guard !running else { return .live }
 
         // Tap a SINGLE process — the pattern Apple's AudioCap reference +
@@ -542,13 +556,15 @@ final class SystemAudioProcessTap {
         let ticksPerSecond = Self.hostTicksPerSecond
         let gate = OSAllocatedUnfairLock(initialState: true)
         liveGate = gate
+        let retiredFlag = retired
         var newProcID: AudioDeviceIOProcID?
         err = AudioDeviceCreateIOProcIDWithBlock(&newProcID, aggregateID, ioQueue) {
             _, inInputData, inInputTime, _, _ in
-            // A torn-down build: not one frame, not even the heartbeat —
-            // a stale proc bumping the counter would also hide a dead
-            // replacement from the liveness watchdog.
-            guard gate.withLock({ $0 }) else { return }
+            // A torn-down build, or any build of a stopped instance: not one
+            // frame, not even the heartbeat — a stale proc bumping the
+            // counter would also hide a dead replacement from the liveness
+            // watchdog.
+            guard gate.withLock({ $0 }), !retiredFlag.withLock({ $0 }) else { return }
             // Heartbeat: bump on EVERY fire (even silent/zero buffers) so the
             // liveness watchdog can see the IO proc is alive and distinguish a
             // quiet-but-healthy tap from a dead one.
@@ -590,6 +606,13 @@ final class SystemAudioProcessTap {
             return .failed
         }
 
+        // stop() ran while this rebuild was in flight on ioQueue. The IO proc
+        // is already silent (retired); release the HAL objects too.
+        if retired.withLock({ $0 }) {
+            dimmyHostLog("[SystemAudio/tap] built after stop() - discarding the late build")
+            teardown()
+            return .failed
+        }
         running = true
         dimmyHostLog("[SystemAudio/tap] started rate=\(rate) ch=\(channels)")
         startRescan()
@@ -597,11 +620,25 @@ final class SystemAudioProcessTap {
     }
 
     func stop() {
+        // First, before anything can yield: a rebuild racing this on ioQueue
+        // must find the instance retired, whichever side wins the race.
+        retired.withLock { $0 = true }
         stopRescan()
         guard running else { return }
         teardown()
         running = false
         dimmyHostLog("[SystemAudio/tap] stopped")
+    }
+
+    deinit {
+        // Dropped without stop(): the IO proc does not keep `self` alive, so
+        // this is the last chance to silence it and free the HAL objects.
+        retired.withLock { $0 = true }
+        if ioProcID != nil || aggregateID != AudioObjectID(kAudioObjectUnknown)
+            || tapID != AudioObjectID(kAudioObjectUnknown)
+        {
+            teardown()
+        }
     }
 
     // MARK: - Rescan (event-driven HAL listeners + safety backstop)
