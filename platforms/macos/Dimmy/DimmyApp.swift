@@ -9,13 +9,16 @@ enum DimmyMain {
     static func main() {
         let args = CommandLine.arguments
         if args.count > 1 && args[1] == "--setup" {
-            exit(runSetup(["dimmy-setup"] + args.dropFirst(2)))
+            let commands = Array(args.dropFirst(2))
+            exit(runSetup(commands.isEmpty ? ["help"] : commands))
         }
         DimmyApp.main()
     }
 
     private static func runSetup(_ argv: [String]) -> Int32 {
-        precondition(!argv.isEmpty, "argv[0] is the program name")
+        // The commands only, no program name: dimmy-setup.exe on Windows
+        // forwards argv from index 1 the same way.
+        precondition(!argv.isEmpty, "at least one command")
         let cStrings: [UnsafeMutablePointer<CChar>] = argv.map { strdup($0)! }
         defer { cStrings.forEach { free($0) } }
         let pointers: [UnsafePointer<CChar>] = cStrings.map { UnsafePointer($0) }
