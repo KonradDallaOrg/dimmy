@@ -157,6 +157,7 @@ dimmy_set_app_context
 dimmy_set_config_json
 dimmy_set_event_callback
 dimmy_set_loopback_sample_rate
+dimmy_setup_cli
 dimmy_shutdown
 dimmy_start_recording
 dimmy_stop_recording
