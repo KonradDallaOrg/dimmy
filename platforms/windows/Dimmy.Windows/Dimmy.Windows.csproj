@@ -87,6 +87,17 @@
     <Warning Text="dimmy_lib.dll not found at $(DimmyDllSource). Run 'cargo build --release --lib' in core first." Condition="!Exists('$(DimmyDllSource)')" />
   </Target>
 
+  <!-- The terminal setup tool AI assistants run (docs/dev/agent-setup.md).
+       A small console exe that loads dimmy_lib.dll from its own folder, so it
+       must sit next to it. Shipped as dimmy-setup.exe, the name install.md uses. -->
+  <Target Name="CopyDimmySetup" AfterTargets="Build">
+    <PropertyGroup>
+      <DimmySetupSource>$(MSBuildThisFileDirectory)..\..\..\core\target\release\dimmy_setup.exe</DimmySetupSource>
+    </PropertyGroup>
+    <Copy SourceFiles="$(DimmySetupSource)" DestinationFiles="$(OutputPath)dimmy-setup.exe" Condition="Exists('$(DimmySetupSource)')" SkipUnchangedFiles="true" />
+    <Warning Text="dimmy_setup.exe not found at $(DimmySetupSource). Run 'cargo build --release --bin dimmy_setup --features setup-launcher' in core first." Condition="!Exists('$(DimmySetupSource)')" />
+  </Target>
+
   <!-- Copy llama.cpp's shared libraries next to dimmy_lib.dll.
        REQUIRED, not optional: the local-llm-vulkan / local-llm-metal features
        enable llama-cpp-4's `dynamic-link`, which builds llama.cpp and ggml as
