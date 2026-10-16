@@ -1046,7 +1046,7 @@ mod platform {
     pub fn total_ram_bytes() -> Option<u64> {
         let mut info: libc::sysinfo = unsafe { std::mem::zeroed() };
         let rc = unsafe { libc::sysinfo(&mut info) };
-        (rc == 0).then(|| info.totalram as u64 * info.mem_unit as u64)
+        (rc == 0).then(|| info.totalram * u64::from(info.mem_unit))
     }
 
     #[cfg(target_os = "macos")]
