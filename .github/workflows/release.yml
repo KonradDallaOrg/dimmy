@@ -489,16 +489,10 @@ jobs:
           mkdir -p "$FRAMEWORKS_DIR"
           RELEASE_DIR="core/target/aarch64-apple-darwin/release"
 
-          # Copy dylibs dereferencing symlinks so every file is a real binary
-          for name in libllama libggml libggml-base libggml-cpu libggml-metal libmtmd; do
-            for dylib in "$RELEASE_DIR"/${name}*.dylib; do
-              [ -e "$dylib" ] || continue
-              DEST="$FRAMEWORKS_DIR/$(basename "$dylib")"
-              cp -RL "$dylib" "$DEST"
-              # Ensure install name uses @rpath so the app finds them at runtime
-              install_name_tool -id "@rpath/$(basename "$dylib")" "$DEST" 2>/dev/null || true
-            done
-          done
+          # One file per library, every load command pointed at it. Copying
+          # each name of the versioned chain made dyld load ggml twice. See
+          # the script.
+          bash scripts/macos/bundle-llama-dylibs.sh "$FRAMEWORKS_DIR" "$RELEASE_DIR" - "$APP_PATH"/Contents/MacOS/*
 
           # Point the EXECUTABLE at them. Copying the files and rewriting
           # their own id is not enough: the load command inside the binary
@@ -507,12 +501,9 @@ jobs:
           # app then dies at launch with no window and no message, which is
           # exactly what v0.7.0-rc8 did on macOS. The dylibs reference EACH
           # OTHER the same way and they all sit in Frameworks together, so
-          # only the executable needs rewriting.
+          # only the executable needs rewriting. The script above does it; the
+          # check below proves it.
           EXE="$APP_PATH/Contents/MacOS/Dimmy"
-          for dylib in "$FRAMEWORKS_DIR"/*.dylib; do
-            base="$(basename "$dylib")"
-            install_name_tool -change "@loader_path/$base" "@rpath/$base" "$EXE" 2>/dev/null || true
-          done
 
           # Re-sign all dylibs
           codesign --force --sign - "$FRAMEWORKS_DIR"/*.dylib
