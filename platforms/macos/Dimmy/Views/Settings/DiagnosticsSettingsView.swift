@@ -125,7 +125,7 @@ struct DiagnosticsSettingsView: View {
     }
 
     private func resetOnboarding() {
-        appState.isOnboardingComplete = false
+        appState.resetOnboarding()
         NSApp.keyWindow?.close()
         AppDelegate.shared?.reopenOnboarding()
     }

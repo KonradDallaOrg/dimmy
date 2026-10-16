@@ -55,7 +55,7 @@ struct MacAboutPage: View {
                     title: "Run setup",
                     description: "Model, key, shortcut."
                 ) {
-                    appState.isOnboardingComplete = false
+                    appState.resetOnboarding()
                     AppDelegate.shared?.reopenOnboarding()
                 }
                 MacWizardCard(

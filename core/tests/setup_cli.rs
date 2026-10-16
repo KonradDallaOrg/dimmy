@@ -144,6 +144,61 @@ fn an_agent_session_against_a_throwaway_dir() {
     let (code, v) = cli(&["models", "download", "not-a-model.bin"]);
     assert_eq!(code, 1);
     assert_eq!(v["error"]["code"], "not_found");
+    let (code, v) = cli(&["models", "prepare", "not-a-model.bin"]);
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(v["error"]["code"], "not_found");
+
+    let (code, v) = cli(&["check"]);
+    assert_eq!(code, 0, "{v}");
+    assert!(v["warnings"].is_array());
+    assert_eq!(
+        v["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w["code"] == "no_microphone"),
+        v["microphones"].as_array().unwrap().is_empty()
+    );
+
+    // `last` reports what is on disk, nothing more.
+    let (code, v) = cli(&["last"]);
+    assert_eq!(code, 0, "{v}");
+    assert!(v["dictation"].is_null());
+    assert!(v["meeting"].is_null());
+    {
+        let h = dimmy_lib::history::HistoryStore::new(&dir.join("history.db")).unwrap();
+        h.save("prova di dettatura", "it", 1.5).unwrap();
+    }
+    let m = dir.join("meetings").join("m-short");
+    std::fs::create_dir_all(&m).unwrap();
+    std::fs::write(
+        m.join("meta.json"),
+        r#"{"started_at": 1000.0, "ended_at": 1002.8, "duration_secs": 2.8}"#,
+    )
+    .unwrap();
+    std::fs::write(m.join("transcripts.txt"), "").unwrap();
+    std::fs::write(m.join("audio_mic.ogg"), [0u8; 512]).unwrap();
+    let (code, v) = cli(&["last"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["dictation"]["words"], 3);
+    assert_eq!(v["dictation"]["ok"], true);
+    assert!(!v.to_string().contains("dettatura"), "no transcript text");
+    assert_eq!(v["meeting"]["id"], "m-short");
+    assert_eq!(v["meeting"]["duration_secs"], 2.8);
+    assert_eq!(v["meeting"]["transcript_nonempty"], false);
+    assert_eq!(v["meeting"]["recap_present"], false);
+    assert_eq!(v["meeting"]["audio_tracks_bytes"]["audio_mic.ogg"], 512);
+
+    let (code, v) = cli(&["perm", "status"]);
+    assert_eq!(code, 0, "{v}");
+    for p in setup::PERMISSIONS {
+        assert!(v["permissions"][p].is_string(), "{p}: {v}");
+    }
+    assert!(v["required_granted"].is_boolean());
+    let (code, _) = cli(&["perm", "open", "camera"]);
+    assert_eq!(code, 2);
+    let (code, _) = cli(&["perm"]);
+    assert_eq!(code, 2);
 
     // A second --config-dir in the same process cannot move the state.
     let (code, v) = cli(&["--config-dir", "E:/elsewhere", "info"]);

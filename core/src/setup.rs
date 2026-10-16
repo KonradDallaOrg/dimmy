@@ -1015,6 +1015,8 @@ mod platform {
 mod platform {
     use std::path::Path;
 
+    // statvfs fields are u32 or u64 depending on the OS.
+    #[allow(clippy::unnecessary_cast)]
     pub fn free_disk_bytes(path: &Path) -> Option<u64> {
         use std::os::unix::ffi::OsStrExt;
         let c = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
@@ -1386,6 +1388,323 @@ pub fn hold_app_lock() -> Result<(), String> {
         }
         None => Err("already held by another process".into()),
     }
+}
+
+// ── macOS app bundle ────────────────────────────────────────────────
+
+/// The `.app` bundle the CLI runs from. On macOS the CLI is the app binary
+/// itself, `<X>.app/Contents/MacOS/<X>`, and the bundle may be renamed (a
+/// test build is "Dimmy Agent.app"), so it is derived, never assumed.
+pub fn mac_app_bundle(exe: &Path) -> Option<PathBuf> {
+    let macos = exe.parent()?;
+    let contents = macos.parent()?;
+    let app = contents.parent()?;
+    let shaped = macos.file_name()? == "MacOS"
+        && contents.file_name()? == "Contents"
+        && app.extension()? == "app";
+    shaped.then(|| app.to_path_buf())
+}
+
+/// What `defaults read` takes for the bundle's Info.plist: the path without
+/// the `.plist` extension.
+pub fn mac_info_plist_domain(app: &Path) -> PathBuf {
+    app.join("Contents").join("Info")
+}
+
+/// A reverse-DNS bundle id, and nothing that could break out of the quoted
+/// AppleScript string it is put in.
+pub fn valid_bundle_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 255
+        && id.contains('.')
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+}
+
+pub fn mac_quit_script(bundle_id: &str) -> String {
+    assert!(
+        valid_bundle_id(bundle_id),
+        "bundle id must be validated first"
+    );
+    format!("tell application id \"{bundle_id}\" to quit")
+}
+
+// ── check warnings ──────────────────────────────────────────────────
+
+pub fn check_warnings(microphones: &[String]) -> Vec<Value> {
+    let mut w = Vec::new();
+    if microphones.is_empty() {
+        w.push(json!({
+            "code": "no_microphone",
+            "message": "No microphone found on this computer. Dictation and meetings need one.",
+        }));
+    }
+    w
+}
+
+// ── Permissions ─────────────────────────────────────────────────────
+
+pub const PERMISSIONS: [&str; 4] = [
+    "microphone",
+    "accessibility",
+    "input_monitoring",
+    "system_audio",
+];
+
+/// The two Dimmy cannot work without; the others only matter on some Macs.
+pub const REQUIRED_PERMISSIONS: [&str; 2] = ["microphone", "accessibility"];
+
+pub const PERMISSIONS_FILE: &str = "permissions.json";
+pub const PERMISSION_GUIDE_TRIGGER: &str = ".show-permission-guide";
+
+/// The System Settings pane (macOS) or Settings page (Windows) for one
+/// permission. None where the OS has no such permission.
+pub fn permission_settings_url(perm: &str, os: &str) -> Option<&'static str> {
+    match (os, perm) {
+        ("macos", "microphone") => {
+            Some("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
+        }
+        ("macos", "accessibility") => {
+            Some("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+        }
+        ("macos", "input_monitoring") => {
+            Some("x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")
+        }
+        ("macos", "system_audio") => {
+            Some("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+        }
+        ("windows", "microphone") => Some("ms-settings:privacy-microphone"),
+        _ => None,
+    }
+}
+
+fn permission_value(perm: &str, raw: &Value) -> &'static str {
+    let allowed: &[&'static str] = match perm {
+        "microphone" => &["granted", "denied", "not_determined", "restricted"],
+        "accessibility" => &["granted", "denied"],
+        _ => &["granted", "denied", "unknown"],
+    };
+    raw.as_str()
+        .and_then(|s| allowed.iter().find(|a| **a == s).copied())
+        .unwrap_or("unknown")
+}
+
+/// `perm status` on macOS. macOS attributes a permission to the process
+/// that is RESPONSIBLE for the caller, which for the CLI is the assistant
+/// that launched it, so the CLI cannot ask the system about Dimmy's grants.
+/// The app writes what it sees to `permissions.json`; this reads it back.
+pub fn permissions_report(file: Option<&str>, now: chrono::DateTime<chrono::Utc>) -> Value {
+    let unknown = || {
+        let mut m = Map::new();
+        for p in PERMISSIONS {
+            m.insert(p.into(), json!("unknown"));
+        }
+        Value::Object(m)
+    };
+    let Some(text) = file else {
+        return json!({
+            "source": "app",
+            "known": false,
+            "message": "Dimmy has not run on this Mac yet, so its permissions are unknown.",
+            "fix": "dimmy-setup app start",
+            "permissions": unknown(),
+            "required_granted": false,
+        });
+    };
+    let v: Value = serde_json::from_str(text).unwrap_or(Value::Null);
+    let updated = v["updated_at"]
+        .as_str()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|d| d.with_timezone(&chrono::Utc));
+    let Some(updated) = updated else {
+        return json!({
+            "source": "app",
+            "known": false,
+            "message": "The permissions Dimmy saved could not be read.",
+            "fix": "dimmy-setup app start",
+            "permissions": unknown(),
+            "required_granted": false,
+        });
+    };
+    let mut perms = Map::new();
+    for p in PERMISSIONS {
+        perms.insert(p.into(), json!(permission_value(p, &v[p])));
+    }
+    let required = REQUIRED_PERMISSIONS
+        .iter()
+        .all(|p| perms[*p] == json!("granted"));
+    let stale = (now - updated).num_seconds().max(0);
+    assert!(stale >= 0, "stale_secs is never negative");
+    json!({
+        "source": "app",
+        "known": true,
+        "updated_at": updated.to_rfc3339(),
+        "stale_secs": stale,
+        "permissions": Value::Object(perms),
+        "required_granted": required,
+    })
+}
+
+/// The microphone privacy switches on Windows, as `Value` strings from
+/// `...\CapabilityAccessManager\ConsentStore\microphone`: the device-wide
+/// one (HKLM), the per-user one (HKCU) and the per-user "let desktop apps
+/// use the microphone" one (HKCU `NonPackaged`). A missing value is the
+/// Windows default, which is Allow.
+pub fn windows_mic_state(
+    device: Option<&str>,
+    user: Option<&str>,
+    desktop_apps: Option<&str>,
+) -> &'static str {
+    let vals = [device, user, desktop_apps];
+    if vals
+        .iter()
+        .any(|v| v.is_some_and(|s| s.eq_ignore_ascii_case("Deny")))
+    {
+        return "denied";
+    }
+    if vals
+        .iter()
+        .all(|v| v.is_none_or(|s| s.eq_ignore_ascii_case("Allow")))
+    {
+        return "granted";
+    }
+    "unknown"
+}
+
+// ── last dictation / meeting ────────────────────────────────────────
+
+fn rfc3339(epoch_secs: f64) -> Option<String> {
+    if !epoch_secs.is_finite() || epoch_secs <= 0.0 {
+        return None;
+    }
+    chrono::DateTime::from_timestamp(epoch_secs as i64, 0).map(|d| d.to_rfc3339())
+}
+
+fn age_secs(epoch_secs: f64, now: f64) -> Option<u64> {
+    (epoch_secs.is_finite() && epoch_secs > 0.0).then(|| (now - epoch_secs).max(0.0) as u64)
+}
+
+/// The latest dictation, without its text: an agent needs to know that
+/// something was transcribed and how much, not what was said.
+pub fn dictation_summary(t: &crate::history::Transcript, now: f64) -> Value {
+    let text = t.enhanced_text.as_deref().unwrap_or(&t.text);
+    json!({
+        "at": rfc3339(t.timestamp),
+        "age_secs": age_secs(t.timestamp, now),
+        "duration_secs": t.duration,
+        "chars": t.text.chars().count(),
+        "words": t.word_count,
+        "language": t.language,
+        "enhanced": t.enhanced_text.is_some(),
+        "llm_style": t.llm_style,
+        "ok": !text.trim().is_empty(),
+    })
+}
+
+fn read_meta(dir: &Path) -> Value {
+    std::fs::read_to_string(dir.join("meta.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or(Value::Null)
+}
+
+/// Newest meeting under `meetings`, ordered by `started_at` like the app's
+/// list (folder mtime when a meeting has none).
+pub fn latest_meeting_dir(meetings: &Path) -> Option<PathBuf> {
+    let rd = std::fs::read_dir(meetings).ok()?;
+    rd.flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .map(|p| {
+            let started = read_meta(&p)["started_at"].as_f64().unwrap_or_else(|| {
+                std::fs::metadata(&p)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map_or(0.0, |d| d.as_secs_f64())
+            });
+            (started, p)
+        })
+        .max_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, p)| p)
+}
+
+/// Warnings and errors the log holds for one meeting: the lines after its
+/// `started id=` line, up to the next meeting's.
+pub fn meeting_log_notes(log: &str, id: &str) -> Vec<String> {
+    assert!(!id.is_empty(), "meeting id must not be empty");
+    let start_tag = format!("started id={id}");
+    let Some(start) = log.lines().position(|l| l.contains(&start_tag)) else {
+        return Vec::new();
+    };
+    let mut notes: Vec<String> = log
+        .lines()
+        .skip(start + 1)
+        .take_while(|l| !l.contains("[Meeting] started id="))
+        .filter(|l| {
+            let lower = l.to_ascii_lowercase();
+            lower.contains("warn") || lower.contains("error") || lower.contains("failed")
+        })
+        .map(redact_line)
+        .collect();
+    let keep = notes.len().saturating_sub(10);
+    notes.drain(..keep);
+    assert!(notes.len() <= 10);
+    notes
+}
+
+/// What an agent needs to tell whether a test meeting really worked: how
+/// long it ran, whether anything was transcribed, how big each audio track
+/// is (a mic track of a few KB is silence), and whether a recap exists.
+pub fn meeting_summary(dir: &Path, now: f64, log: &str) -> Value {
+    let id = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    assert!(!id.is_empty(), "a meeting dir has a name");
+    let meta = read_meta(dir);
+    let started = meta["started_at"].as_f64().unwrap_or(0.0);
+    let ended = meta["ended_at"].as_f64().unwrap_or(0.0);
+    let transcript = std::fs::read_to_string(dir.join("transcripts.txt")).unwrap_or_default();
+    let transcript_lines = transcript
+        .lines()
+        .filter(|l| !l.trim().is_empty() && !l.contains("[paused]"))
+        .count();
+    let mut tracks = Map::new();
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        let mut files: Vec<(String, u64)> = rd
+            .flatten()
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().into_owned();
+                let audio =
+                    name.starts_with("audio") && (name.ends_with(".ogg") || name.ends_with(".wav"));
+                let len = e.metadata().ok().filter(|m| m.is_file())?.len();
+                audio.then_some((name, len))
+            })
+            .collect();
+        files.sort();
+        for (name, len) in files {
+            tracks.insert(name, json!(len));
+        }
+    }
+    let recap_present = std::fs::read_to_string(dir.join("recap.md"))
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+    let last_activity = if ended > 0.0 { ended } else { started };
+    json!({
+        "id": id,
+        "started_at": rfc3339(started),
+        "age_secs": age_secs(last_activity, now),
+        "duration_secs": meta["duration_secs"].as_f64(),
+        "recording": dir.join(".recording").exists(),
+        "chunk_count": meta["chunk_count"].as_u64(),
+        "transcript_nonempty": transcript_lines > 0,
+        "transcript_lines": transcript_lines,
+        "audio_tracks_bytes": Value::Object(tracks),
+        "recap_present": recap_present,
+        "log_notes": meeting_log_notes(log, &id),
+    })
 }
 
 #[cfg(test)]
@@ -1822,5 +2141,203 @@ mod tests {
         assert!(!app_running(&d).unwrap());
         assert!(app_lock_path(&d).exists());
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn mac_bundle_is_derived_from_the_running_binary() {
+        let exe = Path::new("/Applications/Dimmy Agent.app/Contents/MacOS/Dimmy Agent");
+        let app = mac_app_bundle(exe).expect("bundle");
+        assert_eq!(app, Path::new("/Applications/Dimmy Agent.app"));
+        assert_eq!(
+            mac_info_plist_domain(&app),
+            Path::new("/Applications/Dimmy Agent.app/Contents/Info")
+        );
+        assert!(mac_app_bundle(Path::new("/usr/local/bin/dimmy-setup")).is_none());
+        assert!(mac_app_bundle(Path::new("/x/Dimmy.app/Contents/Resources/tool")).is_none());
+        assert!(mac_app_bundle(Path::new("/x/Dimmy/Contents/MacOS/Dimmy")).is_none());
+    }
+
+    #[test]
+    fn quit_script_targets_the_bundle_id() {
+        assert!(valid_bundle_id("com.dimmy.agent"));
+        assert!(valid_bundle_id("com.dimmy.app-staging"));
+        assert!(!valid_bundle_id(""));
+        assert!(!valid_bundle_id("Dimmy"));
+        assert!(!valid_bundle_id("com.x\" to quit\ntell app \"Finder"));
+        assert_eq!(
+            mac_quit_script("com.dimmy.agent"),
+            "tell application id \"com.dimmy.agent\" to quit"
+        );
+    }
+
+    #[test]
+    fn no_microphone_is_a_warning() {
+        let w = check_warnings(&[]);
+        assert_eq!(w.len(), 1);
+        assert_eq!(w[0]["code"], "no_microphone");
+        assert!(check_warnings(&["MacBook Pro Microphone".into()]).is_empty());
+    }
+
+    #[test]
+    fn every_mac_permission_has_a_settings_pane() {
+        for p in PERMISSIONS {
+            let url = permission_settings_url(p, "macos").expect(p);
+            assert!(url.starts_with("x-apple.systempreferences:"));
+        }
+        assert_eq!(
+            permission_settings_url("microphone", "windows"),
+            Some("ms-settings:privacy-microphone")
+        );
+        assert_eq!(permission_settings_url("accessibility", "windows"), None);
+        assert_eq!(permission_settings_url("camera", "macos"), None);
+    }
+
+    fn at(s: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(s)
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    }
+
+    #[test]
+    fn permissions_file_is_read_back_with_its_age() {
+        let file = r#"{"updated_at":"2026-10-16T10:00:00Z","platform":"macos",
+            "microphone":"granted","accessibility":"denied",
+            "input_monitoring":"granted","system_audio":"bogus"}"#;
+        let v = permissions_report(Some(file), at("2026-10-16T10:01:30Z"));
+        assert_eq!(v["known"], true);
+        assert_eq!(v["stale_secs"], 90);
+        assert_eq!(v["permissions"]["microphone"], "granted");
+        assert_eq!(v["permissions"]["accessibility"], "denied");
+        assert_eq!(v["permissions"]["system_audio"], "unknown");
+        assert_eq!(v["required_granted"], false);
+
+        let ok = file.replace("\"denied\"", "\"granted\"");
+        let v = permissions_report(Some(&ok), at("2026-10-16T10:00:00Z"));
+        assert_eq!(v["required_granted"], true);
+        assert_eq!(v["stale_secs"], 0);
+    }
+
+    #[test]
+    fn missing_or_broken_permissions_file_says_so() {
+        let now = at("2026-10-16T10:00:00Z");
+        let v = permissions_report(None, now);
+        assert_eq!(v["known"], false);
+        assert_eq!(v["fix"], "dimmy-setup app start");
+        assert_eq!(v["permissions"]["microphone"], "unknown");
+        let v = permissions_report(Some("{not json"), now);
+        assert_eq!(v["known"], false);
+        assert_eq!(v["required_granted"], false);
+    }
+
+    #[test]
+    fn windows_mic_switches() {
+        assert_eq!(windows_mic_state(None, None, None), "granted");
+        assert_eq!(
+            windows_mic_state(Some("Allow"), Some("Allow"), Some("Allow")),
+            "granted"
+        );
+        assert_eq!(
+            windows_mic_state(Some("Allow"), Some("Allow"), Some("Deny")),
+            "denied"
+        );
+        assert_eq!(windows_mic_state(Some("Deny"), None, None), "denied");
+        assert_eq!(windows_mic_state(None, Some("Prompt"), None), "unknown");
+    }
+
+    #[test]
+    fn dictation_summary_carries_no_text() {
+        let t = crate::history::Transcript {
+            id: 1,
+            text: "ciao a tutti".into(),
+            language: "it".into(),
+            timestamp: 1_000.0,
+            duration: 2.5,
+            word_count: 3,
+            enhanced_text: None,
+            audio_path: None,
+            app_process_name: None,
+            app_bundle_id: None,
+            llm_style: None,
+            llm_translate_to: None,
+            size_bytes: 0,
+            word_timestamps: None,
+        };
+        let v = dictation_summary(&t, 1_060.0);
+        assert_eq!(v["age_secs"], 60);
+        assert_eq!(v["chars"], 12);
+        assert_eq!(v["words"], 3);
+        assert_eq!(v["ok"], true);
+        assert!(!v.to_string().contains("ciao"));
+    }
+
+    fn meeting_fixture(root: &Path, id: &str, meta: Value) -> PathBuf {
+        let d = root.join(id);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("meta.json"), meta.to_string()).unwrap();
+        d
+    }
+
+    #[test]
+    fn latest_meeting_is_the_newest_start() {
+        let root = temp_dir("meetings-order");
+        meeting_fixture(&root, "old", json!({ "started_at": 100.0 }));
+        meeting_fixture(&root, "new", json!({ "started_at": 200.0 }));
+        std::fs::write(root.join("stray.txt"), "x").unwrap();
+        let got = latest_meeting_dir(&root).unwrap();
+        assert_eq!(got.file_name().unwrap(), "new");
+        assert!(latest_meeting_dir(&root.join("missing")).is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_failed_test_meeting_looks_failed() {
+        // The 2026-10 Mac run: 2.8 s, no microphone, empty transcript, no recap.
+        let root = temp_dir("meeting-failed");
+        let d = meeting_fixture(
+            &root,
+            "abc123",
+            json!({ "started_at": 1_000.0, "ended_at": 1_002.8, "duration_secs": 2.8, "chunk_count": 0 }),
+        );
+        std::fs::write(d.join("transcripts.txt"), "").unwrap();
+        std::fs::write(d.join("audio_mic.ogg"), vec![0u8; 4096]).unwrap();
+        let log = "x\n[Meeting] started id=abc123 dir=\"C:\\\\Users\\\\bob\\\\m\"\n\
+                   [Meeting] WARN no input device\nok line\n\
+                   [Meeting] started id=other\n[Meeting] WARN later meeting\n";
+        let v = meeting_summary(&d, 1_010.0, log);
+        assert_eq!(v["id"], "abc123");
+        assert_eq!(v["duration_secs"], 2.8);
+        assert_eq!(v["age_secs"], 7);
+        assert_eq!(v["transcript_nonempty"], false);
+        assert_eq!(v["recap_present"], false);
+        assert_eq!(v["recording"], false);
+        assert_eq!(v["audio_tracks_bytes"]["audio_mic.ogg"], 4096);
+        let notes = v["log_notes"].as_array().unwrap();
+        assert_eq!(notes.len(), 1);
+        assert!(notes[0].as_str().unwrap().contains("no input device"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_good_meeting_looks_good() {
+        let root = temp_dir("meeting-good");
+        let d = meeting_fixture(
+            &root,
+            "m1",
+            json!({ "started_at": 1_000.0, "duration_secs": 600.0 }),
+        );
+        std::fs::write(
+            d.join("transcripts.txt"),
+            "[00:00:01] [mic] hello\n[paused]\n",
+        )
+        .unwrap();
+        std::fs::write(d.join("recap.md"), "# Weekly\n- done\n").unwrap();
+        std::fs::write(d.join(".recording"), "1").unwrap();
+        let v = meeting_summary(&d, 2_000.0, "");
+        assert_eq!(v["transcript_nonempty"], true);
+        assert_eq!(v["transcript_lines"], 1);
+        assert_eq!(v["recap_present"], true);
+        assert_eq!(v["recording"], true);
+        assert_eq!(v["started_at"], "1970-01-01T00:16:40+00:00");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

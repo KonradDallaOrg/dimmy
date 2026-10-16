@@ -244,14 +244,7 @@ pub fn prepare_in_background(model_filename: &str) {
                 "[CoreML] preparing the Neural Engine encoder for {name} (once; takes minutes)"
             ));
             let started = std::time::Instant::now();
-            let result =
-                crate::local_stt::prepare_coreml_encoder(&crate::local_stt::model_path(&name))
-                    .and_then(|()| {
-                        std::fs::write(prepared_marker(&name), b"").map_err(|e| {
-                            TranscribeError::LocalModel(format!("prepared marker: {e}"))
-                        })
-                    });
-            match result {
+            match prepare_blocking(&name) {
                 Ok(()) => {
                     crate::log(&format!(
                         "[CoreML] encoder prepared in {:.0}s",
@@ -269,6 +262,33 @@ pub fn prepare_in_background(model_filename: &str) {
     if spawned.is_err() {
         PREPARING.store(false, Ordering::SeqCst);
     }
+}
+
+/// Compile the bundle for `model_filename` on the calling thread, then mark
+/// it prepared. Minutes for a large model, once per machine. The background
+/// path above and `dimmy-setup models prepare` both end here.
+pub fn prepare_blocking(model_filename: &str) -> Result<(), TranscribeError> {
+    assert!(
+        !model_filename.is_empty(),
+        "model filename must not be empty"
+    );
+    crate::local_stt::prepare_coreml_encoder(&crate::local_stt::model_path(model_filename))?;
+    std::fs::write(prepared_marker(model_filename), b"")
+        .map_err(|e| TranscribeError::LocalModel(format!("prepared marker: {e}")))?;
+    assert!(bundle_prepared(model_filename) || !bundle_present(model_filename));
+    Ok(())
+}
+
+/// Rough unpacked size of the encoder, for a free-space check before the
+/// download (the archive and the unpacked bundle exist together briefly).
+pub fn approx_size_mb(model_filename: &str) -> Option<u32> {
+    Some(match architecture(model_filename)? {
+        "tiny" => 20,
+        "base" => 40,
+        "small" => 170,
+        "medium" => 600,
+        _ => 1250,
+    })
 }
 
 /// How long after a meeting stops before a deferred preparation starts.
