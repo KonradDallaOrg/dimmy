@@ -96,6 +96,39 @@ impl Binding {
         self.event.swap(EVENT_NONE, Ordering::SeqCst)
     }
 
+    /// Clear the down-flag of every key the OS reports as up. The hook never
+    /// sees a key-up that happens on another desktop (lock screen, PIN,
+    /// Ctrl+Alt+Del, UAC) or in an elevated window, so the flag would stay set
+    /// for good: the remaining key then fires the combo on its own, and
+    /// `MODIFIER_SUPPRESS` never clears, swallowing every shortcut key
+    /// system-wide. Burned 2026-10-20: Alt alone started meetings, Shift dead.
+    ///
+    /// An active combo is left alone: our synthetic key-ups make the OS report
+    /// its held keys as up. The slot of `vk` is skipped too, because the OS
+    /// state of the key being processed isn't updated yet inside the hook.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    fn forget_released_keys(&self, vk: u32, is_held: impl Fn(u32) -> bool) {
+        if self.combo_active.load(Ordering::SeqCst) {
+            return;
+        }
+        let k1 = self.key1_codes.load(Ordering::SeqCst);
+        let k2 = self.key2_codes.load(Ordering::SeqCst);
+        let k3 = self.key3_code.load(Ordering::SeqCst);
+        for (packed, down) in [(k1, &self.key1_down), (k2, &self.key2_down)] {
+            if packed == 0 || matches_key_group(vk, packed) || !down.load(Ordering::SeqCst) {
+                continue;
+            }
+            let left = packed >> 16;
+            let right = packed & 0xFFFF;
+            if !is_held(left) && (right == 0 || !is_held(right)) {
+                down.store(false, Ordering::SeqCst);
+            }
+        }
+        if k3 != 0 && vk != k3 && self.key3_down.load(Ordering::SeqCst) && !is_held(k3) {
+            self.key3_down.store(false, Ordering::SeqCst);
+        }
+    }
+
     /// Feed one physical key event. Updates the down-flags + `combo_active`,
     /// writes the event mailbox on a transition, and returns that transition
     /// so the platform hook can drive modifier-suppression. Pure logic, no
@@ -1012,6 +1045,9 @@ mod platform {
         // interfere. On a fresh activation, flush the kernel modifier state +
         // arm suppression for THAT binding's keys (the synthetic-release +
         // Start-Menu chord-buster, identical to the single-combo behaviour).
+        for b in [&DICT, &CMD, &MTNG] {
+            b.forget_released_keys(vk, is_key_pressed);
+        }
         if DICT.process(vk, is_down, is_up) == Transition::Pressed {
             MODIFIER_SUPPRESS.store(true, Ordering::SeqCst);
             emit_synthetic_combo_release(&DICT);
@@ -1633,6 +1669,67 @@ mod tests {
         assert_eq!(b.process(0x41, true, false), Transition::None);
         assert!(b.all_released());
         assert!(!b.matches_key(VK_LCONTROL));
+    }
+
+    #[test]
+    #[serial]
+    fn binding_missed_key_up_does_not_fire_combo_on_next_key() {
+        // 2026-10-20: Ctrl and M went down, their key-ups happened where the
+        // hook can't see them (lock screen), and every later Alt press started
+        // a meeting on its own. The OS says Ctrl and M are up: forget them.
+        let b = Binding::new();
+        b.set_codes(
+            group_to_packed(GROUP_CTRL),
+            group_to_packed(GROUP_ALT),
+            name_to_vk("m"),
+        );
+        assert_eq!(b.process(VK_LCONTROL, true, false), Transition::None);
+        assert_eq!(b.process(0x4D, true, false), Transition::None);
+
+        let nothing_held = |_: u32| false;
+        b.forget_released_keys(VK_LMENU, nothing_held);
+        assert_eq!(b.process(VK_LMENU, true, false), Transition::None);
+        b.forget_released_keys(VK_LMENU, nothing_held);
+        assert_eq!(b.process(VK_LMENU, false, true), Transition::None);
+        assert!(
+            b.all_released(),
+            "stale flags keep suppression armed forever"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn binding_forget_keeps_keys_the_os_reports_held() {
+        let b = Binding::new();
+        b.set_codes(group_to_packed(GROUP_CTRL), group_to_packed(GROUP_ALT), 0);
+        assert_eq!(b.process(VK_RCONTROL, true, false), Transition::None);
+        b.forget_released_keys(VK_LMENU, |vk| vk == VK_RCONTROL);
+        assert_eq!(b.process(VK_LMENU, true, false), Transition::Pressed);
+    }
+
+    #[test]
+    #[serial]
+    fn binding_forget_leaves_an_active_combo_alone() {
+        // Our synthetic key-ups make the OS report a held combo as released.
+        let b = Binding::new();
+        b.set_codes(group_to_packed(GROUP_WIN), group_to_packed(GROUP_ALT), 0);
+        assert_eq!(b.process(VK_LWIN, true, false), Transition::None);
+        assert_eq!(b.process(VK_LMENU, true, false), Transition::Pressed);
+        b.forget_released_keys(VK_LMENU, |_| false);
+        assert!(!b.all_released());
+        assert_eq!(b.process(VK_LMENU, false, true), Transition::Released);
+    }
+
+    #[test]
+    #[serial]
+    fn binding_forget_skips_the_key_being_processed() {
+        // Inside the hook the OS state of the current key isn't updated yet.
+        let b = Binding::new();
+        b.set_codes(group_to_packed(GROUP_CTRL), group_to_packed(GROUP_ALT), 0);
+        assert_eq!(b.process(VK_LCONTROL, true, false), Transition::None);
+        b.forget_released_keys(VK_LCONTROL, |_| false);
+        assert_eq!(b.process(VK_LCONTROL, true, false), Transition::None);
+        assert_eq!(b.process(VK_LMENU, true, false), Transition::Pressed);
     }
 
     #[test]
