@@ -241,7 +241,7 @@ fn app_values() -> Result<Value, CliError> {
     let mut m = Map::new();
     for p in setup_prefs::app_prefs() {
         let out = std::process::Command::new("/usr/bin/defaults")
-            .args(["read", &id, p.store_key])
+            .args(["read", id.as_str(), p.store_key])
             .output()
             .map_err(|e| CliError::failed("failed", e.to_string(), ""))?;
         let raw = String::from_utf8_lossy(&out.stdout).into_owned();
