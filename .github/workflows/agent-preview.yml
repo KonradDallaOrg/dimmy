@@ -195,14 +195,9 @@ jobs:
           FRAMEWORKS_DIR="$APP_PATH/Contents/Frameworks"
           mkdir -p "$FRAMEWORKS_DIR"
           RELEASE_DIR="core/target/aarch64-apple-darwin/release"
-          for name in libllama libggml libggml-base libggml-cpu libggml-metal libmtmd; do
-            for dylib in "$RELEASE_DIR"/${name}*.dylib; do
-              [ -e "$dylib" ] || continue
-              DEST="$FRAMEWORKS_DIR/$(basename "$dylib")"
-              cp -RL "$dylib" "$DEST"
-              install_name_tool -id "@rpath/$(basename "$dylib")" "$DEST" 2>/dev/null || true
-            done
-          done
+          # One file per library, as in staging-tester.yml: copying each name
+          # of the versioned chain made dyld load ggml twice.
+          bash scripts/macos/bundle-llama-dylibs.sh "$FRAMEWORKS_DIR" "$RELEASE_DIR" - "$APP_PATH"/Contents/MacOS/*
 
       - name: Verify Silero VAD model is bundled
         run: |

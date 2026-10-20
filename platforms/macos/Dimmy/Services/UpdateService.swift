@@ -287,6 +287,13 @@ final class UpdateService: NSObject, ObservableObject {
         let tagged = (build ?? "").trimmingCharacters(in: .whitespaces)
         guard !marketing.isEmpty else { return tagged.isEmpty ? "0.0.0" : tagged }
         guard !tagged.isEmpty, tagged.hasPrefix(marketing) else { return marketing }
+        // release.yml writes an all-numeric build (scripts/ci/mac_bundle_version.py):
+        // X.Y.Z.0.N for rc N, X.Y.Z.1 for the stable. Show the tag it stands for.
+        let suffix = tagged.dropFirst(marketing.count)
+        if suffix == ".1" { return marketing }
+        if suffix.hasPrefix(".0."), let rc = Int(suffix.dropFirst(3)), rc > 0 {
+            return "\(marketing)-rc.\(rc)"
+        }
         return tagged
     }
 

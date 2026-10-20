@@ -257,7 +257,14 @@ fn dispatch(args: &mut Vec<String>, out: &mut dyn Write) -> CmdResult {
                 no_more(args)?;
                 models_download(&id, out)
             }
-            _ => Err(CliError::usage("models list | models download <id>")),
+            Some("prepare") => {
+                let id = sub(args);
+                no_more(args)?;
+                models_prepare(id.as_deref(), out)
+            }
+            _ => Err(CliError::usage(
+                "models list | models download <id> | models prepare [<id>]",
+            )),
         },
         "login" => {
             let action = sub(args);
@@ -306,6 +313,23 @@ fn dispatch(args: &mut Vec<String>, out: &mut dyn Write) -> CmdResult {
             }
             _ => Err(CliError::usage("onboarding status | onboarding done")),
         },
+        "last" => {
+            no_more(args)?;
+            last()
+        }
+        "perm" => {
+            let action = sub(args);
+            let perm = sub(args);
+            no_more(args)?;
+            match (action.as_deref(), perm.as_deref()) {
+                (Some("status"), None) => perm_status(),
+                (Some("open"), Some(p)) if setup::PERMISSIONS.contains(&p) => perm_open(p),
+                (Some("guide"), None) => perm_guide(),
+                _ => Err(CliError::usage(
+                    "perm status | perm open microphone|accessibility|input_monitoring|system_audio | perm guide",
+                )),
+            }
+        }
         "diag" => {
             let lines = match take_value(args, "--lines")? {
                 Some(n) => n
@@ -339,11 +363,13 @@ fn help() -> Value {
             "info", "schema", "check", "config get",
             "config set key=value ... [--json '{...}'] [--dry-run]",
             "profile apply --use meeting|dictation|both --lang <code|auto> --stt local|cloud [--stt-provider <id>] [--stt-backend <engine>] --recap claude-sub|codex-sub|api|local|off [--recap-model <id>] [--dry-run]",
-            "models list", "models download <id>",
+            "models list", "models download <id>", "models prepare [<id>]",
             "login status|start|test claude|codex|gemini",
             "key status", "key test <provider>",
             "test stt --file <wav>", "test recap",
-            "onboarding status|done", "diag [--lines N]", "app status|start|quit",
+            "onboarding status|done", "last",
+            "perm status", "perm open microphone|accessibility|input_monitoring|system_audio", "perm guide",
+            "diag [--lines N]", "app status|start|quit",
         ],
         "exit_codes": { "0": "ok", "1": "failed", "2": "bad usage or invalid settings", "3": "Dimmy is running; quit it to change settings" },
     })
@@ -356,9 +382,7 @@ fn app_exe() -> Option<PathBuf> {
     if cfg!(target_os = "windows") {
         Some(me.parent()?.join("Dimmy.Windows.exe"))
     } else if cfg!(target_os = "macos") {
-        me.ancestors()
-            .find(|p| p.extension().is_some_and(|e| e == "app"))
-            .map(Path::to_path_buf)
+        setup::mac_app_bundle(&me)
     } else {
         None
     }
@@ -417,6 +441,7 @@ fn check() -> CmdResult {
     let ram = setup::total_ram_bytes();
     let models_free = setup::free_disk_bytes(&models_dir);
     let (clis, claude_ready, codex_ready) = cli_states();
+    let mics = crate::audio::list_input_devices();
     let rec = setup::recommended_profile(&setup::MachineFacts {
         fitness,
         apple_silicon: gpu.apple_silicon,
@@ -443,7 +468,8 @@ fn check() -> CmdResult {
             "fitness": format!("{fitness:?}").to_ascii_lowercase(),
             "known_bad": gpu_known_bad(),
         },
-        "microphones": crate::audio::list_input_devices(),
+        "microphones": mics,
+        "warnings": setup::check_warnings(&mics),
         "local_stt_backends": setup::available_backends(),
         "subscription_clis": clis,
         "keys": key_flags(),
@@ -453,14 +479,8 @@ fn check() -> CmdResult {
     }))
 }
 
-#[cfg(any(feature = "local-stt", feature = "local-llm"))]
 fn gpu_known_bad() -> bool {
     crate::gpu_health::read_known_bad().is_some()
-}
-
-#[cfg(not(any(feature = "local-stt", feature = "local-llm")))]
-fn gpu_known_bad() -> bool {
-    false
 }
 
 fn license_kind(v: &Value) -> Value {
@@ -636,6 +656,8 @@ struct ModelRow {
     size_mb: u64,
     present: bool,
     dir: Option<PathBuf>,
+    /// Core ML only: compiled for this Mac already.
+    prepared: Option<bool>,
 }
 
 fn model_rows() -> Vec<ModelRow> {
@@ -649,16 +671,34 @@ fn model_rows() -> Vec<ModelRow> {
             size_mb: m.size_mb as u64,
             present: crate::local_stt::model_exists(m.filename),
             dir: Some(stt_dir.clone()),
+            prepared: None,
         })
         .collect();
+    if cfg!(feature = "local-stt-coreml") {
+        for m in crate::local_stt::AVAILABLE_MODELS {
+            let Some(size) = crate::coreml_encoder::approx_size_mb(m.filename) else {
+                continue;
+            };
+            rows.push(ModelRow {
+                id: format!("{COREML_PREFIX}{}", m.filename),
+                kind: "coreml_encoder",
+                name: format!("Neural Engine encoder for {}", m.name),
+                size_mb: size as u64,
+                present: crate::coreml_encoder::bundle_present(m.filename),
+                dir: Some(stt_dir.clone()),
+                prepared: Some(crate::coreml_encoder::bundle_prepared(m.filename)),
+            });
+        }
+    }
     if setup::available_backends().contains(&"parakeet") {
         rows.push(ModelRow {
             id: crate::download_center::PARAKEET_ID.into(),
             kind: "parakeet",
             name: "Parakeet TDT v3".into(),
-            size_mb: crate::parakeet::BUNDLE_SIZE_MB as u64,
+            size_mb: crate::parakeet::active_bundle_size_mb() as u64,
             present: crate::parakeet::active_bundle_present(),
-            dir: crate::parakeet::bundle_dir(),
+            dir: crate::parakeet::active_bundle_dir(),
+            prepared: None,
         });
     }
     for m in crate::qwen_asr::AVAILABLE_MODELS
@@ -672,6 +712,7 @@ fn model_rows() -> Vec<ModelRow> {
             size_mb: m.size_mb as u64,
             present: crate::qwen_asr::bundle_present(m.model_file),
             dir: Some(stt_dir.clone()),
+            prepared: None,
         });
     }
     if crate::whistle::engine_available() {
@@ -682,6 +723,7 @@ fn model_rows() -> Vec<ModelRow> {
             size_mb: crate::whistle::size_mb() as u64,
             present: crate::whistle::bundle_present(),
             dir: Some(stt_dir.clone()),
+            prepared: None,
         });
     }
     for m in crate::local_llm::AVAILABLE_LLM_MODELS {
@@ -694,6 +736,7 @@ fn model_rows() -> Vec<ModelRow> {
             dir: crate::local_llm::model_path(m.filename)
                 .parent()
                 .map(Path::to_path_buf),
+            prepared: None,
         });
     }
     rows
@@ -703,10 +746,14 @@ fn models_list() -> CmdResult {
     let rows: Vec<Value> = model_rows()
         .iter()
         .map(|r| {
-            json!({
+            let mut v = json!({
                 "id": r.id, "kind": r.kind, "name": r.name,
                 "size_mb": r.size_mb, "present": r.present,
-            })
+            });
+            if let Some(p) = r.prepared {
+                v["prepared"] = json!(p);
+            }
+            v
         })
         .collect();
     Ok(json!({
@@ -724,7 +771,7 @@ fn models_download(id: &str, out: &mut dyn Write) -> CmdResult {
     let row = model_rows()
         .into_iter()
         .find(|r| r.id == id)
-        .filter(|_| crate::download_center::is_known_id(id))
+        .filter(|_| id.starts_with(COREML_PREFIX) || crate::download_center::is_known_id(id))
         .ok_or_else(|| {
             CliError::failed(
                 "not_found",
@@ -740,7 +787,12 @@ fn models_download(id: &str, out: &mut dyn Write) -> CmdResult {
         .as_deref()
         .and_then(setup::free_disk_bytes)
         .map(|b| b / (1024 * 1024));
-    let need = needed_mb(row.size_mb);
+    let coreml = id.strip_prefix(COREML_PREFIX);
+    let need = needed_mb(if coreml.is_some() {
+        row.size_mb * 2
+    } else {
+        row.size_mb
+    });
     match free {
         Some(f) if f >= need => {}
         _ => {
@@ -756,6 +808,9 @@ fn models_download(id: &str, out: &mut dyn Write) -> CmdResult {
         }
     }
     let _lock = write_lock()?;
+    if let Some(model) = coreml {
+        return coreml_download(id, model, out);
+    }
     let (tx, rx) = std::sync::mpsc::channel::<String>();
     let center = crate::download_center::with_emit(Box::new(move |p| {
         let _ = tx.send(p.to_string());
@@ -1153,8 +1208,9 @@ fn app_quit() -> CmdResult {
         return Ok(json!({ "was_running": false }));
     }
     let status = if cfg!(target_os = "macos") {
+        let script = setup::mac_quit_script(&mac_bundle_id()?);
         std::process::Command::new("/usr/bin/osascript")
-            .args(["-e", "quit app \"Dimmy\""])
+            .args(["-e", &script])
             .status()
     } else if cfg!(target_os = "windows") {
         let exe = app_exe().filter(|p| p.exists()).ok_or_else(|| {
@@ -1193,6 +1249,338 @@ fn app_quit() -> CmdResult {
         "Dimmy did not quit within 15 s",
         "Quit Dimmy from its tray icon.",
     ))
+}
+
+// ── Core ML (macOS) ─────────────────────────────────────────────────
+
+/// Model ids for whisper's optional Neural Engine encoder: `coreml:<whisper
+/// model file>`. Not download-center ids; the encoder belongs to its model.
+const COREML_PREFIX: &str = "coreml:";
+
+fn coreml_download(id: &str, model: &str, out: &mut dyn Write) -> CmdResult {
+    assert!(id.ends_with(model), "id carries the model name");
+    let out = std::cell::RefCell::new(out);
+    let last_pct = std::cell::Cell::new(-1i64);
+    let rt = tokio::runtime::Runtime::new()
+        .map_err(|e| CliError::failed("failed", e.to_string(), ""))?;
+    let r = rt.block_on(crate::coreml_encoder::download(model, |done, total| {
+        let pct = if total > 0 {
+            (done * 100 / total) as i64
+        } else {
+            0
+        };
+        if pct != last_pct.get() {
+            last_pct.set(pct);
+            print(
+                &mut **out.borrow_mut(),
+                &json!({ "event": "progress", "id": id, "state": "downloading",
+                         "downloaded": done, "total": total }),
+            );
+        }
+    }));
+    r.map_err(|e| {
+        CliError::failed(
+            "download_failed",
+            e.to_string(),
+            "Check the connection and run the same command again; it resumes.",
+        )
+    })?;
+    Ok(json!({
+        "id": id, "state": "done", "already_present": false,
+        "next": format!("dimmy-setup models prepare {model}"),
+    }))
+}
+
+/// The model the configured local engine loads, as a `models` id.
+fn configured_model_id(cfg: &Value) -> Option<String> {
+    match cfg["local_stt_backend"].as_str().unwrap_or("whisper") {
+        "parakeet" => Some(crate::download_center::PARAKEET_ID.to_string()),
+        "whisper" => cfg["local_model"]
+            .as_str()
+            .filter(|m| !m.is_empty())
+            .map(str::to_string),
+        _ => None,
+    }
+}
+
+fn not_needed(id: &str, reason: &str) -> CmdResult {
+    Ok(json!({ "id": id, "needed": false, "reason": reason }))
+}
+
+/// Do now, while the user waits for setup, the one-time Core ML compile
+/// that would otherwise land in the first meeting (347 s on 2026-09-14).
+fn models_prepare(id: Option<&str>, out: &mut dyn Write) -> CmdResult {
+    let id = match id {
+        Some(i) => i.to_string(),
+        None => configured_model_id(&current_config()?).ok_or_else(|| {
+            CliError::failed(
+                "nothing_to_prepare",
+                "the configured engine is not parakeet or whisper",
+                "Pass a model id: dimmy-setup models list",
+            )
+        })?,
+    };
+    if id == crate::download_center::PARAKEET_ID {
+        if !crate::parakeet::active_is_fluid() {
+            return not_needed(
+                &id,
+                "Parakeet here runs on ONNX Runtime; nothing is compiled.",
+            );
+        }
+        if !crate::parakeet::active_bundle_present() {
+            return Err(CliError::failed(
+                "model_missing",
+                "the Parakeet model is not downloaded",
+                format!("dimmy-setup models download {id}"),
+            ));
+        }
+        let _lock = write_lock()?;
+        print(
+            out,
+            &json!({ "event": "progress", "id": id, "state": "preparing" }),
+        );
+        let started = std::time::Instant::now();
+        crate::parakeet::warmup().map_err(|e| {
+            CliError::failed(
+                "prepare_failed",
+                e.to_string(),
+                "Run `dimmy-setup diag` for the log.",
+            )
+        })?;
+        return Ok(json!({
+            "id": id, "needed": true, "engine": "parakeet-coreml",
+            "prepared": true, "elapsed_ms": started.elapsed().as_millis() as u64,
+        }));
+    }
+    let model = id.strip_prefix(COREML_PREFIX).unwrap_or(&id).to_string();
+    if !crate::local_stt::AVAILABLE_MODELS
+        .iter()
+        .any(|m| m.filename == model)
+    {
+        return Err(CliError::failed(
+            "not_found",
+            format!("'{id}' is not a model this build can prepare"),
+            "dimmy-setup models list",
+        ));
+    }
+    if !cfg!(feature = "local-stt-coreml") {
+        return not_needed(&id, "Whisper here needs no preparation.");
+    }
+    if !crate::local_stt::model_exists(&model) {
+        return Err(CliError::failed(
+            "model_missing",
+            format!("{model} is not downloaded"),
+            format!("dimmy-setup models download {model}"),
+        ));
+    }
+    if !crate::coreml_encoder::bundle_present(&model) {
+        let mut v = not_needed(
+            &id,
+            "No Neural Engine encoder is downloaded, so whisper uses the GPU and compiles nothing.",
+        )?;
+        if crate::coreml_encoder::bundle_available(&model) {
+            v["optional"] = json!(format!(
+                "dimmy-setup models download {COREML_PREFIX}{model}"
+            ));
+        }
+        return Ok(v);
+    }
+    if crate::coreml_encoder::bundle_prepared(&model) {
+        return Ok(json!({ "id": id, "needed": true, "prepared": true, "already_prepared": true }));
+    }
+    let _lock = write_lock()?;
+    print(
+        out,
+        &json!({ "event": "progress", "id": id, "state": "preparing",
+                 "note": "Once per Mac; a large model takes several minutes." }),
+    );
+    let started = std::time::Instant::now();
+    crate::coreml_encoder::prepare_blocking(&model).map_err(|e| {
+        CliError::failed(
+            "prepare_failed",
+            e.to_string(),
+            "Run `dimmy-setup diag` for the log.",
+        )
+    })?;
+    Ok(json!({
+        "id": id, "needed": true, "engine": "whisper-coreml",
+        "prepared": true, "elapsed_ms": started.elapsed().as_millis() as u64,
+    }))
+}
+
+// ── last ────────────────────────────────────────────────────────────
+
+fn now_secs() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0.0, |d| d.as_secs_f64())
+}
+
+/// What the last dictation and the last meeting actually produced, so an
+/// agent reports results from the disk and not from what it was told.
+fn last() -> CmdResult {
+    let dir = config_dir()?;
+    let now = now_secs();
+    let db = dir.join("history.db");
+    let dictation = if db.exists() {
+        crate::history::HistoryStore::open_read_only(&db)
+            .and_then(|h| h.recent(1))
+            .map_err(|e| {
+                CliError::failed(
+                    "history_unreadable",
+                    e,
+                    "Run `dimmy-setup diag` for the log.",
+                )
+            })?
+            .first()
+            .map(|t| setup::dictation_summary(t, now))
+    } else {
+        None
+    };
+    let log = crate::log_path()
+        .and_then(|p| std::fs::read(p).ok())
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .unwrap_or_default();
+    let meeting = crate::meetings_dir()
+        .and_then(|m| setup::latest_meeting_dir(&m))
+        .map(|d| setup::meeting_summary(&d, now, &log));
+    let cfg = current_config()?;
+    Ok(json!({
+        "dictation": dictation,
+        "meeting": meeting,
+        "engine_now": {
+            "stt_mode": cfg["stt_mode"],
+            "local_stt_backend": cfg["local_stt_backend"],
+        },
+        "note": "History keeps only dictations that produced text; a failed one shows in `dimmy-setup diag`.",
+    }))
+}
+
+// ── perm ────────────────────────────────────────────────────────────
+
+fn perm_status() -> CmdResult {
+    if cfg!(target_os = "macos") {
+        let dir = config_dir()?;
+        let text = std::fs::read_to_string(dir.join(setup::PERMISSIONS_FILE)).ok();
+        let mut v = setup::permissions_report(text.as_deref(), chrono::Utc::now());
+        v["app_running"] = json!(app_running()?);
+        return Ok(v);
+    }
+    let mut perms = Map::new();
+    for p in setup::PERMISSIONS {
+        perms.insert(p.into(), json!("not_applicable"));
+    }
+    let mic = windows_mic();
+    perms.insert("microphone".into(), json!(mic));
+    Ok(json!({
+        "source": "system",
+        "known": mic != "unknown",
+        "permissions": Value::Object(perms),
+        "required_granted": mic == "granted",
+    }))
+}
+
+#[cfg(target_os = "windows")]
+fn windows_mic() -> &'static str {
+    use windows::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+    const KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone";
+    let nonpackaged = format!(r"{KEY}\NonPackaged");
+    let device = crate::win_paths::read_registry_string(HKEY_LOCAL_MACHINE, KEY, "Value");
+    let user = crate::win_paths::read_registry_string(HKEY_CURRENT_USER, KEY, "Value");
+    let desktop = crate::win_paths::read_registry_string(HKEY_CURRENT_USER, &nonpackaged, "Value");
+    setup::windows_mic_state(device.as_deref(), user.as_deref(), desktop.as_deref())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn windows_mic() -> &'static str {
+    "unknown"
+}
+
+fn open_url(url: &str) -> Result<(), CliError> {
+    let spawned = if cfg!(target_os = "macos") {
+        std::process::Command::new("/usr/bin/open").arg(url).spawn()
+    } else if cfg!(target_os = "windows") {
+        std::process::Command::new("explorer.exe").arg(url).spawn()
+    } else {
+        std::process::Command::new("xdg-open").arg(url).spawn()
+    };
+    spawned
+        .map(|_| ())
+        .map_err(|e| CliError::failed("open_failed", e.to_string(), ""))
+}
+
+fn perm_open(perm: &str) -> CmdResult {
+    assert!(
+        setup::PERMISSIONS.contains(&perm),
+        "dispatch checks the name"
+    );
+    let url = setup::permission_settings_url(perm, std::env::consts::OS).ok_or_else(|| {
+        CliError::failed(
+            "not_applicable",
+            format!("{perm} is not a permission on this OS"),
+            "dimmy-setup perm status",
+        )
+    })?;
+    open_url(url)?;
+    Ok(json!({
+        "permission": perm,
+        "opened": url,
+        "next": "Ask the user to turn Dimmy on in the list that opened, then run `dimmy-setup perm status`.",
+    }))
+}
+
+/// Opens Dimmy's own permission guide: one window, every permission with
+/// its live state and a button to its settings pane.
+fn perm_guide() -> CmdResult {
+    if !cfg!(target_os = "macos") {
+        return Err(CliError::failed(
+            "not_supported",
+            "the permission guide is a Mac window",
+            "dimmy-setup perm open microphone",
+        ));
+    }
+    let app = app_exe().filter(|p| p.exists()).ok_or_else(|| {
+        CliError::failed(
+            "not_installed",
+            "could not find Dimmy's app bundle",
+            "Install Dimmy from https://dimmy.app.",
+        )
+    })?;
+    let dir = config_dir()?;
+    std::fs::create_dir_all(&dir)
+        .and_then(|()| std::fs::write(dir.join(setup::PERMISSION_GUIDE_TRIGGER), "1"))
+        .map_err(|e| {
+            CliError::failed(
+                "failed",
+                e.to_string(),
+                "Check the settings folder is writable.",
+            )
+        })?;
+    std::process::Command::new("/usr/bin/open")
+        .arg(&app)
+        .spawn()
+        .map_err(|e| CliError::failed("start_failed", e.to_string(), ""))?;
+    Ok(json!({
+        "opened": true,
+        "next": "The user turns each permission on from Dimmy's window; check with `dimmy-setup perm status`.",
+    }))
+}
+
+/// CFBundleIdentifier of the bundle this CLI runs from.
+fn mac_bundle_id() -> Result<String, CliError> {
+    let fail = |m: String| CliError::failed("quit_failed", m, "Quit Dimmy from its menu-bar icon.");
+    let app = app_exe().ok_or_else(|| fail("not running from an app bundle".into()))?;
+    let out = std::process::Command::new("/usr/bin/defaults")
+        .arg("read")
+        .arg(setup::mac_info_plist_domain(&app))
+        .arg("CFBundleIdentifier")
+        .output()
+        .map_err(|e| fail(e.to_string()))?;
+    let id = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if !out.status.success() || !setup::valid_bundle_id(&id) {
+        return Err(fail(format!("no bundle id in {}", app.display())));
+    }
+    Ok(id)
 }
 
 #[cfg(test)]

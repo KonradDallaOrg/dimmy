@@ -163,8 +163,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             // grants and causing an infinite reopen loop on every launch.
             // The yellow badge on the menubar icon plus Settings →
             // Permissions still surface the missing perm in Debug.
+            //
+            // When an AI assistant set Dimmy up from the terminal, everything
+            // but the grants is done: the small permission guide, not the
+            // whole wizard (which used to open twice in that flow).
+            if !permissionsGranted() && AppState.configuredByAssistant {
+                hkLog("[AppDelegate] configured by an assistant, permissions missing: permission guide")
+                PermissionGuideWindowController.shared.show()
+            }
             #if !DEBUG
-            if !permissionsGranted() {
+            if !permissionsGranted() && !AppState.configuredByAssistant {
                 hkLog("[AppDelegate] onboarding complete but permissions missing — reopening Permissions step")
                 showOnboarding(startStep: 1)
             }
@@ -178,6 +186,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             showOnboarding()
         }
         applyActivationPolicy()
+        PermissionGuideWindowController.shared.showIfRequested()
     }
 
     /// Reset TCC entries for any permission that the running process doesn't see as granted.
@@ -482,6 +491,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         HotkeyManager.shared.stop()
         DimmyCore.shared.shutdown()
+        // Config is saved and the models released by now. What exit() would
+        // still do is run the C++ static destructors of whisper/llama/ggml
+        // while Rust threads (AEC, telemetry, Telegram) may be inside them,
+        // and one of those destructors threw on quit in 0.7.13-rc.3
+        // (std::terminate from __cxa_finalize_ranges, SIGABRT, crash report
+        // instead of an update). Registered last, this handler runs first
+        // when AppKit calls exit(0), i.e. after every willTerminate observer
+        // (Sparkle's install-on-quit included), and ends the process before
+        // those destructors.
+        atexit {
+            fflush(nil)
+            _exit(0)
+        }
     }
 
     /// Bring the onboarding window back to the front whenever Dimmy is re-activated
@@ -489,6 +511,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// activates the process but leaves the window hidden behind other apps.
     func applicationDidBecomeActive(_ notification: Notification) {
         onboardingWindow?.makeKeyAndOrderFront(nil)
+        PermissionGuideWindowController.shared.showIfRequested()
     }
 
     /// Handle `dimmy://` URLs delivered by the OS (clicking the magic

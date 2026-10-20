@@ -21,6 +21,7 @@
 		AA00DD01 /* LocalLlmCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00DD01 /* LocalLlmCatalog.swift */; };
 		AA000504 /* MeetingWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000504 /* MeetingWindowController.swift */; };
 		AA00E001 /* WizardWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00E001 /* WizardWindowController.swift */; };
+		AA00F0A1 /* PermissionGuideWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00F0A1 /* PermissionGuideWindowController.swift */; };
 		AA00E002 /* MacWizardCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00E002 /* MacWizardCard.swift */; };
 		AA00E003 /* CommandWizardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00E003 /* CommandWizardView.swift */; };
 		AA00E004 /* MeetingWizardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00E004 /* MeetingWizardView.swift */; };
@@ -167,6 +168,7 @@
 		AB00DD01 /* LocalLlmCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalLlmCatalog.swift; sourceTree = "<group>"; };
 		AB000504 /* MeetingWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingWindowController.swift; sourceTree = "<group>"; };
 		AB00E001 /* WizardWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WizardWindowController.swift; sourceTree = "<group>"; };
+		AB00F0A1 /* PermissionGuideWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionGuideWindowController.swift; sourceTree = "<group>"; };
 		AB00E002 /* MacWizardCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacWizardCard.swift; sourceTree = "<group>"; };
 		AB00E003 /* CommandWizardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandWizardView.swift; sourceTree = "<group>"; };
 		AB00E004 /* MeetingWizardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingWizardView.swift; sourceTree = "<group>"; };
@@ -465,6 +467,7 @@
 				AB000504 /* MeetingWindowController.swift */,
 				AB001102 /* CallNudgeWindowController.swift */,
 				AB00E001 /* WizardWindowController.swift */,
+				AB00F0A1 /* PermissionGuideWindowController.swift */,
 			);
 			path = Controllers;
 			sourceTree = "<group>";
@@ -720,7 +723,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
-			shellScript = "set -euo pipefail\n# Bundle libllama + libggml*.dylib into Dimmy.app/Contents/Frameworks/.\n# Mirrors release.yml's \"Bundle llama.cpp dylibs\" step so a local Xcode\n# build produces a self-contained .app that runs outside Xcode and on\n# end-user macOS where /opt/homebrew/lib isn't on the linker path.\n# Idempotent — skips files that are already present and unchanged.\nREPO_ROOT=\"$SRCROOT/../..\"\nRD=\"$REPO_ROOT/core/target/aarch64-apple-darwin/release\"\nFW=\"$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH\"\nmkdir -p \"$FW\"\nIDENTITY=\"${EXPANDED_CODE_SIGN_IDENTITY:-${CODE_SIGN_IDENTITY:--}}\"\nfor n in libllama libggml libggml-base libggml-cpu libggml-metal libmtmd; do\n  for d in \"$RD\"/${n}*.dylib; do\n    [ -e \"$d\" ] || continue\n    name=\"$(basename \"$d\")\"\n    cp -RL \"$d\" \"$FW/$name\"\n    install_name_tool -id \"@rpath/$name\" \"$FW/$name\" 2>/dev/null || true\n    chmod 644 \"$FW/$name\"\n    codesign --force --sign \"$IDENTITY\" --timestamp=none \"$FW/$name\"\n  done\ndone\n\n# Point the EXECUTABLE at them. Rewriting the copied files' own id is\n# not enough: the load command inside the binary still says\n# @loader_path/libllama...dylib, and @loader_path for Contents/MacOS is\n# NOT Contents/Frameworks. The app then dies at launch with no window and\n# no message - what v0.7.0-rc8 did on macOS. The dylibs reference each\n# other the same way and all live in Frameworks together, so only the\n# executable needs rewriting.\n#\n# Debug builds on Xcode 26 link the app's code into Dimmy.debug.dylib\n# next to the executable (ENABLE_DEBUG_DYLIB), and THAT image carries the\n# @loader_path/libllama... load commands. Rewriting only the executable\n# left a Debug .app that dies at launch with 'Library not loaded:\n# @loader_path/libllama.0.1.2.dylib', which is why preflight-mac.sh crashed.\nfor BIN in \"$TARGET_BUILD_DIR/$EXECUTABLE_PATH\" \"$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH\"/*.debug.dylib; do\n  [ -e \"$BIN\" ] || continue\n  for d in \"$FW\"/*.dylib; do\n    b=\"$(basename \"$d\")\"\n    install_name_tool -change \"@loader_path/$b\" \"@rpath/$b\" \"$BIN\" 2>/dev/null || true\n  done\ndone\n";
+			shellScript = "set -euo pipefail\n# Bundle the llama.cpp + ggml dylibs into Dimmy.app/Contents/Frameworks/,\n# one file per library, and point the executable at them. Debug builds on\n# Xcode 26 link the app's code into Dimmy.debug.dylib next to the executable\n# (ENABLE_DEBUG_DYLIB) and THAT image carries the load commands, so it is\n# rewritten too. Same script as the release workflows; see it for why one\n# file per library matters (0.7.13 loaded every ggml library twice).\nREPO_ROOT=\"$SRCROOT/../..\"\nIDENTITY=\"${EXPANDED_CODE_SIGN_IDENTITY:-${CODE_SIGN_IDENTITY:--}}\"\nbash \"$REPO_ROOT/scripts/macos/bundle-llama-dylibs.sh\" \"$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH\" \"$REPO_ROOT/core/target/aarch64-apple-darwin/release\" \"$IDENTITY\" \"$TARGET_BUILD_DIR/$EXECUTABLE_PATH\" \"$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH\"/*.debug.dylib\n";
 		};
 		AE000006 /* Validate Frameworks bundle */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -739,7 +742,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
-			shellScript = "set -euo pipefail\n# Verify the runtime dylibs Dimmy.app needs are bundled in\n# Contents/Frameworks/ and resolvable. Catches a missing\n# libonnxruntime.dylib or libllama.dylib at build time, before the\n# user discovers it as a launch crash.\nFW=\"$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH\"\nrequired=(\n  libonnxruntime.dylib\n  libllama.dylib\n  libggml.dylib\n  libggml-base.dylib\n  libggml-cpu.dylib\n  libggml-metal.dylib\n  libmtmd.dylib\n)\nmissing=()\nfor f in \"${required[@]}\"; do\n  [ -f \"$FW/$f\" ] || missing+=(\"$f\")\ndone\nif (( ${#missing[@]} > 0 )); then\n  echo \"error: missing required dylibs in $FW:\" >&2\n  for f in \"${missing[@]}\"; do echo \"  - $f\" >&2; done\n  echo \"hint: rebuild the Rust core with the matching feature flags\" >&2\n  echo \"      (cargo build --release --lib --target aarch64-apple-darwin\" >&2\n  echo \"       --features local-stt-metal,local-llm-metal,local-stt-parakeet-coreml,local-stt-parakeet-fluid)\" >&2\n  exit 1\nfi\necho \"[validate] all required dylibs present (${#required[@]} files)\"\n";
+			shellScript = "set -euo pipefail\n# Verify the runtime dylibs Dimmy.app needs are bundled in\n# Contents/Frameworks/, each exactly ONCE. A missing one is a launch crash;\n# two file names for one library made dyld load ggml twice (0.7.13 quit crash).\nFW=\"$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH\"\nbad=0\nif [ ! -f \"$FW/libonnxruntime.dylib\" ]; then\n  echo \"error: missing libonnxruntime.dylib in $FW\" >&2\n  bad=1\nfi\nfor n in libllama libllama-common libggml libggml-base libggml-cpu libggml-metal libmtmd; do\n  count=0\n  for f in \"$FW/$n\".dylib \"$FW/$n\".*.dylib; do\n    if [ -f \"$f\" ]; then count=$((count + 1)); fi\n  done\n  if [ \"$count\" -ne 1 ]; then\n    echo \"error: $n is bundled $count times in $FW (want exactly 1)\" >&2\n    bad=1\n  fi\ndone\nif [ \"$bad\" -ne 0 ]; then\n  echo \"hint: rebuild the Rust core with the matching feature flags\" >&2\n  echo \"      (cargo build --release --lib --target aarch64-apple-darwin\" >&2\n  echo \"       --features local-stt-metal,local-llm-metal,local-stt-parakeet-coreml,local-stt-parakeet-fluid)\" >&2\n  exit 1\nfi\necho \"[validate] all required dylibs present, one file each\"\n";
 		};
 		AE000004 /* Bundle onnxruntime.dylib */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -893,6 +896,7 @@ echo \"[gtcrn] bundled $(basename \"$GTCRN_SRC\") into Resources\"
 				AA00DD01 /* LocalLlmCatalog.swift in Sources */,
 				AA000504 /* MeetingWindowController.swift in Sources */,
 				AA00E001 /* WizardWindowController.swift in Sources */,
+				AA00F0A1 /* PermissionGuideWindowController.swift in Sources */,
 				AA00E002 /* MacWizardCard.swift in Sources */,
 				AA00E003 /* CommandWizardView.swift in Sources */,
 				AA00E004 /* MeetingWizardView.swift in Sources */,

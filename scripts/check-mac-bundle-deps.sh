@@ -19,6 +19,13 @@
 # the bundle), /usr/lib and /System/Library (ship with macOS). Allowed minimum
 # macOS: at most the app's LSMinimumSystemVersion.
 #
+# It also fails when one library ships under two file names (two Mach-O files
+# with the same LC_UUID), or when the executable or a top-level Frameworks
+# dylib names a bundled library that is not there. 0.7.13 shipped every
+# llama/ggml dylib three times (libX.dylib, libX.0.dylib, libX.0.20.2.dylib);
+# the executable loaded one name and the libraries the other, so dyld mapped
+# two copies of ggml into the process and the app aborted on quit.
+#
 # Usage: scripts/check-mac-bundle-deps.sh path/to/Dimmy.app
 set -euo pipefail
 
@@ -32,6 +39,36 @@ newer_than() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | 
 
 CHECKED=0
 BAD=0
+UUIDS="$(mktemp)"
+trap 'rm -f "$UUIDS"' EXIT
+EXE_DIR="$APP/Contents/MacOS"
+# LC_RPATH entries of a Mach-O, one per line.
+rpaths_of() { otool -l "$1" | awk '/ cmd LC_RPATH/ {r=1} r && $1 == "path" {print $2; r=0}'; }
+EXE_RPATHS=""
+for exe in "$EXE_DIR"/*; do
+  if [ -f "$exe" ] && [ ! -L "$exe" ]; then
+    EXE_RPATHS="$EXE_RPATHS $(rpaths_of "$exe" | tr -s '[:space:]' ' ')"
+  fi
+done
+
+# Does dependency $2 of file $1 resolve to a file inside the bundle?
+resolves() {
+  local f="$1" dep="$2" rest rp dir
+  dir="$(dirname "$f")"
+  case "$dep" in
+    @loader_path/*)     [ -e "$dir/${dep#@loader_path/}" ] ;;
+    @executable_path/*) [ -e "$EXE_DIR/${dep#@executable_path/}" ] ;;
+    @rpath/*)
+      rest="${dep#@rpath/}"
+      for rp in $EXE_RPATHS $(rpaths_of "$f"); do
+        rp="${rp/#@executable_path/$EXE_DIR}"
+        rp="${rp/#@loader_path/$dir}"
+        [ -e "$rp/$rest" ] && return 0
+      done
+      return 1 ;;
+    *) return 0 ;;
+  esac
+}
 while IFS= read -r -d '' f; do
   [ -L "$f" ] && continue
   file -b "$f" | grep -q 'Mach-O' || continue
@@ -42,11 +79,23 @@ while IFS= read -r -d '' f; do
   # (once per architecture in a universal binary, e.g. Sparkle). A dylib also
   # lists its own install name (LC_ID_DYLIB), which is not a dependency.
   own_id=$(otool -D "$f" 2>/dev/null | sed -n '2p')
+  otool -l "$f" | awk -v rel="$rel" '/ cmd LC_UUID/ {u=1} u && $1 == "uuid" {print $2, rel; u=0}' >> "$UUIDS"
+  case "$rel" in
+    Contents/MacOS/*|Contents/Frameworks/*.dylib) top=1 ;;
+    *) top=0 ;;
+  esac
+  case "$rel" in Contents/Frameworks/*/*) top=0 ;; esac
   while read -r dep; do
     [ -z "$dep" ] && continue
     [ "$dep" = "$own_id" ] && continue
     case "$dep" in
-      @rpath/*|@executable_path/*|@loader_path/*|/usr/lib/*|/System/Library/*) ;;
+      @rpath/*|@executable_path/*|@loader_path/*)
+        if [ "$top" -eq 1 ] && ! resolves "$f" "$dep"; then
+          echo "::error::$rel links $dep, which is not in the bundle - dyld will refuse to launch the app"
+          BAD=1
+        fi
+        ;;
+      /usr/lib/*|/System/Library/*) ;;
       *)
         echo "::error::$rel links $dep - that path exists only on the build machine; the app will not launch on a Mac without it"
         BAD=1
@@ -71,5 +120,12 @@ if [ "$CHECKED" -eq 0 ]; then
   echo "::error::no Mach-O files found under $APP - this check is not looking at what it thinks it is"
   exit 1
 fi
+# Same UUID = same library. Two of them means dyld can map it twice.
+DUPS="$(awk '{print $1}' "$UUIDS" | sort | uniq -d)"
+for u in $DUPS; do
+  echo "::error::one library is bundled under several names (UUID $u):$(awk -v u="$u" '$1 == u {printf " %s", $2}' "$UUIDS") - ship one file and point every load command at it"
+  BAD=1
+done
+
 [ "$BAD" -eq 0 ] || exit 1
-echo "all $CHECKED Mach-O files link only bundled or system libraries and run on macOS $APP_MIN"
+echo "all $CHECKED Mach-O files are unique, link only bundled or system libraries and run on macOS $APP_MIN"

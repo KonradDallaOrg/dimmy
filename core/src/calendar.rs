@@ -151,6 +151,11 @@ pub struct ConnectorStatus {
     /// `ok`, `cli_missing`, `not_logged_in`, `connector_not_authorised`,
     /// `probe_failed`.
     pub reason: String,
+    /// Which calendars the connector reaches, as the user knows them
+    /// ("Microsoft 365", "Google Calendar"), so Settings can say what is
+    /// linked instead of a bare "Connected". Empty when unavailable.
+    #[serde(default)]
+    pub providers: Vec<String>,
 }
 
 impl ConnectorStatus {
@@ -158,6 +163,7 @@ impl ConnectorStatus {
         Self {
             available: false,
             reason: reason.to_string(),
+            providers: Vec::new(),
         }
     }
 }
@@ -580,10 +586,35 @@ else. If you have none, answer exactly: NONE";
         ConnectorStatus {
             available: true,
             reason: "ok".to_string(),
+            providers: calendar_providers(&raw),
         }
     } else {
         ConnectorStatus::unavailable("connector_not_authorised")
     }
+}
+
+/// The calendars behind the tool names the probe listed, in the names a
+/// user recognises. A calendar tool from a connector we do not know is
+/// still a calendar: it shows as "another calendar" rather than vanishing.
+fn calendar_providers(tool_names: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in tool_names.lines() {
+        let l = line.trim().to_ascii_lowercase();
+        if !l.contains("calendar") {
+            continue;
+        }
+        let name = if l.contains("outlook") || l.contains("microsoft") || l.contains("m365") {
+            "Microsoft 365"
+        } else if l.contains("google") || l.contains("gcal") {
+            "Google Calendar"
+        } else {
+            "another calendar"
+        };
+        if !out.iter().any(|n| n == name) {
+            out.push(name.to_string());
+        }
+    }
+    out
 }
 
 /// Fetch the events of `day_iso` (YYYY-MM-DD) as the connector sees them.
@@ -781,6 +812,34 @@ pub fn spawn_connector_setup() -> Result<(), TranscribeError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn providers_name_the_calendars_a_user_recognises() {
+        let raw = "mcp__claude_ai_Microsoft_365__outlook_calendar_search
+                   mcp__claude_ai_Google_Calendar__list_events_calendar
+                   mcp__claude_ai_Microsoft_365__outlook_calendar_search
+";
+        assert_eq!(
+            super::calendar_providers(raw),
+            vec!["Microsoft 365".to_string(), "Google Calendar".to_string()]
+        );
+    }
+
+    #[test]
+    fn an_unknown_calendar_connector_still_counts() {
+        assert_eq!(
+            super::calendar_providers("mcp__fastmail__calendar_query"),
+            vec!["another calendar".to_string()]
+        );
+        assert!(super::calendar_providers("NONE").is_empty());
+    }
+
+    #[test]
+    fn status_without_providers_still_parses() {
+        let s: super::ConnectorStatus =
+            serde_json::from_str(r#"{"available":false,"reason":"disabled"}"#).unwrap();
+        assert!(s.providers.is_empty());
+    }
+
     use super::*;
 
     fn ev(id: &str, start: i64, end: i64) -> CalendarEvent {

@@ -284,6 +284,21 @@ final class LoopbackRateEstimatorTests: XCTestCase {
             UpdateService.displayVersion(short: "0.6.74", build: "0.6.74"), "0.6.74")
     }
 
+    func testDisplayVersionReadsTheNumericBuildBackAsTheTag() {
+        // Sparkle ignores everything after a '-', so release.yml now writes
+        // rc N as X.Y.Z.0.N and the stable as X.Y.Z.1. The About page must
+        // still say which build this is, in the tag's words.
+        XCTAssertEqual(
+            UpdateService.displayVersion(short: "0.7.13", build: "0.7.13.0.6"), "0.7.13-rc.6")
+        XCTAssertEqual(
+            UpdateService.displayVersion(short: "0.7.13", build: "0.7.13.0.10"), "0.7.13-rc.10")
+        XCTAssertEqual(
+            UpdateService.displayVersion(short: "0.7.13", build: "0.7.13.1"), "0.7.13")
+        // Builds from before the change keep reading as they always did.
+        XCTAssertEqual(
+            UpdateService.displayVersion(short: "0.7.13", build: "0.7.13-rc.3"), "0.7.13-rc.3")
+    }
+
     func testDisplayVersionFallsBackWhenTheBuildDoesNotExtendIt() {
         // A local Xcode build inherits the .pbxproj defaults, which do not
         // extend the marketing number. Showing them would present a stale
