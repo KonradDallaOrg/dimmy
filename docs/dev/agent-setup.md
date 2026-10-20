@@ -57,7 +57,7 @@ Two thin entry points, so the installers carry no second copy of the core:
 | Command | Does | v |
 |---|---|---|
 | `info` | version, flavor, platform, config dir, app installed/running | 1 |
-| `schema` | every setting the agent may set: type, allowed values, default, one plain sentence | 1 |
+| `schema` | every user setting: type, allowed values, default, one plain sentence; `stored_by: "app"` for the ones the app keeps outside `config.json` (see below) | 1 |
 | `check` | OS, CPU arch, RAM, free disk, GPU fitness + known-bad, mics, Claude/Codex/Gemini CLI state, which keys exist (booleans), license, onboarding done, **recommended profile**, `warnings` (`no_microphone` when no input device is found; always present, may be empty) | 1 |
 | `config get` | current settings, no secrets | 1 |
 | `config set k=v ...` / `--json` | strict-validated patch, `--dry-run` shows the diff | 1 |
@@ -77,6 +77,34 @@ Two thin entry points, so the installers carry no second copy of the core:
 | `onboarding status\|done` | marks onboarding done so the app opens on a "configured by your AI" summary | 1 |
 | `diag [--lines N]` | versions, settings without secrets, redacted log tail, recognised error categories | 1 |
 | `app status\|start\|quit` | | 1 |
+
+## Every setting, including the ones the app stores
+
+`schema` lists every user setting. `setup::NOT_SETTINGS` names the
+`config.json` fields that are not choices (connection state written by the
+Notion and Confluence sign-in, caches, counters, window anchors, migrated
+knobs); a test makes each new `AppConfig` field land in one list or the
+other.
+
+Some settings never reach `config.json`: the app reads them itself at
+launch. They carry `"stored_by": "app"` in `schema`, and `config get` /
+`config set` handle them like the rest (`core/src/setup_prefs.rs`):
+
+| OS | Store | Keys |
+|---|---|---|
+| Windows | `<config_dir>/ui_prefs.json`, merged (unknown properties are kept) | `dict_add_hotkey`, `command_hotkey`, `meeting_hotkey`, `update_channel`, `recap_export_folder`, `theme`, `pill_show_on_startup`, `pill_show_on_hotkey`, `show_taskbar_icon`, `tray_icon_always_visible` |
+| macOS | the app's UserDefaults, via `defaults write <bundle id>` | `shortcut`, `dict_add_hotkey`, `command_hotkey`, `meeting_hotkey`, `update_channel`, `recap_export_folder`, `pill_visible`, `show_in_dock`, `show_in_menu_bar` |
+
+- On macOS the dictation `shortcut` is the app's `shortcutEncoded`; the
+  `config.json` field is never read there, so it is not offered.
+- Hotkeys use one grammar on both systems (`ctrl+alt+m`; `opt`/`option`
+  = `alt`, `cmd` = `win`; `fn` alone on macOS). The Mac encodings
+  (`HotkeyCombo.encoded`, the `ModifierShortcut` bitmask) are mirrored and
+  unit-tested in `setup_prefs`. `""` turns an optional hotkey off; on macOS
+  that deletes the key and sets `meetingHotkeyDefaultApplied`, otherwise
+  the app restores its default meeting shortcut.
+- Same rule as `config.json`: written only while the app is closed (exit 3),
+  because both apps read these once at launch and save their own copy.
 
 ## Permissions on macOS
 

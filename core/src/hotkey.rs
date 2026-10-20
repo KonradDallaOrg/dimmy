@@ -490,6 +490,11 @@ pub(crate) fn is_valid_combo(combo: &str) -> bool {
     parse_combo(combo).is_some()
 }
 
+/// Whether `name` is a non-modifier key the Windows hook knows, e.g. `m`, `f5`.
+pub(crate) fn is_key_name(name: &str) -> bool {
+    name_to_vk(name) != 0
+}
+
 /// Set the dictation shortcut combo. An unrecognised combo falls back to the
 /// platform default so the dictation hotkey is never left unbound.
 pub fn set_shortcut(combo: &str) {
