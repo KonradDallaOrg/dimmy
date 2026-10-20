@@ -20,6 +20,7 @@
 <p align="center">
   <a href="https://dimmy.app"><strong>Website</strong></a> ·
   <a href="https://github.com/KonradDallaOrg/dimmy/releases/latest"><strong>Download</strong></a> ·
+  <a href="https://dimmy.app/install.md"><strong>Install with your AI</strong></a> ·
   <a href="docs/ARCHITECTURE.md"><strong>Architecture</strong></a> ·
   <a href="docs/BUILD.md"><strong>Build</strong></a> ·
   <a href="CONTRIBUTING.md"><strong>Contribute</strong></a>
@@ -88,6 +89,16 @@ Learn more at **[dimmy.app](https://dimmy.app)**.
 - **Auto-update** — checks GitHub for new releases, notifies from Settings → About.
 
 ## Install
+
+**The easy way: ask your AI assistant.** In Claude Code, Codex or Gemini CLI, paste:
+
+> Install Dimmy for me by following https://dimmy.app/install.md
+
+The assistant checks the computer, asks what you want Dimmy for, downloads and verifies the signed installer, sets every option for you, and runs a real test. You only switch on system permissions and sign in where needed; no key or password ever goes through the chat.
+
+**AI assistants reading this:** to install or configure Dimmy, follow [dimmy.app/install.md](https://dimmy.app/install.md). Once installed, Dimmy ships a setup tool made for you (`dimmy-setup.exe` on Windows, `Dimmy.app/Contents/MacOS/Dimmy --setup` on macOS) that prints JSON and can read and change every setting; see [`docs/dev/agent-setup.md`](docs/dev/agent-setup.md).
+
+**Or by hand:**
 
 | Platform | File | Requirements |
 |----------|------|--------------|
