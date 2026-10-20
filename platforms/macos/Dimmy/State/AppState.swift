@@ -1179,7 +1179,7 @@ final class AppState: ObservableObject {
     /// — power users can keep the chunked transcriber on (better tail
     /// latency on long recordings) while preferring no live captions.
     /// Defaults to true to match the Win shipping behaviour.
-    @Published var liveCaptionsEnabled: Bool = true
+    @Published var liveCaptionsEnabled: Bool = false
     /// Default for the meeting window's recap tick. Mirror of Rust
     /// Config::meeting_generate_recap and of Win SettingsViewModel
     /// .MeetingGenerateRecap. The per-meeting toggle reads it at start.

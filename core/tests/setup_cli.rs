@@ -80,6 +80,38 @@ fn an_agent_session_against_a_throwaway_dir() {
     assert_eq!(saved["llm_style"], "correct");
     assert_eq!(saved["llm_enabled"], true);
 
+    // Settings that are not switches: a list, a number, text.
+    let (code, v) = cli(&[
+        "config",
+        "set",
+        r#"user_dict=["Dimmy","Temera"]"#,
+        "input_gain=0.7",
+        "prompt=Konrad",
+    ]);
+    assert_eq!(code, 0, "{v}");
+    let saved = saved_config(&dir);
+    assert_eq!(saved["user_dict"], serde_json::json!(["Dimmy", "Temera"]));
+    assert_eq!(saved["prompt"], "Konrad");
+
+    // A setting the Windows app stores itself lands in ui_prefs.json, under
+    // the app's own property name, and comes back from `config get`.
+    #[cfg(target_os = "windows")]
+    {
+        let (code, v) = cli(&["config", "set", "meeting_hotkey=", "theme=Dark"]);
+        assert_eq!(code, 0, "{v}");
+        let prefs: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("ui_prefs.json")).expect("ui_prefs.json"),
+        )
+        .unwrap();
+        assert_eq!(prefs["MeetingHotkey"], "");
+        assert_eq!(prefs["Theme"], "Dark");
+        let (_, v) = cli(&["config", "get"]);
+        assert_eq!(v["settings"]["meeting_hotkey"], "");
+        assert_eq!(v["settings"]["dict_add_hotkey"], "ctrl+shift+d");
+        let (code, v) = cli(&["config", "set", "meeting_hotkey=ctrl+alt+nope"]);
+        assert_eq!(code, 2, "{v}");
+    }
+
     // The running app holds the lock: writes refuse with 3, reads still work.
     {
         let held = setup::try_lock_dir(&dir).unwrap().expect("lock");

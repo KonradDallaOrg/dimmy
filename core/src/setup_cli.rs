@@ -15,6 +15,7 @@ use serde_json::{json, Map, Value};
 
 use crate::provider::{KeyringScope, Provider};
 use crate::setup;
+use crate::setup_prefs;
 
 pub const EXIT_OK: i32 = 0;
 pub const EXIT_FAILED: i32 = 1;
@@ -206,7 +207,80 @@ fn schema_view(cfg: &Value) -> Value {
     for s in setup::settings() {
         m.insert(s.key.to_string(), cfg[s.key].clone());
     }
+    for p in setup_prefs::app_prefs() {
+        m.insert(p.key.to_string(), cfg[p.key].clone());
+    }
     Value::Object(m)
+}
+
+/// The core's settings plus the ones the app stores itself.
+fn current_all() -> Result<Value, CliError> {
+    let mut v = current_config()?;
+    if let (Some(m), Value::Object(app)) = (v.as_object_mut(), app_values()?) {
+        m.extend(app);
+    }
+    Ok(v)
+}
+
+#[cfg(target_os = "windows")]
+fn app_values() -> Result<Value, CliError> {
+    Ok(setup_prefs::read_ui_prefs(
+        &config_dir()?.join("ui_prefs.json"),
+    ))
+}
+
+#[cfg(target_os = "windows")]
+fn write_app_values(patch: &Map<String, Value>) -> Result<(), CliError> {
+    setup_prefs::write_ui_prefs(&config_dir()?.join("ui_prefs.json"), patch)
+        .map_err(|e| CliError::failed("failed", format!("saving app settings failed: {e}"), ""))
+}
+
+#[cfg(target_os = "macos")]
+fn app_values() -> Result<Value, CliError> {
+    let id = mac_bundle_id()?;
+    let mut m = Map::new();
+    for p in setup_prefs::app_prefs() {
+        let out = std::process::Command::new("/usr/bin/defaults")
+            .args(["read", id.as_str(), p.store_key])
+            .output()
+            .map_err(|e| CliError::failed("failed", e.to_string(), ""))?;
+        let raw = String::from_utf8_lossy(&out.stdout).into_owned();
+        let v = setup_prefs::mac_value(&p, out.status.success().then_some(raw.as_str()));
+        m.insert(p.key.to_string(), v);
+    }
+    Ok(Value::Object(m))
+}
+
+#[cfg(target_os = "macos")]
+fn write_app_values(patch: &Map<String, Value>) -> Result<(), CliError> {
+    let id = mac_bundle_id()?;
+    for op in setup_prefs::mac_defaults_ops(patch) {
+        let status = std::process::Command::new("/usr/bin/defaults")
+            .arg(&op[0])
+            .arg(&id)
+            .args(&op[1..])
+            .output()
+            .map_err(|e| CliError::failed("failed", e.to_string(), ""))?;
+        // `defaults delete` of a key that is not there is already "off".
+        if !status.status.success() && op[0] != "delete" {
+            return Err(CliError::failed(
+                "failed",
+                format!("defaults {} {} failed", op[0], op[1]),
+                "",
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn app_values() -> Result<Value, CliError> {
+    Ok(json!({}))
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn write_app_values(_patch: &Map<String, Value>) -> Result<(), CliError> {
+    unreachable!("Linux has no app-stored settings")
 }
 
 // ── Dispatch ────────────────────────────────────────────────────────
@@ -236,7 +310,7 @@ fn dispatch(args: &mut Vec<String>, out: &mut dyn Write) -> CmdResult {
         "config" => match sub(args).as_deref() {
             Some("get") => {
                 no_more(args)?;
-                Ok(json!({ "settings": schema_view(&current_config()?) }))
+                Ok(json!({ "settings": schema_view(&current_all()?) }))
             }
             Some("set") => config_set(args),
             _ => Err(CliError::usage("config get | config set")),
@@ -501,7 +575,7 @@ fn parse_pairs(args: &[String]) -> Result<Map<String, Value>, CliError> {
             return Err(CliError::usage(format!("'{a}' has no key")));
         }
         let parsed = match serde_json::from_str::<Value>(v) {
-            Ok(j @ (Value::Bool(_) | Value::Number(_) | Value::String(_))) => j,
+            Ok(j @ (Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_))) => j,
             _ => Value::String(v.to_string()),
         };
         m.insert(k.to_string(), parsed);
@@ -544,6 +618,10 @@ fn validate_against(patch: &Value, current: &Value) -> Result<(), CliError> {
     if combined.len() != p.len() {
         setup::validate_patch(&Value::Object(combined)).map_err(invalid)?;
     }
+    let app_errs = setup_prefs::cross_check(p, current);
+    if !app_errs.is_empty() {
+        return Err(invalid(app_errs));
+    }
     if let Some(dev) = p.get("selected_device").and_then(|d| d.as_str()) {
         let devices = crate::audio::list_input_devices();
         if !devices.iter().any(|d| d == dev) {
@@ -568,6 +646,22 @@ fn diff(patch: &Value, current: &Value) -> Vec<Value> {
         .collect()
 }
 
+/// Numbers compare loosely: the core keeps the microphone gain as an f32, so
+/// 0.7 reads back as 0.699999988.
+fn same_value(got: &Value, wanted: &Value) -> bool {
+    if let (Some(a), Some(b)) = (got.as_f64(), wanted.as_f64()) {
+        return (a - b).abs() < 1e-4;
+    }
+    // A Mac shortcut reads back as `ctrl+opt+m` after `ctrl+alt+m` was set.
+    if let (Some(a), Some(b)) = (got.as_str(), wanted.as_str()) {
+        if a != b && a.contains('+') {
+            return setup_prefs::split_combo(a)
+                .is_some_and(|x| Some(x) == setup_prefs::split_combo(b));
+        }
+    }
+    got == wanted
+}
+
 /// Validate, then hand the patch to the same setter the app uses, then read
 /// it back: a value the core still adjusted is reported, not hidden.
 fn apply_patch(patch: Value, dry_run: bool) -> CmdResult {
@@ -576,27 +670,38 @@ fn apply_patch(patch: Value, dry_run: bool) -> CmdResult {
         return Err(CliError::usage("no settings given"));
     }
     let _lock = if dry_run { None } else { Some(write_lock()?) };
-    let current = current_config()?;
+    let current = current_all()?;
     validate_against(&patch, &current)?;
     let changes = diff(&patch, &current);
     if dry_run {
         return Ok(json!({ "dry_run": true, "changes": changes }));
     }
-    let c = CString::new(patch.to_string()).expect("JSON has no NUL");
-    let rc = unsafe { crate::ffi::dimmy_set_config_json(c.as_ptr()) };
-    if rc != 0 {
-        return Err(CliError::failed(
-            "failed",
-            format!("saving settings failed ({rc})"),
-            "",
-        ));
+    let (app, core): (Map<String, Value>, Map<String, Value>) = patch
+        .as_object()
+        .expect("object")
+        .clone()
+        .into_iter()
+        .partition(|(k, _)| setup_prefs::app_pref(k).is_some());
+    if !core.is_empty() {
+        let c = CString::new(Value::Object(core).to_string()).expect("JSON has no NUL");
+        let rc = unsafe { crate::ffi::dimmy_set_config_json(c.as_ptr()) };
+        if rc != 0 {
+            return Err(CliError::failed(
+                "failed",
+                format!("saving settings failed ({rc})"),
+                "",
+            ));
+        }
     }
-    let after = current_config()?;
+    if !app.is_empty() {
+        write_app_values(&app)?;
+    }
+    let after = current_all()?;
     let not_applied: Vec<Value> = patch
         .as_object()
         .expect("object")
         .iter()
-        .filter(|(k, v)| after[k.as_str()] != **v)
+        .filter(|(k, v)| !same_value(&after[k.as_str()], v))
         .map(|(k, v)| json!({ "key": k, "wanted": v, "got": after[k.as_str()] }))
         .collect();
     if !not_applied.is_empty() {
@@ -1171,7 +1276,7 @@ fn diag(lines: usize) -> CmdResult {
         "version": env!("CARGO_PKG_VERSION"),
         "flavor": crate::build_flavor(),
         "os": { "name": std::env::consts::OS, "version": setup::os_version(), "arch": std::env::consts::ARCH },
-        "settings": schema_view(&current_config()?),
+        "settings": schema_view(&current_all().or_else(|_| current_config())?),
         "error_categories": counts,
         "log_tail": tail,
     }))

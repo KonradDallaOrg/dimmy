@@ -142,10 +142,10 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private string _shortcutMode = "toggle";
     [ObservableProperty] private string? _selectedDevice;
     [ObservableProperty] private List<string> _devices = [];
-    [ObservableProperty] private bool _preprocessingEnabled = true;
+    [ObservableProperty] private bool _preprocessingEnabled;
     [ObservableProperty] private bool _chunkStreamingEnabled;
     [ObservableProperty] private bool _streamingDictation;
-    [ObservableProperty] private bool _liveCaptionsEnabled = true;
+    [ObservableProperty] private bool _liveCaptionsEnabled;
     /// Default for the meeting window's recap tick. Mirror of Rust
     /// Config::meeting_generate_recap.
     [ObservableProperty] private bool _meetingGenerateRecap = true;
@@ -592,7 +592,7 @@ public partial class SettingsViewModel : ObservableObject
             PreprocessingEnabled = r.TryGetProperty("preprocessing_enabled", out var pe) && pe.GetBoolean();
             ChunkStreamingEnabled = r.TryGetProperty("chunk_streaming_enabled", out var cs) && cs.GetBoolean();
             StreamingDictation = r.TryGetProperty("streaming_dictation", out var sd) && sd.GetBoolean();
-            LiveCaptionsEnabled = !r.TryGetProperty("live_captions_enabled", out var lce) || lce.GetBoolean();
+            LiveCaptionsEnabled = r.TryGetProperty("live_captions_enabled", out var lce) && lce.GetBoolean();
             // Absent key ⇒ on. An older config must not silently stop
             // producing recaps after an update.
             MeetingGenerateRecap = !r.TryGetProperty("meeting_generate_recap", out var mgr) || mgr.GetBoolean();

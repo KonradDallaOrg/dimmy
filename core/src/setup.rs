@@ -30,7 +30,47 @@ pub enum Kind {
     Shortcut,
     /// The exact name of an input device, as `check` lists them.
     Device,
+    Text {
+        max_len: usize,
+    },
+    Number {
+        min: f64,
+        max: f64,
+    },
+    TextList,
+    /// The app's per-app rules list, shaped like `app_rules::AppRule`.
+    AppRules,
+    /// A shortcut the app binds itself (`setup_prefs`); `""` is off when
+    /// `may_be_off`.
+    AppHotkey {
+        needs_key: bool,
+        may_be_off: bool,
+    },
 }
+
+/// `AppConfig` fields that are not the user's choices: connection state the
+/// sign-in flows write, caches, counters, window positions, and knobs the
+/// app migrates or forces. `every_user_setting_in_config_is_in_the_schema`
+/// makes a new field land either here or in `settings()`.
+pub const NOT_SETTINGS: &[&str] = &[
+    "use_keyring",
+    "audio_source",
+    "window_anchor_right",
+    "window_anchor_bottom",
+    "stats_total_words",
+    "stats_total_speaking_secs",
+    "meeting_chunk_secs",
+    "loopback_gain",
+    "notion_target_id",
+    "notion_target_kind",
+    "notion_target_title",
+    "confluence_site",
+    "confluence_email",
+    "confluence_space_id",
+    "confluence_space_key",
+    "confluence_space_name",
+    "confluence_parent_id",
+];
 
 #[derive(Debug, Clone)]
 pub struct Setting {
@@ -213,9 +253,9 @@ pub fn available_backends() -> Vec<&'static str> {
     v
 }
 
-/// Every setting an agent may set during setup. Pure UI cosmetics, power
-/// knobs and integrations with their own sign-in flow are deliberately left
-/// out: they belong to the user, in the app.
+/// Every user setting in `config.json`. Secrets never appear here, and the
+/// connection state of Notion and Confluence is written by their own sign-in
+/// flows (see `NOT_SETTINGS`).
 pub fn settings() -> Vec<Setting> {
     let styles: Vec<String> = crate::llm::LlmStyle::ALL
         .iter()
@@ -227,7 +267,7 @@ pub fn settings() -> Vec<Setting> {
         .collect();
     let mut translate = vec!["none".to_string()];
     translate.extend(strs(crate::llm::SUPPORTED_TRANSLATE_LANGS));
-    vec![
+    let mut v = vec![
         Setting {
             key: "stt_mode",
             kind: Kind::Enum(strs(&["local", "cloud"])),
@@ -393,7 +433,165 @@ pub fn settings() -> Vec<Setting> {
             kind: Kind::Bool,
             help: "Leave the dictated text on the clipboard after it is pasted.",
         },
-    ]
+        Setting {
+            key: "preprocessing_enabled",
+            kind: Kind::Bool,
+            help: "Clean up the microphone audio before local transcription (voice detection and level). Off is usually more accurate.",
+        },
+        Setting {
+            key: "live_captions_enabled",
+            kind: Kind::Bool,
+            help: "Show the words in a small caption window while you speak.",
+        },
+        Setting {
+            key: "chunk_streaming_enabled",
+            kind: Kind::Bool,
+            help: "Transcribe long dictations in pieces while you speak, so the text is ready sooner when you stop.",
+        },
+        Setting {
+            key: "prompt",
+            kind: Kind::Text { max_len: 4000 },
+            help: "Words or a short context sentence given to the speech engine to help it spell names and terms.",
+        },
+        Setting {
+            key: "user_dict",
+            kind: Kind::TextList,
+            help: "The personal dictionary: names and terms the speech engine should spell exactly like this.",
+        },
+        Setting {
+            key: "llm_custom_prompt",
+            kind: Kind::Text { max_len: 8000 },
+            help: "The instructions used when the text style is custom.",
+        },
+        Setting {
+            key: "llm_use_same_key",
+            kind: Kind::Bool,
+            help: "Use the speech service key for text improvement too, when it is the same company.",
+        },
+        Setting {
+            key: "recap_use_same_key",
+            kind: Kind::Bool,
+            help: "Use the text improvement key for meeting recaps too.",
+        },
+        Setting {
+            key: "llm_log_enabled",
+            kind: Kind::Bool,
+            help: "Write the text improvement requests and answers to the log, for troubleshooting.",
+        },
+        Setting {
+            key: "gemini_cli_enabled",
+            kind: Kind::Bool,
+            help: "Offer the Gemini command line tool as a way to sign in for text improvement.",
+        },
+        Setting {
+            key: "telegram_enabled",
+            kind: Kind::Bool,
+            help: "Receive voice messages sent to your Telegram inbox and transcribe them.",
+        },
+        Setting {
+            key: "telegram_auto_process",
+            kind: Kind::Bool,
+            help: "Transcribe Telegram voice messages as soon as they arrive.",
+        },
+        Setting {
+            key: "audio_debug_enabled",
+            kind: Kind::Bool,
+            help: "Keep a copy of each recording's audio for troubleshooting.",
+        },
+        Setting {
+            key: "ggml_debug_logging",
+            kind: Kind::Bool,
+            help: "Write the local engines' detailed messages to the log, for troubleshooting.",
+        },
+        Setting {
+            key: "call_detect_excluded_apps",
+            kind: Kind::TextList,
+            help: "Apps whose calls are never suggested for recording.",
+        },
+        Setting {
+            key: "call_detect_cooldown_secs",
+            kind: Kind::Int { min: 0, max: 86400 },
+            help: "Seconds to wait before suggesting recording again in the same app after a call.",
+        },
+        Setting {
+            key: "call_detect_min_active_secs",
+            kind: Kind::Int { min: 0, max: 600 },
+            help: "Seconds the microphone must be in use before a call is suggested for recording.",
+        },
+        Setting {
+            key: "call_detect_timeout_cooldown_secs",
+            kind: Kind::Int { min: 0, max: 86400 },
+            help: "Seconds to wait before suggesting again after a suggestion was ignored.",
+        },
+        Setting {
+            key: "history_audio_max_mb",
+            kind: Kind::Int {
+                min: 0,
+                max: 1_000_000,
+            },
+            help: "Most megabytes of dictation audio kept in the history; 0 means no limit.",
+        },
+        Setting {
+            key: "border_style",
+            kind: Kind::Enum(strs(&[
+                "Rainbow", "Blue", "Green", "Purple", "Orange", "None",
+            ])),
+            help: "Colour of the border around the recording pill.",
+        },
+        Setting {
+            key: "waveform_style",
+            kind: Kind::Enum(strs(&["Bars", "Bars Center", "Bars Round", "Line", "Dots"])),
+            help: "How the recording pill draws your voice.",
+        },
+        Setting {
+            key: "overlay_position",
+            kind: Kind::Enum(strs(&[
+                "Top Left",
+                "Top Center",
+                "Top Right",
+                "Bottom Left",
+                "Bottom Center",
+                "Bottom Right",
+            ])),
+            help: "Where the recording pill sits on the screen.",
+        },
+        Setting {
+            key: "input_gain",
+            kind: Kind::Number { min: 0.0, max: 2.0 },
+            help: "Microphone volume boost: 1 leaves it as it is, below 1 is quieter, above 1 is louder.",
+        },
+        Setting {
+            key: "meeting_storage_path",
+            kind: Kind::Text { max_len: 1024 },
+            help: "Folder where meetings are saved; empty means Dimmy's own data folder.",
+        },
+        Setting {
+            key: "notion_auto_send",
+            kind: Kind::Bool,
+            help: "Send every meeting recap to the linked Notion page on its own. Needs Notion connected in the app.",
+        },
+        Setting {
+            key: "confluence_auto_send",
+            kind: Kind::Bool,
+            help: "Send every meeting recap to the linked Confluence space on its own. Needs Confluence connected in the app.",
+        },
+        Setting {
+            key: "calendar_context_enabled",
+            kind: Kind::Bool,
+            help: "Use the title and attendees of the current calendar event in meeting recaps.",
+        },
+        Setting {
+            key: "app_rules",
+            kind: Kind::AppRules,
+            help: "Per-app text style and translation, as the app's rules list (match_pattern, match_type, llm_style, llm_translate_to).",
+        },
+    ];
+    // The Mac app keeps its dictation shortcut in its own settings
+    // (`setup_prefs`), and never reads this one.
+    if cfg!(target_os = "macos") {
+        v.retain(|s| s.key != "shortcut");
+    }
+    v
 }
 
 pub fn setting(key: &str) -> Option<Setting> {
@@ -434,13 +632,41 @@ pub fn config_value(cfg: &AppConfig, key: &str) -> Value {
         "history_audio_keep_days" => json!(cfg.history_audio_keep_days),
         "filler_removal_enabled" => json!(cfg.filler_removal_enabled),
         "keep_in_clipboard" => json!(cfg.keep_in_clipboard),
+        "preprocessing_enabled" => json!(cfg.preprocessing_enabled),
+        "live_captions_enabled" => json!(cfg.live_captions_enabled),
+        "chunk_streaming_enabled" => json!(cfg.chunk_streaming_enabled),
+        "prompt" => json!(cfg.prompt),
+        "user_dict" => json!(cfg.user_dict),
+        "llm_custom_prompt" => json!(cfg.llm_custom_prompt),
+        "llm_use_same_key" => json!(cfg.llm_use_same_key),
+        "recap_use_same_key" => json!(cfg.recap_use_same_key),
+        "llm_log_enabled" => json!(cfg.llm_log_enabled),
+        "gemini_cli_enabled" => json!(cfg.gemini_cli_enabled),
+        "telegram_enabled" => json!(cfg.telegram_enabled),
+        "telegram_auto_process" => json!(cfg.telegram_auto_process),
+        "audio_debug_enabled" => json!(cfg.audio_debug_enabled),
+        "ggml_debug_logging" => json!(cfg.ggml_debug_logging),
+        "call_detect_excluded_apps" => json!(cfg.call_detect_excluded_apps),
+        "call_detect_cooldown_secs" => json!(cfg.call_detect_cooldown_secs),
+        "call_detect_min_active_secs" => json!(cfg.call_detect_min_active_secs),
+        "call_detect_timeout_cooldown_secs" => json!(cfg.call_detect_timeout_cooldown_secs),
+        "history_audio_max_mb" => json!(cfg.history_audio_max_mb),
+        "border_style" => json!(cfg.border_style),
+        "waveform_style" => json!(cfg.waveform_style),
+        "overlay_position" => json!(cfg.overlay_position),
+        "input_gain" => json!(cfg.input_gain),
+        "meeting_storage_path" => json!(cfg.meeting_storage_path),
+        "notion_auto_send" => json!(cfg.notion_auto_send),
+        "confluence_auto_send" => json!(cfg.confluence_auto_send),
+        "calendar_context_enabled" => json!(cfg.calendar_context_enabled),
+        "app_rules" => json!(cfg.app_rules),
         other => panic!("config_value: '{other}' is not a schema key"),
     }
 }
 
 pub fn schema() -> Value {
     let defaults = AppConfig::default();
-    let list: Vec<Value> = settings()
+    let mut list: Vec<Value> = settings()
         .iter()
         .map(|s| {
             let mut v = json!({
@@ -448,25 +674,57 @@ pub fn schema() -> Value {
                 "default": config_value(&defaults, s.key),
                 "help": s.help,
             });
-            match &s.kind {
-                Kind::Bool => v["type"] = json!("bool"),
-                Kind::Enum(allowed) => {
-                    v["type"] = json!("enum");
-                    v["allowed"] = json!(allowed);
-                }
-                Kind::Int { min, max } => {
-                    v["type"] = json!("int");
-                    v["min"] = json!(min);
-                    v["max"] = json!(max);
-                }
-                Kind::Shortcut => v["type"] = json!("shortcut"),
-                Kind::Device => v["type"] = json!("device"),
-            }
+            describe_kind(&s.kind, &mut v);
             v
         })
         .collect();
-    assert_eq!(list.len(), settings().len());
+    list.extend(crate::setup_prefs::app_prefs().iter().map(|p| {
+        let mut v =
+            json!({ "key": p.key, "default": p.default, "help": p.help, "stored_by": "app" });
+        describe_kind(&p.kind, &mut v);
+        v
+    }));
+    assert_eq!(
+        list.len(),
+        settings().len() + crate::setup_prefs::app_prefs().len()
+    );
     json!({ "settings": list, "local_stt_backends_in_this_build": available_backends() })
+}
+
+fn describe_kind(kind: &Kind, v: &mut Value) {
+    match kind {
+        Kind::Bool => v["type"] = json!("bool"),
+        Kind::Enum(allowed) => {
+            v["type"] = json!("enum");
+            v["allowed"] = json!(allowed);
+        }
+        Kind::Int { min, max } => {
+            v["type"] = json!("int");
+            v["min"] = json!(min);
+            v["max"] = json!(max);
+        }
+        Kind::Shortcut => v["type"] = json!("shortcut"),
+        Kind::Device => v["type"] = json!("device"),
+        Kind::Text { max_len } => {
+            v["type"] = json!("text");
+            v["max_len"] = json!(max_len);
+        }
+        Kind::Number { min, max } => {
+            v["type"] = json!("number");
+            v["min"] = json!(min);
+            v["max"] = json!(max);
+        }
+        Kind::TextList => v["type"] = json!("text_list"),
+        Kind::AppRules => v["type"] = json!("app_rules"),
+        Kind::AppHotkey {
+            needs_key,
+            may_be_off,
+        } => {
+            v["type"] = json!("shortcut");
+            v["needs_key"] = json!(needs_key);
+            v["may_be_off"] = json!(may_be_off);
+        }
+    }
 }
 
 // ── Strict validation ───────────────────────────────────────────────
@@ -481,7 +739,12 @@ pub struct FieldError {
 }
 
 impl FieldError {
-    fn new(key: &str, problem: &'static str, message: String, allowed: Option<Value>) -> Self {
+    pub(crate) fn new(
+        key: &str,
+        problem: &'static str,
+        message: String,
+        allowed: Option<Value>,
+    ) -> Self {
         Self {
             key: key.to_string(),
             problem,
@@ -564,6 +827,60 @@ fn check_value(s: &Setting, v: &Value) -> Option<FieldError> {
                 ])),
             )),
         },
+        Kind::Text { max_len } => match v.as_str() {
+            None => Some(FieldError::new(
+                key,
+                "wrong_type",
+                format!("{key} must be a string"),
+                None,
+            )),
+            Some(t) if t.chars().count() > *max_len => Some(FieldError::new(
+                key,
+                "out_of_range",
+                format!("{key} is longer than {max_len} characters"),
+                Some(json!({ "max_len": max_len })),
+            )),
+            Some(_) => None,
+        },
+        Kind::Number { min, max } => match v.as_f64() {
+            None => Some(FieldError::new(
+                key,
+                "wrong_type",
+                format!("{key} must be a number"),
+                Some(json!({ "min": min, "max": max })),
+            )),
+            Some(n) if n < *min || n > *max => Some(FieldError::new(
+                key,
+                "out_of_range",
+                format!("{key} must be between {min} and {max}, got {n}"),
+                Some(json!({ "min": min, "max": max })),
+            )),
+            Some(_) => None,
+        },
+        Kind::TextList => match v.as_array() {
+            Some(a) if a.iter().all(|x| x.is_string()) => None,
+            _ => Some(FieldError::new(
+                key,
+                "wrong_type",
+                format!("{key} must be a JSON list of strings"),
+                None,
+            )),
+        },
+        Kind::AppHotkey {
+            needs_key,
+            may_be_off,
+        } => crate::setup_prefs::check_hotkey(key, v, *needs_key, *may_be_off),
+        Kind::AppRules => {
+            match serde_json::from_value::<Vec<crate::app_rules::AppRule>>(v.clone()) {
+                Ok(_) => None,
+                Err(e) => Some(FieldError::new(
+                    key,
+                    "wrong_type",
+                    format!("{key} is not a valid rules list: {e}"),
+                    None,
+                )),
+            }
+        }
         Kind::Device => match v.as_str() {
             Some(d) if !d.trim().is_empty() => None,
             _ => Some(FieldError::new(
@@ -666,16 +983,33 @@ pub fn validate_patch(patch: &Value) -> Result<(), Vec<FieldError>> {
         )]);
     };
     let all = settings();
+    let app = crate::setup_prefs::app_prefs();
     let mut errs: Vec<FieldError> = Vec::new();
     for (k, v) in m {
-        match all.iter().find(|s| s.key == k) {
+        let found = all
+            .iter()
+            .map(|s| (s.key, &s.kind))
+            .chain(app.iter().map(|p| (p.key, &p.kind)))
+            .find(|(key, _)| key == k);
+        match found {
             None => errs.push(FieldError::new(
                 k,
                 "unknown_key",
                 format!("'{k}' is not a setting dimmy-setup can change"),
-                Some(json!(all.iter().map(|s| s.key).collect::<Vec<_>>())),
+                Some(json!(all
+                    .iter()
+                    .map(|s| s.key)
+                    .chain(app.iter().map(|p| p.key))
+                    .collect::<Vec<_>>())),
             )),
-            Some(s) => errs.extend(check_value(s, v)),
+            Some((key, kind)) => errs.extend(check_value(
+                &Setting {
+                    key,
+                    kind: kind.clone(),
+                    help: "",
+                },
+                v,
+            )),
         }
     }
     if errs.is_empty() {
@@ -1757,6 +2091,54 @@ mod tests {
     }
 
     #[test]
+    fn every_user_setting_in_config_is_in_the_schema() {
+        let lib = include_str!("lib.rs");
+        let start = lib.find("pub struct AppConfig {").expect("AppConfig");
+        let body = &lib[start..start + lib[start..].find("\n}").expect("end")];
+        let keys: Vec<String> = settings()
+            .iter()
+            .map(|s| s.key.to_string())
+            .chain(
+                crate::setup_prefs::app_prefs()
+                    .iter()
+                    .map(|p| p.key.to_string()),
+            )
+            .collect();
+        for line in body.lines() {
+            let Some(field) = line
+                .trim()
+                .strip_prefix("pub ")
+                .and_then(|r| r.split_once(':'))
+                .map(|(f, _)| f)
+            else {
+                continue;
+            };
+            assert!(
+                keys.iter().any(|k| k == field) || NOT_SETTINGS.contains(&field),
+                "AppConfig.{field} is neither in the setup schema nor in NOT_SETTINGS"
+            );
+        }
+    }
+
+    #[test]
+    fn text_number_list_and_rules_are_checked() {
+        assert!(validate_patch(&json!({ "prompt": "Konrad, Dimmy" })).is_ok());
+        let long = "x".repeat(4001);
+        assert_eq!(
+            validate_patch(&json!({ "prompt": long })).unwrap_err()[0].problem,
+            "out_of_range"
+        );
+        assert!(validate_patch(&json!({ "input_gain": 0.7 })).is_ok());
+        assert!(validate_patch(&json!({ "input_gain": 2.5 })).is_err());
+        assert!(validate_patch(&json!({ "user_dict": ["Dimmy", "Temera"] })).is_ok());
+        assert!(validate_patch(&json!({ "user_dict": "Dimmy" })).is_err());
+        assert!(validate_patch(&json!({ "user_dict": [1] })).is_err());
+        let rule = json!([{ "match_pattern": "code.exe", "match_type": "process_name", "llm_style": "formal" }]);
+        assert_eq!(validate_patch(&json!({ "app_rules": rule })), Ok(()));
+        assert!(validate_patch(&json!({ "app_rules": [{ "match_pattern": 1 }] })).is_err());
+    }
+
+    #[test]
     fn schema_keys_are_unique_and_documented() {
         let all = settings();
         for (i, s) in all.iter().enumerate() {
@@ -1766,12 +2148,16 @@ mod tests {
             assert!(all[i + 1..].iter().all(|o| o.key != s.key));
         }
         let sc = schema();
-        assert_eq!(sc["settings"].as_array().unwrap().len(), all.len());
+        assert_eq!(
+            sc["settings"].as_array().unwrap().len(),
+            all.len() + crate::setup_prefs::app_prefs().len()
+        );
     }
 
     #[test]
     fn schema_never_offers_a_secret() {
-        for s in settings() {
+        // A switch such as llm_use_same_key cannot hold a secret.
+        for s in settings().into_iter().filter(|s| s.kind != Kind::Bool) {
             assert!(
                 !s.key.ends_with("_key") && !s.key.contains("token"),
                 "{} looks like a secret",

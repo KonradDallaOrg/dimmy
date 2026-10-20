@@ -59,7 +59,7 @@ public partial class AppViewModel : ObservableObject
 
     /// Mirrors the user-facing toggle. When false, App.xaml.cs does
     /// not show the CaptionWindow even if the chunked engine is on.
-    [ObservableProperty] private bool _liveCaptionsEnabled = true;
+    [ObservableProperty] private bool _liveCaptionsEnabled;
 
     /// Recap/command text as the LLM writes it, accumulated from the core's
     /// `llm_stream` event. A slow open-weight model can take half a minute

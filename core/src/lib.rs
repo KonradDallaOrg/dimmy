@@ -84,6 +84,7 @@ pub mod qwen_asr;
 pub mod qwen_fluid;
 pub mod setup;
 pub mod setup_cli;
+pub mod setup_prefs;
 pub mod silero;
 #[cfg(feature = "sim-audio")]
 pub mod sim_audio;
@@ -1160,7 +1161,7 @@ impl Default for AppConfig {
             local_model: "ggml-base-q8_0.bin".to_string(),
             local_stt_backend: default_local_stt_backend().to_string(),
             qwen_asr_model: crate::qwen_asr::DEFAULT_MODEL.to_string(),
-            live_captions_enabled: true,
+            live_captions_enabled: false,
             call_detect_enabled: true,
             call_detect_auto_record: false,
             // No default exclusions — the user's "Never" click is
@@ -3270,6 +3271,15 @@ mod tests {
         assert!(load_config_file().meeting_generate_recap);
 
         save_config_file(&AppConfig::default());
+    }
+
+    #[test]
+    fn realtime_text_and_preprocessing_are_off_by_default() {
+        let d = AppConfig::default();
+        assert!(!d.preprocessing_enabled);
+        assert!(!d.streaming_dictation);
+        assert!(!d.chunk_streaming_enabled);
+        assert!(!d.live_captions_enabled);
     }
 
     #[test]

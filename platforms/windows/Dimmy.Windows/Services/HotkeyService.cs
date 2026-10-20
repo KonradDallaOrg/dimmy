@@ -107,7 +107,7 @@ public class HotkeyService : IDisposable
         while (_polling)
         {
             int ev = DimmyNative.dimmy_hotkey_take_event();
-            if (ev == 1)
+            if (ev == 1 && !IgnoredOnLockScreen("dictation"))
             {
                 Log($"EVENT: pressed (PttMode={PttMode})");
                 _dispatcher.TryEnqueue(() => HotkeyPressed?.Invoke());
@@ -121,7 +121,7 @@ public class HotkeyService : IDisposable
 
             // Command-mode hotkey edges (same hook, same PTT/toggle rules).
             int cev = DimmyNative.dimmy_hotkey_take_command_event();
-            if (cev == 1)
+            if (cev == 1 && !IgnoredOnLockScreen("command"))
             {
                 Log($"CMD EVENT: pressed (PttMode={PttMode})");
                 _dispatcher.TryEnqueue(() => CommandHotkeyPressed?.Invoke());
@@ -136,7 +136,7 @@ public class HotkeyService : IDisposable
             // Meeting hotkey: TOGGLE-only — fire on pressed, ignore released
             // regardless of PttMode (a meeting can't be push-to-talk).
             int mev = DimmyNative.dimmy_hotkey_take_meeting_event();
-            if (mev == 1)
+            if (mev == 1 && !IgnoredOnLockScreen("meeting"))
             {
                 Log("MTNG EVENT: pressed (toggle)");
                 _dispatcher.TryEnqueue(() => MeetingHotkeyPressed?.Invoke());
@@ -144,6 +144,19 @@ public class HotkeyService : IDisposable
             Thread.Sleep(10);
         }
         Log("Poll loop exited");
+    }
+
+    /// <summary>A press while Windows is locked never starts anything: it
+    /// would open the microphone behind the lock screen and paste into it.
+    /// Burned 2026-10-20 (2.5 min recorded on the lock screen, then Ctrl+V
+    /// into lockapp.exe). Releases still flow so a running PTT can stop.</summary>
+    private static bool IgnoredOnLockScreen(string which)
+    {
+        var proc = Helpers.AppContextCapture.GetForegroundProcessName();
+        if (proc != "lockapp.exe" && proc != "logonui.exe")
+            return false;
+        Log($"{which} hotkey ignored on the lock screen ({proc})");
+        return true;
     }
 
     // ── Shortcut parsing (kept for compatibility with settings UI) ──
