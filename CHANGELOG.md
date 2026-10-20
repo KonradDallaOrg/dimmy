@@ -8,6 +8,29 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- dimmy-setup, a JSON command-line tool for an AI assistant following
+  dimmy.app/install.md: `dimmy-setup.exe` next to the app on Windows (now also
+  built by release.yml, it was staging-only), `Dimmy --setup` on macOS. One
+  implementation in the core (setup.rs, setup_cli.rs, `dimmy_setup_cli` FFI).
+  Writes go through `dimmy_set_config_json` and are read back; they refuse
+  while the app holds `.app.lock` (exit 3). No secret is ever an argument or
+  output.
+- `schema` / `config get` / `config set` cover every user setting in
+  config.json (new kinds: text, number, string list, app rules). Fields that
+  are not choices are listed in `setup::NOT_SETTINGS`, and a test forces every
+  new AppConfig field into one list or the other.
+- Settings the hosts store outside config.json are handled too (setup_prefs.rs,
+  marked `stored_by: app`): Windows `ui_prefs.json` (merged, unknown properties
+  kept), macOS UserDefaults through `defaults write <bundle id>`, with the
+  HotkeyCombo string and ModifierShortcut bitmask encodings mirrored and
+  unit-tested.
+- `last`, `perm status|open|guide`, `models prepare`; quit and launch by bundle
+  id. macOS writes permissions.json for `perm status`, because a permission
+  query from `Dimmy --setup` is answered for the calling terminal, not for
+  Dimmy.
+- Calendar context names the linked connector (Microsoft 365, Google Calendar).
+  The probe already listed the tool names and discarded them.
+
 - Claude Haiku 5.5 in the Anthropic model list for dictation and recap
   (Windows, Mac). It takes the "fast" label from Haiku 4.5, which stays listed.
 - Hidden tester switch: an empty file named mute-consent-audio in the config
@@ -22,6 +45,33 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Windows hotkey hook: a key-up delivered on another desktop (lock screen,
+  LogonUI, Ctrl+Alt+Del, UAC) or to an elevated window never reaches a
+  WH_KEYBOARD_LL hook, so a binding's down-flag stayed set. The remaining key
+  then fired the combo alone (Alt -> Ctrl+Alt+M meeting), and MODIFIER_SUPPRESS,
+  which clears only when every key of every binding is up, stayed armed and
+  swallowed all shortcut keys system-wide. Each event now first clears the
+  flags GetAsyncKeyState reports as up, except on an active combo (our own
+  synthetic key-ups make its held keys read as up) and except the key being
+  processed (its async state is not yet updated inside the hook).
+- Windows: a hotkey press with lockapp.exe or logonui.exe in front is ignored;
+  it used to start recording on the lock screen and paste into it.
+- macOS: `config set shortcut` had no effect, because the app reads
+  shortcutEncoded from UserDefaults and never the config field. On macOS the
+  shortcut is now an app-stored setting.
+- macOS: CFBundleVersion and sparkle:version were the dashed tag. Sparkle's
+  SUStandardVersionComparator stops at the first '-', so every rc of a line
+  compared equal and rc installs never updated. Now all-numeric: rc N =
+  X.Y.Z.0.N, stable = X.Y.Z.1.
+- macOS: a system-audio tap rebuild finishing after stop() left an IO proc
+  pushing into the core until quit; leaked procs filled the uncapped AEC
+  reference ring (590M samples) and an 80-minute meeting kept 46% of its audio.
+  Stopped instances are now retired, and the push path goes through
+  aec::push_to_ring like Windows.
+- macOS: every llama/ggml dylib shipped under three names, so dyld loaded two
+  copies (two ggml-base globals). Quit also ran C++ static destructors while
+  Rust threads were inside them (SIGABRT on the update quit in rc.3). Each
+  dylib is now bundled once, and quit ends with _exit(0) after shutdown.
 - Dictation through an Anthropic API key read the first content block of the
   reply as the answer. Models that think by default (Sonnet 5, Opus 5, Fable,
   Haiku 5.5) can open with a thinking block, and the enhancement then fell
@@ -46,6 +96,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- live_captions_enabled defaults to false (core, Windows view models and their
+  absent-field fallback, Mac AppState). Existing configs keep their value.
 - The documented macOS minimum is 14 Sonoma (it was stated as 12), Apple
   Silicon only. CI now rejects a bundle in which any Mach-O links outside the
   bundle or the system, or needs a newer macOS than LSMinimumSystemVersion,
