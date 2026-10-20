@@ -1741,11 +1741,11 @@ public partial class App : Application
                 _appViewModel.KeepInClipboard = kc.GetBoolean();
             if (r.TryGetProperty("theme", out var pt))
                 _appViewModel.Theme = pt.GetString() ?? "Default";
-            // live_captions_enabled — defaults to true if absent (old configs).
+            // live_captions_enabled — off if absent, like the core default.
             // Drives whether OnSttChunkReceived shows the floating caption
             // window. Independent of chunk_streaming_enabled.
             _appViewModel.LiveCaptionsEnabled =
-                !r.TryGetProperty("live_captions_enabled", out var lce) || lce.GetBoolean();
+                r.TryGetProperty("live_captions_enabled", out var lce) && lce.GetBoolean();
             // call_detect_enabled — default true. The Rust state machine
             // is the source of truth for what fires; this mirror is just
             // a fast no-op gate in OnCallDetected for the in-flight
