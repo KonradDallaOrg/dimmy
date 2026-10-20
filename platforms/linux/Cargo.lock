@@ -1028,6 +1028,7 @@ dependencies = [
  "futures-util",
  "hound",
  "keyring",
+ "libc",
  "libloading",
  "nnnoiseless",
  "regex",
