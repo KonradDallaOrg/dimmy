@@ -24,6 +24,7 @@ pub struct AppPref {
     pub default: Value,
 }
 
+#[cfg_attr(not(any(target_os = "windows", target_os = "macos")), allow(dead_code))]
 fn pref(
     key: &'static str,
     kind: Kind,
@@ -40,6 +41,7 @@ fn pref(
     }
 }
 
+#[cfg_attr(not(any(target_os = "windows", target_os = "macos")), allow(dead_code))]
 fn hotkey(needs_key: bool, may_be_off: bool) -> Kind {
     Kind::AppHotkey {
         needs_key,
@@ -47,6 +49,7 @@ fn hotkey(needs_key: bool, may_be_off: bool) -> Kind {
     }
 }
 
+#[cfg_attr(not(any(target_os = "windows", target_os = "macos")), allow(dead_code))]
 fn channel() -> Kind {
     Kind::Enum(vec!["stable".into(), "prerelease".into()])
 }
