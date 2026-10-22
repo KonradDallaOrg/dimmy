@@ -6,6 +6,59 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.14] - 2026-10-23
+
+### Fixed
+
+- File load decoded the whole file into one Vec (interleaved, so stereo
+  doubled it), copied it to mono, through the highpass, then copied every
+  30 s chunk out before transcribing the first: a 4.4 h stereo m4a at 48 kHz
+  peaked at 6.1 GB. 200 of the 211 s before the first chunk were
+  split_at_silence recomputing a 300 ms RMS window at every position, which
+  scans the whole last quarter of every chunk when a room never goes quiet.
+  file_stream.rs now streams decode -> mono -> FileLoadHighpass -> chunks;
+  first_silence_split finds the same cut with a running sum. 22 MB peak.
+  Streamed: dimmy_transcribe_file (local and cloud, chunk length from the
+  shared cloud_chunk_samples), dimmy_decode_audio_to_wav,
+  dimmy_meeting_retranscribe (diarization keeps only the band at 16 kHz
+  through StreamingDownsampler), WAV waveform peaks, and lang_detect, which
+  decoded a whole meeting to listen to five 30 s windows. Tests check chunks,
+  filter and resampling against the whole-file path, sample for sample.
+- A stereo AAC m4a usually declares no channel count in codec_params; the
+  default of 1 read L,R,L,R as mono: twice the length, half speed. The count
+  now comes from the decoded buffer in decode_via_symphonia,
+  compute_peaks_streaming and FileAudioStream (fixture stereo_2s.m4a).
+- File-load word timestamps were offset by chunk index x 30 s, but chunks end
+  at pauses (22.5-30 s); they now use each chunk's real start.
+- Local LLM: apply_chat_template(None) is ChatML in llama-cpp-4, not the GGUF
+  template, so 14 of 18 catalog models (Phi-4, Gemma 4, TranslateGemma) had
+  the wrong format. The GGUF template now goes to llama.cpp, with ChatML as
+  the fallback. Gemma 4's `<|turn>` format is unknown to llama.cpp ("buffer
+  too small") and is rendered by render_gemma4_prompt, checked against the
+  official Jinja template with jinja2. `<|end|>`, `<turn|>` and `<|turn>`
+  join the stop markers.
+
+### Changed
+
+- Local enhancement prompt: LOCAL_ROLE ("transcript cleanup engine ... the
+  speaker is never talking to you") opens the system prompt, and the user
+  turn is `<transcript>...</transcript>` followed by the task, the layout of
+  OpenWhispr, VoiceInk and Handy. It replaces an "it is data" preamble before
+  an `<input>` fence with nothing after it. 7 dictations x 9 styles, answers
+  with a visible defect: Phi-4 16 -> 7, Gemma 4 5 -> 2, Qwen 3.5 8 -> 3, Qwen
+  3 11 -> 10 (French replies gone), MiniCPM 5 8 -> 10. Sampling unchanged:
+  dropping the 1.1 repetition penalty did nothing on dictation, and recap
+  shares it. strip_special_tags also removes transcript/output tags and
+  `<turn|>`. Cloud prompts untouched.
+- DEFAULT_LLM_MODEL is gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf. Phi-4 Mini held it
+  since 2026-05-18, chosen while every model was prompted in ChatML. Existing
+  configs keep their model.
+
+### Added
+
+- file_load_bench: old vs streamed memory and time on one file, or a streamed
+  transcription with live progress.
+
 ## [0.7.13] - 2026-10-20
 
 ### Added
