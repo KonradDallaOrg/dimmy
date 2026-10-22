@@ -11,14 +11,14 @@ use crate::error::LlmError;
 // ── Model catalogue ───────────────────────────────────────────────
 
 const LLM_MODEL_BASE_URL: &str = "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main";
-/// Default local LLM model. Switched 2026-05-18 from `gemma-4-E2B-it-Q4_K_M.gguf`
-/// to `phi-4-mini-instruct-q4_k_m.gguf` — Phi-4 Mini (3.8B) is heavily tuned
-/// for instruction-following whereas Gemma 4 E2B (5B) drifted into "playful"
-/// persona on small prompts (emoji spam, meta-commentary, hallucinations).
-/// Both work with the embedded-chat-template path landed in the same commit,
-/// so users who prefer Gemma can still select it from Settings without losing
-/// the prompt-quality improvements.
-pub const DEFAULT_LLM_MODEL: &str = "phi-4-mini-instruct-q4_k_m.gguf";
+/// Default local LLM model: Gemma 4 E2B QAT, the one the catalog already
+/// called "Recommended". Phi-4 Mini held the default from 2026-05-18, chosen
+/// when Gemma looked "playful" (emoji, meta-commentary). Every model was then
+/// prompted in ChatML, wrong for both (fixed 2026-10-22). In its own format,
+/// on 27 real-dictation answers across 9 styles (Mac M4): Gemma ~1 visible
+/// defect at 1.4 s each, Phi-4 ~4 at 3.0 s. Only the default changes: a model
+/// already picked stays in the user's config.
+pub const DEFAULT_LLM_MODEL: &str = "gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf";
 
 pub struct LlmModel {
     pub name: &'static str,
