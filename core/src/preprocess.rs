@@ -541,83 +541,100 @@ pub fn process_buffer_for_file_load(samples: &[f32], sample_rate: u32) -> Vec<f3
 pub fn process_buffer_for_file_load_with_progress<F: FnMut(usize, usize)>(
     samples: &[f32],
     sample_rate: u32,
-    mut on_progress: F,
+    on_progress: F,
 ) -> Vec<f32> {
-    assert!(
-        sample_rate > 0,
-        "process_buffer_for_file_load: sample_rate must be > 0, got {}",
-        sample_rate
-    );
-    if samples.is_empty() {
-        return Vec::new();
-    }
+    let mut out = samples.to_vec();
+    process_buffer_for_file_load_in_place(&mut out, sample_rate, on_progress);
+    out
+}
 
-    // Sanitise: any non-finite input becomes 0 (defensive — file loaders
-    // shouldn't emit NaN/Inf but cheap to enforce). Clamp finite values
-    // to [-1, 1] before filtering so the highpass biquad never sees
-    // extreme magnitudes that could push it into a numerically unstable
-    // regime over a long stream.
-    // Sanitising into its own Vec first cost a second full copy of the
-    // audio: 325 MB for a 28-minute file, on top of the decoded input and
-    // the output. Three live buffers plus the caller's own copy peaked at
-    // ~1.3 GB and pushed a 15.7 GB machine with 0.8 GB free into paging,
-    // which is where the 97 s went. Clamp and filter in ONE pass instead.
-    let sanitize = |s: f32| {
-        if s.is_finite() {
-            s.clamp(-1.0, 1.0)
-        } else {
-            0.0
-        }
-    };
-
-    // 80 Hz Butterworth highpass — same coefficients as the live path.
-    if sample_rate < 1000 {
-        on_progress(samples.len(), samples.len());
-        return samples.iter().copied().map(sanitize).collect();
-    }
-    let coeffs = match Coefficients::<f32>::from_params(
-        FilterType::HighPass,
-        (sample_rate as f32).hz(),
-        80.0.hz(),
-        Q_BUTTERWORTH_F32,
-    ) {
-        Ok(c) => c,
-        Err(_) => {
-            on_progress(samples.len(), samples.len());
-            return samples.iter().copied().map(sanitize).collect();
-        }
-    };
-    let mut hp = DirectForm2Transposed::<f32>::new(coeffs);
-
+/// The same pass, written over the input.
+pub fn process_buffer_for_file_load_in_place<F: FnMut(usize, usize)>(
+    samples: &mut [f32],
+    sample_rate: u32,
+    mut on_progress: F,
+) {
+    let mut hp = FileLoadHighpass::new(sample_rate);
     let total = samples.len();
-    let mut out: Vec<f32> = Vec::with_capacity(total);
+    if total == 0 {
+        return;
+    }
     // Report about every 2%: often enough that the bar visibly moves on a
     // half-minute pass, rare enough that the FFI marshalling is noise.
     let step = (total / 50).max(1);
-    for (i, &raw) in samples.iter().enumerate() {
-        let v = hp.run(sanitize(raw));
-        out.push(if v.is_finite() {
-            v.clamp(-1.0, 1.0)
-        } else {
-            0.0
-        });
-        if i % step == 0 {
-            on_progress(i, total);
-        }
+    for (i, block) in samples.chunks_mut(step).enumerate() {
+        on_progress(i * step, total);
+        hp.process(block);
     }
     on_progress(total, total);
+}
 
-    // Post-condition: same length, all finite, in range.
-    assert_eq!(
-        out.len(),
-        samples.len(),
-        "process_buffer_for_file_load preserves sample count"
-    );
-    debug_assert!(out.iter().all(|s| s.is_finite()));
-    debug_assert!(out.iter().all(|&s| (-1.0..=1.0).contains(&s)));
-    // No shrink_to_fit: with_capacity already sized it exactly, and on a
-    // 325 MB buffer the reallocation it may perform is a third full copy.
-    out
+/// The file-load filter as a stream: feed it consecutive blocks of one
+/// file and the output is identical, sample for sample, to filtering the
+/// whole file at once. Streaming file load uses it so a file of any length
+/// never has to be held in memory.
+///
+/// Sanitise: any non-finite input becomes 0 (defensive — file loaders
+/// shouldn't emit NaN/Inf but cheap to enforce). Clamp finite values to
+/// [-1, 1] before filtering so the highpass biquad never sees extreme
+/// magnitudes that could push it into a numerically unstable regime over a
+/// long stream.
+pub struct FileLoadHighpass {
+    /// None below 1 kHz or when the coefficients cannot be built: then the
+    /// pass only sanitises, as it always has.
+    hp: Option<DirectForm2Transposed<f32>>,
+}
+
+impl FileLoadHighpass {
+    pub fn new(sample_rate: u32) -> Self {
+        assert!(
+            sample_rate > 0,
+            "process_buffer_for_file_load: sample_rate must be > 0, got {}",
+            sample_rate
+        );
+        // 80 Hz Butterworth highpass — same coefficients as the live path.
+        let hp = if sample_rate < 1000 {
+            None
+        } else {
+            Coefficients::<f32>::from_params(
+                FilterType::HighPass,
+                (sample_rate as f32).hz(),
+                80.0.hz(),
+                Q_BUTTERWORTH_F32,
+            )
+            .ok()
+            .map(DirectForm2Transposed::<f32>::new)
+        };
+        Self { hp }
+    }
+
+    pub fn process(&mut self, block: &mut [f32]) {
+        let sanitize = |s: f32| {
+            if s.is_finite() {
+                s.clamp(-1.0, 1.0)
+            } else {
+                0.0
+            }
+        };
+        match self.hp.as_mut() {
+            None => {
+                for s in block.iter_mut() {
+                    *s = sanitize(*s);
+                }
+            }
+            Some(hp) => {
+                for s in block.iter_mut() {
+                    let v = hp.run(sanitize(*s));
+                    *s = if v.is_finite() {
+                        v.clamp(-1.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                }
+            }
+        }
+        debug_assert!(block.iter().all(|&s| (-1.0..=1.0).contains(&s)));
+    }
 }
 
 /// Process a complete audio buffer (used for final transcription on stop_recording).
@@ -1113,9 +1130,184 @@ pub fn downsample_to(samples: &[f32], source_rate: u32, target_rate: u32) -> Vec
     output
 }
 
+/// [`downsample_to`] over a stream: feed consecutive blocks with `push`,
+/// call `finish` at the end, and the concatenated output is identical,
+/// sample for sample, to `downsample_to` on the whole signal. Lets a long
+/// file reach 16 kHz without first holding it at its native rate.
+pub struct StreamingDownsampler {
+    lp: Option<DirectForm2Transposed<f32>>,
+    /// None when the source is already at or below the target: pass-through.
+    ratio: Option<f64>,
+    /// Filtered samples still needed for interpolation; `tail[0]` is input
+    /// sample number `tail_start`.
+    tail: Vec<f32>,
+    tail_start: u64,
+    total_in: u64,
+    next_out: u64,
+}
+
+impl StreamingDownsampler {
+    pub fn new(source_rate: u32, target_rate: u32) -> Self {
+        assert!(
+            source_rate > 0 && target_rate > 0,
+            "StreamingDownsampler: rates must be > 0, got {} -> {}",
+            source_rate,
+            target_rate
+        );
+        if source_rate <= target_rate {
+            return Self {
+                lp: None,
+                ratio: None,
+                tail: Vec::new(),
+                tail_start: 0,
+                total_in: 0,
+                next_out: 0,
+            };
+        }
+        let cutoff = target_rate as f32 * 0.4375;
+        let lp = if source_rate >= 1000 {
+            Coefficients::<f32>::from_params(
+                FilterType::LowPass,
+                (source_rate as f32).hz(),
+                cutoff.hz(),
+                Q_BUTTERWORTH_F32,
+            )
+            .ok()
+            .map(DirectForm2Transposed::<f32>::new)
+        } else {
+            None
+        };
+        Self {
+            lp,
+            ratio: Some(source_rate as f64 / target_rate as f64),
+            tail: Vec::new(),
+            tail_start: 0,
+            total_in: 0,
+            next_out: 0,
+        }
+    }
+
+    pub fn push(&mut self, block: &[f32], out: &mut Vec<f32>) {
+        let Some(ratio) = self.ratio else {
+            out.extend_from_slice(block);
+            return;
+        };
+        match self.lp.as_mut() {
+            Some(lp) => self.tail.extend(block.iter().map(|&s| lp.run(s))),
+            None => self.tail.extend_from_slice(block),
+        }
+        self.total_in += block.len() as u64;
+        // Emit only outputs that the whole-signal pass would also produce
+        // (index below floor(total / ratio) for the length seen so far,
+        // which only grows) and whose two neighbours have both arrived, so
+        // no clamping differs from the whole-signal pass.
+        let safe_len = (self.total_in as f64 / ratio).floor() as u64;
+        let avail_end = self.tail_start + self.tail.len() as u64;
+        while self.next_out < safe_len {
+            let src_pos = self.next_out as f64 * ratio;
+            let idx = src_pos as u64;
+            if idx + 1 >= avail_end {
+                break;
+            }
+            let frac = (src_pos - idx as f64) as f32;
+            let s0 = self.tail[(idx - self.tail_start) as usize];
+            let s1 = self.tail[(idx + 1 - self.tail_start) as usize];
+            out.push(s0 + (s1 - s0) * frac);
+            self.next_out += 1;
+        }
+        // Drop what no later output can reach.
+        let keep_from = ((self.next_out as f64 * ratio) as u64).max(self.tail_start);
+        let drop = ((keep_from - self.tail_start) as usize).min(self.tail.len());
+        if drop > 0 {
+            self.tail.drain(..drop);
+            self.tail_start += drop as u64;
+        }
+    }
+
+    pub fn finish(&mut self, out: &mut Vec<f32>) {
+        let Some(ratio) = self.ratio else {
+            return;
+        };
+        let output_len = (self.total_in as f64 / ratio).floor() as u64;
+        if self.tail.is_empty() {
+            return;
+        }
+        let last = self.tail_start + self.tail.len() as u64 - 1;
+        while self.next_out < output_len {
+            let src_pos = self.next_out as f64 * ratio;
+            let idx = src_pos as u64;
+            let frac = (src_pos - idx as f64) as f32;
+            let s0 = self.tail[(idx.min(last) - self.tail_start) as usize];
+            let s1 = self.tail[((idx + 1).min(last) - self.tail_start) as usize];
+            let v = s0 + (s1 - s0) * frac;
+            assert!(v.is_finite(), "downsample output contains NaN or Inf");
+            out.push(v);
+            self.next_out += 1;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn streaming_downsampler_matches_whole_signal() {
+        let mut seed: u32 = 77;
+        let mut rnd = || {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            (seed >> 9) as f32 / (1u32 << 23) as f32 - 0.5
+        };
+        for (src, len) in [
+            (48_000u32, 480_017usize),
+            (44_100, 441_003),
+            (22_050, 70_001),
+            (16_000, 9_999),
+            (8_000, 5_000),
+        ] {
+            let signal: Vec<f32> = (0..len).map(|_| rnd() * 0.8).collect();
+            let expected = downsample_to_16k(&signal, src);
+            let mut ds = StreamingDownsampler::new(src, 16_000);
+            let mut got = Vec::new();
+            let mut i = 0;
+            while i < signal.len() {
+                // Ragged blocks, including 1-sample ones.
+                let n = ((rnd() + 0.5) * 9_000.0) as usize % 9_001 + 1;
+                let end = (i + n).min(signal.len());
+                ds.push(&signal[i..end], &mut got);
+                i = end;
+            }
+            ds.finish(&mut got);
+            assert_eq!(got.len(), expected.len(), "{src} Hz: length");
+            assert!(
+                got == expected,
+                "{src} Hz: streamed samples differ from the whole-signal pass"
+            );
+        }
+    }
+
+    #[test]
+    fn file_load_highpass_streamed_matches_whole_buffer() {
+        let mut seed: u32 = 99;
+        let signal: Vec<f32> = (0..300_001)
+            .map(|_| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                ((seed >> 8) as f32 / (1u32 << 24) as f32 - 0.5) * 2.5 // some out of range
+            })
+            .collect();
+        let expected = process_buffer_for_file_load(&signal, 48_000);
+        let mut hp = FileLoadHighpass::new(48_000);
+        let mut got = Vec::new();
+        for block in signal.chunks(4_093) {
+            let mut b = block.to_vec();
+            hp.process(&mut b);
+            got.extend(b);
+        }
+        assert!(
+            got == expected,
+            "streamed highpass differs from the whole-buffer pass"
+        );
+    }
 
     #[test]
     fn agc_boosts_quiet_audio() {
