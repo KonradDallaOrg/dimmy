@@ -12,6 +12,14 @@
 use dimmy_lib::file_stream::{for_each_chunk, FileAudioStream};
 use std::time::Instant;
 
+// libc is a unix-only dependency of the core; on Windows the bench reports 0
+// and the peak is read from Task Manager or Get-Process.
+#[cfg(not(unix))]
+fn peak_rss_mb() -> f64 {
+    0.0
+}
+
+#[cfg(unix)]
 fn peak_rss_mb() -> f64 {
     let mut ru: libc::rusage = unsafe { std::mem::zeroed() };
     unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut ru) };
