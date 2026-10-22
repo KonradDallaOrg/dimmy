@@ -402,7 +402,11 @@ impl PieceFilter {
         // matters as much as Gemma's: without it a Qwen/QAT model closes its
         // turn, opens a new one and says the whole thing again (users saw
         // their dictation two or three times over, 2026-09-05).
-        const STOPS: [&str; 6] = [
+        // `<|end|>` closes a Phi-4 turn, `<turn|>` / `<|turn>` a Gemma 4 one.
+        const STOPS: [&str; 9] = [
+            "<|end|>",
+            "<turn|>",
+            "<|turn>",
             "<end_of_turn>",
             "<start_of_turn>",
             "</s>",
@@ -438,6 +442,29 @@ impl PieceFilter {
 /// the switch get nothing: a model that always reasons cannot be told not to,
 /// and the filter above keeps its reasoning out of the text.
 #[cfg_attr(not(feature = "local-llm"), allow(dead_code))]
+/// Gemma 4's template is the only one in the catalog llama.cpp does not
+/// recognise (`apply_chat_template` fails with "buffer too small").
+pub(crate) fn is_gemma4_template(chat_template: &str) -> bool {
+    chat_template.contains("<|turn>")
+}
+
+/// A system + user exchange in Gemma 4's format, opening the model's turn.
+/// Matches the official Jinja template rendered with add_generation_prompt
+/// (BOS comes from the tokenizer). No system turn when there is no system
+/// prompt, as the template does.
+pub(crate) fn render_gemma4_prompt(system_prompt: &str, user_text: &str) -> String {
+    let mut p = String::new();
+    if !system_prompt.trim().is_empty() {
+        p.push_str("<|turn>system\n");
+        p.push_str(system_prompt);
+        p.push_str("<turn|>\n");
+    }
+    p.push_str("<|turn>user\n");
+    p.push_str(user_text);
+    p.push_str("<turn|>\n<|turn>model\n");
+    p
+}
+
 pub(crate) fn skip_thinking_suffix(chat_template: &str) -> &'static str {
     if chat_template.contains("enable_thinking") && chat_template.contains("<think>") {
         "<think>\n\n</think>\n\n"
@@ -952,19 +979,17 @@ mod llm_cache {
             .as_ref()
             .expect("LLM cache must be populated after load");
 
-        // ── Build prompt via embedded chat template ─────────────
-        // Every modern gguf carries `tokenizer.chat_template` in its
-        // metadata (seen in `llama_model_loader: kv 47:
-        // tokenizer.chat_template str = …` log line). `apply_chat_template`
-        // reads it and emits the correct turn format for the family —
-        // `<start_of_turn>` for Gemma 4, `<|im_start|>` for Phi-4,
-        // `<|start_header_id|>` for Llama 3, etc. — without per-family
-        // branches in our code. Replaces the hand-rolled Gemma-only
-        // template at `build_local_prompt` which carried a Qwen3-specific
-        // `<|/think|>` marker that confused Gemma instruct-tuning and
-        // produced meta-commentary outputs ("La frase originale è molto
-        // informale e grammaticalmente incompleta…" instead of the actual
-        // rewrite). 2026-05-18.
+        // ── Build prompt in the model's own chat format ─────────
+        // Every modern gguf carries `tokenizer.chat_template`. llama.cpp does
+        // not run that Jinja: given the template string it recognises the
+        // family and applies its built-in format; given None it falls back
+        // to ChatML. Until 2026-10-22 we passed None, so every model got
+        // ChatML: right for Qwen 3 / 3.5 and MiniCPM 5, wrong for 14 of the
+        // 18 catalog models. Phi-4 mini (the default) then answered dictated
+        // questions and leaked our instructions into 12 of 40 real
+        // dictations (1 of 40 in its own format). Gemma 4's `<|turn>` format
+        // is one llama.cpp does not know, so it is rendered here
+        // (`render_gemma4_prompt`, identical to the official template).
         //
         // System role: Phi-4 / Llama expose a real system turn and follow it
         // well. Gemma has NO system role — its chat template folds the system
@@ -979,16 +1004,43 @@ mod llm_cache {
             LlamaChatMessage::new("user".to_string(), user_text.to_string())
                 .map_err(|e| crate::error::LlmError::LocalModel(format!("chat msg user: {}", e)))?,
         ];
-        let mut full_prompt = cached
-            .model
-            .apply_chat_template(None, &messages, /* add_ass */ true)
-            .map_err(|e| {
-                crate::error::LlmError::LocalModel(format!("chat template apply: {}", e))
-            })?;
         let template = cached
             .model
             .get_chat_template(64 * 1024)
             .unwrap_or_default();
+        let mut full_prompt = if super::is_gemma4_template(&template) {
+            super::render_gemma4_prompt(system_prompt, user_text)
+        } else {
+            let own = if template.is_empty() {
+                None
+            } else {
+                cached
+                    .model
+                    .apply_chat_template(
+                        Some(template.as_str()),
+                        &messages,
+                        /* add_ass */ true,
+                    )
+                    .ok()
+            };
+            match own {
+                Some(p) => p,
+                None => {
+                    // A family llama.cpp does not recognise keeps the format
+                    // every model had before: ChatML.
+                    crate::log("[LocalLLM] model chat template not recognised, using ChatML");
+                    cached
+                        .model
+                        .apply_chat_template(None, &messages, /* add_ass */ true)
+                        .map_err(|e| {
+                            crate::error::LlmError::LocalModel(format!(
+                                "chat template apply: {}",
+                                e
+                            ))
+                        })?
+                }
+            }
+        };
         full_prompt.push_str(super::skip_thinking_suffix(&template));
 
         let tokens = cached
@@ -2248,6 +2300,50 @@ Hi"
         let mut f = PieceFilter::default();
         assert_eq!(f.classify("Buongiorno"), PieceAction::Show);
         assert_eq!(f.classify(" <3 "), PieceAction::Show);
+    }
+
+    // ── Chat formats (2026-10-22) ────────────────────────────────
+
+    #[test]
+    fn phi4_and_gemma4_turn_ends_stop_generation() {
+        let mut f = PieceFilter::default();
+        assert_eq!(f.classify("<|end|>"), PieceAction::Stop);
+        let mut f = PieceFilter::default();
+        assert_eq!(f.classify("<turn|>"), PieceAction::Stop);
+        let mut f = PieceFilter::default();
+        assert_eq!(f.classify("<|turn>"), PieceAction::Stop);
+    }
+
+    /// The official gemma-4-E2B-it template, rendered with jinja2 for
+    /// [system "SYS PROMPT", user "USER TEXT"] and add_generation_prompt,
+    /// gives exactly this after its `<bos>` (which the tokenizer adds).
+    #[test]
+    fn gemma4_prompt_matches_the_official_template() {
+        assert_eq!(
+            render_gemma4_prompt("SYS PROMPT", "USER TEXT"),
+            "<|turn>system\nSYS PROMPT<turn|>\n<|turn>user\nUSER TEXT<turn|>\n<|turn>model\n"
+        );
+    }
+
+    #[test]
+    fn gemma4_prompt_without_a_system_prompt_has_no_system_turn() {
+        assert_eq!(
+            render_gemma4_prompt("  ", "hi"),
+            "<|turn>user\nhi<turn|>\n<|turn>model\n"
+        );
+    }
+
+    #[test]
+    fn only_gemma4_templates_take_the_hand_rendered_format() {
+        assert!(is_gemma4_template("{{- '<|turn>' + role + '\\n' }}"));
+        assert!(!is_gemma4_template(
+            "{% for m in messages %}<|im_start|>{{ m.role }}"
+        ));
+        assert!(!is_gemma4_template(
+            "{{ '<|system|>' + m.content + '<|end|>' }}"
+        ));
+        assert!(!is_gemma4_template("<start_of_turn>user"));
+        assert!(!is_gemma4_template(""));
     }
 
     #[test]
