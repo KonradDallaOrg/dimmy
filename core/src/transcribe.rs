@@ -795,6 +795,35 @@ pub fn whistle_words(
 /// concatenates results with spaces.
 ///
 /// `on_progress` is called before sending each chunk: (current_1indexed, total_chunks).
+/// Samples per cloud request at `sample_rate`. When `total_samples` is known
+/// and the whole file's 16 kHz WAV fits `max_wav_bytes`, that is the whole
+/// file (one request, as transcribe_chunked sends it). Otherwise 80% of the
+/// limit (WAV header, rounding), never under 5 s. Shared by
+/// transcribe_chunked and streaming file load so both cut in the same place.
+pub fn cloud_chunk_samples(
+    max_wav_bytes: usize,
+    sample_rate: u32,
+    total_samples: Option<u64>,
+) -> usize {
+    assert!(
+        max_wav_bytes > 0 && sample_rate > 0,
+        "cloud_chunk_samples: max_wav_bytes and sample_rate must be positive"
+    );
+    if let Some(n) = total_samples {
+        let ratio = sample_rate as f64 / 16000.0;
+        let wav_bytes = (n as f64 / ratio).ceil() as usize * 2 + 44;
+        if wav_bytes <= max_wav_bytes {
+            return (n as usize).max(1);
+        }
+    }
+    // WAV 16kHz 16-bit mono = 32000 bytes/sec after downsample.
+    let max_secs = max_wav_bytes / 32000;
+    let safe_secs = ((max_secs as f64 * 0.8) as usize).max(5);
+    let samples = safe_secs * sample_rate as usize;
+    assert!(samples > 0, "cloud_chunk_samples computed as zero");
+    samples
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn transcribe_chunked(
     api_url: &str,
@@ -825,22 +854,7 @@ pub async fn transcribe_chunked(
         return transcribe_audio(api_url, model, api_key, &payload.data, language, prompt).await;
     }
 
-    // Calculate max chunk size in samples from the byte limit.
-    // WAV 16kHz 16-bit mono = 32000 bytes/sec after downsample.
-    // Convert: max_bytes → max_seconds → max_samples (at native sample rate).
-    let bytes_per_sec: usize = 32000;
-    let max_secs = max_wav_bytes / bytes_per_sec;
-    // 80% safety margin for WAV header, rounding, etc.
-    let safe_secs = (max_secs as f64 * 0.8) as usize;
-    // Must be at least 5 seconds to produce usable transcription
-    let safe_secs = safe_secs.max(5);
-    let max_chunk_samples = safe_secs * audio.sample_rate as usize;
-
-    assert!(
-        max_chunk_samples > 0,
-        "transcribe_chunked: max_chunk_samples computed as zero"
-    );
-
+    let max_chunk_samples = cloud_chunk_samples(max_wav_bytes, audio.sample_rate, None);
     let chunks = audio.split_at_silence(max_chunk_samples);
     let total = chunks.len();
 

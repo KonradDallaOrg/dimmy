@@ -8321,14 +8321,17 @@ pub unsafe extern "C" fn dimmy_clear_app_context() {
 /// WAV goes through hound and everything else through Symphonia,
 /// because Symphonia is compiled WITHOUT the wav/pcm features (see
 /// core/Cargo.toml) and answers `unsupported codec` for a plain WAV.
-/// Anything reading a meeting's audio must come through here: a
-/// recorded meeting keeps ogg tracks, but one imported from a file
-/// stores `audio.wav`, so a Symphonia-only caller works on some
-/// meetings and silently fails on the others. That is what happened to
+/// Anything reading a meeting's audio must dispatch this way (production
+/// code does it through `file_stream::FileAudioStream::open`, which
+/// streams; this whole-file form is kept for tests): a recorded meeting
+/// keeps ogg tracks, but one imported from a file stores `audio.wav`, so
+/// a Symphonia-only caller works on some meetings and silently fails on
+/// the others. That is what happened to
 /// language detection — measured 2026-09-10, `[LangDetect] cannot
 /// decode audio: unsupported codec` on every file-derived meeting, and
 /// the recap then fell back to the generic "follow the transcript's
 /// language" wording that a 4B model ignores. Half-English recaps.
+#[cfg(test)]
 pub(crate) fn decode_audio_any(path: &str) -> Result<(Vec<f32>, u32), String> {
     if path.to_ascii_lowercase().ends_with(".wav") {
         decode_wav_via_hound(path)
@@ -8427,7 +8430,10 @@ pub fn decode_via_symphonia(path: &str) -> Result<(Vec<f32>, u32), String> {
         .codec_params
         .sample_rate
         .ok_or_else(|| "missing sample rate in codec params".to_string())?;
-    let channels = track
+    // The header's channel count is only a fallback: an AAC m4a usually
+    // leaves it out, and assuming 1 read stereo as mono samples (twice the
+    // length, half speed). The decoded buffers carry the real count.
+    let mut channels = track
         .codec_params
         .channels
         .map(|c| c.count())
@@ -8471,6 +8477,7 @@ pub fn decode_via_symphonia(path: &str) -> Result<(Vec<f32>, u32), String> {
             Ok(audio_buf) => {
                 if sample_buf.is_none() {
                     let spec = *audio_buf.spec();
+                    channels = spec.channels.count().max(1);
                     let duration = audio_buf.capacity() as u64;
                     sample_buf = Some(SampleBuffer::<f32>::new(duration, spec));
                 }
@@ -8522,6 +8529,50 @@ pub fn decode_via_symphonia(path: &str) -> Result<(Vec<f32>, u32), String> {
 ///
 /// Returns the per-bucket peaks (each clamped to `[0, 1]`, NaN-guarded) and
 /// the track duration in seconds.
+/// Peaks for a WAV in one streamed pass: `buckets` equal slices of
+/// `total / buckets` frames, the absolute peak of each, capped at 1.0. The
+/// same buckets the whole-file pass computed. None when nothing decodes.
+fn wav_peaks_streaming(path: &str, buckets: usize) -> Option<(Vec<f32>, f64)> {
+    assert!(buckets > 0, "wav_peaks_streaming: buckets must be positive");
+    let pass = |total: usize| -> Option<(Vec<f32>, usize, u32)> {
+        let mut stream = crate::file_stream::FileAudioStream::open(path).ok()?;
+        let rate = stream.sample_rate;
+        let frames_per_bucket = (total / buckets).max(1);
+        let mut peaks = vec![0.0f32; buckets];
+        let mut i = 0usize;
+        let mut block: Vec<f32> = Vec::with_capacity(16_384);
+        loop {
+            block.clear();
+            if !stream.read_block(&mut block) {
+                break;
+            }
+            for &s in &block {
+                let b = i / frames_per_bucket;
+                if b < buckets && s.abs() > peaks[b] {
+                    peaks[b] = s.abs();
+                }
+                i += 1;
+            }
+        }
+        for p in peaks.iter_mut() {
+            *p = p.min(1.0);
+        }
+        Some((peaks, i, rate))
+    };
+    let declared = crate::file_stream::FileAudioStream::open(path)
+        .ok()?
+        .total_frames
+        .unwrap_or(0) as usize;
+    let (mut peaks, mut decoded, mut rate) = pass(declared.max(1))?;
+    if decoded == 0 || rate == 0 {
+        return None;
+    }
+    if decoded != declared {
+        (peaks, decoded, rate) = pass(decoded)?;
+    }
+    Some((peaks, decoded as f64 / rate as f64))
+}
+
 fn compute_peaks_streaming(path: &str, buckets: usize) -> Result<(Vec<f32>, f64), String> {
     use symphonia::core::audio::SampleBuffer;
     use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
@@ -8570,7 +8621,9 @@ fn compute_peaks_streaming(path: &str, buckets: usize) -> Result<(Vec<f32>, f64)
         .codec_params
         .sample_rate
         .ok_or_else(|| "missing sample rate in codec params".to_string())?;
-    let channels = track
+    // Fallback only: the decoded buffers carry the real count (an AAC m4a
+    // usually declares none, and 1 would read stereo at twice its length).
+    let mut channels = track
         .codec_params
         .channels
         .map(|c| c.count())
@@ -8610,6 +8663,7 @@ fn compute_peaks_streaming(path: &str, buckets: usize) -> Result<(Vec<f32>, f64)
             Ok(audio_buf) => {
                 if sample_buf.is_none() {
                     let spec = *audio_buf.spec();
+                    channels = spec.channels.count().max(1);
                     let duration = audio_buf.capacity() as u64;
                     sample_buf = Some(SampleBuffer::<f32>::new(duration, spec));
                 }
@@ -8708,50 +8762,59 @@ pub unsafe extern "C" fn dimmy_decode_audio_to_wav(
         Ok(s) => s,
         Err(_) => return -1,
     };
-    let ext = std::path::Path::new(src)
-        .extension()
-        .and_then(|s| s.to_str())
-        .map(|s| s.to_ascii_lowercase())
-        .unwrap_or_default();
-    let (mono, sample_rate) = match if ext == "wav" {
-        decode_wav_via_hound(src)
-    } else {
-        decode_via_symphonia(src)
-    } {
-        Ok(v) => v,
+    // Streamed block by block: a 4-hour file is ~1.4 GB of WAV, and it
+    // never sits in memory (file_stream.rs).
+    let mut stream = match crate::file_stream::FileAudioStream::open(src) {
+        Ok(s) => s,
         Err(e) => {
             log(&format!("[DecodeToWav] decode failed: {}", e));
             return -2;
         }
     };
-    if mono.is_empty() || sample_rate == 0 {
-        return -2;
-    }
     let spec = hound::WavSpec {
         channels: 1,
-        sample_rate,
+        sample_rate: stream.sample_rate,
         bits_per_sample: 16,
         sample_format: hound::SampleFormat::Int,
     };
-    let mut writer = match hound::WavWriter::create(dst, spec) {
-        Ok(w) => w,
-        Err(e) => {
-            log(&format!("[DecodeToWav] hound create {}: {}", dst, e));
-            return -3;
+    let mut writer: Option<hound::WavWriter<std::io::BufWriter<std::fs::File>>> = None;
+    let mut block: Vec<f32> = Vec::with_capacity(16_384);
+    loop {
+        block.clear();
+        if !stream.read_block(&mut block) {
+            break;
         }
-    };
-    for &s in &mono {
-        let clamped = s.clamp(-1.0, 1.0);
-        let i = (clamped * i16::MAX as f32) as i16;
-        if writer.write_sample(i).is_err() {
-            return -3;
+        // Created on the first samples, so an undecodable file leaves no
+        // empty WAV behind.
+        if writer.is_none() {
+            writer = match hound::WavWriter::create(dst, spec) {
+                Ok(w) => Some(w),
+                Err(e) => {
+                    log(&format!("[DecodeToWav] hound create {}: {}", dst, e));
+                    return -3;
+                }
+            };
+        }
+        let w = writer.as_mut().expect("writer created above");
+        for &s in &block {
+            let clamped = s.clamp(-1.0, 1.0);
+            let i = (clamped * i16::MAX as f32) as i16;
+            if w.write_sample(i).is_err() {
+                return -3;
+            }
         }
     }
+    let Some(writer) = writer else {
+        log("[DecodeToWav] decoded to zero samples");
+        return -2;
+    };
     if writer.finalize().is_err() {
         return -3;
     }
+    // The size is the success value: saturate rather than wrap past 2 GB
+    // (a 48 kHz file longer than ~6 h).
     std::fs::metadata(dst)
-        .map(|m| m.len() as c_int)
+        .map(|m| m.len().min(c_int::MAX as u64) as c_int)
         .unwrap_or(0)
 }
 
@@ -8797,36 +8860,14 @@ pub unsafe extern "C" fn dimmy_compute_audio_peaks(
         .unwrap_or_default();
     let buckets = bucket_count as usize;
     let (peaks, duration_secs): (Vec<f32>, f64) = if ext == "wav" {
-        // WAV: hound full-load fast path. WAV is uncommon/short for meeting
-        // recordings; the streaming branch below is what guards the long
-        // compressed tracks (.ogg) against the unbounded-decode OOM.
-        let (mono, sample_rate) = match decode_wav_via_hound(path) {
-            Ok(v) => v,
-            Err(_) => return -2,
-        };
-        if mono.is_empty() || sample_rate == 0 {
-            return -2;
+        // WAV: streamed through the same reader as file load, so a 4-hour
+        // WAV costs one block, not 2.8 GB. The bucket width needs the length
+        // up front: the header gives it, and when the header is wrong (a WAV
+        // cut short by a crash) a second pass uses the real count.
+        match wav_peaks_streaming(path, buckets) {
+            Some(v) => v,
+            None => return -2,
         }
-        let total = mono.len();
-        let frames_per_bucket = (total / buckets).max(1);
-        let mut peaks: Vec<f32> = Vec::with_capacity(buckets);
-        for b in 0..buckets {
-            let start = b * frames_per_bucket;
-            if start >= total {
-                peaks.push(0.0);
-                continue;
-            }
-            let end = ((b + 1) * frames_per_bucket).min(total);
-            let mut peak: f32 = 0.0;
-            for &s in &mono[start..end] {
-                let a = s.abs();
-                if a > peak {
-                    peak = a;
-                }
-            }
-            peaks.push(peak.min(1.0));
-        }
-        (peaks, total as f64 / sample_rate as f64)
     } else {
         // Compressed (ogg/m4a/mp3/flac): stream the decode into a bounded
         // peak envelope. A full-track decode of a 60-min meeting OOM-aborted
@@ -8867,12 +8908,6 @@ pub unsafe extern "C" fn dimmy_compute_audio_peaks(
     dst[bytes.len()] = 0;
     bytes.len() as c_int
 }
-/// How much of the file-load progress bar the preprocessing pass owns.
-/// It is a single pass over every sample and on a long file it is tens of
-/// seconds, so it needs to be visible; the transcription that follows is
-/// much longer, so it does not need much.
-const PREPROCESS_PROGRESS_SHARE: f64 = 10.0;
-
 /// Synchronously transcribe an audio file using the active local STT
 /// backend (whisper.cpp or Parakeet, per `local_stt_backend`). Cloud
 /// transcription via this entry point is unimplemented for now —
@@ -8914,82 +8949,53 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
         Ok(s) => s,
         Err(_) => return -1,
     };
-    log(&format!("[FileLoad] decoding '{}'", path));
+    log(&format!("[FileLoad] streaming '{}'", path));
 
-    // ── Decode: dispatch by extension. WAV → hound (fast path, well
-    // tested); everything else → Symphonia (pure-Rust multi-format).
-    let ext = std::path::Path::new(path)
-        .extension()
-        .and_then(|s| s.to_str())
-        .map(|s| s.to_ascii_lowercase())
-        .unwrap_or_default();
-    let (mono, sample_rate) = if ext == "wav" {
-        match decode_wav_via_hound(path) {
-            Ok(v) => v,
-            Err(e) => {
-                log(&format!("[FileLoad] WAV decode failed: {}", e));
-                return -2;
-            }
-        }
-    } else {
-        match decode_via_symphonia(path) {
-            Ok(v) => v,
-            Err(e) => {
-                log(&format!(
-                    "[FileLoad] Symphonia decode failed (ext='{}'): {}",
-                    ext, e
-                ));
-                return -2;
-            }
+    // ── Stream: decode → mono → highpass → chunks, one block at a time ──
+    // The whole file is never in memory: one decoded packet plus one chunk
+    // (see file_stream.rs). Highpass only, no VAD, no AGC: on a long file
+    // dagc meets natural silence and emits NaN that corrupts everything after
+    // it (CLAUDE.md AUDIO-001; a 95-min WAV lost 97 % of its audio).
+    let mut stream = match crate::file_stream::FileAudioStream::open(path) {
+        Ok(s) => s,
+        Err(e) => {
+            log(&format!("[FileLoad] open failed: {}", e));
+            return -2;
         }
     };
+    let sample_rate = stream.sample_rate;
+    let declared_secs = stream.total_frames.map(|f| f as f64 / sample_rate as f64);
     log(&format!(
-        "[FileLoad] decoded: {} samples @ {} Hz mono ({:.1}s) [ext={}]",
-        mono.len(),
+        "[FileLoad] {} Hz, declared length {}",
         sample_rate,
-        mono.len() as f64 / sample_rate as f64,
-        if ext.is_empty() { "(none)" } else { &ext },
+        declared_secs
+            .map(|s| format!("{:.1}s", s))
+            .unwrap_or_else(|| "unknown".to_string())
     ));
-
-    // ── Preprocess: file-load mode (highpass only, no VAD, no AGC) ──
-    // The live-recording pipeline normalises level via dagc, but on a
-    // long recorded file dagc encounters natural silence stretches and
-    // emits NaN, permanently corrupting all downstream samples (CLAUDE.md
-    // AUDIO-001). On a 95-min meeting WAV this destroyed 97 % of the
-    // audio, leaving only the first ~150 s transcribable. File-load
-    // audio is already at a recorded level — only de-rumble is needed.
-    // Only the LENGTH of the decoded audio is ever needed below (three
-    // duration computations), and cloning the buffer to get it cost a full
-    // 325 MB on a 28-minute file. Keep the number, not the samples.
-    let raw_sample_count = mono.len();
-    // The preprocess is the whole wait before the first chunk. Give it the
-    // first tenth of the progress bar so the UI moves during it; the chunk
-    // loop below owns the rest and never has to go backwards.
-    let processed_samples = crate::preprocess::process_buffer_for_file_load_with_progress(
-        &mono,
-        sample_rate,
-        |done, total| {
-            let pct = if total > 0 {
-                (done as f64 / total as f64) * PREPROCESS_PROGRESS_SHARE
+    // Progress comes from the stream: the declared length when the container
+    // has one, the bytes read when it does not. chunk_total stays 0 because
+    // chunks end at pauses, so their count is only known at the end.
+    let emit_progress =
+        |processed_secs: f64, stream: &crate::file_stream::FileAudioStream, chunk_index: usize| {
+            let frac = stream.progress();
+            let total_secs = declared_secs.unwrap_or(if frac > 0.0 {
+                processed_secs / frac
             } else {
                 0.0
-            };
+            });
             emit_event(
                 "file_transcribe_progress",
-                &serde_json::json!({ "percent": pct }).to_string(),
+                &serde_json::json!({
+                    "processed_secs": processed_secs,
+                    "total_secs": total_secs,
+                    "percent": frac * 100.0,
+                    "chunk_index": chunk_index,
+                    "chunk_total": 0,
+                })
+                .to_string(),
             );
-        },
-    );
-    // Decoded audio is dead from here on and it is 325 MB of it.
-    drop(mono);
-    let processed = crate::audio::ProcessedAudio {
-        samples: processed_samples,
-        sample_rate,
-    };
-    if processed.samples.is_empty() {
-        log("[FileLoad] preprocess produced 0 samples (silent input?)");
-        return -3;
-    }
+        };
+    emit_progress(0.0, &stream, 0);
 
     // ── Route per active backend (local or cloud) ───────────────
     let st = state();
@@ -8998,15 +9004,13 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
         .lock()
         .map(|m| m.clone())
         .unwrap_or_else(|_| "local".to_string());
-    let total_secs_pre = raw_sample_count as f64 / sample_rate as f64;
 
-    // ── Cloud branch: hand off to transcribe_chunked ──────────────
-    // Cloud STT routing reuses the same chunking machinery the live
-    // dictation path uses. We block on a one-shot tokio runtime
-    // because the FFI surface is sync and Velopack-installed apps
-    // don't have an ambient runtime running. Empty cloud config
-    // (missing key / URL) is treated as a configuration error so the
-    // user gets actionable feedback in the Settings status row.
+    // ── Cloud branch: one request per chunk ───────────────────────
+    // Chunks are as long as the provider accepts, cut where
+    // transcribe_chunked cuts them. We block on a one-shot tokio runtime
+    // because the FFI surface is sync and Velopack-installed apps don't have
+    // an ambient runtime running. Empty cloud config (missing key / URL) is a
+    // configuration error so the user gets actionable feedback.
     if stt_mode != "local" {
         let api_url = st.api_url.lock().map(|u| u.clone()).unwrap_or_default();
         let api_key_opt = st.api_key.lock().ok().and_then(|g| g.clone());
@@ -9023,32 +9027,11 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
             return -6;
         }
         let provider = crate::provider::Provider::from_url(&api_url);
-        let max_wav_bytes = provider.max_file_bytes();
-        emit_event(
-            "file_transcribe_progress",
-            &serde_json::json!({
-                "processed_secs": 0.0,
-                "total_secs": total_secs_pre,
-                "percent": 0.0,
-            })
-            .to_string(),
+        let max_chunk_samples = crate::transcribe::cloud_chunk_samples(
+            provider.max_file_bytes(),
+            sample_rate,
+            stream.total_frames,
         );
-        let total_secs_for_progress = total_secs_pre;
-        let on_progress: Box<dyn Fn(usize, usize) + Send + Sync> =
-            Box::new(move |idx: usize, total: usize| {
-                let frac = idx as f64 / total.max(1) as f64;
-                emit_event(
-                    "file_transcribe_progress",
-                    &serde_json::json!({
-                        "processed_secs": frac * total_secs_for_progress,
-                        "total_secs": total_secs_for_progress,
-                        "percent": frac * 100.0,
-                        "chunk_index": idx,
-                        "chunk_total": total,
-                    })
-                    .to_string(),
-                );
-            });
         let rt = match tokio::runtime::Runtime::new() {
             Ok(r) => r,
             Err(e) => {
@@ -9056,40 +9039,68 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
                 return -7;
             }
         };
-        let result = rt.block_on(crate::transcribe::transcribe_chunked(
-            &api_url,
-            &model,
-            &api_key,
-            processed,
-            &language_cloud,
-            "",
-            max_wav_bytes,
-            Some(on_progress.as_ref()),
-        ));
-        match result {
-            Ok(text) => {
-                if text.trim().is_empty() {
-                    log("[FileLoad] cloud returned empty transcript");
-                    return -5;
-                }
-                if let Ok(guard) = st.history_store.lock() {
-                    if let Some(ref store) = *guard {
-                        let _ = store.save(&text, &language_cloud, total_secs_pre);
+        let mut parts: Vec<String> = Vec::new();
+        let mut failed: Option<String> = None;
+        let mut idx = 0usize;
+        let decoded =
+            crate::file_stream::for_each_chunk(&mut stream, max_chunk_samples, |chunk, s| {
+                idx += 1;
+                let end_secs =
+                    (chunk.start_sample + chunk.audio.samples.len()) as f64 / sample_rate as f64;
+                let payload = match chunk.audio.to_wav_payload() {
+                    Ok(p) => p,
+                    Err(e) => {
+                        failed = Some(format!("chunk {}: {}", idx, e));
+                        return false;
+                    }
+                };
+                match rt.block_on(crate::transcribe::transcribe_audio(
+                    &api_url,
+                    &model,
+                    &api_key,
+                    &payload.data,
+                    &language_cloud,
+                    "",
+                )) {
+                    Ok(t) => {
+                        let t = t.trim();
+                        if !t.is_empty() {
+                            parts.push(t.to_string());
+                        }
+                    }
+                    Err(e) => {
+                        failed = Some(format!("chunk {}: {}", idx, e));
+                        return false;
                     }
                 }
-                // Stats: file load contributes to Total words +
-                // Time saved the same way pill dictation does. Was
-                // missing 2026-05-15; without it a 60-min imported
-                // WAV vanished from the user's cumulative counters.
-                let words = text.split_whitespace().count() as c_int;
-                let _ = dimmy_update_stats(words, total_secs_pre);
-                return write_to_buf(&text, out_buf, buf_len);
-            }
-            Err(e) => {
-                log(&format!("[FileLoad] cloud transcribe failed: {}", e));
-                return -8;
+                emit_progress(end_secs, s, idx);
+                true
+            });
+        if let Some(e) = failed {
+            log(&format!("[FileLoad] cloud transcribe failed: {}", e));
+            return -8;
+        }
+        if decoded == 0 {
+            log("[FileLoad] file decoded to zero samples");
+            return -2;
+        }
+        let total_secs = decoded as f64 / sample_rate as f64;
+        let text = parts.join(" ");
+        if text.trim().is_empty() {
+            log("[FileLoad] cloud returned empty transcript");
+            return -5;
+        }
+        if let Ok(guard) = st.history_store.lock() {
+            if let Some(ref store) = *guard {
+                let _ = store.save(&text, &language_cloud, total_secs);
             }
         }
+        // Stats: file load contributes to Total words + Time saved the same
+        // way pill dictation does (a 60-min imported WAV vanished from the
+        // cumulative counters before 2026-05-15).
+        let words = text.split_whitespace().count() as c_int;
+        let _ = dimmy_update_stats(words, total_secs);
+        return write_to_buf(&text, out_buf, buf_len);
     }
 
     let backend = st
@@ -9114,42 +9125,26 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
     let prompt_base = st.prompt.lock().map(|p| p.clone()).unwrap_or_default();
     let user_dict_snapshot = st.user_dict.lock().map(|d| d.clone()).unwrap_or_default();
     let composed_prompt = crate::compose_stt_prompt(&prompt_base, &user_dict_snapshot);
-    // Emit a starting event so the UI can flip its progress bar
-    // from indeterminate to 0 % the moment we begin work.
-    let total_secs = raw_sample_count as f64 / sample_rate as f64;
-    emit_event(
-        "file_transcribe_progress",
-        &serde_json::json!({
-            "processed_secs": 0.0,
-            "total_secs": total_secs,
-            "percent": 0.0,
-        })
-        .to_string(),
-    );
 
-    // Chunk the preprocessed audio so we can emit per-chunk progress
-    // events. 30-second windows give a smooth percent indicator
-    // without too many model wakeups; falling back to a single chunk
-    // on short files (≤ 35 s) keeps the existing fast path.
+    // 30-second windows: the models' sweet spot, and a smooth progress bar.
     const CHUNK_MAX_SECS: usize = 30;
-    let max_chunk_samples = CHUNK_MAX_SECS * processed.sample_rate as usize;
-    let chunks = processed.split_at_silence(max_chunk_samples);
-    let n_chunks = chunks.len();
-    log(&format!(
-        "[FileLoad] backend={} model={} → {} chunk(s)",
-        backend, model, n_chunks
-    ));
+    let max_chunk_samples = CHUNK_MAX_SECS * sample_rate as usize;
+    log(&format!("[FileLoad] backend={} model={}", backend, model));
 
     let mut transcript_acc = String::new();
-    // Accumulated word timestamps across all chunks, with each chunk's
-    // local times offset by the chunk's start position in the file.
-    // Only populated for the parakeet backend — whisper word-timestamp
-    // extraction is a follow-up. Vec of `{"word","start","end"}` in JSON
-    // value form so we don't have to round-trip strings.
+    // Accumulated word timestamps across all chunks, each chunk's local
+    // times offset by the chunk's REAL start in the file. Chunks end at
+    // pauses, so they are 22.5-30 s long: offsetting by index × 30 s drifted
+    // by up to 7.5 s per chunk, tens of minutes into a long file. Vec of
+    // `{"word","start","end"}` in JSON value form.
     let mut word_ts_acc: Vec<serde_json::Value> = Vec::new();
-    let chunk_secs = CHUNK_MAX_SECS as f64;
-    for (idx, chunk) in chunks.into_iter().enumerate() {
-        let chunk_offset_secs = (idx as f64) * chunk_secs;
+    let mut n_chunks = 0usize;
+    let decoded = crate::file_stream::for_each_chunk(&mut stream, max_chunk_samples, |c, s| {
+        n_chunks += 1;
+        let idx = n_chunks;
+        let chunk = c.audio;
+        let chunk_offset_secs = c.start_sample as f64 / sample_rate as f64;
+        let end_secs = chunk_offset_secs + chunk.samples.len() as f64 / sample_rate as f64;
         let result: Result<(String, Option<String>), _> = if backend == "parakeet" {
             crate::transcribe::transcribe_audio_local_parakeet_with_word_ts(&chunk)
                 .map(|(t, j)| (t, Some(j)))
@@ -9182,14 +9177,12 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
                         for mut entry in arr {
                             // Shift start/end into absolute file time.
                             if let Some(obj) = entry.as_object_mut() {
-                                if let Some(s) = obj.get_mut("start") {
-                                    if let Some(v) = s.as_f64() {
-                                        *s = serde_json::json!(v + chunk_offset_secs);
-                                    }
-                                }
-                                if let Some(e) = obj.get_mut("end") {
-                                    if let Some(v) = e.as_f64() {
-                                        *e = serde_json::json!(v + chunk_offset_secs);
+                                for key in ["start", "end"] {
+                                    if let Some(v) = obj.get(key).and_then(|v| v.as_f64()) {
+                                        obj.insert(
+                                            key.to_string(),
+                                            serde_json::json!(v + chunk_offset_secs),
+                                        );
                                     }
                                 }
                             }
@@ -9199,33 +9192,26 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
                 }
             }
             Err(e) => {
+                // Continue — one bad chunk shouldn't kill the whole file.
+                // Empty chunks are normal (long silence).
                 log(&format!(
-                    "[FileLoad] chunk {} of {} failed: {}",
-                    idx + 1,
-                    n_chunks,
-                    e
+                    "[FileLoad] chunk {} at {:.0}s failed: {}",
+                    idx, chunk_offset_secs, e
                 ));
-                // Continue — one bad chunk shouldn't kill the whole
-                // file. Empty chunks are normal (long silence).
             }
         }
-        // Best-effort progress: assume even-sized chunks. The user
-        // sees a smoothly advancing bar even if the last chunk is
-        // shorter than the rest.
-        let processed_secs = ((idx + 1) as f64 * chunk_secs).min(total_secs);
-        let percent = (processed_secs / total_secs.max(0.001) * 100.0).min(100.0);
-        emit_event(
-            "file_transcribe_progress",
-            &serde_json::json!({
-                "processed_secs": processed_secs,
-                "total_secs": total_secs,
-                "percent": percent,
-                "chunk_index": idx + 1,
-                "chunk_total": n_chunks,
-            })
-            .to_string(),
-        );
+        emit_progress(end_secs, s, idx);
+        true
+    });
+    if decoded == 0 {
+        log("[FileLoad] file decoded to zero samples");
+        return -2;
     }
+    let total_secs = decoded as f64 / sample_rate as f64;
+    log(&format!(
+        "[FileLoad] decoded {} samples @ {} Hz ({:.1}s) in {} chunk(s)",
+        decoded, sample_rate, total_secs, n_chunks
+    ));
 
     if transcript_acc.trim().is_empty() {
         log("[FileLoad] all chunks produced empty transcripts");
@@ -9233,23 +9219,16 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
     }
     let text = transcript_acc;
 
-    // Auto-save to history (v1 schema on this branch). When the
-    // history-v2 branch lands the merge will switch this to save_v2
-    // with audio_path = source-file path (no copy) so the user can
-    // jump from a History row to the original file.
-    if !text.trim().is_empty() {
-        if let Ok(guard) = st.history_store.lock() {
-            if let Some(ref store) = *guard {
-                let duration = raw_sample_count as f64 / sample_rate as f64;
-                let saved_id = store
-                    .save(&text, history_language(&language), duration)
-                    .ok();
-                // Attach word timestamps when the parakeet path produced
-                // them. Whisper backend leaves word_ts_acc empty → no-op.
-                if let (Some(id), false) = (saved_id, word_ts_acc.is_empty()) {
-                    let json = serde_json::Value::Array(word_ts_acc).to_string();
-                    let _ = store.update_word_timestamps(id, &json);
-                }
+    // Auto-save to history with the word timestamps when the backend
+    // produced them (parakeet); the others leave word_ts_acc empty.
+    if let Ok(guard) = st.history_store.lock() {
+        if let Some(ref store) = *guard {
+            let saved_id = store
+                .save(&text, history_language(&language), total_secs)
+                .ok();
+            if let (Some(id), false) = (saved_id, word_ts_acc.is_empty()) {
+                let json = serde_json::Value::Array(word_ts_acc).to_string();
+                let _ = store.update_word_timestamps(id, &json);
             }
         }
     }
@@ -9481,41 +9460,35 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
         let band: &'static str = if *band == "system" { "system" } else { "mic" };
         let mut band_lines: Vec<(u128, String)> = Vec::new();
         let mut band_words: Vec<crate::diarize::Word> = Vec::new();
-        let ext = std::path::Path::new(path)
-            .extension()
-            .and_then(|s| s.to_str())
-            .map(|s| s.to_ascii_lowercase())
-            .unwrap_or_default();
-        let (mono, rate) = match if ext == "wav" {
-            decode_wav_via_hound(path)
-        } else {
-            decode_via_symphonia(path)
-        } {
-            Ok(v) => v,
+        // Streamed (file_stream.rs): a band of any length costs one window at
+        // its native rate. Diarization needs the whole band at once, so only
+        // when it runs is the band kept, at 16 kHz (~0.9 GB for 4 hours).
+        let mut stream = match crate::file_stream::FileAudioStream::open(path) {
+            Ok(s) => s,
             Err(e) => {
                 log(&format!("[Retranscribe] decode {} failed: {}", band, e));
                 continue;
             }
         };
-        let processed = crate::preprocess::process_buffer_for_file_load(&mono, rate);
-        if processed.is_empty() {
-            continue;
-        }
-        let total = processed.len();
-        if is_local {
+        let rate = stream.sample_rate;
+        let mut took_over = false;
+        let mut ds16k =
+            diarize_on.then(|| crate::preprocess::StreamingDownsampler::new(rate, 16_000));
+        let mut pcm16k_acc: Vec<f32> = Vec::new();
+        let decoded = if is_local {
             // LOCAL: fixed `meeting_chunk_secs` windows (whisper context /
             // parakeet). Timestamp = window start.
             let chunk_samples = ((chunk_secs * rate as f32) as usize).max(rate as usize);
-            let mut start = 0usize;
-            while start < total {
+            crate::file_stream::for_each_window(&mut stream, chunk_samples, |c, s| {
                 if meeting_took_over() {
-                    return -7;
+                    took_over = true;
+                    return false;
                 }
-                let end = (start + chunk_samples).min(total);
-                let window = crate::audio::ProcessedAudio {
-                    samples: processed[start..end].to_vec(),
-                    sample_rate: rate,
-                };
+                if let Some(ds) = ds16k.as_mut() {
+                    ds.push(&c.audio.samples, &mut pcm16k_acc);
+                }
+                let start = c.start_sample;
+                let window = c.audio;
                 let elapsed_ms = (start as f64 / rate as f64 * 1000.0) as u128;
                 let offset_secs = start as f64 / rate as f64;
                 let text = if backend == "qwen" {
@@ -9585,9 +9558,9 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
                 if !trimmed.is_empty() {
                     band_lines.push((elapsed_ms, trimmed.to_string()));
                 }
-                progress(track, end as f64 / total as f64 * transcribe_share, band);
-                start = end;
-            }
+                progress(track, s.progress() * transcribe_share, band);
+                true
+            })
         } else {
             // CLOUD: chunk at the PROVIDER's max file size (a few big calls,
             // never one-per-15s). Deepgram → per-word timestamps grouped into
@@ -9598,15 +9571,17 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
             // 30 s so a tiny max_file_bytes can't explode the call count.
             let max_16k = (provider.max_file_bytes().saturating_sub(4096) / 2).max(16_000 * 30);
             let win = (((max_16k as f64 / 16_000.0) * rate as f64) as usize).max(rate as usize);
-            let mut start = 0usize;
-            while start < total {
+            crate::file_stream::for_each_window(&mut stream, win, |c, s| {
                 if meeting_took_over() {
-                    return -7;
+                    took_over = true;
+                    return false;
                 }
-                let end = (start + win).min(total);
-                let pcm16k = crate::preprocess::downsample_to_16k(&processed[start..end], rate);
+                if let Some(ds) = ds16k.as_mut() {
+                    ds.push(&c.audio.samples, &mut pcm16k_acc);
+                }
+                let pcm16k = crate::preprocess::downsample_to_16k(&c.audio.samples, rate);
                 let wav = crate::audio::encode_wav(&pcm16k, 16000).unwrap_or_default();
-                let chunk_start_secs = start as f64 / rate as f64;
+                let chunk_start_secs = c.start_sample as f64 / rate as f64;
                 if is_deepgram {
                     let words = cloud_rt
                         .as_ref()
@@ -9648,17 +9623,23 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
                         band_lines.push(((chunk_start_secs * 1000.0) as u128, trimmed.to_string()));
                     }
                 }
-                progress(track, end as f64 / total as f64 * transcribe_share, band);
-                start = end;
-            }
-        }
-
-        if meeting_took_over() {
+                progress(track, s.progress() * transcribe_share, band);
+                true
+            })
+        };
+        if took_over || meeting_took_over() {
             return -7;
         }
+        if decoded == 0 {
+            continue;
+        }
+        if let Some(ds) = ds16k.as_mut() {
+            ds.finish(&mut pcm16k_acc);
+        }
+        let band_secs = decoded as f64 / rate as f64;
         let diarized = if diarize_on && !band_lines.is_empty() {
             progress(track, transcribe_share, "speakers");
-            let pcm16k = crate::preprocess::downsample_to_16k(&processed, rate);
+            let pcm16k = std::mem::take(&mut pcm16k_acc);
             let t0 = std::time::Instant::now();
             match crate::diarize::diarize(&pcm16k) {
                 Ok(d) => {
@@ -9670,7 +9651,7 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
                         d.speakers(1.0).len()
                     ));
                     let turns = if band_words.is_empty() {
-                        lines_by_dominant_speaker(&band_lines, &d, total as f64 / rate as f64)
+                        lines_by_dominant_speaker(&band_lines, &d, band_secs)
                     } else {
                         crate::diarize::group_words(&band_words, &d)
                     };

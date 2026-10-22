@@ -31,6 +31,7 @@ pub mod download;
 pub mod download_center;
 pub mod error;
 pub mod ffi;
+pub mod file_stream;
 pub mod filler;
 pub mod gemini_cli;
 pub mod gpu_diag;

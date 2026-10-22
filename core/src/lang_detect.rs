@@ -160,16 +160,39 @@ pub fn detect_from_audio_file(path: &Path) -> Option<String> {
         return None;
     };
 
-    let (mono, rate) = match crate::ffi::decode_audio_any(&path.to_string_lossy()) {
-        Ok(v) => v,
+    // Only the five half-minute windows are ever looked at, so only they are
+    // kept: the file streams past (file_stream.rs) instead of being decoded
+    // whole, which on a 4-hour meeting was ~3.7 GB to read 2.5 minutes.
+    let path_str = path.to_string_lossy();
+    let open = || match crate::file_stream::FileAudioStream::open(&path_str) {
+        Ok(s) => Some(s),
         Err(e) => {
             crate::log(&format!("[LangDetect] cannot decode audio: {e}"));
-            return None;
+            None
         }
     };
-    let pcm = resample_to_16k(&mono, rate);
-    drop(mono);
-    let secs = pcm.len() as f32 / 16_000.0;
+    let mut stream = open()?;
+    let rate = stream.sample_rate;
+    // The windows' positions need the length: the header's, or a counting
+    // pass when the container does not declare it.
+    let total = match stream.total_frames {
+        Some(n) if n > 0 => n as usize,
+        _ => {
+            let mut block = Vec::new();
+            while {
+                block.clear();
+                stream.read_block(&mut block)
+            } {}
+            let n = stream.samples_read() as usize;
+            stream = open()?;
+            n
+        }
+    };
+    if total == 0 {
+        crate::log("[LangDetect] cannot decode audio: no samples");
+        return None;
+    }
+    let secs = total as f32 / rate as f32;
 
     let offsets = window_offsets(secs, WINDOWS);
     if offsets.is_empty() {
@@ -178,6 +201,35 @@ pub fn detect_from_audio_file(path: &Path) -> Option<String> {
         ));
         return None;
     }
+    let ranges: Vec<(usize, usize)> = offsets
+        .iter()
+        .map(|o| {
+            let from = (*o * rate as f32) as usize;
+            (
+                from,
+                (from + WINDOW_SECS as usize * rate as usize).min(total),
+            )
+        })
+        .collect();
+    let mut native: Vec<Vec<f32>> = vec![Vec::new(); ranges.len()];
+    let mut block: Vec<f32> = Vec::with_capacity(16_384);
+    let mut at = 0usize;
+    let last_end = ranges.iter().map(|r| r.1).max().unwrap_or(0);
+    while at < last_end {
+        block.clear();
+        if !stream.read_block(&mut block) {
+            break;
+        }
+        let (b0, b1) = (at, at + block.len());
+        for (w, &(from, to)) in native.iter_mut().zip(&ranges) {
+            let (lo, hi) = (from.max(b0), to.min(b1));
+            if lo < hi {
+                w.extend_from_slice(&block[lo - b0..hi - b0]);
+            }
+        }
+        at = b1;
+    }
+    let windows: Vec<Vec<f32>> = native.iter().map(|w| resample_to_16k(w, rate)).collect();
 
     let t0 = std::time::Instant::now();
     let cpath = std::ffi::CString::new(model.to_string_lossy().as_ref()).ok()?;
@@ -197,17 +249,14 @@ pub fn detect_from_audio_file(path: &Path) -> Option<String> {
         .unwrap_or(2);
 
     let mut votes: Vec<(String, f32)> = Vec::with_capacity(offsets.len());
-    for offset_s in &offsets {
+    for slice in &windows {
         // Only the half-minute the detector will look at. Handing the whole
         // recording to pcm_to_mel and offsetting into it costs a full-length
         // mel per window — 155 s on a 34-minute meeting, measured, versus 1.4 s
         // this way.
-        let from = (*offset_s * 16_000.0) as usize;
-        let to = (from + (WINDOW_SECS as usize) * 16_000).min(pcm.len());
-        if to <= from {
+        if slice.is_empty() {
             continue;
         }
-        let slice = &pcm[from..to];
         let mut probs = vec![0.0f32; n_langs as usize];
 
         let id = unsafe {

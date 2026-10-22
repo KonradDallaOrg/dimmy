@@ -2194,77 +2194,112 @@ impl ProcessedAudio {
     /// window (RMS < 0.01 for 300ms). If no silence found, force-splits at max.
     /// All chunks inherit the same sample_rate. Total samples in = total samples out.
     pub fn split_at_silence(self, max_chunk_samples: usize) -> Vec<ProcessedAudio> {
-        assert!(
-            max_chunk_samples > 0,
-            "split_at_silence: max_chunk_samples must be positive"
-        );
+        let ends = self.silence_split_points(max_chunk_samples);
         let sr = self.sample_rate;
-        let total = self.samples.len();
-
-        if total <= max_chunk_samples {
-            return vec![ProcessedAudio {
-                samples: self.samples,
-                sample_rate: sr,
-            }];
-        }
-
-        let silence_threshold: f32 = 0.01;
-        let silence_window = ((sr as f64 * 0.3) as usize).max(1); // 300ms, min 1
-        let mut chunks = Vec::new();
-        let mut offset = 0;
-
-        while offset < total {
-            let remaining = total - offset;
-            if remaining <= max_chunk_samples {
-                chunks.push(ProcessedAudio {
-                    samples: self.samples[offset..total].to_vec(),
+        let mut start = 0;
+        let chunks: Vec<ProcessedAudio> = ends
+            .iter()
+            .map(|&end| {
+                let c = ProcessedAudio {
+                    samples: self.samples[start..end].to_vec(),
                     sample_rate: sr,
-                });
-                break;
-            }
-
-            // Search for silence in the last 25% of the chunk window
-            let chunk_end = (offset + max_chunk_samples).min(total);
-            let search_start = offset + (max_chunk_samples - max_chunk_samples / 4);
-            let mut split_at = None;
-
-            if chunk_end > silence_window + offset {
-                let scan_from = search_start.max(offset + silence_window);
-                for pos in (scan_from..chunk_end).rev() {
-                    let win_start = pos.saturating_sub(silence_window);
-                    if win_start < offset {
-                        break;
-                    }
-                    let window = &self.samples[win_start..pos];
-                    let rms =
-                        (window.iter().map(|s| s * s).sum::<f32>() / window.len() as f32).sqrt();
-                    if rms < silence_threshold {
-                        split_at = Some(pos);
-                        break;
-                    }
-                }
-            }
-
-            let end = split_at.unwrap_or(chunk_end);
-            // Defensive: never produce a zero-length chunk (would infinite-loop)
-            let end = end.max(offset + 1);
-            chunks.push(ProcessedAudio {
-                samples: self.samples[offset..end].to_vec(),
-                sample_rate: sr,
-            });
-            offset = end;
-        }
+                };
+                start = end;
+                c
+            })
+            .collect();
 
         // Post-condition: total samples preserved
         let out_total: usize = chunks.iter().map(|c| c.samples.len()).sum();
         assert_eq!(
-            out_total, total,
+            out_total,
+            self.samples.len(),
             "split_at_silence lost samples: {} in, {} out",
-            total, out_total
+            self.samples.len(),
+            out_total
         );
-
         chunks
     }
+
+    /// The end offset of every chunk `split_at_silence` would cut, without
+    /// copying any audio. A long file is transcribed one chunk at a time
+    /// from these, so only one chunk is ever copied out.
+    ///
+    /// The silence window slides with a running sum of squares. Recomputing
+    /// the 300 ms window at every position cost ~5 billion multiply-adds per
+    /// chunk whenever no pause was found (steady room noise, music): minutes
+    /// of CPU on a long file before the first chunk was transcribed.
+    pub fn silence_split_points(&self, max_chunk_samples: usize) -> Vec<usize> {
+        assert!(
+            max_chunk_samples > 0,
+            "split_at_silence: max_chunk_samples must be positive"
+        );
+        let total = self.samples.len();
+        let mut ends = Vec::with_capacity(total / max_chunk_samples + 1);
+        let mut offset = 0;
+        while total - offset > max_chunk_samples {
+            offset +=
+                first_silence_split(&self.samples[offset..], self.sample_rate, max_chunk_samples);
+            ends.push(offset);
+        }
+        ends.push(total);
+        ends
+    }
+}
+
+/// Where to end the first chunk of `samples`, which must be longer than
+/// `max_chunk_samples`: the latest 300 ms window with RMS < 0.01 in the
+/// last 25% of the first `max_chunk_samples`, or `max_chunk_samples` when
+/// there is none. Looks only at `samples[..max_chunk_samples]`, so a stream
+/// holding just over one chunk cuts exactly where the whole-file split does.
+///
+/// The window slides with a running sum of squares. Recomputing the 300 ms
+/// window at every position cost ~5 billion multiply-adds per chunk whenever
+/// no pause was found (steady room noise, music): minutes of CPU on a long
+/// file before the first chunk was transcribed.
+pub fn first_silence_split(samples: &[f32], sample_rate: u32, max_chunk_samples: usize) -> usize {
+    assert!(
+        max_chunk_samples > 0 && samples.len() > max_chunk_samples,
+        "first_silence_split: need more than one chunk ({} samples, max {})",
+        samples.len(),
+        max_chunk_samples
+    );
+    let silence_window = ((sample_rate as f64 * 0.3) as usize).max(1); // 300ms, min 1
+    let chunk_end = max_chunk_samples;
+    let search_start = max_chunk_samples - max_chunk_samples / 4;
+    let sq = |i: usize| {
+        let v = samples[i] as f64;
+        v * v
+    };
+    let mut split_at = None;
+    if chunk_end > silence_window {
+        let scan_from = search_start.max(silence_window);
+        if scan_from < chunk_end {
+            // Window [pos - silence_window, pos), latest position first.
+            let limit = 0.01f64 * 0.01f64 * silence_window as f64;
+            let mut pos = chunk_end - 1;
+            let mut sum: f64 = (pos - silence_window..pos).map(sq).sum();
+            loop {
+                if sum < limit {
+                    split_at = Some(pos);
+                    break;
+                }
+                if pos == scan_from {
+                    break;
+                }
+                // Slide one sample back: drop [pos-1], add [pos-1-w].
+                pos -= 1;
+                sum = (sum + sq(pos - silence_window) - sq(pos)).max(0.0);
+            }
+        }
+    }
+    // Never a zero-length chunk (the caller would loop forever).
+    let end = split_at.unwrap_or(chunk_end).max(1);
+    assert!(
+        end <= max_chunk_samples,
+        "chunk end {end} past max {max_chunk_samples}"
+    );
+    end
 }
 
 /// Encode f32 samples to WAV bytes (16-bit PCM, mono)
@@ -2856,6 +2891,120 @@ mod tests {
         for (i, chunk) in chunks.iter().enumerate() {
             assert!(chunk.samples.len() <= sr * 12, "Chunk {} exceeds max", i);
         }
+    }
+
+    /// The pre-2026-10-22 search, kept as the oracle: recompute the window's
+    /// RMS at every position, latest first.
+    fn split_points_reference(samples: &[f32], sr: u32, max_chunk_samples: usize) -> Vec<usize> {
+        let total = samples.len();
+        if total <= max_chunk_samples {
+            return vec![total];
+        }
+        let silence_window = ((sr as f64 * 0.3) as usize).max(1);
+        let mut ends = Vec::new();
+        let mut offset = 0;
+        while offset < total {
+            if total - offset <= max_chunk_samples {
+                ends.push(total);
+                break;
+            }
+            let chunk_end = offset + max_chunk_samples;
+            let search_start = offset + (max_chunk_samples - max_chunk_samples / 4);
+            let mut split_at = None;
+            if chunk_end > silence_window + offset {
+                let scan_from = search_start.max(offset + silence_window);
+                for pos in (scan_from..chunk_end).rev() {
+                    let w = &samples[pos - silence_window..pos];
+                    let rms = (w.iter().map(|s| s * s).sum::<f32>() / w.len() as f32).sqrt();
+                    if rms < 0.01 {
+                        split_at = Some(pos);
+                        break;
+                    }
+                }
+            }
+            let end = split_at.unwrap_or(chunk_end).max(offset + 1);
+            ends.push(end);
+            offset = end;
+        }
+        ends
+    }
+
+    #[test]
+    fn split_points_match_the_reference_search() {
+        let sr: u32 = 16_000;
+        let n = sr as usize * 95;
+        // Deterministic pseudo-noise, no rand dependency.
+        let mut seed: u32 = 0x9e37_79b9;
+        let mut noise = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            (seed as f32 / u32::MAX as f32) * 2.0 - 1.0
+        };
+        let speech_with_pauses: Vec<f32> = (0..n)
+            .map(|i| {
+                let t = i as f32 / sr as f32;
+                // 0.4 s pauses at irregular points inside every chunk window.
+                if (t % 7.3) < 0.4 {
+                    noise() * 0.002
+                } else {
+                    noise() * 0.3
+                }
+            })
+            .collect();
+        let steady_noise: Vec<f32> = (0..n).map(|_| noise() * 0.05).collect();
+        let near_threshold: Vec<f32> = (0..n).map(|_| noise() * 0.0172).collect();
+        let silence = vec![0.0f32; n];
+        for (name, samples) in [
+            ("speech_with_pauses", speech_with_pauses),
+            ("steady_noise", steady_noise),
+            ("near_threshold", near_threshold),
+            ("silence", silence),
+        ] {
+            for max in [sr as usize * 30, sr as usize * 12, 7_919] {
+                let expected = split_points_reference(&samples, sr, max);
+                let audio = ProcessedAudio {
+                    samples: samples.clone(),
+                    sample_rate: sr,
+                };
+                assert_eq!(
+                    audio.silence_split_points(max),
+                    expected,
+                    "{name}, max {max}: split points differ from the reference search"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn split_points_without_any_pause_are_fast() {
+        // One hour of steady noise at 48 kHz, no window ever quiet enough:
+        // every chunk scans its full last quarter. The old search did ~5e9
+        // multiply-adds per chunk here; the sliding sum must stay linear.
+        let sr: u32 = 48_000;
+        let mut seed: u32 = 12345;
+        let samples: Vec<f32> = (0..sr as usize * 3600)
+            .map(|_| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                ((seed >> 8) as f32 / (1u32 << 24) as f32 - 0.5) * 0.2
+            })
+            .collect();
+        let audio = ProcessedAudio {
+            samples,
+            sample_rate: sr,
+        };
+        let t = std::time::Instant::now();
+        let ends = audio.silence_split_points(sr as usize * 30);
+        let elapsed = t.elapsed();
+        assert_eq!(
+            ends.len(),
+            120,
+            "an hour of no pauses is 120 forced 30 s cuts"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "split points over 1 h took {elapsed:?}"
+        );
     }
 
     #[test]
