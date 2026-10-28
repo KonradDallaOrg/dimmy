@@ -2725,7 +2725,7 @@
                                    Text="4. Dimmy on this PC picks it up, transcribes it and writes the recap." />
                         <TextBlock TextWrapping="Wrap" FontSize="13"
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                   Text="Dimmy signs in as you through Telegram's official protocol and reads only the audio in Saved Messages. It never touches your other chats, and the login stays on this PC." />
+                                   Text="Dimmy is an unofficial app that uses the Telegram API. It signs in as you and reads only the audio in Saved Messages. It never touches your other chats, and the login stays on this PC." />
                       </StackPanel>
                     </Flyout>
                   </Button.Flyout>

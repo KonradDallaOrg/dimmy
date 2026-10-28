@@ -136,7 +136,7 @@ struct TelegramConnectSheet: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Log in with your Telegram account")
                 .font(.system(size: 16, weight: .semibold))
-            Text("Record on your phone, forward the audio to your own Saved Messages, and Dimmy transcribes + recaps it here. Dimmy signs in as you via Telegram's official protocol; nothing is posted, nothing else is read.")
+            Text("Record on your phone, forward the audio to your own Saved Messages, and Dimmy transcribes + recaps it here. Dimmy is an unofficial app that uses the Telegram API. It signs in as you; nothing is posted, nothing else is read.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
