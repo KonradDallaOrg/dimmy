@@ -307,6 +307,15 @@ extension DimmyCore {
         return String(cString: buffer)
     }
 
+    /// Records that the user accepted the current Terms version. A plain
+    /// config write: the core ignores an empty value, so no other save can
+    /// un-accept.
+    func acceptTerms() {
+        let version = termsVersion
+        guard !version.isEmpty else { return }
+        setConfig(["terms_accepted_version": version])
+    }
+
     // MARK: - Recording consent
 
     /// Recording-consent notice text from the shared core. `kind` is "modal"

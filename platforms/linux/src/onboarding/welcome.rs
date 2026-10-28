@@ -2,7 +2,9 @@
 
 use gtk4::prelude::*;
 
-pub fn create_page() -> gtk4::Box {
+/// Returns the page and the terms checkbox: Get Started stays disabled until
+/// it is ticked (pre-ticked when the current terms were already accepted).
+pub fn create_page(app_state: &std::sync::Arc<dimmy_lib::AppState>) -> (gtk4::Box, gtk4::CheckButton) {
     let page = gtk4::Box::new(gtk4::Orientation::Vertical, 16);
     page.set_halign(gtk4::Align::Center);
     page.set_valign(gtk4::Align::Center);
@@ -34,5 +36,14 @@ pub fn create_page() -> gtk4::Box {
     desc.set_margin_top(8);
     page.append(&desc);
 
-    page
+    let terms_check = gtk4::CheckButton::with_label(crate::terms::CHECK_LABEL);
+    terms_check.set_halign(gtk4::Align::Center);
+    terms_check.set_margin_top(8);
+    terms_check.set_active(crate::terms::is_accepted(app_state));
+    page.append(&terms_check);
+
+    let terms_link = gtk4::LinkButton::with_label(crate::terms::TERMS_URL, "Read the terms");
+    page.append(&terms_link);
+
+    (page, terms_check)
 }

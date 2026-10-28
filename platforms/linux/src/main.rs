@@ -6,6 +6,7 @@ mod onboarding;
 mod pill_window;
 mod settings;
 mod state;
+mod terms;
 mod text_injector;
 mod tray;
 mod waveform;
@@ -100,6 +101,12 @@ fn main() {
         });
 
         pill.present();
+
+        // Existing installs that have not accepted the current terms: one
+        // dialog per launch, never blocking.
+        if !terms::is_accepted(&state_clone) {
+            terms::show_launch_dialog(app, &state_clone);
+        }
 
         // Start system tray (StatusNotifierItem via D-Bus)
         let _tray_handle = tray::start_tray(&state_clone);

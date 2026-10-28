@@ -25,6 +25,9 @@ struct OnboardingContainerView: View {
     @State private var onboardingStartEmitted: Bool = false
     /// Wizard picked on the TryIt success page, opened once onboarding ends.
     @State private var wizardAfterFinish: WizardWindowController.Kind? = nil
+    /// Welcome-step gate. Pre-ticked when the current terms were already
+    /// accepted (setup re-run), so only a first run has to tick it.
+    @State private var termsAccepted: Bool = TermsPrompt.isAccepted(in: DimmyCore.shared.isInitialized ? DimmyCore.shared.getConfig() : nil)
 
     init(appState: AppState, startStep: Int = 0) {
         self.appState = appState
@@ -46,7 +49,7 @@ struct OnboardingContainerView: View {
             Group {
                 switch currentStep {
                 case 0:
-                    WelcomeStepView()
+                    WelcomeStepView(termsAccepted: $termsAccepted)
                 case 1:
                     PermissionsStepView(appState: appState)
                 case 2:
@@ -123,6 +126,7 @@ struct OnboardingContainerView: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.regular)
                 .keyboardShortcut(.return, modifiers: [])
+                .disabled(currentStep == 0 && !termsAccepted)
             }
         }
         .padding(.horizontal, 28)
@@ -146,6 +150,10 @@ struct OnboardingContainerView: View {
     private func goNext() {
         if currentStep >= Self.totalSteps - 2 { return }
         let leaving = Self.stepName(currentStep)
+        if currentStep == 0 {
+            guard termsAccepted else { return }
+            DimmyCore.shared.acceptTerms()
+        }
         if currentStep == 3 {
             // Entering TryIt — trigger the pill intro animation.
             appState.showPillIntro = true

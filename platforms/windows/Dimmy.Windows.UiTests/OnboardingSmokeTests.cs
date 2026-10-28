@@ -125,18 +125,32 @@ public class OnboardingSmokeTests : IDisposable
         return null;
     }
 
+    /// Tick the Terms checkbox (Get Started is disabled until it is) and press Get Started.
+    private static void StartWizard(AutomationElement window)
+    {
+        var terms = FindByIdWithRetry(window, "OnboardingTermsCheckBox")
+            ?? throw new InvalidOperationException("terms checkbox not found");
+        terms.AsCheckBox().IsChecked = true;
+        FindByIdWithRetry(window, "OnboardingGetStartedButton")!.AsButton().Invoke();
+    }
+
     // ── Tests ─────────────────────────────────────────────────────────
 
     [Fact]
-    public void Step0_WelcomeShowsGetStartedButton()
+    public void Step0_GetStartedNeedsTheTermsBoxTicked()
     {
         using var automation = new UIA3Automation();
         var window = LaunchAndGetMainWindow(automation);
 
         var getStarted = FindByIdWithRetry(window, "OnboardingGetStartedButton");
-
         Assert.NotNull(getStarted);
-        Assert.True(getStarted!.IsEnabled, "Get Started button must be enabled on first launch");
+        // A dev box that already accepted the terms starts with the box ticked.
+        var terms = FindByIdWithRetry(window, "OnboardingTermsCheckBox")!.AsCheckBox();
+        terms.IsChecked = false;
+        Assert.False(getStarted!.IsEnabled, "Get Started must wait for the terms checkbox");
+
+        terms.IsChecked = true;
+        Assert.True(getStarted.IsEnabled, "Get Started must enable once the terms are accepted");
     }
 
     [Fact]
@@ -145,9 +159,7 @@ public class OnboardingSmokeTests : IDisposable
         using var automation = new UIA3Automation();
         var window = LaunchAndGetMainWindow(automation);
 
-        var getStarted = FindByIdWithRetry(window, "OnboardingGetStartedButton");
-        Assert.NotNull(getStarted);
-        getStarted!.AsButton().Invoke();
+        StartWizard(window);
 
         var local = FindByIdWithRetry(window, "OnboardingLocalCard");
         var cloud = FindByIdWithRetry(window, "OnboardingCloudCard");
@@ -167,7 +179,7 @@ public class OnboardingSmokeTests : IDisposable
         using var automation = new UIA3Automation();
         var window = LaunchAndGetMainWindow(automation);
 
-        FindByIdWithRetry(window, "OnboardingGetStartedButton")!.AsButton().Invoke();
+        StartWizard(window);
 
         var keyBox = FindByIdWithRetry(window, "OnboardingGroqKeyBox");
         Assert.NotNull(keyBox);
@@ -179,7 +191,7 @@ public class OnboardingSmokeTests : IDisposable
         using var automation = new UIA3Automation();
         var window = LaunchAndGetMainWindow(automation);
 
-        FindByIdWithRetry(window, "OnboardingGetStartedButton")!.AsButton().Invoke();
+        StartWizard(window);
 
         var cont = FindByIdWithRetry(window, "OnboardingChoiceContinueButton");
         Assert.NotNull(cont);
@@ -195,7 +207,7 @@ public class OnboardingSmokeTests : IDisposable
         using var automation = new UIA3Automation();
         var window = LaunchAndGetMainWindow(automation);
 
-        FindByIdWithRetry(window, "OnboardingGetStartedButton")!.AsButton().Invoke();
+        StartWizard(window);
 
         var back = FindByIdWithRetry(window, "OnboardingChoiceBackButton")
             ?? throw new InvalidOperationException("back button not found");

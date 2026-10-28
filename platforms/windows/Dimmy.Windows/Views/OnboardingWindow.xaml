@@ -27,10 +27,18 @@
             <TextBlock Text="Hold a shortcut, speak, release.&#x0a;Your words appear wherever you're typing."
                        FontSize="13" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                        HorizontalAlignment="Center" TextAlignment="Center" />
-            <Button Content="Get Started" HorizontalAlignment="Center"
+            <CheckBox x:Name="TermsCheck"
+                      AutomationProperties.AutomationId="OnboardingTermsCheckBox"
+                      HorizontalAlignment="Center" Margin="0,16,0,0"
+                      Checked="TermsCheck_Changed" Unchecked="TermsCheck_Changed"
+                      Content="I accept the Terms of Service and End-User Licence Agreement" />
+            <HyperlinkButton Content="Read the terms" HorizontalAlignment="Center"
+                             NavigateUri="https://dimmy.app/terms/" />
+            <Button x:Name="GetStartedBtn" Content="Get Started" HorizontalAlignment="Center"
                     AutomationProperties.AutomationId="OnboardingGetStartedButton"
+                    IsEnabled="False"
                     Style="{ThemeResource AccentButtonStyle}" Width="200"
-                    Click="NextStep_Click" Margin="0,16,0,0" />
+                    Click="NextStep_Click" Margin="0,8,0,0" />
         </StackPanel>
 
         <!-- Step 1: Local or Cloud -->

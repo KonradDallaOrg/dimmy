@@ -350,6 +350,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 if let cfg = cfg {
                     self.appState.loadFromRustConfig(cfg)
                 }
+                // Existing installs that have not accepted the current terms:
+                // one dialog per launch, after this block finishes (the alert
+                // runs a nested loop and must not hold up the startup below).
+                if self.appState.isOnboardingComplete, !TermsPrompt.isAccepted(in: cfg) {
+                    DispatchQueue.main.async { MainActor.assumeIsolated { TermsPrompt.present() } }
+                }
                 hkLog("[AppDelegate] core ready — starting HotkeyManager")
                 HotkeyManager.shared.start(appState: self.appState)
 

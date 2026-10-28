@@ -187,7 +187,8 @@ The tests kill any running Dimmy process before each run and delete `%APPDATA%\d
 ```
 
 Existing IDs (keep stable — renaming breaks tests):
-- `OnboardingGetStartedButton`
+- `OnboardingGetStartedButton` (disabled until `OnboardingTermsCheckBox` is ticked)
+- `OnboardingTermsCheckBox`
 - `OnboardingLocalCard` / `OnboardingCloudCard`
 - `OnboardingGroqKeyBox`
 - `OnboardingChoiceBackButton` / `OnboardingChoiceContinueButton`
