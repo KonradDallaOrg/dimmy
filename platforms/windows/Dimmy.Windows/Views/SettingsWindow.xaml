@@ -1008,7 +1008,10 @@
                                       InfoTip="Skips the prompt: the meeting starts the moment a call is detected, the window opens and the recording notice is read aloud to the participants. Needs call detection on."
                                       IsEnabled="{Binding CallDetectEnabled}"
                                       HelpUrl="https://dimmy.app/help/use-meeting-recaps">
-                  <ToggleSwitch IsOn="{Binding CallDetectAutoRecord, Mode=TwoWay}"
+                  <!-- One-way + Toggled: the first enable asks for a confirmation
+                       first, and the view model must stay off until it is given. -->
+                  <ToggleSwitch IsOn="{Binding CallDetectAutoRecord, Mode=OneWay}"
+                                Toggled="AutoRecordToggle_Toggled"
                                 Style="{StaticResource CompactToggleSwitch}" />
                 </controls:SettingCard>
                 <controls:SettingCard Glyph="&#xE71F;"

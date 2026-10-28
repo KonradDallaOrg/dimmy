@@ -7036,7 +7036,7 @@ pub unsafe extern "C" fn dimmy_consent_audio(
 /// 1 when the spoken notice must stay silent (see
 /// [`crate::consent::announcement_audio_muted`]), 0 otherwise. The host
 /// checks it before playing anything, the system-voice fallback included,
-/// and logs "announce_muted" instead of "announced".
+/// and logs "announce_muted" instead of "notice_played_locally".
 #[no_mangle]
 pub extern "C" fn dimmy_consent_audio_muted() -> c_int {
     crate::consent::announcement_audio_muted() as c_int

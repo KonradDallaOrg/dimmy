@@ -5555,6 +5555,36 @@ public sealed partial class SettingsWindow : Window
         UpdateCheckText.Text = message;
     }
 
+    private bool _autoRecordToggleBusy;
+
+    private async void AutoRecordToggle_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (_autoRecordToggleBusy || sender is not ToggleSwitch toggle) return;
+        // The view model already agrees: this is the echo of a change it made.
+        if (toggle.IsOn == ViewModel.CallDetectAutoRecord) return;
+        if (!toggle.IsOn)
+        {
+            ViewModel.CallDetectAutoRecord = false;
+            return;
+        }
+
+        _autoRecordToggleBusy = true;
+        try
+        {
+            var lang = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+            if (!await ConsentFlow.ConfirmAutoRecordAsync(this.Content?.XamlRoot, lang))
+            {
+                toggle.IsOn = false;
+                return;
+            }
+            ViewModel.CallDetectAutoRecord = true;
+        }
+        finally
+        {
+            _autoRecordToggleBusy = false;
+        }
+    }
+
     private async void ShowLicense_Click(object sender, RoutedEventArgs e) =>
         await ShowLegalTextAsync("Licence (AGPL-3.0)", DimmyNative.LicenseText());
 

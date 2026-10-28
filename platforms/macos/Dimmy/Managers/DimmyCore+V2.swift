@@ -409,8 +409,9 @@ extension DimmyCore {
         return String(cString: buffer)
     }
 
-    /// Append a consent event ("confirmed" / "declined" / "announced" /
-    /// "chat_copied") to the local audit log. Best-effort.
+    /// Append a consent event ("confirmed" / "declined" /
+    /// "notice_played_locally" / "notice_copied" / "auto_start_confirmed")
+    /// to the local audit log. Best-effort.
     func consentLogEvent(kind: String, lang: String) {
         _ = kind.withCString { k in
             lang.withCString { l in

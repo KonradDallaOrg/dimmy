@@ -306,7 +306,8 @@ pub fn ui_text(kind: &str, lang: &str) -> Option<String> {
 
 /// JSON line for one consent event. Pure (no clock / IO) so it can be tested.
 /// `kind` is the event tag the host emits: "confirmed", "declined",
-/// "announced", "chat_copied".
+/// "notice_played_locally", "notice_copied", "auto_start_confirmed" (older
+/// builds wrote "announced" and "chat_copied"; those lines stay as written).
 pub fn format_event(kind: &str, lang: &str, now_epoch: i64) -> String {
     serde_json::json!({
         "ts": now_epoch,

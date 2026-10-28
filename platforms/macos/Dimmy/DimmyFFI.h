@@ -372,7 +372,8 @@ int32_t dimmy_ai_notice_text(const char * _Nonnull kind, const char * _Nonnull l
 
 /// Append a consent event to the local append-only audit log
 /// (<configdir>/consent.jsonl). `kind` is the event tag the host emits:
-/// "confirmed", "declined", "announced", "chat_copied". Returns 0, or -1.
+/// "confirmed", "declined", "notice_played_locally", "notice_copied",
+/// "auto_start_confirmed". Returns 0, or -1.
 int32_t dimmy_consent_log_event(const char * _Nonnull kind, const char * _Nullable lang);
 
 /// Track that a meeting recording was started/stopped from a shortcut or menu.

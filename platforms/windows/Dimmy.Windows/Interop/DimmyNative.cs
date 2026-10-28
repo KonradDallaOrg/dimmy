@@ -307,7 +307,7 @@ public static class DimmyNative
         ReadBuffer((buf, len) => dimmy_ai_notice_text(kind, lang, buf, len), 1024);
 
     /// <summary>Append a consent event to the local audit log. kind = "confirmed" /
-    /// "declined" / "announced" / "chat_copied".</summary>
+    /// "declined" / "notice_played_locally" / "notice_copied" / "auto_start_confirmed".</summary>
     public static void ConsentLogEvent(string kind, string? lang) =>
         dimmy_consent_log_event(kind, lang);
 

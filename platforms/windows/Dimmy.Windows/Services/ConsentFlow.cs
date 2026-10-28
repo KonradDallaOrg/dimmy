@@ -39,24 +39,78 @@ public static class ConsentFlow
 
     /// Announce without asking, for the auto-record path: the user
     /// answered the question once in Settings, and a dialog at call time
-    /// would defeat "start recording immediately". Participants still get
-    /// the spoken notice and the pasteable text, and the audit log still
-    /// records that they were told. Mac mirror:
-    /// MeetingConsentFlow.announceOnly.
+    /// would defeat "start recording immediately". The notice is played on
+    /// this machine's output and copied for pasting into the meeting chat,
+    /// the same as the manual path. Neither tells the other participants by
+    /// itself (headphones, call echo cancellation), which is why the hint
+    /// names the chat. Mac mirror: MeetingConsentFlow.announceOnly.
     public static void AnnounceOnly(string lang)
     {
         var (text, variant) = DimmyNative.ConsentAnnouncement(lang);
         var announcement = text
             ?? "Quick note: this meeting is being recorded and transcribed for note-taking.";
-        // The clipboard is NOT touched here, unlike the manual path. Nobody
-        // asked for this recording, so nothing the user was holding to paste
-        // may be thrown away for it. The manual flow still copies, because
-        // there the user pressed Start and the pasteable text is the point.
-        //
-        // SpeakAsync writes the "announced" audit entry once the notice has
-        // actually been spoken. Logging it here as well recorded every
-        // announcement twice.
+        CopyNotice(announcement, lang);
+        // AnnounceAsync writes the audit entry once the notice has actually
+        // been played; logging it here as well recorded every one twice.
         _ = AnnounceAsync(announcement, lang, variant);
+    }
+
+    /// The pasteable notice is the only part that can reach people who do
+    /// not hear this machine's speakers, so it is copied on every start and
+    /// the user is told to paste it. Best-effort: a clipboard failure must
+    /// not block the meeting.
+    private static void CopyNotice(string announcement, string lang)
+    {
+        try
+        {
+            var dp = new global::Windows.ApplicationModel.DataTransfer.DataPackage();
+            dp.SetText(announcement);
+            global::Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dp);
+            DimmyNative.ConsentLogEvent("notice_copied", lang);
+            DictNotificationService.ShowNoticeCopied();
+        }
+        catch { /* clipboard failure must not block the meeting */ }
+    }
+
+    private static string AutoRecordMarker =>
+        System.IO.Path.Combine(BuildInfo.ConfigDirPath, ".auto_record_confirmed");
+
+    /// One-time confirmation the first time "Start recording automatically"
+    /// is turned on. A marker file, not a UiPreferences field: the App keeps
+    /// a long-lived UiPreferences copy and re-saves it, which would erase a
+    /// flag written by the Settings window.
+    public static async Task<bool> ConfirmAutoRecordAsync(XamlRoot? xamlRoot, string lang)
+    {
+        try { if (System.IO.File.Exists(AutoRecordMarker)) return true; } catch { }
+
+        var dialog = new ContentDialog
+        {
+            RequestedTheme = Dimmy.Windows.Helpers.ThemeHelper.ResolvedElementTheme(),
+            XamlRoot = xamlRoot,
+            Title = "Record calls automatically?",
+            Content = new TextBlock
+            {
+                TextWrapping = TextWrapping.Wrap,
+                Text =
+                    "Other participants are not notified automatically. Dimmy plays a notice on " +
+                    "your speakers and copies it so you can paste it in the meeting chat, but " +
+                    "people on the call may not hear it.\n\n" +
+                    "In some places (for example California and Germany) everyone must consent " +
+                    "to being recorded. Getting that consent is your responsibility.",
+            },
+            PrimaryButtonText = "Turn on",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+        };
+        bool ok;
+        try { ok = await dialog.ShowAsync() == ContentDialogResult.Primary; }
+        catch { return false; }
+        if (!ok) return false;
+
+        try { System.IO.File.WriteAllText(AutoRecordMarker, "1"); }
+        catch (Exception ex) { App.Log($"auto-record marker not written: {ex.Message}", "Consent"); }
+        DimmyNative.ConsentLogEvent("auto_start_confirmed", lang);
+        return true;
     }
 
     public static async Task<bool> ConfirmAndAnnounceAsync(XamlRoot? xamlRoot, string lang)
@@ -88,15 +142,7 @@ public static class ConsentFlow
         }
         DimmyNative.ConsentLogEvent("confirmed", lang);
 
-        try
-        {
-            var dp = new global::Windows.ApplicationModel.DataTransfer.DataPackage();
-            dp.SetText(announcement);
-            global::Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dp);
-            DimmyNative.ConsentLogEvent("chat_copied", lang);
-        }
-        catch { /* clipboard failure must not block the meeting */ }
-
+        CopyNotice(announcement, lang);
         _ = AnnounceAsync(announcement, lang, variant);
         return true;
     }
@@ -243,7 +289,9 @@ public static class ConsentFlow
         }
         if (TryPlayRecordedTake(lang, variant))
         {
-            DimmyNative.ConsentLogEvent("announced", lang);
+            // Truthful name: this started playback on THIS machine. It says
+            // nothing about whether anyone on the call heard it.
+            DimmyNative.ConsentLogEvent("notice_played_locally", lang);
             return;
         }
         await SpeakAsync(text, lang);
@@ -296,7 +344,7 @@ public static class ConsentFlow
             _player ??= new global::Windows.Media.Playback.MediaPlayer();
             _player.Source = global::Windows.Media.Core.MediaSource.CreateFromStream(stream, stream.ContentType);
             _player.Play();
-            DimmyNative.ConsentLogEvent("announced", lang);
+            DimmyNative.ConsentLogEvent("notice_played_locally", lang);
         }
         catch { /* TTS failure must never block the meeting */ }
     }
