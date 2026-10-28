@@ -107,6 +107,10 @@ pub const DEFAULT_MODEL: &str = "whisper-large-v3-turbo";
 /// Default prompt guides Whisper to produce punctuated, well-formatted output.
 /// Whisper mimics the style of this text — punctuation, capitalization, etc.
 pub const DEFAULT_PROMPT: &str = "Hello, how are you? Fine, thanks! Today we'll discuss an interesting topic. Ciao, come stai? Bene, grazie! Oggi parliamo di un argomento interessante.";
+/// Version of the Terms of Service / EULA (https://dimmy.app/terms/) the app
+/// asks the user to accept. Bump it when the terms change and every install
+/// is asked once more.
+pub const TERMS_VERSION: &str = "2026-10-29";
 pub const DEFAULT_LLM_URL: &str = "https://api.groq.com/openai/v1/chat/completions";
 /// Must name a model Groq still serves — this is what a fresh install
 /// and every config missing `llm_api_model` dispatches to. Groq retired
@@ -1014,6 +1018,10 @@ pub struct AppConfig {
     /// ones stay in the old dir (no move logic). Falls back to default if
     /// the path is missing/unwritable (removable / network drive).
     pub meeting_storage_path: String,
+    /// [`TERMS_VERSION`] the user last accepted, empty = never. Written by the
+    /// host when the box is ticked; only a newer `TERMS_VERSION` re-asks.
+    /// Identity-class: an empty value is never applied over a saved one.
+    pub terms_accepted_version: String,
     /// Notion integration target — UUID of the parent page or database
     /// where each meeting recap lands. Empty string = no target
     /// configured (Settings UI shows the onboarding flow).
@@ -1205,6 +1213,7 @@ impl Default for AppConfig {
             loopback_gain: 1.0,
             meeting_chunk_secs: DEFAULT_MEETING_CHUNK_SECS,
             meeting_storage_path: String::new(),
+            terms_accepted_version: String::new(),
             notion_target_id: String::new(),
             notion_target_kind: String::new(),
             notion_target_title: String::new(),
@@ -1315,6 +1324,7 @@ pub fn save_config_file(cfg: &AppConfig) {
             "loopback_gain": cfg.loopback_gain,
             "meeting_chunk_secs": cfg.meeting_chunk_secs,
             "meeting_storage_path": cfg.meeting_storage_path,
+            "terms_accepted_version": cfg.terms_accepted_version,
             "notion_target_id": cfg.notion_target_id,
             "notion_target_kind": cfg.notion_target_kind,
             "notion_target_title": cfg.notion_target_title,
@@ -1559,6 +1569,10 @@ pub fn load_config_file() -> AppConfig {
                     meeting_storage_path: v["meeting_storage_path"]
                         .as_str()
                         .unwrap_or(&defaults.meeting_storage_path)
+                        .to_string(),
+                    terms_accepted_version: v["terms_accepted_version"]
+                        .as_str()
+                        .unwrap_or(&defaults.terms_accepted_version)
                         .to_string(),
                     confluence_site: v["confluence_site"]
                         .as_str()
@@ -1983,6 +1997,8 @@ pub struct AppState {
     pub meeting_chunk_secs: Mutex<f32>,
     /// User-chosen meeting storage dir — see [`AppConfig::meeting_storage_path`].
     pub meeting_storage_path: Mutex<String>,
+    /// See [`AppConfig::terms_accepted_version`].
+    pub terms_accepted_version: Mutex<String>,
     /// Notion integration target — see [`AppConfig::notion_target_id`].
     pub notion_target_id: Mutex<String>,
     pub notion_target_kind: Mutex<String>,
@@ -2166,6 +2182,7 @@ impl AppState {
             loopback_gain: loopback_gain_atomic,
             meeting_chunk_secs: Mutex::new(file_cfg.meeting_chunk_secs),
             meeting_storage_path: Mutex::new(file_cfg.meeting_storage_path.clone()),
+            terms_accepted_version: Mutex::new(file_cfg.terms_accepted_version.clone()),
             notion_target_id: Mutex::new(file_cfg.notion_target_id.clone()),
             notion_target_kind: Mutex::new(file_cfg.notion_target_kind.clone()),
             notion_target_title: Mutex::new(file_cfg.notion_target_title.clone()),
@@ -2441,6 +2458,11 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         meeting_chunk_secs: *state.meeting_chunk_secs.lock().map_err(|e| e.to_string())?,
         meeting_storage_path: state
             .meeting_storage_path
+            .lock()
+            .map_err(|e| e.to_string())?
+            .clone(),
+        terms_accepted_version: state
+            .terms_accepted_version
             .lock()
             .map_err(|e| e.to_string())?
             .clone(),
@@ -3270,6 +3292,25 @@ mod tests {
         cfg.meeting_generate_recap = true;
         save_config_file(&cfg);
         assert!(load_config_file().meeting_generate_recap);
+
+        save_config_file(&AppConfig::default());
+    }
+
+    /// Nobody has accepted the terms on a fresh install, and an acceptance
+    /// outlives the app: it is what stops the first-run checkbox and the
+    /// launch dialog from asking again.
+    #[test]
+    fn terms_acceptance_is_empty_by_default_and_survives_a_save_and_load() {
+        assert!(AppConfig::default().terms_accepted_version.is_empty());
+        assert!(
+            !TERMS_VERSION.is_empty() && TERMS_VERSION.len() <= 64,
+            "the version tag must satisfy the setter's own length guard"
+        );
+
+        let mut cfg = AppConfig::default();
+        cfg.terms_accepted_version = TERMS_VERSION.to_string();
+        save_config_file(&cfg);
+        assert_eq!(load_config_file().terms_accepted_version, TERMS_VERSION);
 
         save_config_file(&AppConfig::default());
     }

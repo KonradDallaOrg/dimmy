@@ -61,6 +61,7 @@ pub const NOT_SETTINGS: &[&str] = &[
     "stats_total_speaking_secs",
     "meeting_chunk_secs",
     "loopback_gain",
+    "terms_accepted_version",
     "notion_target_id",
     "notion_target_kind",
     "notion_target_title",
