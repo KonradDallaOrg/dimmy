@@ -2879,7 +2879,7 @@
                             VerticalAlignment="Top" Margin="0,2,0,0" />
                   <TextBlock TextWrapping="Wrap" FontSize="13"
                              Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                             Text="Dimmy never sends your transcriptions, audio, API keys, microphone names, or anything personal. Anonymous usage data and crash reports help us spot bugs and decide what to build next." />
+                             Text="Dimmy's own statistics never include your audio, transcripts, prompts or API keys. They use a random per-install ID. If you choose a cloud provider, your audio and text go to that provider." />
                 </StackPanel>
               </Border>
 

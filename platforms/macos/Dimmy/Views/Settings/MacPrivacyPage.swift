@@ -18,8 +18,8 @@ struct MacPrivacyPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             MacNote(
-                title: "Your transcriptions stay yours",
-                message: "Dimmy never sends your transcriptions, audio, API keys, or microphone names. Anonymous usage data and crash reports help us spot bugs and decide what to build next.",
+                title: "What Dimmy's statistics include",
+                message: "Dimmy's own statistics never include your audio, transcripts, prompts or API keys. They use a random per-install ID. If you choose a cloud provider, your audio and text go to that provider.",
                 systemImage: "shield.fill"
             )
             .padding(.bottom, 8)
@@ -114,7 +114,7 @@ struct MacPrivacyPage: View {
             MacTile {
                 MacRow(
                     "Send anonymous usage data",
-                    description: "No content, no identifiers.",
+                    description: "No content. A random per-install ID only.",
                     hint: "Events like 'app started', 'transcription completed in 2.3 s', 'cloud provider: groq'. Never the transcribed text, your microphone name, file paths, or your username.",
                     hintURL: URL(string: "https://dimmy.app/help/telemetry")
                 ) {
