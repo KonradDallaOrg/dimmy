@@ -74,7 +74,7 @@ dmg-assets/                      DMG installer background + layout
 - **Target:** `aarch64-apple-darwin` (Apple Silicon). Intel builds are not shipped.
 - **Configuration:** `~/.config/dimmy/config.json`. The Rust core is the only writer.
 - **Mac-only UI prefs:** `UserDefaults` (NOT in `config.json`) for OS-specific behaviours that don't cross platforms — `showInDock`, `showInMenuBar`, `useTahoeSettings`. Same reasoning Windows uses for `ui_prefs.json`.
-- **Keys:** `~/.config/dimmy/keys.enc` (AES-256-GCM).
+- **Keys:** `~/.config/dimmy/keys.enc` (AES-256-CTR + HMAC-SHA256).
 - **Logs:** `~/Library/Logs/dimmy/`.
 - **Installer:** DMG (see [`dmg-assets/`](dmg-assets) for layout). First launch needs right-click → Open or `xattr -d com.apple.quarantine /Applications/Dimmy.app` because we don't have a Developer ID.
 

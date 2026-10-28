@@ -37,7 +37,7 @@ If you spot anything in the above list inside the repo or in git history, **plea
 | Backend code disclosure | Backend is in a private repo; even the public PoC handlers reveal no cryptographic material |
 | Compromised client binary | Velopack release artifacts are not code-signed by an EV cert today (planned); SHA256 of installers published in release notes |
 | MITM on `license.dimmy.app` | HTTPS-only enforced in `core/src/provider.rs::validate_url`; Cloudflare TLS |
-| Local secret exfil | API keys encrypted with AES-256-GCM via machine-specific derivation in `keys.enc` (see `core/src/keystore.rs`) |
+| Local secret exfil | API keys encrypted with AES-256-CTR + HMAC-SHA256, key derived from user name + computer name, in `keys.enc` (see `core/src/keystore.rs`). Stops the file being read on another computer; does not protect against malware running as the same user |
 
 ## In-scope vs out-of-scope
 

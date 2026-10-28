@@ -28,7 +28,7 @@ No FFI boundary on Linux — the Linux UI crate imports the Rust core directly a
 ## Runtime facts
 
 - **Configuration:** `~/.config/dimmy/config.json`. Core is the only writer.
-- **Keys:** `~/.config/dimmy/keys.enc` (AES-256-GCM).
+- **Keys:** `~/.config/dimmy/keys.enc` (AES-256-CTR + HMAC-SHA256).
 - **Logs:** `~/.local/share/dimmy/logs/`.
 - **Installer:** AppImage. CPU-only whisper.cpp (`local-stt` default feature, no Vulkan) for portability across distros with varying Vulkan loader availability.
 - **User wanting GPU on Linux** rebuilds from source with `--features local-stt-vulkan`. Documented in BUILD.md.

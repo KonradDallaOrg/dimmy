@@ -592,7 +592,7 @@ struct MacOutputPage: View {
                     MacRow(
                         "Recap API key",
                         description: "Encrypted locally.",
-                        hint: "Stored encrypted on this device with AES-256. Used only for the recap call.",
+                        hint: "Stored encrypted on this device, tied to this computer. Used only for the recap call.",
                         hintURL: URL(string: "https://dimmy.app/help/api-keys"),
                         showsDivider: showRecapKeyField
                     ) {
@@ -868,7 +868,7 @@ struct MacOutputPage: View {
                                 MacRow(
                                     "LLM API key",
                                     description: "Encrypted locally.",
-                                    hint: "Stored encrypted on this device with AES-256. The provider only ever receives your transcript and this key, nothing else.",
+                                    hint: "Stored encrypted on this device, tied to this computer. The provider only ever receives your transcript and this key, nothing else.",
                                     hintURL: URL(string: "https://dimmy.app/help/api-keys"),
                                     showsDivider: showLlmKeyField
                                 ) {

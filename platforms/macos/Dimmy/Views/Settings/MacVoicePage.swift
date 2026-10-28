@@ -467,7 +467,7 @@ struct MacVoicePage: View {
                         MacRow(
                             "API key",
                             description: "Encrypted locally.",
-                            hint: "Stored encrypted on this device with AES-256. The provider only ever receives your audio and this key, nothing else.",
+                            hint: "Stored encrypted on this device, tied to this computer. The provider only ever receives your audio and this key, nothing else.",
                             hintURL: URL(string: "https://dimmy.app/help/api-keys"),
                             showsDivider: showKeyField
                         ) {
