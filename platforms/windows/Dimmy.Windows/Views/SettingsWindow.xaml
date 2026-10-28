@@ -1005,7 +1005,7 @@
                 </controls:SettingCard>
                 <controls:SettingCard Glyph="&#xE7C8;"
                                       Label="Start recording automatically"
-                                      InfoTip="Skips the prompt: the meeting starts the moment a call is detected, the window opens and the recording notice is read aloud to the participants. Needs call detection on."
+                                      InfoTip="Skips the prompt: the meeting starts the moment a call is detected and the window opens. Dimmy plays the recording notice on your speakers: participants on headphones or in a call usually won't hear it, and telling them is your responsibility. Needs call detection on."
                                       IsEnabled="{Binding CallDetectEnabled}"
                                       HelpUrl="https://dimmy.app/help/use-meeting-recaps">
                   <ToggleSwitch IsOn="{Binding CallDetectAutoRecord, Mode=TwoWay}"
