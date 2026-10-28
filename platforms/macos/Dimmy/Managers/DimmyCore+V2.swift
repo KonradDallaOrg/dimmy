@@ -272,6 +272,41 @@ extension DimmyCore {
         return String(cString: buffer)
     }
 
+    // MARK: - Legal notices + terms
+
+    /// Sizes the buffer to the exact length the core reports (the notices run
+    /// to ~1 MB, far past any fixed buffer).
+    private func sizedString(_ call: (UnsafeMutablePointer<CChar>?, Int32) -> Int32) -> String? {
+        let needed = call(nil, 0)
+        guard needed > 0 else { return nil }
+        let cap = Int(needed) + 1
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: cap)
+        defer { buffer.deallocate() }
+        buffer[0] = 0
+        guard call(buffer, Int32(cap)) > 0 else { return nil }
+        return String(cString: buffer)
+    }
+
+    /// The GNU AGPL v3 text.
+    func licenseText() -> String? {
+        sizedString { dimmy_license_text($0, $1) }
+    }
+
+    /// Third-party licence texts and copyright notices.
+    func thirdPartyNotices() -> String? {
+        sizedString { dimmy_third_party_notices($0, $1) }
+    }
+
+    /// Terms version to store in `terms_accepted_version` when the user accepts.
+    var termsVersion: String {
+        let bufLen: Int32 = 64
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
+        defer { buffer.deallocate() }
+        buffer[0] = 0
+        guard dimmy_terms_version(buffer, bufLen) > 0 else { return "" }
+        return String(cString: buffer)
+    }
+
     // MARK: - Recording consent
 
     /// Recording-consent notice text from the shared core. `kind` is "modal"

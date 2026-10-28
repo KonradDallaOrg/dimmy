@@ -311,6 +311,17 @@ int32_t dimmy_meetings_dir(char * _Nonnull out_buf, int32_t buf_len);
 /// and call again).
 int32_t dimmy_model_catalog_json(char * _Nullable out_buf, int32_t buf_len);
 
+/// GNU AGPL v3 text and the third-party licence notices, compiled into the
+/// core. Same length-query contract as dimmy_model_catalog_json: returns the
+/// TOTAL byte length, pass out_buf=NULL to size, then call again.
+int32_t dimmy_license_text(char * _Nullable out_buf, int32_t buf_len);
+int32_t dimmy_third_party_notices(char * _Nullable out_buf, int32_t buf_len);
+
+/// Terms of Service / EULA version the user is asked to accept. Store it in
+/// the `terms_accepted_version` config field on acceptance. Bytes written, -1
+/// on a null buffer.
+int32_t dimmy_terms_version(char * _Nonnull out_buf, int32_t buf_len);
+
 /// Recording-consent notice text (shared across platforms). `kind` is
 /// "modal" (pre-record confirmation shown to the recorder) or "announcement"
 /// (spoken via TTS + pasted in the call chat for the participants; the

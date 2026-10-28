@@ -8,6 +8,7 @@ import SwiftUI
 struct MacAboutPage: View {
     @ObservedObject var appState: AppState
     @ObservedObject private var updates = UpdateService.shared
+    @State private var legalSheet: LegalSheetKind?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -29,8 +30,12 @@ struct MacAboutPage: View {
 
             setupGroup
             resourcesGroup
+            legalGroup
             // "Made with Claude Code" credit removed per Win redesign
             // (commit 4080ff06).
+        }
+        .sheet(item: $legalSheet) { kind in
+            LegalSheet(title: kind.title, text: kind.text) { legalSheet = nil }
         }
     }
 
@@ -196,26 +201,49 @@ struct MacAboutPage: View {
                     }
                 }
                 MacRow(
-                    "GitHub repository",
+                    "Source code of this version",
                     description: "Source, issues, releases",
                     icon: "chevron.left.forwardslash.chevron.right",
-                    iconBackground: Color(red: 0.11, green: 0.11, blue: 0.12)
+                    iconBackground: Color(red: 0.11, green: 0.11, blue: 0.12),
+                    showsDivider: false
                 ) {
-                    Link(destination: URL(string: "https://github.com/KonradDallaOrg/dimmy")!) {
+                    Link(destination: URL(string: "https://github.com/KonradDallaOrg/dimmy/tree/v\(versionString)")!) {
                         Text("github.com ›")
                             .font(.system(size: 12))
                     }
                 }
+            }
+        }
+    }
+
+    // MARK: Legal
+
+    // AGPL-3.0 sections 0 and 5(d): the notice, the no-warranty statement and
+    // the licence texts, reachable from the running app.
+    private var legalGroup: some View {
+        Group {
+            MacGroupLabel(text: "Legal")
+            Text("Dimmy v\(versionString) \u{00A9} Konrad Dalla. Free software under the GNU AGPL v3. NO WARRANTY.")
+                .font(.system(size: 12))
+                .foregroundStyle(Color.macTextSecondary)
+                .padding(.bottom, 8)
+            MacTile {
                 MacRow(
-                    "License",
-                    description: "Open source, free to fork",
+                    "Licence (AGPL-3.0)",
+                    description: "The full licence text",
                     icon: "doc.text.fill",
+                    iconBackground: Color.gray
+                ) {
+                    Button("View") { legalSheet = .license }
+                }
+                MacRow(
+                    "Open source notices",
+                    description: "Licences of the components Dimmy includes",
+                    icon: "doc.on.doc.fill",
                     iconBackground: Color.gray,
                     showsDivider: false
                 ) {
-                    Link(destination: URL(string: "https://github.com/KonradDallaOrg/dimmy/blob/main/LICENSE")!) {
-                        Text("View ›").font(.system(size: 12))
-                    }
+                    Button("View") { legalSheet = .notices }
                 }
             }
         }
@@ -262,4 +290,67 @@ struct MacAboutPage: View {
         }
         return "this build"
     }
+}
+
+// MARK: - Legal text sheet
+
+private enum LegalSheetKind: String, Identifiable {
+    case license
+    case notices
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .license: return "Licence (AGPL-3.0)"
+        case .notices: return "Open source notices"
+        }
+    }
+
+    var text: String {
+        let raw = self == .license
+            ? DimmyCore.shared.licenseText()
+            : DimmyCore.shared.thirdPartyNotices()
+        return raw ?? "Text unavailable."
+    }
+}
+
+private struct LegalSheet: View {
+    let title: String
+    let text: String
+    let onClose: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text(title).font(.headline)
+                Spacer()
+                Button("Close", action: onClose)
+                    .keyboardShortcut(.cancelAction)
+            }
+            .padding(12)
+            Divider()
+            LegalTextView(text: text)
+        }
+        .frame(minWidth: 640, minHeight: 480)
+    }
+}
+
+/// NSTextView, not SwiftUI Text: the notices are ~1 MB.
+private struct LegalTextView: NSViewRepresentable {
+    let text: String
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSTextView.scrollableTextView()
+        if let tv = scroll.documentView as? NSTextView {
+            tv.isEditable = false
+            tv.isSelectable = true
+            tv.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+            tv.textContainerInset = NSSize(width: 8, height: 8)
+            tv.string = text
+        }
+        return scroll
+    }
+
+    func updateNSView(_ nsView: NSScrollView, context: Context) {}
 }
