@@ -305,6 +305,22 @@ fn decrypt_value(master_key: &[u8; 32], encoded: &str) -> Result<String, String>
     String::from_utf8(plaintext).map_err(|e| format!("UTF-8 decode error: {}", e))
 }
 
+/// Seal `plaintext` under the machine key, in the same format as a `keys.enc`
+/// value. Anything stored this way is readable only on the machine and user
+/// account it was written on.
+#[cfg(feature = "telegram")]
+pub(crate) fn seal_with_machine_key(plaintext: &[u8]) -> String {
+    assert!(!plaintext.is_empty(), "nothing to seal");
+    encrypt_value(&derive_machine_key(), plaintext)
+}
+
+/// Inverse of [`seal_with_machine_key`]. `Err` on a wrong machine, a tampered
+/// file or garbage; never panics on bad input.
+#[cfg(feature = "telegram")]
+pub(crate) fn open_with_machine_key(sealed: &str) -> Result<Vec<u8>, String> {
+    decrypt_value(&derive_machine_key(), sealed).map(String::into_bytes)
+}
+
 /// Constant-time comparison to prevent timing attacks.
 fn constant_time_eq(a: &[u8; 32], b: &[u8; 32]) -> bool {
     let mut diff = 0u8;
