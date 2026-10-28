@@ -56,6 +56,25 @@ pub fn announcement_text(lang: &str, cloud_processing: bool) -> String {
     announcement_variant(lang, cloud_processing, 0)
 }
 
+/// True when the meeting's audio or transcript leaves the device: cloud STT,
+/// cloud LLM, or a recap that runs on a cloud model or a subscription. The
+/// recap is chosen independently of `llm_mode` (`recap_model_override`,
+/// `recap_auth_method`), so the notice must look at it too, not only at the
+/// two mode switches. Errs toward disclosing: a spurious "external service"
+/// is a harmless over-statement, "never leaves my device" when it does is not.
+pub fn cloud_processing(
+    stt_mode: &str,
+    llm_mode: &str,
+    recap_model_override: &str,
+    recap_auth_method: &str,
+) -> bool {
+    let (recap_provider, _) = crate::ffi::parse_recap_override(recap_model_override);
+    stt_mode.eq_ignore_ascii_case("cloud")
+        || llm_mode.eq_ignore_ascii_case("cloud")
+        || recap_provider == "cloud"
+        || (recap_auth_method == "subscription" && recap_provider != "local")
+}
+
 /// How many wordings of the announcement exist per language and per storage
 /// mode. Variant 0 is the original wording and must stay byte-identical: it
 /// is what shipped, and the chat message is a legal notice, not copy.
@@ -333,6 +352,48 @@ pub fn append_event(kind: &str, lang: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The participant notice says where the audio goes. A meeting whose STT
+    // and LLM are both local still sends the transcript to a provider when
+    // the recap model is a cloud one or the recap runs on a subscription, and
+    // "the recording never leaves my device" would then be a false statement
+    // read out to the other people on the call.
+    #[test]
+    fn all_local_without_a_cloud_recap_is_not_cloud_processing() {
+        assert!(!cloud_processing("local", "local", "", ""));
+        assert!(!cloud_processing("local", "local", "local:gemma.gguf", ""));
+    }
+
+    #[test]
+    fn a_cloud_recap_model_override_is_cloud_processing() {
+        assert!(cloud_processing("local", "local", "cloud:gpt-5", ""));
+        // Legacy bare model id: always meant a cloud model.
+        assert!(cloud_processing("local", "local", "gemini-2.5-flash", ""));
+    }
+
+    #[test]
+    fn a_subscription_recap_is_cloud_processing_unless_the_recap_is_local() {
+        assert!(cloud_processing(
+            "local",
+            "local",
+            "cloud:claude-opus-4-7",
+            "subscription"
+        ));
+        assert!(cloud_processing("local", "cloud", "", "subscription"));
+        assert!(!cloud_processing(
+            "local",
+            "local",
+            "local:gemma.gguf",
+            "subscription"
+        ));
+    }
+
+    #[test]
+    fn cloud_stt_or_cloud_llm_stay_cloud_processing() {
+        assert!(cloud_processing("cloud", "local", "", ""));
+        assert!(cloud_processing("local", "cloud", "", ""));
+        assert!(cloud_processing("CLOUD", "local", "", ""));
+    }
 
     #[test]
     fn audio_mute_needs_prerelease_and_the_marker_file() {

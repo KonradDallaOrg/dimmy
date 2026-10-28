@@ -6895,20 +6895,7 @@ pub unsafe extern "C" fn dimmy_consent_text(
     let lang = CStr::from_ptr(lang_ptr).to_str().unwrap_or("en");
     let text = match kind {
         "modal" => crate::consent::modal_text(lang),
-        "announcement" => {
-            let st = state();
-            let stt_cloud = st
-                .stt_mode
-                .lock()
-                .map(|m| m.eq_ignore_ascii_case("cloud"))
-                .unwrap_or(false);
-            let llm_cloud = st
-                .llm_mode
-                .lock()
-                .map(|m| m.eq_ignore_ascii_case("cloud"))
-                .unwrap_or(false);
-            crate::consent::announcement_text(lang, stt_cloud || llm_cloud)
-        }
+        "announcement" => crate::consent::announcement_text(lang, consent_cloud_processing()),
         // Localized dialog chrome: "title" | "intro" | "confirm" | "cancel".
         other => match crate::consent::ui_text(other, lang) {
             Some(s) => s,
@@ -6975,22 +6962,20 @@ pub unsafe extern "C" fn dimmy_detect_audio_language(
 /// `kind` is "title" or "hint". Returns the byte length written, -1 on bad
 /// args or an unknown kind.
 ///
-/// True when the audio leaves the device: STT or LLM is configured cloud.
-/// The announcement must disclose it, so both the text and the recording ask
-/// the same question here rather than each deciding for itself.
+/// True when the audio or transcript leaves the device: STT or LLM is cloud,
+/// or the recap runs on a cloud model / subscription (see
+/// [`crate::consent::cloud_processing`]). The announcement must disclose it,
+/// so both the text and the recording ask the same question here rather than
+/// each deciding for itself.
 fn consent_cloud_processing() -> bool {
     let st = state();
-    let stt = st
-        .stt_mode
-        .lock()
-        .map(|m| m.eq_ignore_ascii_case("cloud"))
-        .unwrap_or(false);
-    let llm = st
-        .llm_mode
-        .lock()
-        .map(|m| m.eq_ignore_ascii_case("cloud"))
-        .unwrap_or(false);
-    stt || llm
+    let read = |m: &Mutex<String>| m.lock().map(|s| s.clone()).unwrap_or_default();
+    crate::consent::cloud_processing(
+        &read(&st.stt_mode),
+        &read(&st.llm_mode),
+        &read(&st.recap_model_override),
+        &read(&st.recap_auth_method),
+    )
 }
 
 /// The participant announcement for THIS meeting: picks one of the wordings
@@ -7088,7 +7073,11 @@ pub unsafe extern "C" fn dimmy_ai_notice_text(
 
 /// Append a recording-consent event to the local audit log
 /// (`<config_dir>/consent.jsonl`). `kind` is the host's event tag:
-/// "confirmed" / "declined" / "announced" / "chat_copied". `lang` (may be
+/// "confirmed" / "declined" / "notice_played_locally" / "notice_copied" /
+/// "auto_start_confirmed" (older builds also wrote "announced" and
+/// "chat_copied"; those lines stay as written). "announced" must never be
+/// logged for local playback, which proves nothing about the participants.
+/// `lang` (may be
 /// null) records which notice language was used. Returns 0, -1 on bad args.
 ///
 /// # Safety
@@ -7120,6 +7109,9 @@ pub unsafe extern "C" fn dimmy_consent_log_event(
         "cancelled" => "cancelled",
         "announced" => "announced",
         "announce_muted" => "announce_muted",
+        "notice_played_locally" => "notice_played_locally",
+        "notice_copied" => "notice_copied",
+        "auto_start_confirmed" => "auto_start_confirmed",
         "declined" => "declined",
         _ => "other",
     };
