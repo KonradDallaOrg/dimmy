@@ -59,6 +59,13 @@ extension DimmyCore {
         case historySync   = "history_sync"
         case premiumStyles = "premium_styles"
 
+        /// What the License screen lists. The managed scopes stay valid token
+        /// scopes but are hidden: no Dimmy-hosted service exists, so showing
+        /// them as "included" would be false.
+        public static var listed: [LicenseScope] {
+            allCases.filter { $0 != .managedStt && $0 != .managedLlm }
+        }
+
         public var display: String {
             switch self {
             case .managedStt:    return "Managed STT"
