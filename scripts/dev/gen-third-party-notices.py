@@ -1,0 +1,187 @@
+#!/usr/bin/env python3
+"""Regenerate core/assets/THIRD_PARTY_NOTICES.md (Python stdlib only).
+
+AGPL-3.0 section 0 ("Appropriate Legal Notices") and the MIT / BSD / Apache
+conditions all require the licence text and copyright notice to travel with the
+binary. The file is compiled into dimmy_lib (`dimmy_third_party_notices`), so
+every UI shows the same bytes.
+
+Rust side: every NORMAL (non build, non dev) dependency of the shipped crates,
+for all targets, taken from `cargo metadata`. The licence files found in each
+crate's own directory are grouped by identical text, so a licence is printed
+once per distinct text and keeps its original copyright lines.
+
+Non-Rust side: hand-maintained list in scripts/dev/third-party-manual.md plus
+the full texts in scripts/dev/third-party-texts/*.txt.
+
+Usage (from the repo root, with the crates already downloaded):
+    python3 scripts/dev/gen-third-party-notices.py
+    python3 scripts/dev/gen-third-party-notices.py --metadata core.json --metadata linux.json
+
+The feature sets below are the union of what the release pipelines build: the
+frozen Windows set plus the macOS Metal/CoreML/FluidAudio set. Update them with
+the pipelines.
+"""
+import argparse
+import json
+import os
+import subprocess
+import sys
+from collections import OrderedDict
+
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+CONFIGS = [
+    (
+        "core/Cargo.toml",
+        "local-stt-vulkan,local-stt-parakeet,local-llm-vulkan,denoise-gtcrn,"
+        "local-stt-qwen,license-client,telemetry-sentry,local-stt-metal,"
+        "local-stt-coreml,local-stt-parakeet-fluid,local-llm-metal",
+    ),
+    ("platforms/linux/Cargo.toml", "license-client"),
+    ("mcp-server/Cargo.toml", ""),
+]
+
+LICENSE_PREFIXES = ("license", "licence", "copying", "unlicense", "notice", "copyright")
+
+
+def run_metadata(manifest, features):
+    cmd = ["cargo", "metadata", "--locked", "--format-version", "1",
+           "--manifest-path", os.path.join(ROOT, manifest)]
+    if features:
+        cmd += ["--features", features]
+    out = subprocess.run(cmd, check=True, capture_output=True).stdout
+    return json.loads(out.decode("utf-8"))
+
+
+def runtime_packages(meta):
+    by_id = {p["id"]: p for p in meta["packages"]}
+    nodes = {n["id"]: n for n in meta["resolve"]["nodes"]}
+    root = meta["resolve"]["root"]
+    seen, stack = set(), [root]
+    while stack:
+        i = stack.pop()
+        if i in seen:
+            continue
+        seen.add(i)
+        for d in nodes[i]["deps"]:
+            if any(k["kind"] is None for k in d["dep_kinds"]):
+                stack.append(d["pkg"])
+    seen.discard(root)
+    # The Linux UI and the MCP server depend on Dimmy's own core; that is the
+    # work being licensed, not a third-party notice.
+    return [by_id[i] for i in seen if by_id[i]["name"] != "dimmy"]
+
+
+def read_text(path):
+    with open(path, "rb") as f:
+        data = f.read()
+    return data.decode("utf-8", errors="replace").replace("\r\n", "\n").strip()
+
+
+def license_files(pkg):
+    crate_dir = os.path.dirname(pkg["manifest_path"])
+    found = []
+    try:
+        names = sorted(os.listdir(crate_dir))
+    except OSError:
+        return found
+    for name in names:
+        full = os.path.join(crate_dir, name)
+        if os.path.isfile(full) and name.lower().startswith(LICENSE_PREFIXES):
+            found.append(read_text(full))
+    explicit = pkg.get("license_file")
+    if explicit and not found:
+        full = os.path.join(crate_dir, explicit)
+        if os.path.isfile(full):
+            found.append(read_text(full))
+    return found
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--metadata", action="append", default=[],
+                    help="pre-captured `cargo metadata` JSON (repeatable); default runs cargo")
+    ap.add_argument("--out", default=os.path.join(ROOT, "core", "assets", "THIRD_PARTY_NOTICES.md"))
+    args = ap.parse_args()
+
+    metas = [json.load(open(p, encoding="utf-8")) for p in args.metadata] or [
+        run_metadata(m, f) for m, f in CONFIGS
+    ]
+
+    crates = {}
+    for meta in metas:
+        for p in runtime_packages(meta):
+            crates[(p["name"], p["version"])] = p
+    ordered = sorted(crates.values(), key=lambda p: (p["name"].lower(), p["version"]))
+    assert ordered, "no runtime crates found: cargo metadata output is empty"
+
+    groups = OrderedDict()
+    no_file = []
+    for p in ordered:
+        texts = license_files(p)
+        if not texts:
+            no_file.append(p)
+        for t in texts:
+            groups.setdefault(t, []).append("%s %s" % (p["name"], p["version"]))
+
+    o = []
+    o.append("# Open source notices\n")
+    o.append("Dimmy is free software under the GNU Affero General Public License v3 "
+             "(see the Licence screen). It includes the third-party components below, "
+             "each under its own licence. The licence texts and copyright notices are "
+             "reproduced here as those licences require.\n")
+    o.append("Generated by scripts/dev/gen-third-party-notices.py. Do not edit the "
+             "Rust section by hand.\n")
+
+    o.append("## Rust crates (%d)\n" % len(ordered))
+    o.append("| Crate | Version | Licence | Repository |")
+    o.append("|---|---|---|---|")
+    for p in ordered:
+        lic = (p.get("license") or ("see " + p["license_file"] if p.get("license_file") else "see crate")).replace("|", "/")
+        o.append("| %s | %s | %s | %s |" % (p["name"], p["version"], lic, p.get("repository") or p.get("homepage") or ""))
+    o.append("")
+
+    manual = os.path.join(ROOT, "scripts", "dev", "third-party-manual.md")
+    o.append(read_text(manual))
+    o.append("")
+
+    o.append("## Licence texts: non-Rust components\n")
+    tdir = os.path.join(ROOT, "scripts", "dev", "third-party-texts")
+    for name in sorted(os.listdir(tdir)):
+        o.append("### %s\n" % os.path.splitext(name)[0])
+        o.append("```text\n%s\n```\n" % read_text(os.path.join(tdir, name)))
+
+    o.append("## Licence texts: Rust crates\n")
+    o.append("Identical texts are printed once, followed by the crates that carry them.\n")
+    for text, who in sorted(groups.items(), key=lambda kv: kv[1][0].lower()):
+        o.append("### Used by: %s\n" % ", ".join(who))
+        o.append("```text\n%s\n```\n" % text)
+
+    if no_file:
+        o.append("## Crates without a licence file in the package\n")
+        o.append("These crates declare a licence in their manifest (see the table above) "
+                 "but ship no separate licence file. The standard SPDX text of each "
+                 "licence they name follows; the copyright holders are the authors "
+                 "named in each crate's repository.\n")
+        spdx_dir = os.path.join(ROOT, "scripts", "dev", "third-party-texts-spdx")
+        by_id = OrderedDict()
+        for p in no_file:
+            expr = (p.get("license") or "").replace("/", " OR ")
+            for tok in expr.replace("(", " ").replace(")", " ").split():
+                if tok in ("OR", "AND", "WITH") or not os.path.isfile(os.path.join(spdx_dir, tok + ".txt")):
+                    continue
+                by_id.setdefault(tok, []).append("%s %s" % (p["name"], p["version"]))
+        for spdx, who in sorted(by_id.items()):
+            o.append("### %s, used by: %s\n" % (spdx, ", ".join(who)))
+            o.append("```text\n%s\n```\n" % read_text(os.path.join(spdx_dir, spdx + ".txt")))
+
+    with open(args.out, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(o))
+    print("wrote %s: %d crates, %d distinct licence texts, %d without a file"
+          % (args.out, len(ordered), len(groups), len(no_file)))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
