@@ -7,7 +7,6 @@
 
 use std::sync::Arc;
 
-use adw::prelude::*;
 use dimmy_lib::AppState;
 use gtk4::prelude::*;
 use libadwaita as adw;
