@@ -954,4 +954,52 @@ public class SettingsViewModelTests
         Assert.DoesNotContain("authentication_error", msg);
         Assert.DoesNotContain("x-api-key", msg);
     }
+
+    [Fact]
+    public void RefreshDevices_shows_a_mic_plugged_in_after_launch()
+    {
+        var vm = new SettingsViewModel();
+        vm.Devices = ["Microfono (Realtek)"];
+        vm.SelectedDevice = "Microfono (Realtek)";
+
+        vm.RefreshDevices(["Microfono (Realtek)", "Jabra Evolve2 65"]);
+
+        Assert.Equal(["Microfono (Realtek)", "Jabra Evolve2 65"], vm.Devices);
+        Assert.Equal("Microfono (Realtek)", vm.SelectedDevice);
+    }
+
+    [Fact]
+    public void RefreshDevices_keeps_the_selection_the_combobox_drops()
+    {
+        // A TwoWay-bound ComboBox writes null back into SelectedItem when its
+        // ItemsSource is replaced. Without the restore that null would be
+        // auto-saved and the picker would show nothing.
+        var vm = new SettingsViewModel();
+        vm.Devices = ["Microfono (Realtek)"];
+        vm.SelectedDevice = "Microfono (Realtek)";
+        vm.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(SettingsViewModel.Devices)) vm.SelectedDevice = null;
+        };
+
+        vm.RefreshDevices(["Microfono (Realtek)", "Jabra Evolve2 65"]);
+
+        Assert.Equal("Microfono (Realtek)", vm.SelectedDevice);
+    }
+
+    [Fact]
+    public void RefreshDevices_with_the_same_list_changes_nothing()
+    {
+        // Every property change schedules an auto-save, so re-reading an
+        // unchanged list must stay silent.
+        var vm = new SettingsViewModel();
+        vm.Devices = ["Microfono (Realtek)"];
+        vm.SelectedDevice = "Microfono (Realtek)";
+        var changes = 0;
+        vm.PropertyChanged += (_, _) => changes++;
+
+        vm.RefreshDevices(["Microfono (Realtek)"]);
+
+        Assert.Equal(0, changes);
+    }
 }

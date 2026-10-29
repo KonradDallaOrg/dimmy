@@ -763,6 +763,18 @@ public partial class SettingsViewModel : ObservableObject
         catch (JsonException) { }
     }
 
+    /// Replace the input-device list with a fresh enumeration. The selection
+    /// is put back because the TwoWay-bound ComboBox writes null into it when
+    /// its ItemsSource changes, and that null would be auto-saved.
+    public void RefreshDevices(List<string> fresh)
+    {
+        ArgumentNullException.ThrowIfNull(fresh);
+        if (fresh.SequenceEqual(Devices)) return;
+        var keep = SelectedDevice;
+        Devices = fresh;
+        SelectedDevice = keep;
+    }
+
     /// <summary>
     /// Serialize the Settings ViewModel to a JSON payload for
     /// <c>dimmy_set_config_json</c>.

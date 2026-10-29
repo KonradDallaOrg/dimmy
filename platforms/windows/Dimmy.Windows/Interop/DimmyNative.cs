@@ -836,6 +836,10 @@ public static class DimmyNative
     // ── Local STT helpers ────────────────────────────────────────
     public static string? ListLocalModels() => ReadBuffer(dimmy_list_local_models);
 
+    /// Live enumeration. The `devices` field of dimmy_get_config_json is the
+    /// list taken at launch, so a mic plugged in later is missing from it.
+    public static string? ListInputDevicesJson() => ReadBuffer(dimmy_list_devices_json, 16384);
+
     public static string? QwenAsrModelsJson() => ReadBuffer(dimmy_qwen_asr_models_json);
 
     // ── Local LLM helpers ───────────────────────────────────────
