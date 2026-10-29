@@ -2975,6 +2975,20 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
     if let Some(s) = v["terms_accepted_version"].as_str() {
         apply_terms_accepted_version(st, s);
     }
+    // Only a real answer is applied: an absent key or null never turns an
+    // answer back into "not asked".
+    if let Some(yes) = v["analytics_consent"].as_bool() {
+        crate::telemetry::set_enabled(yes);
+        if let Ok(mut c) = st.analytics_consent.lock() {
+            *c = Some(yes);
+        }
+    }
+    if let Some(yes) = v["crash_reports_consent"].as_bool() {
+        crate::telemetry::set_crash_enabled(yes);
+        if let Ok(mut c) = st.crash_reports_consent.lock() {
+            *c = Some(yes);
+        }
+    }
     // Meeting storage override. Identity-class field: the host UI omits
     // it from a normal full-config save when empty (else a transient
     // empty VM wipes the saved dir). An explicit "" here is the

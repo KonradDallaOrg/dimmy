@@ -122,7 +122,16 @@ pub fn init() {
                     // so a long transcript-producing burst can't fill
                     // the buffer with sensitive lines before a panic.
                     max_breadcrumbs: 20,
-                    before_send: Some(std::sync::Arc::new(scrub_event)),
+                    // Panics reach Sentry through its own integration, not
+                    // through capture_*, so this is the only place the
+                    // consent switch can stop them.
+                    before_send: Some(std::sync::Arc::new(|event| {
+                        if is_enabled() {
+                            scrub_event(event)
+                        } else {
+                            None
+                        }
+                    })),
                     before_breadcrumb: Some(std::sync::Arc::new(scrub_breadcrumb)),
                     ..Default::default()
                 },
@@ -571,12 +580,6 @@ fn scrub_event(
     mut event: sentry::protocol::Event<'static>,
 ) -> Option<sentry::protocol::Event<'static>> {
     use crate::telemetry::sanitize::looks_like_secret;
-
-    // Panics reach Sentry through its own integration, not through
-    // capture_*, so this is the only place the switch can stop them.
-    if !is_enabled() {
-        return None;
-    }
 
     // Drop server name (may include hostname / username on some OSes).
     event.server_name = None;
