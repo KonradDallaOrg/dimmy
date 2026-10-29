@@ -55,7 +55,8 @@ fn sentry_release(version: &str, build_id: &str) -> String {
 }
 
 #[cfg(feature = "telemetry-sentry")]
-static ENABLED: AtomicBool = AtomicBool::new(true);
+// Off until the saved consent says yes: nothing leaves before the answer.
+static ENABLED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(feature = "telemetry-sentry")]
 static GUARD: std::sync::OnceLock<Option<ClientInitGuard>> = std::sync::OnceLock::new();
@@ -121,7 +122,16 @@ pub fn init() {
                     // so a long transcript-producing burst can't fill
                     // the buffer with sensitive lines before a panic.
                     max_breadcrumbs: 20,
-                    before_send: Some(std::sync::Arc::new(scrub_event)),
+                    // Panics reach Sentry through its own integration, not
+                    // through capture_*, so this is the only place the
+                    // consent switch can stop them.
+                    before_send: Some(std::sync::Arc::new(|event| {
+                        if is_enabled() {
+                            scrub_event(event)
+                        } else {
+                            None
+                        }
+                    })),
                     before_breadcrumb: Some(std::sync::Arc::new(scrub_breadcrumb)),
                     ..Default::default()
                 },

@@ -133,6 +133,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 self.onboardingWindow = nil
                 self.pillWindowController?.show()
                 self.applyActivationPolicy()
+                // Fresh install: the telemetry question comes right after
+                // onboarding. Deferred one turn so the onboarding window is
+                // gone before the alert's nested loop starts.
+                if DimmyCore.shared.isInitialized,
+                   TelemetryConsentPrompt.needsAnswer(in: DimmyCore.shared.getConfig()) {
+                    DispatchQueue.main.async { MainActor.assumeIsolated { TelemetryConsentPrompt.present() } }
+                }
             }
             .store(in: &cancellables)
 
@@ -350,11 +357,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 if let cfg = cfg {
                     self.appState.loadFromRustConfig(cfg)
                 }
-                // Existing installs that have not accepted the current terms:
-                // one dialog per launch, after this block finishes (the alert
-                // runs a nested loop and must not hold up the startup below).
-                if self.appState.isOnboardingComplete, !TermsPrompt.isAccepted(in: cfg) {
-                    DispatchQueue.main.async { MainActor.assumeIsolated { TermsPrompt.present() } }
+                // Existing installs that have not accepted the current terms
+                // or answered the telemetry question: one dialog each per
+                // launch, after this block finishes (the alerts run a nested
+                // loop and must not hold up the startup below). One block so
+                // the second waits for the first instead of stacking on it.
+                if self.appState.isOnboardingComplete {
+                    let askTerms = !TermsPrompt.isAccepted(in: cfg)
+                    let askConsent = TelemetryConsentPrompt.needsAnswer(in: cfg)
+                    if askTerms || askConsent {
+                        DispatchQueue.main.async {
+                            MainActor.assumeIsolated {
+                                if askTerms { TermsPrompt.present() }
+                                if askConsent { TelemetryConsentPrompt.present() }
+                            }
+                        }
+                    }
                 }
                 hkLog("[AppDelegate] core ready — starting HotkeyManager")
                 HotkeyManager.shared.start(appState: self.appState)

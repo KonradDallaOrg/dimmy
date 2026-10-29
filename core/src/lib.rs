@@ -1035,6 +1035,12 @@ pub struct AppConfig {
     /// host when the box is ticked; only a newer `TERMS_VERSION` re-asks.
     /// Identity-class: an empty value is never applied over a saved one.
     pub terms_accepted_version: String,
+    /// The user's answer to "send anonymous usage statistics?". `None` =
+    /// not asked yet, and nothing is sent until there is an answer: consent
+    /// first (ePrivacy art. 5(3), Codice privacy art. 122), never a default.
+    pub analytics_consent: Option<bool>,
+    /// Same question for crash reports. See [`AppConfig::analytics_consent`].
+    pub crash_reports_consent: Option<bool>,
     /// Notion integration target — UUID of the parent page or database
     /// where each meeting recap lands. Empty string = no target
     /// configured (Settings UI shows the onboarding flow).
@@ -1227,6 +1233,8 @@ impl Default for AppConfig {
             meeting_chunk_secs: DEFAULT_MEETING_CHUNK_SECS,
             meeting_storage_path: String::new(),
             terms_accepted_version: String::new(),
+            analytics_consent: None,
+            crash_reports_consent: None,
             notion_target_id: String::new(),
             notion_target_kind: String::new(),
             notion_target_title: String::new(),
@@ -1338,6 +1346,8 @@ pub fn save_config_file(cfg: &AppConfig) {
             "meeting_chunk_secs": cfg.meeting_chunk_secs,
             "meeting_storage_path": cfg.meeting_storage_path,
             "terms_accepted_version": cfg.terms_accepted_version,
+            "analytics_consent": cfg.analytics_consent,
+            "crash_reports_consent": cfg.crash_reports_consent,
             "notion_target_id": cfg.notion_target_id,
             "notion_target_kind": cfg.notion_target_kind,
             "notion_target_title": cfg.notion_target_title,
@@ -1587,6 +1597,8 @@ pub fn load_config_file() -> AppConfig {
                         .as_str()
                         .unwrap_or(&defaults.terms_accepted_version)
                         .to_string(),
+                    analytics_consent: v["analytics_consent"].as_bool(),
+                    crash_reports_consent: v["crash_reports_consent"].as_bool(),
                     confluence_site: v["confluence_site"]
                         .as_str()
                         .unwrap_or(&defaults.confluence_site)
@@ -2012,6 +2024,10 @@ pub struct AppState {
     pub meeting_storage_path: Mutex<String>,
     /// See [`AppConfig::terms_accepted_version`].
     pub terms_accepted_version: Mutex<String>,
+    /// See [`AppConfig::analytics_consent`].
+    pub analytics_consent: Mutex<Option<bool>>,
+    /// See [`AppConfig::crash_reports_consent`].
+    pub crash_reports_consent: Mutex<Option<bool>>,
     /// Notion integration target — see [`AppConfig::notion_target_id`].
     pub notion_target_id: Mutex<String>,
     pub notion_target_kind: Mutex<String>,
@@ -2196,6 +2212,8 @@ impl AppState {
             meeting_chunk_secs: Mutex::new(file_cfg.meeting_chunk_secs),
             meeting_storage_path: Mutex::new(file_cfg.meeting_storage_path.clone()),
             terms_accepted_version: Mutex::new(file_cfg.terms_accepted_version.clone()),
+            analytics_consent: Mutex::new(file_cfg.analytics_consent),
+            crash_reports_consent: Mutex::new(file_cfg.crash_reports_consent),
             notion_target_id: Mutex::new(file_cfg.notion_target_id.clone()),
             notion_target_kind: Mutex::new(file_cfg.notion_target_kind.clone()),
             notion_target_title: Mutex::new(file_cfg.notion_target_title.clone()),
@@ -2479,6 +2497,11 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
             .lock()
             .map_err(|e| e.to_string())?
             .clone(),
+        analytics_consent: *state.analytics_consent.lock().map_err(|e| e.to_string())?,
+        crash_reports_consent: *state
+            .crash_reports_consent
+            .lock()
+            .map_err(|e| e.to_string())?,
         notion_target_id: state
             .notion_target_id
             .lock()
@@ -3229,6 +3252,13 @@ mod tests {
     }
 
     #[test]
+    fn consent_is_unasked_by_default() {
+        let cfg = AppConfig::default();
+        assert_eq!(cfg.analytics_consent, None);
+        assert_eq!(cfg.crash_reports_consent, None);
+    }
+
+    #[test]
     fn load_config_reads_input_gain() {
         let tmp = std::env::temp_dir().join("dimmy-test-gain-present");
         let _ = std::fs::create_dir_all(&tmp);
@@ -3265,6 +3295,8 @@ mod tests {
         cfg.overlay_position = "Top Left".to_string();
         cfg.keep_in_clipboard = true;
         cfg.diarization_enabled = true;
+        cfg.analytics_consent = Some(false);
+        cfg.crash_reports_consent = Some(true);
         save_config_file(&cfg);
 
         let loaded = load_config_file();
@@ -3278,6 +3310,8 @@ mod tests {
         assert_eq!(loaded.overlay_position, "Top Left");
         assert!(loaded.keep_in_clipboard);
         assert!(loaded.diarization_enabled);
+        assert_eq!(loaded.analytics_consent, Some(false));
+        assert_eq!(loaded.crash_reports_consent, Some(true));
 
         // Restore default
         save_config_file(&AppConfig::default());

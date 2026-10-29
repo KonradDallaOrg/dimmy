@@ -749,6 +749,22 @@ public partial class App : Application
         }
     }
 
+    /// <summary>Fresh and existing installs alike: ask until there is an
+    /// answer. StartNormalMode also runs when the first-launch wizard closes,
+    /// so a new user meets this right after onboarding.</summary>
+    private void ShowStatsConsentIfNeeded()
+    {
+        try
+        {
+            if (!Services.StatsConsent.NeedsAsking()) return;
+            new Views.StatsConsentWindow().Activate();
+        }
+        catch (Exception ex)
+        {
+            PttLog($"[telemetry] consent prompt failed: {ex.Message}");
+        }
+    }
+
     private void StartNormalMode()
     {
         // Check audio device health before starting
@@ -786,6 +802,7 @@ public partial class App : Application
         InitCallDetection();
         InitTelegram();
         ShowTermsIfNeeded();
+        ShowStatsConsentIfNeeded();
 
         // If the launch came from a `dimmy://activate?…` URL but no
         // running instance was around to handle it, we stashed the

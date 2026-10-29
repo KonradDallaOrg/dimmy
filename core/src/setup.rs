@@ -430,6 +430,16 @@ pub fn settings() -> Vec<Setting> {
             help: "Remove filler words like um and uh from dictation.",
         },
         Setting {
+            key: "analytics_consent",
+            kind: Kind::Bool,
+            help: "Send anonymous usage statistics (which features are used, never audio, text, prompts, file names or keys). Ask the person and write their answer; never choose for them. Unset means the app asks at launch.",
+        },
+        Setting {
+            key: "crash_reports_consent",
+            kind: Kind::Bool,
+            help: "Send crash reports (the technical error, with user names removed from paths). Ask the person and write their answer; never choose for them. Unset means the app asks at launch.",
+        },
+        Setting {
             key: "keep_in_clipboard",
             kind: Kind::Bool,
             help: "Leave the dictated text on the clipboard after it is pasted.",
@@ -661,6 +671,8 @@ pub fn config_value(cfg: &AppConfig, key: &str) -> Value {
         "confluence_auto_send" => json!(cfg.confluence_auto_send),
         "calendar_context_enabled" => json!(cfg.calendar_context_enabled),
         "app_rules" => json!(cfg.app_rules),
+        "analytics_consent" => json!(cfg.analytics_consent),
+        "crash_reports_consent" => json!(cfg.crash_reports_consent),
         other => panic!("config_value: '{other}' is not a schema key"),
     }
 }
@@ -2078,7 +2090,12 @@ mod tests {
         let d = AppConfig::default();
         for s in settings() {
             let v = config_value(&d, s.key);
-            if s.key == "selected_device" {
+            // Unset is the default and means "not chosen yet": the device
+            // is picked at runtime, consent is asked at launch.
+            if matches!(
+                s.key,
+                "selected_device" | "analytics_consent" | "crash_reports_consent"
+            ) {
                 assert!(v.is_null());
                 continue;
             }

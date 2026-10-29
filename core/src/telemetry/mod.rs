@@ -52,6 +52,18 @@ pub fn set_enabled(enabled: bool) {
     client::set_enabled(enabled);
 }
 
+/// Turn both pipelines on only for an explicit "yes". Not asked yet
+/// (`None`) and "no" both mean off.
+pub fn apply_consent(analytics: Option<bool>, crash_reports: Option<bool>) {
+    let (a, c) = consent_flags(analytics, crash_reports);
+    set_enabled(a);
+    set_crash_enabled(c);
+}
+
+fn consent_flags(analytics: Option<bool>, crash_reports: Option<bool>) -> (bool, bool) {
+    (analytics == Some(true), crash_reports == Some(true))
+}
+
 /// Read the current runtime enabled flag.
 pub fn is_enabled() -> bool {
     client::is_enabled()
@@ -114,4 +126,21 @@ pub fn flush_pending() -> bool {
 /// telemetry disabled by user · `-3` no DSN compiled in (dev build).
 pub fn capture_feedback(kind: &str, message: &str, email: Option<&str>) -> i32 {
     sentry_pipeline::capture_feedback(kind, message, email)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::consent_flags;
+
+    #[test]
+    fn nothing_is_sent_before_an_answer() {
+        assert_eq!(consent_flags(None, None), (false, false));
+    }
+
+    #[test]
+    fn only_an_explicit_yes_turns_a_pipeline_on() {
+        assert_eq!(consent_flags(Some(true), Some(false)), (true, false));
+        assert_eq!(consent_flags(Some(false), Some(true)), (false, true));
+        assert_eq!(consent_flags(Some(false), None), (false, false));
+    }
 }

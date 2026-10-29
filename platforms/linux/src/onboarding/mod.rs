@@ -99,6 +99,7 @@ pub fn show_onboarding(app: &adw::Application, app_state: &Arc<dimmy_lib::AppSta
     let window_for_next = window.clone();
     let state_for_next = app_state.clone();
     let terms_for_next = terms_check.clone();
+    let app_for_next = app.clone();
 
     next_btn.connect_clicked(move |_| {
         let pos = carousel_for_next.position().round() as u32;
@@ -119,6 +120,10 @@ pub fn show_onboarding(app: &adw::Application, app_state: &Arc<dimmy_lib::AppSta
             }
             let _ = dimmy_lib::mark_onboarding_done();
             dimmy_lib::log("Onboarding completed");
+            // Presented before the wizard closes so the app keeps a window.
+            if crate::telemetry_consent::needs_asking(&state_for_next) {
+                crate::telemetry_consent::show_dialog(&app_for_next, &state_for_next);
+            }
             window_for_next.close();
         }
     });

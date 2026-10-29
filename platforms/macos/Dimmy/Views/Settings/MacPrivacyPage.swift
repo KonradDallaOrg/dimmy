@@ -350,3 +350,47 @@ struct MacPrivacyPage: View {
         }
     }
 }
+
+/// Asked whenever `analytics_consent` has no saved answer: once after
+/// onboarding, then once per launch. Closing the window records nothing,
+/// so both pipelines stay off and the question comes back next launch.
+enum TelemetryConsentPrompt {
+    /// `cfg` is a config snapshot; JSON null (not asked yet) is not a Bool.
+    static func needsAnswer(in cfg: [String: Any]?) -> Bool {
+        guard let cfg = cfg else { return false }
+        return !(cfg["analytics_consent"] is Bool)
+    }
+
+    @MainActor
+    static func present() {
+        let alert = NSAlert()
+        alert.messageText = "Help improve Dimmy"
+        alert.informativeText =
+            "Can Dimmy send anonymous usage statistics and crash reports? They tell us which features are used and what breaks. Never your audio, your text, your prompts, file names or keys. You can change this any time in Settings, Privacy."
+        let yes = alert.addButton(withTitle: "Yes, send them")
+        let no = alert.addButton(withTitle: "No, thanks")
+        // Equal weight: NSAlert makes the first button the Return default
+        // (accent-filled). Neither answer is preselected.
+        yes.keyEquivalent = ""
+        no.keyEquivalent = ""
+
+        // Closing without answering must end the modal loop, or runModal
+        // would keep the app modal with no window on screen.
+        alert.window.styleMask.insert(.closable)
+        let closed = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification, object: alert.window, queue: .main
+        ) { _ in MainActor.assumeIsolated { NSApp.stopModal(withCode: .cancel) } }
+        defer { NotificationCenter.default.removeObserver(closed) }
+
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            DimmyCore.shared.telemetryEnabled = true
+            DimmyCore.shared.crashReportingEnabled = true
+        case .alertSecondButtonReturn:
+            DimmyCore.shared.telemetryEnabled = false
+            DimmyCore.shared.crashReportingEnabled = false
+        default:
+            break
+        }
+    }
+}
