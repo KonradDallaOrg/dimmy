@@ -35,18 +35,18 @@ use std::time::Duration;
 use serial_test::serial;
 
 use dimmy_lib::ffi::{
-    dimmy_call_meeting_started_external, dimmy_call_signal_session_ended, dimmy_claude_code_ping,
-    dimmy_claude_code_status, dimmy_clear_app_context, dimmy_command_transform,
-    dimmy_get_active_mic_sample_rate, dimmy_get_config_json, dimmy_get_loopback_amplitude,
-    dimmy_hardware_json, dimmy_history_save, dimmy_history_update_audio,
-    dimmy_history_update_enhanced, dimmy_history_update_word_timestamps,
-    dimmy_hotkey_combos_conflict, dimmy_hotkey_set_command, dimmy_hotkey_take_command_event,
-    dimmy_init, dimmy_llm_call_raw, dimmy_meeting_is_active, dimmy_meeting_save_post_process,
-    dimmy_model_catalog_json, dimmy_model_delete, dimmy_model_download_cancel,
-    dimmy_model_download_enqueue, dimmy_model_download_snapshot_json, dimmy_push_loopback_audio,
-    dimmy_set_app_context, dimmy_set_config_json, dimmy_set_loopback_sample_rate,
-    dimmy_transcribe_file, dimmy_user_dict_add, dimmy_user_dict_list_json, dimmy_user_dict_remove,
-    dimmy_whistle_size_mb, dimmy_whistle_status,
+    dimmy_call_end_verdict, dimmy_call_live_media, dimmy_call_meeting_started_external,
+    dimmy_call_signal_session_ended, dimmy_claude_code_ping, dimmy_claude_code_status,
+    dimmy_clear_app_context, dimmy_command_transform, dimmy_get_active_mic_sample_rate,
+    dimmy_get_config_json, dimmy_get_loopback_amplitude, dimmy_hardware_json, dimmy_history_save,
+    dimmy_history_update_audio, dimmy_history_update_enhanced,
+    dimmy_history_update_word_timestamps, dimmy_hotkey_combos_conflict, dimmy_hotkey_set_command,
+    dimmy_hotkey_take_command_event, dimmy_init, dimmy_llm_call_raw, dimmy_meeting_is_active,
+    dimmy_meeting_save_post_process, dimmy_model_catalog_json, dimmy_model_delete,
+    dimmy_model_download_cancel, dimmy_model_download_enqueue, dimmy_model_download_snapshot_json,
+    dimmy_push_loopback_audio, dimmy_set_app_context, dimmy_set_config_json,
+    dimmy_set_loopback_sample_rate, dimmy_transcribe_file, dimmy_user_dict_add,
+    dimmy_user_dict_list_json, dimmy_user_dict_remove, dimmy_whistle_size_mb, dimmy_whistle_status,
 };
 
 // ── Fixture wiring (lifted from ffi_e2e to stay self-contained) ──────
@@ -1684,4 +1684,41 @@ fn whistle_status_and_backend_selection_agree() {
 
     let json = CString::new(r#"{"local_stt_backend":"whisper"}"#).unwrap();
     assert_eq!(unsafe { dimmy_set_config_json(json.as_ptr()) }, 0);
+}
+
+// The two FFI the Mac host asks before ending an auto-recorded meeting
+// whose call app released its audio (headset switch vs hang-up). Pure:
+// no config, no state.
+#[test]
+fn call_end_verdict_round_trip() {
+    let mut recheck = -1.0f64;
+    // Live media: the call is still connected.
+    assert_eq!(
+        unsafe { dimmy_call_end_verdict(5.0, 2, 1, &mut recheck) },
+        0
+    );
+    // Media seen, now closed: hung up.
+    assert_eq!(
+        unsafe { dimmy_call_end_verdict(0.0, 0, 1, &mut recheck) },
+        1
+    );
+    // No evidence: ask again later, and say when.
+    assert_eq!(
+        unsafe { dimmy_call_end_verdict(30.0, -1, 0, &mut recheck) },
+        2
+    );
+    assert!(recheck > 0.0 && recheck <= 90.0, "recheck {recheck}");
+    // A null out pointer is allowed; garbage durations are clamped.
+    assert_eq!(
+        unsafe { dimmy_call_end_verdict(f64::NAN, -1, 0, std::ptr::null_mut()) },
+        2
+    );
+}
+
+#[test]
+fn call_live_media_never_crashes() {
+    assert_eq!(dimmy_call_live_media(0), -1);
+    assert_eq!(dimmy_call_live_media(-5), -1);
+    let rc = dimmy_call_live_media(std::process::id() as c_int);
+    assert!(rc >= -1, "rc {rc}");
 }

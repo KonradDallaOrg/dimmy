@@ -11332,6 +11332,55 @@ pub extern "C" fn dimmy_call_meeting_started_external() -> c_int {
     1
 }
 
+/// Connected media sockets (RTP over UDP, not DNS/mDNS/QUIC) of the app the
+/// process `pid` belongs to, across all its helper processes: whether the
+/// call is still connected after the app let go of its audio. Returns the
+/// count, or -1 when it cannot be read (not macOS, lsof failed or timed
+/// out). Blocks up to 5 s: call it off the main thread. See call_media.rs.
+#[no_mangle]
+pub extern "C" fn dimmy_call_live_media(pid: c_int) -> c_int {
+    if pid <= 0 {
+        return -1;
+    }
+    match crate::call_media::live_media_sockets(pid) {
+        Some(n) => c_int::try_from(n).unwrap_or(c_int::MAX),
+        None => -1,
+    }
+}
+
+/// Whether to end a meeting whose call app released its audio
+/// `released_for_secs` ago. `media_now` is `dimmy_call_live_media`'s
+/// result (-1 = unknown); `saw_media` is 1 when this call ever showed a
+/// media socket. Returns 0 = keep recording, 1 = the call is over,
+/// 2 = no evidence yet: ask again after `*out_recheck_secs` seconds.
+///
+/// # Safety
+/// `out_recheck_secs` must be null or point to a writable f64.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_call_end_verdict(
+    released_for_secs: f64,
+    media_now: c_int,
+    saw_media: c_int,
+    out_recheck_secs: *mut f64,
+) -> c_int {
+    let released = if released_for_secs.is_finite() {
+        released_for_secs.max(0.0)
+    } else {
+        0.0
+    };
+    let media = usize::try_from(media_now).ok();
+    match crate::call_media::end_verdict(released, media, saw_media != 0) {
+        crate::call_media::EndVerdict::Stay => 0,
+        crate::call_media::EndVerdict::End => 1,
+        crate::call_media::EndVerdict::RecheckIn(secs) => {
+            if !out_recheck_secs.is_null() {
+                unsafe { *out_recheck_secs = secs };
+            }
+            2
+        }
+    }
+}
+
 /// Record the user's response to a call-detected nudge.
 /// `response` ∈ {"record_now","not_now","never","timeout"}.
 /// On "never" with a non-empty app_id the exclusion list is persisted
