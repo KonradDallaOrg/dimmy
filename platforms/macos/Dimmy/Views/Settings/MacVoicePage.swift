@@ -467,7 +467,7 @@ struct MacVoicePage: View {
                         MacRow(
                             "API key",
                             description: "Encrypted locally.",
-                            hint: "Stored encrypted on this device with AES-256. The provider only ever receives your audio and this key, nothing else.",
+                            hint: "Stored encrypted on this device, tied to this computer. The provider only ever receives your audio and this key, nothing else.",
                             hintURL: URL(string: "https://dimmy.app/help/api-keys"),
                             showsDivider: showKeyField
                         ) {
@@ -1183,7 +1183,7 @@ struct MacVoicePage: View {
 
                     MacRow(
                         "Start recording automatically",
-                        hint: "Skips the popup: the meeting starts the moment a call is detected, the window opens and the recording notice is read aloud to the participants. Needs auto-detect on.",
+                        hint: "Skips the popup: the meeting starts the moment a call is detected and the window opens. Dimmy plays the recording notice on your speakers: participants on headphones or in a call usually won't hear it, and telling them is your responsibility. Needs auto-detect on.",
                         showsDivider: !appState.callDetectExcludedApps.isEmpty
                     ) {
                         Toggle("", isOn: Binding(

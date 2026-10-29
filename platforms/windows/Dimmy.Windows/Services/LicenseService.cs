@@ -38,10 +38,10 @@ public static class LicenseService
         public const string PremiumStyles = "premium_styles";
 
         // Driven by the order shown in the Settings → License scope grid.
+        // ManagedStt / ManagedLlm stay valid token scopes but are not listed:
+        // no Dimmy-hosted service exists, so showing them as "included" would be false.
         public static readonly (string Key, string Display, string Description)[] All = new[]
         {
-            (ManagedStt,    "Managed STT",     "Use Dimmy-hosted speech-to-text without configuring your own provider key."),
-            (ManagedLlm,    "Managed LLM",     "Use Dimmy-hosted post-processing LLM without configuring your own key."),
             (AutoUpdate,    "Auto-update",     "Receive in-app version updates as soon as they ship."),
             (HistorySync,   "History sync",    "Sync your transcription history across devices (planned)."),
             (PremiumStyles, "Premium styles",  "Curated LLM styles and prompts beyond the defaults (planned)."),

@@ -1,8 +1,8 @@
 # Dimmy Privacy Policy
 
-_Last updated: 2026-05-13_
+_Last updated: 2026-10-28_
 
-Dimmy is a voice-transcription overlay that runs locally on your computer. We collect a deliberately small amount of anonymous telemetry to understand how the app is used and to fix crashes — never enough to identify you or recover what you said.
+Dimmy is a voice-transcription overlay that can run entirely on your computer. If you choose a cloud provider, your audio and text go to that provider under its own terms. Dimmy's own telemetry is deliberately small: it never includes your audio, transcripts or prompts, and it identifies an installation only by a random ID.
 
 You can disable telemetry and crash reporting at any time from **Settings → Privacy** (each toggle is independent).
 
@@ -13,7 +13,7 @@ You can disable telemetry and crash reporting at any time from **Settings → Pr
 ### Per-install identifier
 - A random UUIDv4 generated on first launch, stored locally in `~/.config/dimmy/analytics_id` (or `%APPDATA%\dimmy\analytics_id` on Windows). It exists only to de-duplicate "1 user did X 5 times" from "5 users each did X once".
 - You can reset it from **Settings → Privacy → Reset anonymous ID**.
-- It is never linked to anything that could identify you.
+- It is random and not derived from your name, email, account or hardware. It does let us recognise the same installation across events, so it is a pseudonymous identifier; reset it whenever you like.
 
 ### Per-process session identifier
 - A fresh UUIDv4 generated on each app launch (not persisted). Lets us answer "how many transcriptions per session?" without tracking open/close events.
@@ -116,7 +116,7 @@ Sending feedback requires telemetry to be enabled (it shares the same Sentry cha
 - Names of contacts, files, or applications you transcribe into.
 - Microphone device names or hardware fingerprints.
 - File paths beyond a categorical "where this kind of file lives" tag (and even those are scrubbed).
-- API keys (they live in `~/.config/dimmy/keys.enc`, AES-256-GCM encrypted, never sent anywhere except to the provider you configured).
+- API keys (they live in `~/.config/dimmy/keys.enc`, encrypted with AES-256-CTR + HMAC-SHA256 under a key derived from your user name and computer name, so the file is unreadable on another computer but not protected from malware running under your own account; never sent anywhere except to the provider you configured).
 - Anthropic OAuth tokens. If you use the Claude-Code subscription provider, the token lives in `~/.claude/credentials.json` and is managed exclusively by Anthropic's official `claude` CLI. Dimmy never reads or transmits that file.
 - IP addresses (Sentry EU drops them server-side; PostHog explicitly skipped via `$ip: null` in every event).
 - Username / hostname / email (except the explicit feedback-form email if you choose to type one).

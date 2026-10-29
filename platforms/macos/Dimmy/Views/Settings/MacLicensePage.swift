@@ -622,9 +622,9 @@ struct MacLicensePage: View {
         Group {
             MacGroupLabel(text: "Included with your license")
             MacTile {
-                ForEach(Array(DimmyCore.LicenseScope.allCases.enumerated()), id: \.element) { idx, scope in
+                ForEach(Array(DimmyCore.LicenseScope.listed.enumerated()), id: \.element) { idx, scope in
                     let granted = status.scopes.contains(scope.rawValue)
-                    let isLast = idx == DimmyCore.LicenseScope.allCases.count - 1
+                    let isLast = idx == DimmyCore.LicenseScope.listed.count - 1
                     MacRow(scope.display, description: scope.subtitle, showsDivider: !isLast) {
                         HStack(spacing: 6) {
                             Image(systemName: granted ? "checkmark.circle.fill" : "xmark.circle")

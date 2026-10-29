@@ -228,7 +228,7 @@ recap.md + actions.json land in <config>/meetings/<id>/
 
 - `config.json` lives in `~/.config/dimmy/` (Linux/macOS) or `%APPDATA%\dimmy\` (Windows)
 - **Only the Rust core writes it.** UIs send updates via `dimmy_set_config_json()` → core validates → core persists.
-- API keys are never in `config.json`. They live in `~/.config/dimmy/keys.enc` (AES-256-GCM, key derived from `SHA-256(username + hostname + salt)`).
+- API keys are never in `config.json`. They live in `~/.config/dimmy/keys.enc` (AES-256-CTR + HMAC-SHA256, key derived from `SHA-256(username + hostname + salt)`; stops the file being read on another computer, not malware running as the same user).
 - OS keyring exists as read-only fallback for migration from earlier versions. `use_keyring` config field is forced to `false`.
 
 ## FFI surface (stable)

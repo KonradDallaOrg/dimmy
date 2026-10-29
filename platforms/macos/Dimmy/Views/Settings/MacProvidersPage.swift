@@ -41,7 +41,7 @@ struct MacProvidersPage: View {
         VStack(alignment: .leading, spacing: 0) {
             MacNote(
                 title: "One key per provider",
-                message: "Paste a key once here and Dimmy uses it for every task the provider can do: speech to text, rewrite, recap. Keys are encrypted on disk with AES-256-GCM and never leave this Mac.",
+                message: "Paste a key once here and Dimmy uses it for every task the provider can do: speech to text, rewrite, recap. Keys are stored encrypted on this Mac, tied to this computer and user account, and are sent only to the provider they belong to.",
                 systemImage: "key.fill"
             )
             .padding(.bottom, 12)

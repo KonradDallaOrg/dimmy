@@ -87,7 +87,7 @@ The **build script at the repo root** — `build-windows.ps1` — is the one-sho
 - **AppUserModelID:** `Dimmy` (set process-wide via `SetCurrentProcessExplicitAppUserModelID` and per-window via `SHGetPropertyStoreForWindow` — both required on Windows 11 unpackaged for the jump list to bind to our taskbar entry).
 - **Configuration:** `%APPDATA%\dimmy\config.json`. **The Rust core is the only writer.** UI calls `dimmy_set_config_json()` and re-reads.
 - **Win-only UI prefs:** `%APPDATA%\dimmy\ui_prefs.json` — small JSON store for the pill-visibility toggles (`PillShowOnStartup`, `PillShowOnHotkey`). Kept out of `config.json` because they're not cross-platform settings.
-- **Keys:** `%APPDATA%\dimmy\keys.enc` (AES-256-GCM). Managed entirely by the Rust keystore.
+- **Keys:** `%APPDATA%\dimmy\keys.enc` (AES-256-CTR + HMAC-SHA256). Managed entirely by the Rust keystore.
 - **Logs:** `%LOCALAPPDATA%\dimmy\logs\dimmy.log`, `crash.log`, `ptt.log`. Plus diagnostic `%TEMP%\dimmy_jumplist.log` and `%TEMP%\dimmy_startup.log` for boot-time issues.
 - **Installer:** Velopack (`--framework vcredist143-x64`, `--packId Dimmy` — the AUMI must match the packId, otherwise the jump list won't appear). VC Redist goes to System32; the app folder stays lean. See I4 and I10 in [`windows-ci.md`](../../docs/dev/windows-ci.md).
 

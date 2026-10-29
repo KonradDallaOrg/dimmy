@@ -500,6 +500,62 @@ mod imp {
         }
     }
 
+    // The session holds the MTProto auth key: whoever reads it is logged in
+    // as the user. It is sealed with the machine key (same primitives as
+    // `keys.enc`), so a copied file is useless on another computer.
+    const SESSION_SEAL_PREFIX: &str = "dimmy-enc1:";
+
+    fn seal_session(json: &[u8]) -> Vec<u8> {
+        assert!(!json.is_empty(), "refusing to seal an empty session");
+        let sealed = format!(
+            "{SESSION_SEAL_PREFIX}{}",
+            crate::keystore::seal_with_machine_key(json)
+        );
+        assert!(
+            !sealed.starts_with('{'),
+            "a sealed session must never look like legacy plaintext JSON"
+        );
+        sealed.into_bytes()
+    }
+
+    /// The session JSON on disk, or `None` when there is nothing usable: no
+    /// file, a file sealed on another machine, a corrupted one. `None` means
+    /// "not logged in". A legacy plaintext file is returned once and
+    /// rewritten sealed.
+    fn read_session_file(path: &std::path::Path) -> Option<Vec<u8>> {
+        let raw = std::fs::read(path).ok()?;
+        if raw.trim_ascii_start().starts_with(b"{") {
+            let is_object = serde_json::from_slice::<serde_json::Value>(&raw)
+                .map(|v| v.is_object())
+                .unwrap_or(false);
+            if !is_object {
+                return None;
+            }
+            if let Err(e) = write_session_file(path, &raw) {
+                crate::log(&format!("[Telegram] could not seal the session file: {e}"));
+            }
+            return Some(raw);
+        }
+        let text = std::str::from_utf8(&raw).ok()?;
+        let sealed = text.trim().strip_prefix(SESSION_SEAL_PREFIX)?;
+        match crate::keystore::open_with_machine_key(sealed) {
+            Ok(json) => Some(json),
+            Err(e) => {
+                crate::log(&format!(
+                    "[Telegram] session file unreadable, treating as logged out: {e}"
+                ));
+                None
+            }
+        }
+    }
+
+    fn write_session_file(path: &std::path::Path, json: &[u8]) -> std::io::Result<()> {
+        let sealed = seal_session(json);
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, &sealed)?;
+        std::fs::rename(&tmp, path)
+    }
+
     #[derive(Debug)]
     struct FileSessionError;
     impl std::error::Error for FileSessionError {}
@@ -516,8 +572,7 @@ mod imp {
 
     impl FileSession {
         fn load(path: PathBuf) -> Self {
-            let data = std::fs::read(&path)
-                .ok()
+            let data = read_session_file(&path)
                 .and_then(|b| serde_json::from_slice::<PersistedSession>(&b).ok())
                 .map(PersistedSession::into_data)
                 .unwrap_or_default();
@@ -531,7 +586,7 @@ mod imp {
         }
         fn save(&self, d: &SessionData) {
             if let Ok(bytes) = serde_json::to_vec(&PersistedSession::from_data(d)) {
-                let _ = std::fs::write(&self.path, bytes);
+                let _ = write_session_file(&self.path, &bytes);
             }
         }
     }
@@ -1118,6 +1173,83 @@ mod imp {
     fn emit_error(msg: &str) {
         crate::log(&format!("[Telegram] {msg}"));
         crate::ffi::emit_event("telegram_error", &json!({ "message": msg }).to_string());
+    }
+
+    #[cfg(test)]
+    mod session_file_tests {
+        use super::*;
+
+        const SECRET: &str = "AUTHKEY-SECRET-0123456789";
+
+        fn session_json() -> Vec<u8> {
+            format!(r#"{{"home_dc":2,"dc_options":[{{"id":2,"auth_key":"{SECRET}"}}]}}"#)
+                .into_bytes()
+        }
+
+        fn temp_file(tag: &str) -> PathBuf {
+            let dir =
+                std::env::temp_dir().join(format!("dimmy-tg-session-{tag}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            dir.join("session.json")
+        }
+
+        fn contains(hay: &[u8], needle: &str) -> bool {
+            hay.windows(needle.len()).any(|w| w == needle.as_bytes())
+        }
+
+        #[test]
+        fn the_session_on_disk_does_not_contain_the_auth_key() {
+            let path = temp_file("sealed");
+            write_session_file(&path, &session_json()).unwrap();
+            let on_disk = std::fs::read(&path).unwrap();
+            assert!(!contains(&on_disk, SECRET), "auth key is readable on disk");
+            assert!(
+                !contains(&on_disk, "auth_key"),
+                "JSON structure is readable"
+            );
+            assert!(!on_disk.starts_with(b"{"));
+        }
+
+        #[test]
+        fn a_saved_session_loads_back_identical() {
+            let path = temp_file("roundtrip");
+            write_session_file(&path, &session_json()).unwrap();
+            assert_eq!(read_session_file(&path), Some(session_json()));
+        }
+
+        #[test]
+        fn a_legacy_plaintext_session_loads_once_and_is_rewritten_sealed() {
+            let path = temp_file("legacy");
+            std::fs::write(&path, session_json()).unwrap();
+            assert_eq!(read_session_file(&path), Some(session_json()));
+            let on_disk = std::fs::read(&path).unwrap();
+            assert!(!contains(&on_disk, SECRET), "plaintext left behind");
+            assert_eq!(read_session_file(&path), Some(session_json()));
+        }
+
+        #[test]
+        fn a_corrupted_or_foreign_session_means_logged_out() {
+            let path = temp_file("corrupt");
+            write_session_file(&path, &session_json()).unwrap();
+            let mut bytes = std::fs::read(&path).unwrap();
+            let mid = bytes.len() / 2;
+            bytes[mid] = if bytes[mid] == b'A' { b'B' } else { b'A' };
+            std::fs::write(&path, &bytes).unwrap();
+            assert_eq!(read_session_file(&path), None, "tampered MAC");
+
+            std::fs::write(&path, b"not a session at all").unwrap();
+            assert_eq!(read_session_file(&path), None, "unknown format");
+
+            std::fs::write(&path, b"{ truncated json").unwrap();
+            assert_eq!(read_session_file(&path), None, "broken legacy JSON");
+            assert_eq!(std::fs::read(&path).unwrap(), b"{ truncated json");
+
+            std::fs::write(&path, b"").unwrap();
+            assert_eq!(read_session_file(&path), None, "empty file");
+
+            assert_eq!(read_session_file(&path.with_file_name("absent.json")), None);
+        }
     }
 }
 

@@ -305,7 +305,7 @@ The shipping `dimmy.ico`, `dimmy-logo.png`, `dimmy-tray-{dark,light}-{idle,recor
 
 ### Config & keys — single-writer rule
 - **Only the Rust core writes `config.json`.** UIs send updates via `dimmy_set_config_json()` and re-read. The C# / Swift / Rust-UI layers NEVER write the config file directly.
-- API keys live in `~/.config/dimmy/keys.enc` (AES-256-GCM, machine-specific key derivation). **Never in `config.json`.** The `use_keyring` config field is forced to `false` — keyring is read-only fallback only.
+- API keys live in `~/.config/dimmy/keys.enc` (AES-256-CTR + HMAC-SHA256, machine-specific key derivation). **Never in `config.json`.** The `use_keyring` config field is forced to `false` — keyring is read-only fallback only.
 
 ### Windows CI
 All 11 invariants live in [`docs/dev/windows-ci.md`](docs/dev/windows-ci.md) — paid in blood, MUST be read before editing `.github/workflows/` or `platforms/windows/`. Run `/windows-ci-preflight` before pushing any workflow change.

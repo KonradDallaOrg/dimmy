@@ -82,7 +82,7 @@ Learn more at **[dimmy.app](https://dimmy.app)**.
 - **Custom dictionary** — bias STT toward your own names and jargon.
 - **Filler word removal** — strips "um", "basically", "cioè" etc. in six languages.
 - **Searchable history** — SQLite + FTS5 full-text search over every transcription, with audio playback + word timestamps for past dictations.
-- **Privacy-first** — API keys encrypted locally with AES-256-GCM; minimal anonymous opt-out telemetry (no transcripts, no prompts, no IP — full list in [`PRIVACY.md`](PRIVACY.md)). Recording-consent notice + append-only audit log for meetings, and recaps are marked as AI-generated (EU AI Act art. 50).
+- **Privacy-first** — API keys encrypted locally (AES-256-CTR + HMAC-SHA256, bound to your computer and user); minimal anonymous opt-out telemetry (no transcripts, no prompts, no IP — full list in [`PRIVACY.md`](PRIVACY.md)). Recording-consent notice + append-only audit log for meetings, and recaps are marked as AI-generated (EU AI Act art. 50).
 - **GPU acceleration** — Metal on Apple Silicon, Vulkan on Windows (all GPU vendors), CUDA on NVIDIA. Parakeet runs on the Apple Neural Engine on M-series Macs at 100–300× realtime.
 - **Multilingual** — 15 languages plus auto-detect. Auto-detect is cloud-only: local whisper's language detection is unreliable enough to be worse than useless (it returns zero segments, or a confident wrong answer).
 - **Configurable hotkey** — toggle or hold-to-record, any modifier combination.
@@ -192,7 +192,7 @@ graph TD
         LLM["llm.rs<br/>13 styles &middot; command mode &middot; recap"]
         LOCALLM["local_llm.rs<br/>llama.cpp (optional)"]
         HIST["history.rs<br/>SQLite + FTS5"]
-        KEY["keystore.rs<br/>AES-256-GCM"]
+        KEY["keystore.rs<br/>AES-256-CTR + HMAC"]
         INTEG["notion.rs &middot; telegram.rs<br/>claude_desktop.rs (MCP)"]
     end
 
@@ -262,7 +262,7 @@ Linux always offer exactly the same models and cannot drift apart.
 One key per provider covers STT, LLM and recap: the core falls back from the
 LLM scope to the STT scope of the same vendor rather than asking twice.
 
-Keys are encrypted on device with AES-256-GCM and a machine-specific KDF — no keyring prompt, no admin permission, no OS popups.
+Keys are encrypted on device with AES-256-CTR + HMAC-SHA256, using a key derived from your user name and computer name — no keyring prompt, no admin permission, no OS popups. This stops the file being read on another computer; it does not protect against malware running under your own account.
 
 ## Claude Code subscription — no API key needed
 

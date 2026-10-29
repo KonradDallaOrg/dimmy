@@ -401,7 +401,7 @@
               </StackPanel>
               <StackPanel x:Name="ProviderCardsHost" Spacing="10" />
               <TextBlock x:Name="ProviderKeysFootnote"
-                         Text="&#x1F512; Keys are stored encrypted on this device (AES-256) and only ever sent to the provider you choose."
+                         Text="&#x1F512; Keys are stored encrypted on this device, tied to this computer and user account, and only ever sent to the provider you choose."
                          FontSize="12" TextWrapping="Wrap" Margin="2,16,0,0"
                          Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
             </StackPanel>
@@ -526,7 +526,7 @@
                 <controls:SettingCard x:Name="SttApiKeyCard"
                                       Glyph="&#xE192;"
                                       Label="API key"
-                                      InfoTip="The key for your custom speech endpoint. Stored encrypted on this device with AES-256. Catalog providers are keyed from the Providers and keys page instead."
+                                      InfoTip="The key for your custom speech endpoint. Stored encrypted on this device, tied to this computer. Catalog providers are keyed from the Providers and keys page instead."
                                       HelpUrl="https://dimmy.app/help/api-keys"
                                       Visibility="Collapsed">
                   <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
@@ -1006,7 +1006,7 @@
                 </controls:SettingCard>
                 <controls:SettingCard Glyph="&#xE7C8;"
                                       Label="Start recording automatically"
-                                      InfoTip="Skips the prompt: the meeting starts the moment a call is detected, the window opens and the recording notice is read aloud to the participants. Needs call detection on."
+                                      InfoTip="Skips the prompt: the meeting starts the moment a call is detected and the window opens. Dimmy plays the recording notice on your speakers: participants on headphones or in a call usually won't hear it, and telling them is your responsibility. Needs call detection on."
                                       IsEnabled="{Binding CallDetectEnabled}"
                                       HelpUrl="https://dimmy.app/help/use-meeting-recaps">
                   <ToggleSwitch IsOn="{Binding CallDetectAutoRecord, Mode=TwoWay}"
@@ -2726,7 +2726,7 @@
                                    Text="4. Dimmy on this PC picks it up, transcribes it and writes the recap." />
                         <TextBlock TextWrapping="Wrap" FontSize="13"
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                   Text="Dimmy signs in as you through Telegram's official protocol and reads only the audio in Saved Messages. It never touches your other chats, and the login stays on this PC." />
+                                   Text="Dimmy is an unofficial app that uses the Telegram API. It signs in as you and reads only the audio in Saved Messages. It never touches your other chats, and the login stays on this PC." />
                       </StackPanel>
                     </Flyout>
                   </Button.Flyout>
@@ -2880,7 +2880,7 @@
                             VerticalAlignment="Top" Margin="0,2,0,0" />
                   <TextBlock TextWrapping="Wrap" FontSize="13"
                              Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                             Text="Dimmy never sends your transcriptions, audio, API keys, microphone names, or anything personal. Anonymous usage data and crash reports help us spot bugs and decide what to build next." />
+                             Text="Dimmy's own statistics never include your audio, transcripts, prompts or API keys. They use a random per-install ID. If you choose a cloud provider, your audio and text go to that provider." />
                 </StackPanel>
               </Border>
 

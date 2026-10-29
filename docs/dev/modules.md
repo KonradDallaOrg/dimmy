@@ -141,7 +141,7 @@ One place for every multi-GB model download (LLM GGUF, whisper ggml/GGUF, parake
 
 ## `keystore.rs` — API key storage
 
-- **Always uses local AES-256-GCM encrypted file** at `~/.config/dimmy/keys.enc` (or `%APPDATA%\dimmy\keys.enc`).
+- **Always uses local AES-256-CTR + HMAC-SHA256 encrypted file** at `~/.config/dimmy/keys.enc` (or `%APPDATA%\dimmy\keys.enc`).
 - Key derivation: `SHA-256(username + hostname + salt)`. Machine-specific — copying `keys.enc` to another machine yields unreadable blob.
 - **No OS popups, no admin prompts, no keyring prompts.** The `use_keyring` config field is forced to `false` in the core; the toggle is removed from all platform UIs.
 - OS keyring (macOS Keychain, Windows Credential Manager, Secret Service on Linux) is kept as **read-only fallback** for migrating users from the pre-v0.4 era.

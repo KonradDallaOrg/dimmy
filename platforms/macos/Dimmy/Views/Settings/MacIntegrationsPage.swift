@@ -215,7 +215,7 @@ struct MacIntegrationsPage: View {
                 3. Send it to Saved Messages, your chat with yourself. Inside Telegram: touch and hold the audio, Forward, Saved Messages. From another app: Share, Telegram, Saved Messages.
                 4. Dimmy on this Mac picks it up, transcribes it and writes the recap.
 
-                Dimmy signs in as you through Telegram's official protocol and reads only the audio in Saved Messages. It never touches your other chats, and the login stays on this Mac.
+                Dimmy is an unofficial app that uses the Telegram API. It signs in as you and reads only the audio in Saved Messages. It never touches your other chats, and the login stays on this Mac.
                 """)
             telegramCard
 
