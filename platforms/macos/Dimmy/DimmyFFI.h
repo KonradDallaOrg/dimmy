@@ -932,6 +932,20 @@ int32_t dimmy_call_meeting_started_external(void);
 /// 0 when clearing it. `dimmy_meeting_stop` also clears it. Returns 0.
 int32_t dimmy_call_set_tracked_origin(int32_t tracked);
 
+/// Connected media sockets (RTP over UDP, not DNS/mDNS/QUIC) of the app the
+/// process `pid` belongs to, across all its helper processes: is the call
+/// still connected after the app let go of its audio? Count, or -1 when it
+/// cannot be read. Blocks up to 5 s: never call it on the main thread.
+int32_t dimmy_call_live_media(int32_t pid);
+
+/// Whether to end a meeting whose call app released its audio
+/// `released_for_secs` ago. `media_now` = `dimmy_call_live_media` result;
+/// `saw_media` = 1 when this call ever showed a media socket. Returns
+/// 0 keep recording, 1 the call is over, 2 no evidence yet: ask again after
+/// `*out_recheck_secs` seconds. `out_recheck_secs` may be NULL.
+int32_t dimmy_call_end_verdict(double released_for_secs, int32_t media_now,
+                               int32_t saw_media, double * _Nullable out_recheck_secs);
+
 /// Compute a peak-summary JSON `{peaks:[f32;bucket_count], duration_secs}`
 /// from any audio file the Rust loader can decode (WAV via hound, m4a
 /// / mp3 / aac / flac / ogg via Symphonia). Same role as the in-Swift

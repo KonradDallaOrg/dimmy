@@ -10,6 +10,7 @@ pub mod audio;
 pub mod autostart;
 pub mod calendar;
 pub mod call_detector;
+pub mod call_media;
 pub mod catalog;
 pub mod chunked_stt;
 pub mod claude_code;

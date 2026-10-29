@@ -129,6 +129,20 @@ final class CallDetectionManager {
     private var meetingOriginApp: String?
     private var sessionEndedSignaled: Bool = false
 
+    /// Letting go of the audio is not hanging up: a headset switch looks the
+    /// same from CoreAudio, and ending the meeting on it stopped a recording
+    /// and auto-started a new one (2026-10-28). Before the call counts as over
+    /// the core is asked whether its media stream is still connected
+    /// (`call_media.rs`, the signal TranscribeX confirms a meeting with).
+    /// `originSawMedia`: this call showed a media socket at least once, so a
+    /// later zero means the stream closed, not that it is invisible here.
+    private var originSawMedia = false
+    private var lastMediaProbe: Date?
+    /// When the origin let go of its audio while the call may still be up.
+    private var originReleasedAt: Date?
+    private var verdictRecheck: DispatchWorkItem?
+    private static let mediaProbeInterval: TimeInterval = 60
+
     /// Evidence about the call being watched: the pre-meeting candidate,
     /// then — handed over at bind — the meeting's origin.
     private var candidateWatch = CallAudioWatch()
@@ -287,6 +301,7 @@ final class CallDetectionManager {
         meetingOriginPid = lastCandidatePid
         meetingOriginApp = lastCandidateApp
         sessionEndedSignaled = false
+        resetCallEndEvidence()
         // Suppress the Rust silence backstop iff we actually bound a process to
         // watch — otherwise (no candidate pid) keep the backstop as the only
         // stop signal. Watching a real pid is the deterministic authority.
@@ -299,6 +314,7 @@ final class CallDetectionManager {
         meetingOriginPid = 0
         meetingOriginApp = nil
         sessionEndedSignaled = false
+        resetCallEndEvidence()
         // No tracked process → re-enable the silence backstop.
         _ = dimmy_call_set_tracked_origin(0)
     }
@@ -335,6 +351,12 @@ final class CallDetectionManager {
             // streaming (Job 3) runs on the separate 250 ms amplitudeTimer.
             guard !sessionEndedSignaled else { return }
             if meetingOriginPid == 0 {
+                if originGraceExpired() {
+                    sessionEndedSignaled = true
+                    let rc = DimmyCore.shared.callSignalSessionEnded()
+                    dimmyHostLog("[CallDetect] origin exited and no process of the call came back → session_ended rc=\(rc)")
+                    return
+                }
                 adoptCallOriginDuringMeetingTick()
             } else {
                 sessionEndedCheckTick()
@@ -452,16 +474,99 @@ final class CallDetectionManager {
                     deviceAlive: facts.liveDevices.contains)
                 switch state {
                 case .inCall:
-                    break
+                    self.originReleasedAt = nil
+                    self.verdictRecheck?.cancel()
+                    self.probeMediaIfDue(pid: originPid)
                 case .moving:
                     dimmyHostLog("[CallDetect] origin pid=\(originPid) pushed off its device — still in the call")
                 case .released, .gone:
-                    self.sessionEndedSignaled = true
-                    let rc = DimmyCore.shared.callSignalSessionEnded()
-                    dimmyHostLog("[CallDetect] origin pid=\(originPid) \(state == .gone ? "exited" : "released its audio") → session_ended rc=\(rc)")
+                    self.judgeCallEnd(pid: originPid, exited: state == .gone)
                 }
             }
         }
+    }
+
+    private func resetCallEndEvidence() {
+        originSawMedia = false
+        lastMediaProbe = nil
+        originReleasedAt = nil
+        verdictRecheck?.cancel()
+        verdictRecheck = nil
+    }
+
+    /// While the call runs, learn once a minute whether its media stream is
+    /// visible on this network, so a zero after a release can be trusted.
+    private func probeMediaIfDue(pid: pid_t) {
+        guard !originSawMedia else { return }
+        if let last = lastMediaProbe, Date().timeIntervalSince(last) < Self.mediaProbeInterval { return }
+        lastMediaProbe = Date()
+        Self.scanQueue.async { [weak self] in
+            let media = dimmy_call_live_media(pid)
+            Task { @MainActor [weak self] in
+                guard let self, self.meetingOriginPid == pid, media > 0 else { return }
+                self.originSawMedia = true
+                dimmyHostLog("[CallDetect] origin pid=\(pid) media stream visible (\(media) sockets)")
+            }
+        }
+    }
+
+    /// The origin let go of its audio, or its process exited. Hung up, or a
+    /// headset switch? The media stream decides; without it, a long grace.
+    private func judgeCallEnd(pid: pid_t, exited: Bool) {
+        let releasedAt = originReleasedAt ?? Date()
+        originReleasedAt = releasedAt
+        sessionCheckInFlight = true
+        Self.scanQueue.async { [weak self] in
+            // An exited process has no path left to find its app by: the
+            // answer is "unknown" and the grace below decides.
+            let media = exited ? -1 : dimmy_call_live_media(pid)
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.sessionCheckInFlight = false
+                guard self.meetingOriginPid == pid, !self.sessionEndedSignaled else { return }
+                if media > 0 { self.originSawMedia = true }
+                var recheckSecs: Double = 0
+                let verdict = dimmy_call_end_verdict(
+                    Date().timeIntervalSince(releasedAt), media,
+                    self.originSawMedia ? 1 : 0, &recheckSecs)
+                let what = exited ? "exited" : "released its audio"
+                switch verdict {
+                case 0:
+                    dimmyHostLog("[CallDetect] origin pid=\(pid) \(what) but the call is still connected (media=\(media)) — keep recording")
+                case 1:
+                    self.sessionEndedSignaled = true
+                    let rc = DimmyCore.shared.callSignalSessionEnded()
+                    dimmyHostLog("[CallDetect] origin pid=\(pid) \(what), media=\(media) saw_media=\(self.originSawMedia) → session_ended rc=\(rc)")
+                default:
+                    dimmyHostLog("[CallDetect] origin pid=\(pid) \(what), no network evidence (media=\(media)) — recheck in \(Int(recheckSecs.rounded(.up))) s")
+                    self.scheduleVerdictRecheck(after: recheckSecs)
+                }
+                // A helper that restarted leaves its app in the call under a
+                // new pid: let the adoption scan bind it. The release time is
+                // kept, so `handleScanEvent` still ends the meeting when the
+                // grace runs out and nothing came back.
+                if exited && verdict != 1 {
+                    self.meetingOriginPid = 0
+                    self.originWatch = CallAudioWatch()
+                }
+            }
+        }
+    }
+
+    /// The bound origin exited and the grace without network evidence has
+    /// run out with no new process adopted.
+    private func originGraceExpired() -> Bool {
+        guard let releasedAt = originReleasedAt else { return false }
+        return dimmy_call_end_verdict(Date().timeIntervalSince(releasedAt), -1, 0, nil) == 1
+    }
+
+    private func scheduleVerdictRecheck(after secs: Double) {
+        verdictRecheck?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            Task { @MainActor [weak self] in self?.handleScanEvent() }
+        }
+        verdictRecheck = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(1, secs), execute: item)
     }
 
     /// Adopt a call as the meeting origin WHILE a meeting is already
@@ -493,6 +598,9 @@ final class CallDetectionManager {
                     self.originWatch = CallAudioWatch()
                     self.meetingOriginPid = originPid
                     self.meetingOriginApp = appId
+                    // A replacement for an exited origin: the call carries on.
+                    self.originReleasedAt = nil
+                    self.verdictRecheck?.cancel()
                     _ = DimmyCore.shared.callMeetingStartedExternal()
                     // Now watching a real process deterministically → suppress
                     // the Rust silence backstop (the 15-popups bug).
