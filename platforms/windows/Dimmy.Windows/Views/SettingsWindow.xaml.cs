@@ -3982,7 +3982,8 @@ public sealed partial class SettingsWindow : Window
         }
         var code = ExtractCode(raw) ?? raw;
         var label = (LicenseDeviceLabelBox.Text ?? string.Empty).Trim();
-        if (string.IsNullOrEmpty(label)) label = Environment.MachineName;
+        // Never the computer name: it often carries the person's name.
+        if (string.IsNullOrEmpty(label)) label = "Windows PC";
         try
         {
             ShowInfoBar(LicenseActivateInfoBar, InfoBarSeverity.Informational, "Activating…");

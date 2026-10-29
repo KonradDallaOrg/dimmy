@@ -360,12 +360,9 @@ public partial class SettingsViewModel : ObservableObject
     /// `ui_prefs.json`. Default false (opt-in).</summary>
     [ObservableProperty] private bool _trayIconAlwaysVisible;
 
-    // Telemetry — runtime-only for now (no persistence in config.json yet).
-    // Initialised from DimmyNative state on viewmodel load; the on-change
-    // partials forward toggles to the Rust core. Persistence is a separate
-    // workstream (the Rust core needs config.telemetry_enabled fields).
-    [ObservableProperty] private bool _telemetryEnabled = true;
-    [ObservableProperty] private bool _crashReportsEnabled = true;
+    // Telemetry consent. The core owns and saves the answer; these mirror it.
+    [ObservableProperty] private bool _telemetryEnabled;
+    [ObservableProperty] private bool _crashReportsEnabled;
 
     /// Auto-refresh `HasApiKey` (the STT green ✓ badge) when the user
     /// switches providers via the URL dropdown, without waiting for a
@@ -396,12 +393,15 @@ public partial class SettingsViewModel : ObservableObject
 
     partial void OnTelemetryEnabledChanged(bool value)
     {
-        try { Interop.DimmyNative.TelemetryEnabled = value; } catch { }
+        // Setting the core SAVES an answer, so a load that only copies the
+        // current state must not reach it: that would record a "no" the user
+        // never gave.
+        try { if (Interop.DimmyNative.TelemetryEnabled != value) Interop.DimmyNative.TelemetryEnabled = value; } catch { }
     }
 
     partial void OnCrashReportsEnabledChanged(bool value)
     {
-        try { Interop.DimmyNative.CrashReportsEnabled = value; } catch { }
+        try { if (Interop.DimmyNative.CrashReportsEnabled != value) Interop.DimmyNative.CrashReportsEnabled = value; } catch { }
     }
 
     // Autostart — read at viewmodel load from the Rust core's actual
@@ -721,8 +721,8 @@ public partial class SettingsViewModel : ObservableObject
             LlmLogEnabled = r.TryGetProperty("llm_log_enabled", out var lle) && lle.GetBoolean();
             AudioDebugEnabled = r.TryGetProperty("audio_debug_enabled", out var ade) && ade.GetBoolean();
             GgmlDebugLogging = r.TryGetProperty("ggml_debug_logging", out var gdl) && gdl.GetBoolean();
-            // Telemetry toggles read directly from Rust core (runtime state),
-            // not from the JSON — they're not persisted yet.
+            // Telemetry toggles read the core's live state, which it set from
+            // the saved consent at init.
             try
             {
                 TelemetryEnabled = Interop.DimmyNative.TelemetryEnabled;
