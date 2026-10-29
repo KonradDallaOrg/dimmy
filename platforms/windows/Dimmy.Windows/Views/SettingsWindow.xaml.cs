@@ -1509,7 +1509,7 @@ public sealed partial class SettingsWindow : Window
         // be the "Default" fallback because Rust strips unknown keys).
         ViewModel.Theme = uiPrefs.Theme;
 
-        // Also read from FFI for runtime-only fields (has_key, has_llm_key, devices)
+        // Also read from FFI for runtime-only fields (has_key, has_llm_key)
         // that are NOT in config.json (Rust computes them from keystore).
         // We also cache the per-provider has_*_key flags so a dropdown
         // change can refresh the green-check without first persisting
@@ -1537,23 +1537,30 @@ public sealed partial class SettingsWindow : Window
                 _sttKeyByProvider.Clear();
                 _llmKeyByProvider.Clear();
                 CacheProviderKeyFlags(r);
-                if (r.TryGetProperty("devices", out var devArr) &&
-                    devArr.ValueKind == System.Text.Json.JsonValueKind.Array)
-                {
-                    var list = new System.Collections.Generic.List<string>();
-                    foreach (var d in devArr.EnumerateArray())
-                        if (d.GetString() is string s) list.Add(s);
-                    ViewModel.Devices = list;
-                }
             }
         }
         catch { }
+        RefreshInputDevices();
 
         System.Diagnostics.Debug.WriteLine(
             $"[Settings] Loaded: has_key={ViewModel.HasApiKey}, has_llm_key={ViewModel.HasLlmKey}, " +
             $"llm_enabled={ViewModel.LlmStyle != "off"}, llm_style={ViewModel.LlmStyle}, " +
             $"llm_url={ViewModel.LlmApiUrl}, use_same_key={ViewModel.LlmUseSameKey}");
     }
+
+    private void RefreshInputDevices()
+    {
+        try
+        {
+            var json = DimmyNative.ListInputDevicesJson();
+            if (string.IsNullOrEmpty(json)) return;
+            var fresh = System.Text.Json.JsonSerializer.Deserialize<System.Collections.Generic.List<string>>(json);
+            if (fresh != null) ViewModel.RefreshDevices(fresh);
+        }
+        catch (System.Text.Json.JsonException) { }
+    }
+
+    private void InputDevice_DropDownOpened(object sender, object e) => RefreshInputDevices();
 
     /// <summary>
     /// Sync the Provider ComboBox selection to match the current ApiUrl from config.

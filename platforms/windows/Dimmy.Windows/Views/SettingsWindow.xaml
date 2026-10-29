@@ -635,7 +635,8 @@
                                       HelpUrl="https://dimmy.app/help/audio-input">
                   <ComboBox MinWidth="{StaticResource SettingFieldWidth}"
                             SelectedItem="{Binding SelectedDevice, Mode=TwoWay}"
-                            ItemsSource="{Binding Devices}" />
+                            ItemsSource="{Binding Devices}"
+                            DropDownOpened="InputDevice_DropDownOpened" />
                 </controls:SettingCard>
 
                 <!-- Advanced mic tuning -->
