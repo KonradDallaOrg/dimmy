@@ -15,8 +15,6 @@
 //! The app is identified by its `.app` bundle, not a PID: Teams, Chrome
 //! and Zoom keep media and network in helper processes that can restart.
 
-use std::time::Duration;
-
 /// Ports that are never a call's media stream.
 const NOT_MEDIA_PORTS: [u16; 3] = [53, 443, 5353];
 
@@ -25,10 +23,8 @@ const NOT_MEDIA_PORTS: [u16; 3] = [53, 443, 5353];
 /// switch is over in a second or two, so 90 s is far on the safe side.
 pub const NO_EVIDENCE_GRACE_SECS: f64 = 90.0;
 
-const LSOF_TIMEOUT: Duration = Duration::from_secs(5);
-
 /// What to do with a meeting whose call app released its audio.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum EndVerdict {
     /// The call is still connected: keep recording.
     Stay,
@@ -101,9 +97,11 @@ pub fn live_media_sockets(pid: i32) -> Option<usize> {
 
 #[cfg(target_os = "macos")]
 mod imp {
-    use super::{app_bundle_root, count_media_sockets, LSOF_TIMEOUT};
+    use super::{app_bundle_root, count_media_sockets};
     use std::process::{Command, Stdio};
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
+
+    const LSOF_TIMEOUT: Duration = Duration::from_secs(5);
 
     pub fn live_media_sockets(pid: i32) -> Option<usize> {
         let path = exe_path(pid)?;
@@ -129,7 +127,7 @@ mod imp {
             match child.try_wait() {
                 Ok(Some(_)) => break,
                 Ok(None) if started.elapsed() < LSOF_TIMEOUT => {
-                    std::thread::sleep(std::time::Duration::from_millis(20))
+                    std::thread::sleep(Duration::from_millis(20))
                 }
                 _ => {
                     let _ = child.kill();
