@@ -6,6 +6,7 @@ mod onboarding;
 mod pill_window;
 mod settings;
 mod state;
+mod telemetry_consent;
 mod terms;
 mod text_injector;
 mod tray;
@@ -106,6 +107,11 @@ fn main() {
         // dialog per launch, never blocking.
         if !terms::is_accepted(&state_clone) {
             terms::show_launch_dialog(app, &state_clone);
+        }
+
+        // Statistics consent, same cadence: until answered, once per launch.
+        if telemetry_consent::needs_asking(&state_clone) {
+            telemetry_consent::show_dialog(app, &state_clone);
         }
 
         // Start system tray (StatusNotifierItem via D-Bus)
