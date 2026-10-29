@@ -5340,6 +5340,10 @@ public sealed partial class SettingsWindow : Window
         var flavorSuffix = BuildInfo.IsStaging ? " · STAGING" : string.Empty;
         HeroTitleText.Text = $"Dimmy {_currentVersion}{flavorSuffix}";
         HeroSubText.Text = $"Version {_currentVersion}{flavorSuffix}";
+        LegalLineText.Text =
+            $"Dimmy v{_currentVersion} \u00A9 Konrad Dalla. Free software under the GNU AGPL v3. NO WARRANTY.";
+        SourceCodeLink.NavigateUri =
+            new Uri($"https://github.com/KonradDallaOrg/dimmy/tree/v{_currentVersion}");
         // Sidebar staging banner — flip on once we know the flavor. Done
         // here (rather than in the constructor) because XAML elements
         // are initialised lazily.
@@ -5556,6 +5560,72 @@ public sealed partial class SettingsWindow : Window
         UpdateCheckGlyph.Glyph = ok ? "" : ""; // CheckMark / Warning
         UpdateCheckGlyph.Visibility = Visibility.Visible;
         UpdateCheckText.Text = message;
+    }
+
+    private bool _autoRecordToggleBusy;
+
+    private async void AutoRecordToggle_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (_autoRecordToggleBusy || sender is not ToggleSwitch toggle) return;
+        // The view model already agrees: this is the echo of a change it made.
+        if (toggle.IsOn == ViewModel.CallDetectAutoRecord) return;
+        if (!toggle.IsOn)
+        {
+            ViewModel.CallDetectAutoRecord = false;
+            return;
+        }
+
+        _autoRecordToggleBusy = true;
+        try
+        {
+            var lang = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+            if (!await ConsentFlow.ConfirmAutoRecordAsync(this.Content?.XamlRoot, lang))
+            {
+                toggle.IsOn = false;
+                return;
+            }
+            ViewModel.CallDetectAutoRecord = true;
+        }
+        finally
+        {
+            _autoRecordToggleBusy = false;
+        }
+    }
+
+    private async void ShowLicense_Click(object sender, RoutedEventArgs e) =>
+        await ShowLegalTextAsync("Licence (AGPL-3.0)", DimmyNative.LicenseText());
+
+    private async void ShowNotices_Click(object sender, RoutedEventArgs e) =>
+        await ShowLegalTextAsync("Open source notices", DimmyNative.ThirdPartyNotices());
+
+    /// <summary>Read-only scrollable text. A TextBox, not a TextBlock: the
+    /// notices run to ~1 MB, past what one TextBlock lays out reliably.</summary>
+    private async Task ShowLegalTextAsync(string title, string? text)
+    {
+        var box = new TextBox
+        {
+            Text = string.IsNullOrEmpty(text)
+                ? "Text unavailable."
+                : text.Replace("\r\n", "\n").Replace("\n", "\r"),
+            IsReadOnly = true,
+            AcceptsReturn = true,
+            TextWrapping = TextWrapping.Wrap,
+            FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"),
+            FontSize = 12,
+            MinWidth = 640,
+            Height = 440,
+        };
+        ScrollViewer.SetVerticalScrollBarVisibility(box, ScrollBarVisibility.Auto);
+        var dlg = new ContentDialog
+        {
+            RequestedTheme = Dimmy.Windows.Helpers.ThemeHelper.ResolvedElementTheme(),
+            Title = title,
+            Content = box,
+            CloseButtonText = "Close",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = this.Content?.XamlRoot,
+        };
+        await dlg.ShowAsync();
     }
 
     private async void ReleaseNotes_Click(object sender, RoutedEventArgs e)

@@ -127,6 +127,16 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_model_catalog_json(byte[]? outBuf, int bufLen);
 
+    // ── Legal notices + terms (AGPL texts compiled into the core) ────
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_license_text(byte[]? outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_third_party_notices(byte[]? outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_terms_version(byte[] outBuf, int bufLen);
+
     // ── Recording-consent notices ────────────────────────────────────
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_consent_text(
@@ -297,7 +307,7 @@ public static class DimmyNative
         ReadBuffer((buf, len) => dimmy_ai_notice_text(kind, lang, buf, len), 1024);
 
     /// <summary>Append a consent event to the local audit log. kind = "confirmed" /
-    /// "declined" / "announced" / "chat_copied".</summary>
+    /// "declined" / "notice_played_locally" / "notice_copied" / "auto_start_confirmed".</summary>
     public static void ConsentLogEvent(string kind, string? lang) =>
         dimmy_consent_log_event(kind, lang);
 
@@ -857,6 +867,25 @@ public static class DimmyNative
         if (written < 0) return null;
         return System.Text.Encoding.UTF8.GetString(buf, 0, System.Math.Min(written, needed));
     }
+
+    private static string? ReadSized(System.Func<byte[]?, int, int> call)
+    {
+        int needed = call(null, 0);
+        if (needed <= 0) return null;
+        var buf = new byte[needed + 1];
+        int written = call(buf, buf.Length);
+        if (written < 0) return null;
+        return System.Text.Encoding.UTF8.GetString(buf, 0, System.Math.Min(written, needed));
+    }
+
+    /// <summary>The GNU AGPL v3 text, compiled into the core.</summary>
+    public static string? LicenseText() => ReadSized(dimmy_license_text);
+
+    /// <summary>Third-party licence texts and copyright notices.</summary>
+    public static string? ThirdPartyNotices() => ReadSized(dimmy_third_party_notices);
+
+    /// <summary>Terms version to store in terms_accepted_version when the user accepts.</summary>
+    public static string TermsVersion() => ReadBuffer(dimmy_terms_version, 64)?.Trim() ?? string.Empty;
 
     // ── History helpers ──────────────────────────────────────────
     public static string? HistoryRecent(int limit) =>

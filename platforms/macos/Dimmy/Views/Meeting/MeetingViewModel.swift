@@ -1771,9 +1771,10 @@ struct MeetingHistoryRow: Identifiable, Equatable {
 /// Mandatory recording-consent gate for meeting start. Mirror of the Windows
 /// ConsentFlow: notice text + audit log come from the shared Rust core so every
 /// platform says the same thing. The spoken notice reaches the user and anyone
-/// in the same room; REMOTE participants only hear it if the user is unmuted,
-/// so the pasteboard copy is the reliable channel for them. TTS / clipboard are
-/// best-effort and never block the meeting.
+/// in the same room; REMOTE participants usually do not hear it (headphones,
+/// call echo cancellation), so the pasteboard copy, pasted in the meeting chat,
+/// is the only channel that reaches them. TTS / clipboard are best-effort and
+/// never block the meeting.
 @MainActor
 enum MeetingConsentFlow {
     // Held statically so speech isn't cut off when the call returns.
@@ -1808,22 +1809,63 @@ enum MeetingConsentFlow {
             }
             synthesizer.speak(utterance)
         }
-        DimmyCore.shared.consentLogEvent(kind: "announced", lang: lang)
+        // Truthful name: this started playback on THIS machine. It says
+        // nothing about whether anyone on the call heard it.
+        DimmyCore.shared.consentLogEvent(kind: "notice_played_locally", lang: lang)
+    }
+
+    /// Copy the notice for pasting into the meeting chat, log it and say so.
+    /// Done on every start, including the automatic one. Best-effort.
+    private static func copyNotice(_ announcement: String, lang: String) {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(announcement, forType: .string)
+        DimmyCore.shared.consentLogEvent(kind: "notice_copied", lang: lang)
+        DictToastWindow.show(
+            kind: .workflowHint,
+            title: "Recording notice",
+            body: "Notice copied: paste it in the meeting chat.")
+    }
+
+    private static let autoRecordConfirmedKey = "consent.autoRecordConfirmed"
+
+    /// One-time confirmation the first time "Start recording automatically"
+    /// is turned on. Returns true when it may be enabled.
+    static func confirmAutoRecord(lang: String) -> Bool {
+        if UserDefaults.standard.bool(forKey: autoRecordConfirmedKey) { return true }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Record calls automatically?"
+        alert.informativeText =
+            "Other participants are not notified automatically. Dimmy plays a notice on "
+            + "your speakers and copies it so you can paste it in the meeting chat, but "
+            + "people on the call may not hear it.\n\n"
+            + "In some places (for example California and Germany) everyone must consent "
+            + "to being recorded. Getting that consent is your responsibility."
+        alert.addButton(withTitle: "Turn on")
+        alert.addButton(withTitle: "Cancel")
+        // Cancel is the default so Enter does not blow past the warning.
+        if alert.buttons.count > 1 {
+            alert.window.defaultButtonCell = alert.buttons[1].cell as? NSButtonCell
+        }
+        guard alert.runModal() == .alertFirstButtonReturn else { return false }
+        UserDefaults.standard.set(true, forKey: autoRecordConfirmedKey)
+        DimmyCore.shared.consentLogEvent(kind: "auto_start_confirmed", lang: lang)
+        return true
     }
 
     /// Shows the confirmation modal; on accept speaks + copies the announcement
     /// and logs each step. Returns true if the meeting may start. Main thread.
     /// Announce without asking, for the auto-record path: the user
     /// answered the question once in Settings, and a modal at call time
-    /// would defeat "start recording immediately". Participants still get
-    /// the spoken notice, and the audit log still records that they were
-    /// told. The pasteboard is left alone, unlike the manual path: nobody
-    /// asked for this recording, so nothing the user was holding to paste
-    /// may be thrown away for it. Mirror of Win ConsentFlow.AnnounceOnly.
+    /// would defeat "start recording immediately". The notice is played
+    /// locally and copied for the meeting chat, the same as the manual path.
+    /// Mirror of Win ConsentFlow.AnnounceOnly.
     static func announceOnly(lang: String) {
         let picked = DimmyCore.shared.consentAnnouncement(lang: lang)
         let announcement = picked.text
             ?? "Quick note: this meeting is being recorded and transcribed for note-taking."
+        copyNotice(announcement, lang: lang)
         announce(announcement, lang: lang, variant: picked.variant)
     }
 
@@ -1858,13 +1900,10 @@ enum MeetingConsentFlow {
         }
         DimmyCore.shared.consentLogEvent(kind: "confirmed", lang: lang)
 
-        // Chat message for participants (reliable channel for remotes).
-        let pb = NSPasteboard.general
-        pb.clearContents()
-        pb.setString(announcement, forType: .string)
-        DimmyCore.shared.consentLogEvent(kind: "chat_copied", lang: lang)
+        // Chat message for participants: the only channel that reaches people
+        // who do not hear this Mac's speakers.
+        copyNotice(announcement, lang: lang)
 
-        // Speak it (reaches remotes only if the user is unmuted).
         announce(announcement, lang: lang, variant: picked.variant)
         return true
     }

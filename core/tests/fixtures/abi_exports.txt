@@ -114,6 +114,7 @@ dimmy_license_redeem
 dimmy_license_refresh
 dimmy_license_request_trial
 dimmy_license_status_json
+dimmy_license_text
 dimmy_list_devices_json
 dimmy_list_llm_models
 dimmy_list_local_models
@@ -183,6 +184,8 @@ dimmy_telemetry_set_crash_enabled
 dimmy_telemetry_set_enabled
 dimmy_telemetry_status
 dimmy_telemetry_track_typed
+dimmy_terms_version
+dimmy_third_party_notices
 dimmy_track_meeting_action
 dimmy_transcribe_file
 dimmy_update_stats

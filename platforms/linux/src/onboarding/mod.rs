@@ -33,7 +33,7 @@ pub fn show_onboarding(app: &adw::Application, app_state: &Arc<dimmy_lib::AppSta
     dots.set_carousel(Some(&carousel));
 
     // Pages
-    let welcome_page = welcome::create_page();
+    let (welcome_page, terms_check) = welcome::create_page(app_state);
     let shortcut_page = shortcut::create_page(app_state);
     let tryit_page = tryit::create_page(app_state);
 
@@ -55,6 +55,7 @@ pub fn show_onboarding(app: &adw::Application, app_state: &Arc<dimmy_lib::AppSta
 
     let next_btn = gtk4::Button::with_label("Get Started");
     next_btn.add_css_class("suggested-action");
+    next_btn.set_sensitive(terms_check.is_active());
 
     nav_box.append(&back_btn);
     nav_box.append(&next_btn);
@@ -68,9 +69,12 @@ pub fn show_onboarding(app: &adw::Application, app_state: &Arc<dimmy_lib::AppSta
         back_btn,
         #[weak]
         next_btn,
+        #[weak]
+        terms_check,
         move |carousel| {
             let pos = carousel.position().round() as u32;
             back_btn.set_visible(pos > 0);
+            next_btn.set_sensitive(pos > 0 || terms_check.is_active());
             match pos {
                 0 => next_btn.set_label("Get Started"),
                 1 => next_btn.set_label("Next"),
@@ -80,12 +84,30 @@ pub fn show_onboarding(app: &adw::Application, app_state: &Arc<dimmy_lib::AppSta
         }
     ));
 
+    // The box only gates the Welcome page.
+    {
+        let carousel = carousel.clone();
+        let next_btn = next_btn.clone();
+        terms_check.connect_toggled(move |c| {
+            if carousel.position().round() as u32 == 0 {
+                next_btn.set_sensitive(c.is_active());
+            }
+        });
+    }
+
     let carousel_for_next = carousel.clone();
     let window_for_next = window.clone();
     let state_for_next = app_state.clone();
+    let terms_for_next = terms_check.clone();
 
     next_btn.connect_clicked(move |_| {
         let pos = carousel_for_next.position().round() as u32;
+        if pos == 0 {
+            if !terms_for_next.is_active() {
+                return;
+            }
+            crate::terms::accept(&state_for_next);
+        }
         let n_pages = carousel_for_next.n_pages();
         if pos < n_pages - 1 {
             let next_page = carousel_for_next.nth_page(pos + 1);

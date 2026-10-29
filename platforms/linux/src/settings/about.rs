@@ -38,7 +38,7 @@ pub fn create_page(
         .build();
 
     let version_label = gtk4::Label::builder()
-        .label(format!("Version {}", env!("CARGO_PKG_VERSION")))
+        .label(format!("Version {}", dimmy_lib::VERSION))
         .css_classes(vec!["dim-label".to_string()])
         .halign(gtk4::Align::Center)
         .build();
@@ -135,9 +135,14 @@ pub fn create_page(
     // ── Links group ──────────────────────────────────────────────────
     let links_group = adw::PreferencesGroup::builder().title("Links").build();
 
+    // AGPL-3.0 section 6: the source of exactly the running version.
+    let source_url = format!(
+        "https://github.com/KonradDallaOrg/dimmy/tree/v{}",
+        dimmy_lib::VERSION
+    );
     let github_row = adw::ActionRow::builder()
-        .title("GitHub Repository")
-        .subtitle("https://github.com/KonradDallaOrg/dimmy")
+        .title("Source code of this version")
+        .subtitle(source_url.as_str())
         .build();
     let github_btn = gtk4::Button::builder()
         .label("Open")
@@ -146,7 +151,7 @@ pub fn create_page(
         .build();
     github_btn.connect_clicked(move |_| {
         let _ = std::process::Command::new("xdg-open")
-            .arg("https://github.com/KonradDallaOrg/dimmy")
+            .arg(&source_url)
             .spawn();
     });
     github_row.add_suffix(&github_btn);
@@ -171,6 +176,41 @@ pub fn create_page(
 
     page.add(&links_group);
 
+    // ── Legal group (AGPL-3.0 sections 0 and 5(d)) ───────────────────
+    let legal_group = adw::PreferencesGroup::builder()
+        .title("Legal")
+        .description(format!(
+            "Dimmy v{} \u{00A9} Konrad Dalla. Free software under the GNU AGPL v3. NO WARRANTY.",
+            dimmy_lib::VERSION
+        ))
+        .build();
+    for (title, subtitle, text) in [
+        (
+            "Licence (AGPL-3.0)",
+            "The full licence text",
+            dimmy_lib::LICENSE_TEXT,
+        ),
+        (
+            "Open source notices",
+            "Licences of the components Dimmy includes",
+            dimmy_lib::THIRD_PARTY_NOTICES,
+        ),
+    ] {
+        let row = adw::ActionRow::builder()
+            .title(title)
+            .subtitle(subtitle)
+            .build();
+        let btn = gtk4::Button::builder()
+            .label("View")
+            .css_classes(vec!["flat".to_string()])
+            .valign(gtk4::Align::Center)
+            .build();
+        btn.connect_clicked(move |b| show_text_window(b.upcast_ref::<gtk4::Widget>(), title, text));
+        row.add_suffix(&btn);
+        legal_group.add(&row);
+    }
+    page.add(&legal_group);
+
     // ── Footer ───────────────────────────────────────────────────────
     let footer_group = adw::PreferencesGroup::new();
     let footer_label = gtk4::Label::builder()
@@ -190,6 +230,40 @@ pub fn create_page(
     page.add(&footer_group);
 
     page
+}
+
+/// Read-only scrollable text in its own window, for the licence texts.
+fn show_text_window(anchor: &gtk4::Widget, title: &str, text: &str) {
+    let view = gtk4::TextView::builder()
+        .editable(false)
+        .cursor_visible(false)
+        .monospace(true)
+        .wrap_mode(gtk4::WrapMode::WordChar)
+        .left_margin(12)
+        .right_margin(12)
+        .top_margin(12)
+        .bottom_margin(12)
+        .build();
+    view.buffer().set_text(text);
+    let scroll = gtk4::ScrolledWindow::builder()
+        .child(&view)
+        .hexpand(true)
+        .vexpand(true)
+        .build();
+    let win = gtk4::Window::builder()
+        .title(title)
+        .default_width(720)
+        .default_height(540)
+        .modal(true)
+        .child(&scroll)
+        .build();
+    if let Some(parent) = anchor
+        .root()
+        .and_then(|r| r.downcast::<gtk4::Window>().ok())
+    {
+        win.set_transient_for(Some(&parent));
+    }
+    win.present();
 }
 
 /// Query GitHub API for the latest release.

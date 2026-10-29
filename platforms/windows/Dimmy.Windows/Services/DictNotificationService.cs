@@ -41,6 +41,14 @@ public static class DictNotificationService
              $"{what} Open the meeting window to link it.");
     }
 
+    /// <summary>A meeting started and the participant notice is on the
+    /// clipboard. Playing it on this machine does not reach people on the
+    /// call, so the toast sends the user to the chat.</summary>
+    public static void ShowNoticeCopied()
+    {
+        Show("Recording notice", "Notice copied: paste it in the meeting chat.");
+    }
+
     /// <summary>Soft feedback when the user re-adds a word that's
     /// already on the list (dimmy_user_dict_add returns rc=1). Keeps
     /// the hotkey from feeling broken on accidental double-press.</summary>

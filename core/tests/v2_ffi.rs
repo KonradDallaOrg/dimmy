@@ -41,10 +41,11 @@ use dimmy_lib::ffi::{
     dimmy_hardware_json, dimmy_history_save, dimmy_history_update_audio,
     dimmy_history_update_enhanced, dimmy_history_update_word_timestamps,
     dimmy_hotkey_combos_conflict, dimmy_hotkey_set_command, dimmy_hotkey_take_command_event,
-    dimmy_init, dimmy_llm_call_raw, dimmy_meeting_is_active, dimmy_meeting_save_post_process,
-    dimmy_model_catalog_json, dimmy_model_delete, dimmy_model_download_cancel,
-    dimmy_model_download_enqueue, dimmy_model_download_snapshot_json, dimmy_push_loopback_audio,
-    dimmy_set_app_context, dimmy_set_config_json, dimmy_set_loopback_sample_rate,
+    dimmy_init, dimmy_license_text, dimmy_llm_call_raw, dimmy_meeting_is_active,
+    dimmy_meeting_save_post_process, dimmy_model_catalog_json, dimmy_model_delete,
+    dimmy_model_download_cancel, dimmy_model_download_enqueue, dimmy_model_download_snapshot_json,
+    dimmy_push_loopback_audio, dimmy_set_app_context, dimmy_set_config_json,
+    dimmy_set_loopback_sample_rate, dimmy_terms_version, dimmy_third_party_notices,
     dimmy_transcribe_file, dimmy_user_dict_add, dimmy_user_dict_list_json, dimmy_user_dict_remove,
     dimmy_whistle_size_mb, dimmy_whistle_status,
 };
@@ -1502,6 +1503,41 @@ fn model_catalog_json_length_query_and_write_round_trip() {
             .all(|p| !p["icon"].as_str().unwrap_or("").is_empty()),
         "every provider must carry an icon"
     );
+}
+
+fn read_sized(f: extern "C" fn(*mut c_char, c_int) -> c_int) -> String {
+    let needed = f(std::ptr::null_mut(), 0);
+    assert!(needed > 0, "length query must be positive");
+    let mut buf = vec![0u8; (needed + 1) as usize];
+    let written = f(buf.as_mut_ptr() as *mut c_char, buf.len() as c_int);
+    assert_eq!(written, needed);
+    unsafe { CStr::from_ptr(buf.as_ptr() as *const c_char) }
+        .to_str()
+        .expect("legal text is UTF-8")
+        .to_string()
+}
+
+#[test]
+#[serial]
+fn legal_texts_and_terms_version_round_trip() {
+    let licence = read_sized(dimmy_license_text);
+    assert!(licence.starts_with("GNU AFFERO GENERAL PUBLIC LICENSE"));
+    assert!(licence.contains("Version 3, 19 November 2007"));
+
+    let notices = read_sized(dimmy_third_party_notices);
+    assert!(notices.starts_with("# Open source notices"));
+    assert!(
+        notices.contains("whisper.cpp") && notices.contains("Permission is hereby granted"),
+        "notices must carry the component list and the MIT text"
+    );
+
+    let mut buf = vec![0u8; 64];
+    let n = dimmy_terms_version(buf.as_mut_ptr() as *mut c_char, buf.len() as c_int);
+    assert_eq!(n as usize, dimmy_lib::TERMS_VERSION.len());
+    let v = unsafe { CStr::from_ptr(buf.as_ptr() as *const c_char) }
+        .to_str()
+        .unwrap();
+    assert_eq!(v, dimmy_lib::TERMS_VERSION);
 }
 
 #[test]

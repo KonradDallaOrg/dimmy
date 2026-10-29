@@ -733,6 +733,22 @@ public partial class App : Application
         _hotkeyService.SetMeetingShortcut(_uiPrefs.MeetingHotkey);
     }
 
+    /// <summary>Existing installs: ask once per launch until the current terms
+    /// are accepted. Never blocks anything. The wizard path accepts them
+    /// itself, so a fresh install never reaches the window.</summary>
+    private void ShowTermsIfNeeded()
+    {
+        try
+        {
+            if (Services.TermsAcceptance.IsCurrent()) return;
+            new Views.TermsWindow().Activate();
+        }
+        catch (Exception ex)
+        {
+            PttLog($"[terms] launch prompt failed: {ex.Message}");
+        }
+    }
+
     private void StartNormalMode()
     {
         // Check audio device health before starting
@@ -769,6 +785,7 @@ public partial class App : Application
         InitCommandPipeAndJumpList();
         InitCallDetection();
         InitTelegram();
+        ShowTermsIfNeeded();
 
         // If the launch came from a `dimmy://activate?…` URL but no
         // running instance was around to handle it, we stashed the

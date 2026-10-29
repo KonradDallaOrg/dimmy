@@ -55,6 +55,10 @@ public sealed partial class OnboardingWindow : Window
         ((FrameworkElement)Content).DataContext = ViewModel;
         Title = "Dimmy";
 
+        // Re-running setup after the current terms were accepted arrives
+        // already ticked; a first run must tick it before Get Started works.
+        TermsCheck.IsChecked = Services.TermsAcceptance.IsCurrent();
+
         // The Local card promises "runs on your machine"; say what the
         // machine is. One FFI read, and nothing rendered when the probe
         // has nothing honest to report. See core/src/hardware.rs.
@@ -755,8 +759,19 @@ public sealed partial class OnboardingWindow : Window
         }
     }
 
+    private void TermsCheck_Changed(object sender, RoutedEventArgs e) =>
+        GetStartedBtn.IsEnabled = TermsCheck.IsChecked == true;
+
     private void NextStep_Click(object sender, RoutedEventArgs e)
     {
+        // Welcome step: the box is the gate, and acceptance is recorded the
+        // moment the user leaves the step.
+        if (ViewModel.CurrentStep == 0)
+        {
+            if (TermsCheck.IsChecked != true) return;
+            Services.TermsAcceptance.Accept();
+        }
+
         // On the choice step a failed/offline local download turns the
         // Continue button into "Try again" — retry, don't advance.
         if (ViewModel.CurrentStep == 1 &&

@@ -643,6 +643,7 @@ fn dimmy_init_inner() -> c_int {
         loopback_gain: loopback_gain_atomic,
         meeting_chunk_secs: Mutex::new(file_cfg.meeting_chunk_secs),
         meeting_storage_path: Mutex::new(file_cfg.meeting_storage_path),
+        terms_accepted_version: Mutex::new(file_cfg.terms_accepted_version),
         notion_target_id: Mutex::new(file_cfg.notion_target_id),
         notion_target_kind: Mutex::new(file_cfg.notion_target_kind),
         notion_target_title: Mutex::new(file_cfg.notion_target_title),
@@ -2416,6 +2417,12 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         .map(|s| s.clone())
         .unwrap_or_default()
         .into();
+    json["terms_accepted_version"] = st
+        .terms_accepted_version
+        .lock()
+        .map(|s| s.clone())
+        .unwrap_or_default()
+        .into();
 
     let s = serde_json::to_string(&json).unwrap_or_else(|_| "{}".to_string());
     write_to_buf(&s, out_buf, buf_len)
@@ -2949,6 +2956,9 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
             *slot = secs;
         }
         log(&format!("[Config] meeting_chunk_secs set to {:.1}", secs));
+    }
+    if let Some(s) = v["terms_accepted_version"].as_str() {
+        apply_terms_accepted_version(st, s);
     }
     // Meeting storage override. Identity-class field: the host UI omits
     // it from a normal full-config save when empty (else a transient
@@ -4210,7 +4220,7 @@ pub extern "C" fn dimmy_has_api_key() -> c_int {
 /// Returns number of bytes written, or -1 on error.
 #[no_mangle]
 pub extern "C" fn dimmy_get_version(out_buf: *mut c_char, buf_len: c_int) -> c_int {
-    write_to_buf(env!("CARGO_PKG_VERSION"), out_buf, buf_len)
+    write_to_buf(crate::VERSION, out_buf, buf_len)
 }
 
 // ── Meeting mode ─────────────────────────────────────────────────
@@ -6805,6 +6815,57 @@ pub extern "C" fn dimmy_build_flavor(out_buf: *mut c_char, buf_len: c_int) -> c_
     write_to_buf(crate::build_flavor(), out_buf, buf_len)
 }
 
+/// Record the terms version the user accepted. An acceptance is a fact, not a
+/// preference: an empty string (a host that has not loaded its settings yet)
+/// and an oversized one are ignored, so nothing but a real version tag can
+/// replace it and a stray save can never un-accept.
+fn apply_terms_accepted_version(st: &AppState, version: &str) {
+    let version = version.trim();
+    if version.is_empty() || version.len() > 64 {
+        return;
+    }
+    if let Ok(mut slot) = st.terms_accepted_version.lock() {
+        *slot = version.to_string();
+    }
+    log(&format!("[Config] terms_accepted_version set to {version}"));
+}
+
+/// Same contract as `dimmy_model_catalog_json`: returns the TOTAL byte length
+/// of `text` whatever `buf_len` is, and writes only when the buffer is usable.
+/// A host calls once with `out_buf = null` to size, then again to read.
+fn write_static_text(text: &str, out_buf: *mut c_char, buf_len: c_int) -> c_int {
+    assert!(!text.is_empty(), "embedded legal text must not be empty");
+    assert!(
+        text.len() <= c_int::MAX as usize,
+        "embedded legal text exceeds the c_int length contract"
+    );
+    if !out_buf.is_null() && buf_len > 0 {
+        write_to_buf(text, out_buf, buf_len);
+    }
+    text.len() as c_int
+}
+
+/// The GNU AGPL v3 text. Length-query contract, see [`write_static_text`].
+#[no_mangle]
+pub extern "C" fn dimmy_license_text(out_buf: *mut c_char, buf_len: c_int) -> c_int {
+    write_static_text(crate::LICENSE_TEXT, out_buf, buf_len)
+}
+
+/// Open source notices for the components Dimmy ships with. Length-query
+/// contract, see [`write_static_text`].
+#[no_mangle]
+pub extern "C" fn dimmy_third_party_notices(out_buf: *mut c_char, buf_len: c_int) -> c_int {
+    write_static_text(crate::THIRD_PARTY_NOTICES, out_buf, buf_len)
+}
+
+/// Version of the Terms of Service / EULA the app asks the user to accept.
+/// Hosts store it in `terms_accepted_version` when the user ticks the box.
+/// Returns bytes written, or -1 on a null buffer.
+#[no_mangle]
+pub extern "C" fn dimmy_terms_version(out_buf: *mut c_char, buf_len: c_int) -> c_int {
+    write_to_buf(crate::TERMS_VERSION, out_buf, buf_len)
+}
+
 /// Recording-consent notice text (see [`crate::consent`]). `kind` = "modal"
 /// (the confirmation shown to the recorder before a meeting starts) or
 /// "announcement" (spoken via the host TTS + pasted into the call chat for the
@@ -6834,20 +6895,7 @@ pub unsafe extern "C" fn dimmy_consent_text(
     let lang = CStr::from_ptr(lang_ptr).to_str().unwrap_or("en");
     let text = match kind {
         "modal" => crate::consent::modal_text(lang),
-        "announcement" => {
-            let st = state();
-            let stt_cloud = st
-                .stt_mode
-                .lock()
-                .map(|m| m.eq_ignore_ascii_case("cloud"))
-                .unwrap_or(false);
-            let llm_cloud = st
-                .llm_mode
-                .lock()
-                .map(|m| m.eq_ignore_ascii_case("cloud"))
-                .unwrap_or(false);
-            crate::consent::announcement_text(lang, stt_cloud || llm_cloud)
-        }
+        "announcement" => crate::consent::announcement_text(lang, consent_cloud_processing()),
         // Localized dialog chrome: "title" | "intro" | "confirm" | "cancel".
         other => match crate::consent::ui_text(other, lang) {
             Some(s) => s,
@@ -6914,22 +6962,20 @@ pub unsafe extern "C" fn dimmy_detect_audio_language(
 /// `kind` is "title" or "hint". Returns the byte length written, -1 on bad
 /// args or an unknown kind.
 ///
-/// True when the audio leaves the device: STT or LLM is configured cloud.
-/// The announcement must disclose it, so both the text and the recording ask
-/// the same question here rather than each deciding for itself.
+/// True when the audio or transcript leaves the device: STT or LLM is cloud,
+/// or the recap runs on a cloud model / subscription (see
+/// [`crate::consent::cloud_processing`]). The announcement must disclose it,
+/// so both the text and the recording ask the same question here rather than
+/// each deciding for itself.
 fn consent_cloud_processing() -> bool {
     let st = state();
-    let stt = st
-        .stt_mode
-        .lock()
-        .map(|m| m.eq_ignore_ascii_case("cloud"))
-        .unwrap_or(false);
-    let llm = st
-        .llm_mode
-        .lock()
-        .map(|m| m.eq_ignore_ascii_case("cloud"))
-        .unwrap_or(false);
-    stt || llm
+    let read = |m: &Mutex<String>| m.lock().map(|s| s.clone()).unwrap_or_default();
+    crate::consent::cloud_processing(
+        &read(&st.stt_mode),
+        &read(&st.llm_mode),
+        &read(&st.recap_model_override),
+        &read(&st.recap_auth_method),
+    )
 }
 
 /// The participant announcement for THIS meeting: picks one of the wordings
@@ -6990,7 +7036,7 @@ pub unsafe extern "C" fn dimmy_consent_audio(
 /// 1 when the spoken notice must stay silent (see
 /// [`crate::consent::announcement_audio_muted`]), 0 otherwise. The host
 /// checks it before playing anything, the system-voice fallback included,
-/// and logs "announce_muted" instead of "announced".
+/// and logs "announce_muted" instead of "notice_played_locally".
 #[no_mangle]
 pub extern "C" fn dimmy_consent_audio_muted() -> c_int {
     crate::consent::announcement_audio_muted() as c_int
@@ -7027,7 +7073,11 @@ pub unsafe extern "C" fn dimmy_ai_notice_text(
 
 /// Append a recording-consent event to the local audit log
 /// (`<config_dir>/consent.jsonl`). `kind` is the host's event tag:
-/// "confirmed" / "declined" / "announced" / "chat_copied". `lang` (may be
+/// "confirmed" / "declined" / "notice_played_locally" / "notice_copied" /
+/// "auto_start_confirmed" (older builds also wrote "announced" and
+/// "chat_copied"; those lines stay as written). "announced" must never be
+/// logged for local playback, which proves nothing about the participants.
+/// `lang` (may be
 /// null) records which notice language was used. Returns 0, -1 on bad args.
 ///
 /// # Safety
@@ -7059,6 +7109,9 @@ pub unsafe extern "C" fn dimmy_consent_log_event(
         "cancelled" => "cancelled",
         "announced" => "announced",
         "announce_muted" => "announce_muted",
+        "notice_played_locally" => "notice_played_locally",
+        "notice_copied" => "notice_copied",
+        "auto_start_confirmed" => "auto_start_confirmed",
         "declined" => "declined",
         _ => "other",
     };
@@ -12047,6 +12100,56 @@ mod tests {
         assert_eq!(buf[0], 0);
     }
 
+    // ── legal notices + terms ───────────────────────────────────────
+
+    #[test]
+    fn legal_texts_report_their_length_and_fill_a_sized_buffer() {
+        for (f, header) in [
+            (
+                dimmy_license_text as extern "C" fn(*mut c_char, c_int) -> c_int,
+                "GNU AFFERO GENERAL PUBLIC LICENSE",
+            ),
+            (
+                dimmy_third_party_notices as extern "C" fn(*mut c_char, c_int) -> c_int,
+                "# Open source notices",
+            ),
+        ] {
+            let needed = f(std::ptr::null_mut(), 0);
+            assert!(needed > 1000, "embedded text suspiciously short: {needed}");
+            let mut buf = vec![0u8; needed as usize + 1];
+            let written = f(buf.as_mut_ptr() as *mut c_char, buf.len() as c_int);
+            assert_eq!(written, needed);
+            let text = unsafe { CStr::from_ptr(buf.as_ptr() as *const c_char) }
+                .to_str()
+                .expect("legal text is UTF-8");
+            assert!(
+                text.starts_with(header),
+                "unexpected header: {:?}",
+                &text[..40]
+            );
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn terms_acceptance_is_only_ever_replaced_by_a_real_version() {
+        ensure_test_state();
+        let st = state();
+        let get = || st.terms_accepted_version.lock().unwrap().clone();
+        *st.terms_accepted_version.lock().unwrap() = String::new();
+
+        apply_terms_accepted_version(st, "");
+        assert_eq!(get(), "", "empty never applies");
+        apply_terms_accepted_version(st, crate::TERMS_VERSION);
+        assert_eq!(get(), crate::TERMS_VERSION);
+        apply_terms_accepted_version(st, "");
+        assert_eq!(get(), crate::TERMS_VERSION, "a blank save cannot un-accept");
+        apply_terms_accepted_version(st, &"x".repeat(65));
+        assert_eq!(get(), crate::TERMS_VERSION, "oversized value is ignored");
+
+        *st.terms_accepted_version.lock().unwrap() = String::new();
+    }
+
     // ── emit_event tests ────────────────────────────────────────────
 
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -12293,6 +12396,7 @@ mod tests {
                 audio_source: Mutex::new("mic".to_string()),
                 meeting_chunk_secs: Mutex::new(15.0f32),
                 meeting_storage_path: Mutex::new(String::new()),
+                terms_accepted_version: Mutex::new(String::new()),
                 notion_target_id: Mutex::new(String::new()),
                 confluence_site: Mutex::new(String::new()),
                 confluence_email: Mutex::new(String::new()),

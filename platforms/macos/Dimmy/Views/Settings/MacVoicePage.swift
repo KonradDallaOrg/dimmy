@@ -1193,6 +1193,15 @@ struct MacVoicePage: View {
                                     autoRecord: appState.callDetectAutoRecord)
                             },
                             set: { newValue in
+                                // Turning it on for the first time asks for a
+                                // confirmation; the switch stays off until given.
+                                if newValue,
+                                   !MeetingConsentFlow.confirmAutoRecord(
+                                       lang: Locale.current.language.languageCode?.identifier ?? "en") {
+                                    // Re-render so the switch snaps back to off.
+                                    appState.objectWillChange.send()
+                                    return
+                                }
                                 appState.callDetectAutoRecord = newValue
                                 persistConfig()
                             }

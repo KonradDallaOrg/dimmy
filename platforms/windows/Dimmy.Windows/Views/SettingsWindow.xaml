@@ -1009,7 +1009,10 @@
                                       InfoTip="Skips the prompt: the meeting starts the moment a call is detected and the window opens. Dimmy plays the recording notice on your speakers: participants on headphones or in a call usually won't hear it, and telling them is your responsibility. Needs call detection on."
                                       IsEnabled="{Binding CallDetectEnabled}"
                                       HelpUrl="https://dimmy.app/help/use-meeting-recaps">
-                  <ToggleSwitch IsOn="{Binding CallDetectAutoRecord, Mode=TwoWay}"
+                  <!-- One-way + Toggled: the first enable asks for a confirmation
+                       first, and the view model must stay off until it is given. -->
+                  <ToggleSwitch IsOn="{Binding CallDetectAutoRecord, Mode=OneWay}"
+                                Toggled="AutoRecordToggle_Toggled"
                                 Style="{StaticResource CompactToggleSwitch}" />
                 </controls:SettingCard>
                 <controls:SettingCard Glyph="&#xE71F;"
@@ -1795,11 +1798,32 @@
                    to the website + Store, so the card is dropped for all
                    builds. The site stays reachable normally; updates come via
                    Velopack / the Store. Burned: Store cert 2026-06-25. -->
+              <!-- NavigateUri is set in code: it points at the tag of the
+                   running version (AGPL-3.0 section 6 source offer). -->
               <controls:SettingCard Glyph="&#xE943;"
                                     Label="Source code"
                                     InfoTip="Open-source on GitHub.">
-                <HyperlinkButton Content="GitHub"
+                <HyperlinkButton x:Name="SourceCodeLink"
+                                 Content="Source code of this version"
                                  NavigateUri="https://github.com/KonradDallaOrg/dimmy" />
+              </controls:SettingCard>
+
+              <TextBlock Text="LEGAL"
+                         FontSize="12" FontWeight="SemiBold"
+                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                         CharacterSpacing="40" Margin="2,20,0,8" />
+              <TextBlock x:Name="LegalLineText"
+                         FontSize="12" TextWrapping="Wrap" Margin="2,0,0,8"
+                         Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+              <controls:SettingCard Glyph="&#xE8A5;"
+                                    Label="Licence (AGPL-3.0)"
+                                    InfoTip="The full GNU Affero General Public License v3 text.">
+                <Button Content="View" Click="ShowLicense_Click" />
+              </controls:SettingCard>
+              <controls:SettingCard Glyph="&#xE8A5;"
+                                    Label="Open source notices"
+                                    InfoTip="Licences and copyright notices of the components Dimmy includes.">
+                <Button Content="View" Click="ShowNotices_Click" />
               </controls:SettingCard>
 
             </StackPanel>
