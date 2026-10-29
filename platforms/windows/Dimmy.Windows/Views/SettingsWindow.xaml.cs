@@ -3633,7 +3633,7 @@ public sealed partial class SettingsWindow : Window
                                     "You're in your free 14-day trial. Cloud + auto-update are enabled."),
                 "TrialExpired" => ("Trial expired",
                                     "Your trial has ended. Cloud features are paused. Purchase a license to continue."),
-                "Active"       => ($"Active: {s.Tier} ({s.DaysRemaining} day(s) left)",
+                "Active"       => ($"Active: {(s.Tier == "lifetime" ? "Supporter, 3 years" : s.Tier)} ({s.DaysRemaining} day(s) left)",
                                     s.CancelsAt is long ca
                                         ? $"Subscription scheduled to cancel on {DateTimeOffset.FromUnixTimeSeconds(ca).LocalDateTime:MMM d, yyyy}. You keep cloud features until then."
                                         : "Thanks for supporting Dimmy. All cloud features are enabled."),
@@ -3718,7 +3718,7 @@ public sealed partial class SettingsWindow : Window
             {
                 "monthly"  => "PRO • MONTHLY",
                 "annual"   => "PRO • ANNUAL",
-                "lifetime" => "PRO • LIFETIME",
+                "lifetime" => "PRO • SUPPORTER",
                 _          => "PRO",
             },
             "Expired"   => "EXPIRED",
@@ -4113,7 +4113,7 @@ public sealed partial class SettingsWindow : Window
         bool showMonthly = true, showAnnual = true, showLifetime = true;
         string monthlyLabel = "Monthly";
         string annualLabel = "Annual";
-        string lifetimeLabel = "Lifetime";
+        string lifetimeLabel = "Supporter";
         bool showPortalHint = false;
 
         switch (s.Kind)
@@ -4148,21 +4148,21 @@ public sealed partial class SettingsWindow : Window
                 {
                     case "monthly":
                         headline = "Upgrade your plan";
-                        detail = "Switch to Annual for the best value, or Lifetime to skip renewals entirely.";
+                        detail = "Switch to Annual for the best value, or Supporter to pay once for 3 years.";
                         show = true;
                         showMonthly = false;
                         annualLabel = "Switch to Annual";
-                        lifetimeLabel = "Upgrade to Lifetime";
+                        lifetimeLabel = "Become a supporter";
                         showPortalHint = true;
                         break;
                     case "annual":
                         headline = "Change your plan";
-                        detail = "Drop to Monthly (you'll get a credit on the next invoice) or jump to Lifetime for one final payment.";
+                        detail = "Drop to Monthly (you'll get a credit on the next invoice) or move to Supporter: one payment for 3 years.";
                         show = true;
                         showMonthly = true;          // ← reveal Switch to Monthly
                         showAnnual = false;
                         monthlyLabel = "Switch to Monthly";
-                        lifetimeLabel = "Upgrade to Lifetime";
+                        lifetimeLabel = "Become a supporter";
                         showPortalHint = true;
                         break;
                     case "lifetime":

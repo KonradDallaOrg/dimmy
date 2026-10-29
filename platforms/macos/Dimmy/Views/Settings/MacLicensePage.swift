@@ -174,7 +174,7 @@ struct MacLicensePage: View {
             switch status.tier {
             case "monthly":  return "PRO • MONTHLY"
             case "annual":   return "PRO • ANNUAL"
-            case "lifetime": return "PRO • LIFETIME"
+            case "lifetime": return "PRO • SUPPORTER"
             default:         return "PRO"
             }
         case "Expired":   return "EXPIRED"
@@ -225,7 +225,7 @@ struct MacLicensePage: View {
             switch status.tier {
             case "monthly":  return "Pro license, Monthly"
             case "annual":   return "Pro license, Annual"
-            case "lifetime": return "Pro license, Lifetime (3y)"
+            case "lifetime": return "Pro license, Supporter (3 years)"
             default:         return "Pro license"
             }
         case "Expired":   return "License expired"
@@ -308,7 +308,7 @@ struct MacLicensePage: View {
                             Button { Task { await buy(tier: "lifetime") } } label: {
                                 VStack(spacing: 1) {
                                     Text(lifetimeLabel).bold()
-                                    Text("one-time").font(.system(size: 9))
+                                    Text("once · 3 years").font(.system(size: 9))
                                         .foregroundStyle(Color.macTextSecondary)
                                 }.frame(minWidth: 64)
                             }
@@ -395,7 +395,7 @@ struct MacLicensePage: View {
     private var lifetimeLabel: String {
         status.kind == "Active"
             && (status.tier?.lowercased() == "monthly" || status.tier?.lowercased() == "annual")
-            ? "Upgrade to Lifetime" : "Lifetime"
+            ? "Become a supporter" : "Supporter"
     }
 
     private var buyHeadline: String {
@@ -426,9 +426,9 @@ struct MacLicensePage: View {
         case "Active":
             switch status.tier?.lowercased() {
             case "monthly":
-                return "Switch to Annual for the best value, or Lifetime to skip renewals entirely."
+                return "Switch to Annual for the best value, or Supporter to pay once for 3 years."
             case "annual":
-                return "Drop to Monthly (you'll get a credit on the next invoice) or jump to Lifetime for one final payment."
+                return "Drop to Monthly (you'll get a credit on the next invoice) or move to Supporter: one payment for 3 years."
             default:
                 return "Pick a plan and we'll email you a magic link to activate."
             }
