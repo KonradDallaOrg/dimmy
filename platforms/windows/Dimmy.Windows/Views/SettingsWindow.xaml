@@ -3187,8 +3187,8 @@
                             Click="License_BuyLifetime_Click"
                             HorizontalAlignment="Stretch">
                       <StackPanel Spacing="2">
-                        <TextBlock x:Name="LicenseBuyLifetimeLabel" Text="Lifetime" FontWeight="SemiBold" />
-                        <TextBlock Text="one-time" FontSize="10"
+                        <TextBlock x:Name="LicenseBuyLifetimeLabel" Text="Supporter" FontWeight="SemiBold" />
+                        <TextBlock Text="once · 3 years" FontSize="10"
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                       </StackPanel>
                     </Button>
