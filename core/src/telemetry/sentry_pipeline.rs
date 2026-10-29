@@ -55,7 +55,8 @@ fn sentry_release(version: &str, build_id: &str) -> String {
 }
 
 #[cfg(feature = "telemetry-sentry")]
-static ENABLED: AtomicBool = AtomicBool::new(true);
+// Off until the saved consent says yes: nothing leaves before the answer.
+static ENABLED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(feature = "telemetry-sentry")]
 static GUARD: std::sync::OnceLock<Option<ClientInitGuard>> = std::sync::OnceLock::new();
@@ -570,6 +571,12 @@ fn scrub_event(
     mut event: sentry::protocol::Event<'static>,
 ) -> Option<sentry::protocol::Event<'static>> {
     use crate::telemetry::sanitize::looks_like_secret;
+
+    // Panics reach Sentry through its own integration, not through
+    // capture_*, so this is the only place the switch can stop them.
+    if !is_enabled() {
+        return None;
+    }
 
     // Drop server name (may include hostname / username on some OSes).
     event.server_name = None;

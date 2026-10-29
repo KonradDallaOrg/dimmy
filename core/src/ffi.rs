@@ -494,6 +494,7 @@ fn dimmy_init_inner() -> c_int {
 
     // Load config
     let file_cfg = load_config_file();
+    crate::telemetry::apply_consent(file_cfg.analytics_consent, file_cfg.crash_reports_consent);
     let use_kr = file_cfg.use_keyring;
     let key_store = KeyStore::new();
 
@@ -644,6 +645,8 @@ fn dimmy_init_inner() -> c_int {
         meeting_chunk_secs: Mutex::new(file_cfg.meeting_chunk_secs),
         meeting_storage_path: Mutex::new(file_cfg.meeting_storage_path),
         terms_accepted_version: Mutex::new(file_cfg.terms_accepted_version),
+        analytics_consent: Mutex::new(file_cfg.analytics_consent),
+        crash_reports_consent: Mutex::new(file_cfg.crash_reports_consent),
         notion_target_id: Mutex::new(file_cfg.notion_target_id),
         notion_target_kind: Mutex::new(file_cfg.notion_target_kind),
         notion_target_title: Mutex::new(file_cfg.notion_target_title),
@@ -2415,6 +2418,18 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         .meeting_storage_path
         .lock()
         .map(|s| s.clone())
+        .unwrap_or_default()
+        .into();
+    json["analytics_consent"] = st
+        .analytics_consent
+        .lock()
+        .map(|c| *c)
+        .unwrap_or_default()
+        .into();
+    json["crash_reports_consent"] = st
+        .crash_reports_consent
+        .lock()
+        .map(|c| *c)
         .unwrap_or_default()
         .into();
     json["terms_accepted_version"] = st
@@ -9875,7 +9890,19 @@ pub extern "C" fn dimmy_hotkey_stop_recording() {
 #[no_mangle]
 pub extern "C" fn dimmy_telemetry_set_enabled(enabled: c_int) -> c_int {
     crate::telemetry::set_enabled(enabled != 0);
+    save_consent(&state().analytics_consent, enabled != 0);
     0
+}
+
+/// Record a consent answer and write it to disk at once: an answer that only
+/// lived in memory came back as "yes" at the next launch.
+fn save_consent(slot: &Mutex<Option<bool>>, answer: bool) {
+    if let Ok(mut c) = slot.lock() {
+        *c = Some(answer);
+    }
+    if let Ok(cfg) = crate::snapshot_config(state()) {
+        save_config_file(&cfg);
+    }
 }
 
 /// Read the current runtime telemetry-enabled flag. 0 = off, 1 = on.
@@ -9937,6 +9964,7 @@ pub extern "C" fn dimmy_telemetry_status(out_buf: *mut c_char, buf_len: c_int) -
 #[no_mangle]
 pub extern "C" fn dimmy_telemetry_set_crash_enabled(enabled: c_int) -> c_int {
     crate::telemetry::set_crash_enabled(enabled != 0);
+    save_consent(&state().crash_reports_consent, enabled != 0);
     0
 }
 
@@ -12446,6 +12474,8 @@ mod tests {
                 meeting_chunk_secs: Mutex::new(15.0f32),
                 meeting_storage_path: Mutex::new(String::new()),
                 terms_accepted_version: Mutex::new(String::new()),
+                analytics_consent: Mutex::new(None),
+                crash_reports_consent: Mutex::new(None),
                 notion_target_id: Mutex::new(String::new()),
                 confluence_site: Mutex::new(String::new()),
                 confluence_email: Mutex::new(String::new()),

@@ -31,7 +31,8 @@ const POSTHOG_API_KEY: &str = env!("DIMMY_POSTHOG_API_KEY");
 
 /// Whether telemetry is currently enabled at runtime. Defaults true,
 /// flipped by the user's settings toggle (opt-out model).
-static ENABLED: AtomicBool = AtomicBool::new(true);
+// Off until the saved consent says yes: nothing leaves before the answer.
+static ENABLED: AtomicBool = AtomicBool::new(false);
 
 /// Reqwest client built lazily on first send. Sharing one client
 /// reuses the connection pool across events.
