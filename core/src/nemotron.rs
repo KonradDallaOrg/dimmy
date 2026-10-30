@@ -1237,6 +1237,47 @@ pub fn turns(words: &[Word], fallback_text: &str, offset: f64) -> Vec<Line> {
         .collect()
 }
 
+/// What a meeting track heard, for `speakers.json`.
+#[derive(Debug, Default)]
+pub struct Spoken {
+    /// (speaker, start, end) per tagged word, track seconds.
+    pub segments: Vec<(u8, f64, f64)>,
+    /// The diarizer ran for the whole track, so the labels already in the
+    /// transcript are complete and no pass after the meeting is needed.
+    pub covered: bool,
+}
+
+/// The speaker list for `speakers.json`, in the names the transcript
+/// already uses ("Speaker N", N the engine's number), so renaming one
+/// rewrites the same labels. Words closer than 0.3 s join into one span.
+pub fn speaker_list(band: &str, segments: &[(u8, f64, f64)]) -> Vec<crate::diarize::SpeakerInfo> {
+    let mut ids: Vec<u8> = segments.iter().map(|s| s.0).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    ids.into_iter()
+        .map(|n| {
+            let mut spans: Vec<(f64, f64)> = Vec::new();
+            for &(_, a, e) in segments.iter().filter(|s| s.0 == n) {
+                match spans.last_mut() {
+                    Some(last) if a - last.1 < 0.3 => last.1 = last.1.max(e),
+                    _ => spans.push((a, e)),
+                }
+            }
+            let spans: Vec<(f64, f64)> = spans
+                .into_iter()
+                .map(|(a, e)| ((a * 100.0).round() / 100.0, (e * 100.0).round() / 100.0))
+                .collect();
+            crate::diarize::SpeakerInfo {
+                id: format!("S{n}"),
+                name: crate::diarize::default_name(n as usize),
+                band: band.to_string(),
+                talk_secs: spans.iter().map(|(a, e)| e - a).sum(),
+                segments: spans,
+            }
+        })
+        .collect()
+}
+
 /// One track of a meeting (mic or system), streamed as the recording goes.
 /// The meeting hands over overlapping windows; only the part past what was
 /// already pushed goes in, so the stream sees the track exactly once.
@@ -1251,6 +1292,12 @@ pub struct MeetingTrack {
     /// Track second the current stream started at: a stream reopened
     /// without speakers counts its times from there.
     stream_origin: f64,
+    /// Every tagged word as (speaker, start, end), track seconds: the lanes
+    /// and talk time `speakers.json` carries.
+    spoken: Vec<(u8, f64, f64)>,
+    /// Set once the diarizer was dropped mid-meeting: the labels then cover
+    /// only part of it.
+    dropped: bool,
 }
 
 impl MeetingTrack {
@@ -1270,6 +1317,8 @@ impl MeetingTrack {
             language: language.into(),
             keywords: keywords.to_vec(),
             stream_origin: 0.0,
+            spoken: Vec::new(),
+            dropped: false,
         })
     }
 
@@ -1307,30 +1356,46 @@ impl MeetingTrack {
         self.stream = r.stream(&self.language, &self.keywords, false)?;
         self.stream_origin = self.pushed_until as f64 / self.rate as f64;
         self.speakers = false;
+        self.dropped = true;
         Ok(lines)
     }
 
-    pub fn finish(mut self) -> Result<Vec<Line>, TranscribeError> {
+    /// Flush the tail. Returns its lines and what the track heard: who
+    /// spoke when, and whether those labels cover the whole track.
+    pub fn finish(mut self) -> Result<(Vec<Line>, Spoken), TranscribeError> {
         let tail = self.stream.finish()?;
-        Ok(self.lines(tail))
+        let lines = self.lines(tail);
+        let covered = self.speakers && !self.dropped;
+        Ok((
+            lines,
+            Spoken {
+                segments: self.spoken,
+                covered,
+            },
+        ))
     }
 
-    fn lines(&self, updates: Vec<Update>) -> Vec<Line> {
-        updates
-            .into_iter()
-            .filter(|u| u.is_final)
-            .flat_map(|u| {
-                let words: Vec<Word> = if self.speakers {
+    fn lines(&mut self, updates: Vec<Update>) -> Vec<Line> {
+        let origin = self.stream_origin;
+        let mut out = Vec::new();
+        for u in updates.into_iter().filter(|u| u.is_final) {
+            let words: Vec<Word> = if self.speakers {
+                self.spoken.extend(
                     u.words
-                } else {
-                    u.words
-                        .into_iter()
-                        .map(|w| Word { speaker: 0, ..w })
-                        .collect()
-                };
-                turns(&words, &u.text, self.stream_origin)
-            })
-            .collect()
+                        .iter()
+                        .filter(|w| w.speaker > 0)
+                        .map(|w| (w.speaker, origin + w.start, origin + w.end)),
+                );
+                u.words
+            } else {
+                u.words
+                    .into_iter()
+                    .map(|w| Word { speaker: 0, ..w })
+                    .collect()
+            };
+            out.extend(turns(&words, &u.text, origin));
+        }
+        out
     }
 }
 
@@ -1472,6 +1537,21 @@ mod tests {
             }]
         );
         assert!(turns(&[], "  ", 0.0).is_empty());
+    }
+
+    #[test]
+    fn speaker_list_uses_the_transcript_names_and_joins_close_words() {
+        let segs = [(2, 1.0, 1.2), (2, 1.3, 1.5), (3, 4.0, 4.4), (2, 9.0, 9.5)];
+        let list = speaker_list("system", &segs);
+        assert_eq!(list.len(), 2);
+        assert_eq!(
+            (list[0].id.as_str(), list[0].name.as_str()),
+            ("S2", "Speaker 2")
+        );
+        assert_eq!(list[0].segments, vec![(1.0, 1.5), (9.0, 9.5)]);
+        assert!((list[0].talk_secs - 1.0).abs() < 1e-9);
+        assert_eq!(list[1].band, "system");
+        assert!(speaker_list("system", &[]).is_empty());
     }
 
     #[test]

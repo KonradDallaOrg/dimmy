@@ -4448,8 +4448,15 @@ pub unsafe extern "C" fn dimmy_meeting_start(out_buf: *mut c_char, buf_len: c_in
             .unwrap_or_else(|| "auto".to_string()),
         chunk_secs: st.meeting_chunk_secs.lock().ok().map(|s| *s),
         preprocessing_enabled: st.preprocessing_enabled.lock().map(|b| *b).unwrap_or(true),
+        // Nemotron diarizes with its own GGUF model, inside the stream; the
+        // other engines label through diarize.rs's ONNX one.
         speaker_labels: st.diarization_enabled.lock().map(|b| *b).unwrap_or(false)
-            && crate::diarize::model_present(),
+            && (crate::diarize::model_present()
+                || (st
+                    .local_stt_backend
+                    .lock()
+                    .is_ok_and(|b| b.as_str() == "nemotron")
+                    && crate::nemotron::diarizer_present())),
     };
     // Both buffers always run at the canonical 48 kHz (see device_sr
     // comment above) — secondary cpal callback resamples too.

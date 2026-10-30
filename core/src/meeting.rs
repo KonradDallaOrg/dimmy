@@ -886,7 +886,12 @@ impl NemoTracks {
                 .map_err(|e| crate::log(&format!("[Meeting] nemotron track unavailable: {e}")))
                 .ok()
         };
-        let mic = open(ctx.device_sample_rate, false);
+        // People in one room have only the mic: it carries the speakers
+        // then. On a call it is the person recording, and keeps its label.
+        let mic = open(
+            ctx.device_sample_rate,
+            ctx.stt.speaker_labels && !ctx.mix_active,
+        );
         let system = if ctx.mix_active {
             open(ctx.system_sample_rate, ctx.stt.speaker_labels)
         } else {
@@ -936,14 +941,21 @@ impl NemoTracks {
             0.8 * self.load + 0.2 * ratio
         };
         if self.load > 0.9 {
-            if let Some(t) = self.system.as_mut().filter(|t| t.has_speakers()) {
+            let mic_label = sink.mic_label;
+            for (track, label) in [
+                (self.mic.as_mut(), mic_label),
+                (self.system.as_mut(), "system"),
+            ] {
+                let Some(t) = track.filter(|t| t.has_speakers()) else {
+                    continue;
+                };
                 crate::log(&format!(
                     "[Meeting] live speakers cannot keep up (load {:.2}); speakers will be labelled after the meeting",
                     self.load
                 ));
                 match t.drop_speakers() {
-                    Ok(lines) => words += sink.write("system", &lines),
-                    Err(e) => crate::log(&format!("[Meeting] nemotron system: {e}")),
+                    Ok(lines) => words += sink.write(label, &lines),
+                    Err(e) => crate::log(&format!("[Meeting] nemotron {label}: {e}")),
                 }
                 crate::ffi::emit_event(
                     "meeting_speakers_deferred",
@@ -954,16 +966,47 @@ impl NemoTracks {
         words
     }
 
-    fn finish(self, sink: &mut LineSink<'_>) {
+    /// Flush both tracks. Returns true when the live labels covered the
+    /// whole meeting and `speakers.json` was written from them: the stop
+    /// then skips the speaker pass, as it does for diarize.rs's live labels.
+    fn finish(self, sink: &mut LineSink<'_>, wanted: bool, windows_lost: bool) -> bool {
         let mic_label = sink.mic_label;
+        let mut speakers = Vec::new();
+        let mut labelled = false;
+        let mut complete = true;
         for (track, label) in [(self.mic, mic_label), (self.system, "system")] {
-            if let Some(t) = track {
-                match t.finish() {
-                    Ok(lines) => {
-                        sink.write(label, &lines);
+            let Some(t) = track else { continue };
+            let had_speakers = t.has_speakers() || label == "system";
+            match t.finish() {
+                Ok((lines, spoken)) => {
+                    sink.write(label, &lines);
+                    if spoken.covered {
+                        labelled = true;
+                        speakers.extend(crate::nemotron::speaker_list(label, &spoken.segments));
+                    } else if had_speakers {
+                        complete = false;
                     }
-                    Err(e) => crate::log(&format!("[Meeting] nemotron {label} flush: {e}")),
                 }
+                Err(e) => {
+                    complete = false;
+                    crate::log(&format!("[Meeting] nemotron {label} flush: {e}"));
+                }
+            }
+        }
+        if !(wanted && labelled && complete && !windows_lost) {
+            return false;
+        }
+        match crate::diarize::save_speakers(std::path::Path::new(sink.dir), &speakers) {
+            Ok(()) => {
+                crate::log(&format!(
+                    "[Meeting] nemotron live speakers cover the meeting: {} speaker(s), no second pass",
+                    speakers.len()
+                ));
+                true
+            }
+            Err(e) => {
+                crate::log(&format!("[Meeting] nemotron speakers.json not saved: {e}"));
+                false
             }
         }
     }
@@ -1351,24 +1394,34 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
         }
     }
 
-    if let Some(n) = nemo.take() {
-        n.finish(&mut LineSink {
-            file: &mut ctx.transcripts_file,
-            chunk_count: &ctx.chunk_count,
-            dir: &ctx.dir_str,
-            mic_label: ctx.mic_label,
-        });
-    }
-
-    let speakers_labeled = match live {
-        Some(mut l) => {
-            if ctx.windows_lost.load(Ordering::SeqCst) {
-                l.mark_broken("some audio never reached the transcriber");
-            }
-            write_live_speakers(&mut ctx, l)
+    let nemo_labeled = match nemo.take() {
+        Some(n) => {
+            let wanted = ctx.stt.speaker_labels;
+            let lost = ctx.windows_lost.load(Ordering::SeqCst);
+            n.finish(
+                &mut LineSink {
+                    file: &mut ctx.transcripts_file,
+                    chunk_count: &ctx.chunk_count,
+                    dir: &ctx.dir_str,
+                    mic_label: ctx.mic_label,
+                },
+                wanted,
+                lost,
+            )
         }
         None => false,
     };
+
+    let speakers_labeled = nemo_labeled
+        || match live {
+            Some(mut l) => {
+                if ctx.windows_lost.load(Ordering::SeqCst) {
+                    l.mark_broken("some audio never reached the transcriber");
+                }
+                write_live_speakers(&mut ctx, l)
+            }
+            None => false,
+        };
 
     let mut fallback = String::new();
     if !mic_accum.trim().is_empty() {
