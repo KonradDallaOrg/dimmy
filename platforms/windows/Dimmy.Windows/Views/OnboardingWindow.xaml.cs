@@ -54,6 +54,13 @@ public sealed partial class OnboardingWindow : Window
         this.InitializeComponent();
         ((FrameworkElement)Content).DataContext = ViewModel;
         Title = "Dimmy";
+        try
+        {
+            var iconPath = System.IO.Path.Combine(System.AppContext.BaseDirectory, "Assets", "dimmy.ico");
+            if (System.IO.File.Exists(iconPath))
+                Dimmy.Windows.Helpers.WindowHelper.GetAppWindow(this)?.SetIcon(iconPath);
+        }
+        catch { }
 
         // Re-running setup after the current terms were accepted arrives
         // already ticked; a first run must tick it before Get Started works.

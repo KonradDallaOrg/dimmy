@@ -159,6 +159,7 @@ Wrapper around the `sentry` crate (v0.47, default-features = false, explicit `na
   - `dimmy_process_with_llm` failure paths
 - **Manual `capture_feedback(kind, message, email)`** — called from `dimmy_telemetry_capture_feedback` (UI Settings → Send feedback).
 - **Auto: panic hook** via the `panic` feature of the `sentry` crate. Captures every Rust panic and ships it as a Fatal event.
+- **Native aborts** (`abort_report.rs`): a SIGABRT handler writes `last_abort.txt` in the config folder with the free memory in MB, and the next launch sends it as `error_category=native_abort`. Nothing else is in it.
 - **Auto: contexts + backtraces** via the `contexts` and `backtrace` features. OS / device / runtime metadata, `attach_stacktrace = true`.
 - **Auto: breadcrumbs** ring buffer, capped at 50 (`max_breadcrumbs: 50`). HTTP/console breadcrumbs only — `crate::log` calls do NOT yet feed Sentry breadcrumbs (Phase 3b candidate).
 

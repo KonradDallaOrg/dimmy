@@ -68,5 +68,13 @@ public sealed class TermsWindow : Window
         Content = root;
 
         WindowHelper.ResizeLogical(this, 480, 280);
+
+        try
+        {
+            var iconPath = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "dimmy.ico");
+            if (System.IO.File.Exists(iconPath))
+                WindowHelper.GetAppWindow(this)?.SetIcon(iconPath);
+        }
+        catch { }
     }
 }

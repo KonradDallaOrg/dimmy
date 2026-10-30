@@ -908,6 +908,14 @@ impl NemoTracks {
             system.is_some(),
             system.as_ref().is_some_and(|s| s.has_speakers())
         ));
+        // No track means no live text at all: say so while the meeting can
+        // still change engine, instead of an empty transcript at stop.
+        if mic.is_none() && system.is_none() {
+            crate::ffi::emit_event(
+                "meeting_transcription_behind",
+                &serde_json::json!({ "engine": "nemotron", "elapsed_secs": 0 }).to_string(),
+            );
+        }
         Self {
             mic,
             system,
@@ -2252,6 +2260,9 @@ fn worker_loop(
     if pending_stats_secs > 0.0 {
         let _ = crate::ffi::dimmy_update_stats(0, pending_stats_secs);
     }
+    // Read here, not after the transcriber's join: a 37 s drain made a complete
+    // 157 s recording read as 197 s and raised the capture-ratio alarm below.
+    let duration_secs = started.elapsed().as_secs_f64();
 
     // Audio is safe. NOW wait for the transcriber to drain what is queued.
     //
@@ -2303,7 +2314,6 @@ fn worker_loop(
     }
     let chunk_count = chunk_count_shared.load(std::sync::atomic::Ordering::Relaxed);
 
-    let duration_secs = started.elapsed().as_secs_f64();
     // Capture-integrity guard — the meeting sibling of the dictation
     // capture-ratio at StopRec (ffi.rs). Compares audio actually on disk
     // (`samples_written` at the canonical rate) against the REAL ACTIVE

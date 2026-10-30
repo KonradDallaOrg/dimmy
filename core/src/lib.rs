@@ -924,6 +924,8 @@ pub struct AppConfig {
     /// Names the TEXT half; the projector is derived from it, because the
     /// two are only ever useful as a pair. See `qwen_asr::AVAILABLE_MODELS`.
     pub qwen_asr_model: String,
+    /// Which Nemotron model to run: `q8` or `f32` (see `nemotron::pick_model`).
+    pub nemotron_model: String,
     /// When true (and backend = parakeet), show a floating live-caption
     /// window below the pill while chunked transcription is running.
     /// Independent from `chunk_streaming_enabled` — a user can have
@@ -1190,6 +1192,7 @@ impl Default for AppConfig {
             local_model: "ggml-base-q8_0.bin".to_string(),
             local_stt_backend: default_local_stt_backend().to_string(),
             qwen_asr_model: crate::qwen_asr::DEFAULT_MODEL.to_string(),
+            nemotron_model: crate::nemotron::MODEL_CHOICE_Q8.to_string(),
             live_captions_enabled: false,
             call_detect_enabled: true,
             call_detect_auto_record: false,
@@ -1322,6 +1325,7 @@ pub fn save_config_file(cfg: &AppConfig) {
             "local_model": cfg.local_model,
             "local_stt_backend": cfg.local_stt_backend,
             "qwen_asr_model": cfg.qwen_asr_model,
+            "nemotron_model": cfg.nemotron_model,
             "live_captions_enabled": cfg.live_captions_enabled,
             "call_detect_enabled": cfg.call_detect_enabled,
             "call_detect_auto_record": cfg.call_detect_auto_record,
@@ -1507,6 +1511,10 @@ pub fn load_config_file() -> AppConfig {
                     qwen_asr_model: v["qwen_asr_model"]
                         .as_str()
                         .unwrap_or(&defaults.qwen_asr_model)
+                        .to_string(),
+                    nemotron_model: v["nemotron_model"]
+                        .as_str()
+                        .unwrap_or(&defaults.nemotron_model)
                         .to_string(),
                     live_captions_enabled: v["live_captions_enabled"]
                         .as_bool()
@@ -1995,6 +2003,7 @@ pub struct AppState {
     pub local_model: Mutex<String>,
     pub local_stt_backend: Mutex<String>,
     pub qwen_asr_model: Mutex<String>,
+    pub nemotron_model: Mutex<String>,
     pub live_captions_enabled: Mutex<bool>,
     pub call_detect_enabled: Mutex<bool>,
     pub call_detect_auto_record: Mutex<bool>,
@@ -2186,6 +2195,7 @@ impl AppState {
             local_model: Mutex::new(file_cfg.local_model),
             local_stt_backend: Mutex::new(file_cfg.local_stt_backend),
             qwen_asr_model: Mutex::new(file_cfg.qwen_asr_model),
+            nemotron_model: Mutex::new(file_cfg.nemotron_model),
             live_captions_enabled: Mutex::new(file_cfg.live_captions_enabled),
             call_detect_enabled: Mutex::new(file_cfg.call_detect_enabled),
             call_detect_auto_record: Mutex::new(file_cfg.call_detect_auto_record),
@@ -2350,6 +2360,11 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         .lock()
         .map_err(|e| e.to_string())?
         .clone();
+    let nemotron_model = state
+        .nemotron_model
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
     let local_stt_backend = state
         .local_stt_backend
         .lock()
@@ -2449,6 +2464,7 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         local_model,
         local_stt_backend,
         qwen_asr_model,
+        nemotron_model,
         live_captions_enabled,
         call_detect_enabled,
         call_detect_auto_record,

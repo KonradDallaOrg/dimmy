@@ -1177,6 +1177,7 @@ final class AppState: ObservableObject {
     /// Names the TEXT half; the projector is derived from it in the core,
     /// because the two are only ever useful as a pair.
     @Published var qwenAsrModel: String = "Qwen3-ASR-1.7B-Q8_0.gguf"
+    @Published var nemotronModel: String = "q8"
     @Published var qwenBundlePresent: Bool = false
     @Published var qwenDownloadProgress: Double = 0.0
     @Published var isDownloadingQwen: Bool = false
@@ -1837,6 +1838,7 @@ final class AppState: ObservableObject {
         if let v = config["local_model"] as? String { localModel = v }
         if let v = config["local_stt_backend"] as? String { localSttBackend = v }
         if let v = config["qwen_asr_model"] as? String { qwenAsrModel = v }
+        if let v = config["nemotron_model"] as? String { nemotronModel = v }
         if let v = config["live_captions_enabled"] as? Bool { liveCaptionsEnabled = v }
         // Absent ⇒ stays true: an older config must not silently stop
         // producing recaps after an update.
@@ -2343,6 +2345,7 @@ final class AppState: ObservableObject {
             "local_model": localModel,
             "local_stt_backend": localSttBackend,
             "qwen_asr_model": qwenAsrModel,
+            "nemotron_model": nemotronModel,
             "live_captions_enabled": liveCaptionsEnabled,
             "meeting_generate_recap": meetingGenerateRecapDefault,
             "calendar_context_enabled": calendarContextEnabled,

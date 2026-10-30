@@ -460,6 +460,7 @@ public partial class SettingsViewModel : ObservableObject
     // Which Qwen3-ASR variant, when the backend is "qwen". Identity-class:
     // see the if-empty-omit block in ToJson.
     [ObservableProperty] private string _qwenAsrModel = "Qwen3-ASR-1.7B-Q8_0.gguf";
+    [ObservableProperty] private string _nemotronModel = "q8";
     [ObservableProperty] private bool _fillerRemovalEnabled = true;
     [ObservableProperty] private string _llmMode = "cloud";
     [ObservableProperty] private string _localLlmModel = "gemma-4-E2B-it-Q4_K_M.gguf";
@@ -737,6 +738,7 @@ public partial class SettingsViewModel : ObservableObject
             LocalModel = r.TryGetProperty("local_model", out var lmod) ? lmod.GetString() ?? "ggml-base-q8_0.bin" : "ggml-base-q8_0.bin";
             LocalSttBackend = r.TryGetProperty("local_stt_backend", out var lsb) ? lsb.GetString() ?? "whisper" : "whisper";
             QwenAsrModel = r.TryGetProperty("qwen_asr_model", out var qam) ? qam.GetString() ?? QwenAsrModel : QwenAsrModel;
+            NemotronModel = r.TryGetProperty("nemotron_model", out var nmm) ? nmm.GetString() ?? NemotronModel : NemotronModel;
             FillerRemovalEnabled = !r.TryGetProperty("filler_removal_enabled", out var fre) || fre.GetBoolean();
             LlmMode = r.TryGetProperty("llm_mode", out var llmm) ? llmm.GetString() ?? "cloud" : "cloud";
             LocalLlmModel = r.TryGetProperty("local_llm_model", out var llmod) ? llmod.GetString() ?? "gemma-4-E2B-it-Q4_K_M.gguf" : "gemma-4-E2B-it-Q4_K_M.gguf";
@@ -869,6 +871,7 @@ public partial class SettingsViewModel : ObservableObject
         if (!string.IsNullOrEmpty(SelectedDevice)) dict["selected_device"] = SelectedDevice;
         if (!string.IsNullOrEmpty(LocalModel)) dict["local_model"] = LocalModel;
         if (!string.IsNullOrEmpty(QwenAsrModel)) dict["qwen_asr_model"] = QwenAsrModel;
+        if (!string.IsNullOrEmpty(NemotronModel)) dict["nemotron_model"] = NemotronModel;
         if (!string.IsNullOrEmpty(ApiKey)) dict["api_key"] = ApiKey;
         if (!string.IsNullOrEmpty(LlmApiKey)) dict["llm_api_key"] = LlmApiKey;
         // Meeting storage override — identity-class path. Omit when empty

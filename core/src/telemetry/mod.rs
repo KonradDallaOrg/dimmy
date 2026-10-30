@@ -17,6 +17,7 @@
 //! Wiring into lifecycle / transcription / onboarding events is
 //! deferred to Phase 3 (see plan §10).
 
+pub mod abort_report;
 pub mod client;
 pub mod events;
 pub mod identity;
@@ -36,6 +37,12 @@ pub fn init() {
         identity::anonymous_id(),
     ));
     sentry_pipeline::init();
+    if let Some(previous) = crate::config_dir_path().and_then(|d| abort_report::install(&d)) {
+        crate::log(&format!(
+            "[telemetry] previous launch ended in a {previous}"
+        ));
+        capture_error("native_abort", "", &previous);
+    }
 }
 
 /// Submit an event to the analytics pipeline. Best-effort: never

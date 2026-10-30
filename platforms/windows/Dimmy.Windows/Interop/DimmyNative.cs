@@ -420,6 +420,12 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_nemotron_full_size_mb();
 
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_nemotron_full_download();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_nemotron_restart_needed();
+
     /// <summary>Blocking. Progress arrives as nemotron_download_progress.</summary>
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_nemotron_download();
