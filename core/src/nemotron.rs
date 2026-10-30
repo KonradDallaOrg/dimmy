@@ -1402,12 +1402,23 @@ impl MeetingTrack {
 // ---- Turning results into text the app can use --------------------------
 
 /// Keeps the committed text of a stream and turns each result into the
-/// delta the host types at the cursor. Append-only: a word, once typed,
-/// is never taken back, so the delta is only ever text past what was sent.
+/// delta the host types at the cursor.
+///
+/// Whole words only. The engine's partials grow inside a word ("informa",
+/// then "informazioni"), and the hosts type each delta followed by a space,
+/// the contract the cloud streamers keep: handing them pieces put a space
+/// in the middle of nearly every word. So the last word of an open
+/// utterance is held back until the next one starts, and a closed one is
+/// typed out whole, punctuation included.
+///
+/// Append-only: a word, once typed, is never taken back. When the engine
+/// revises a word already on screen, nothing more is typed until the
+/// utterance closes, and then the rest follows the word that stayed.
 #[derive(Debug, Default)]
 pub struct Transcript {
     finals: Vec<String>,
-    sent: String,
+    /// Words already handed to the host, in order.
+    sent: Vec<String>,
 }
 
 impl Transcript {
@@ -1420,10 +1431,8 @@ impl Transcript {
         parts.join(" ")
     }
 
-    /// Apply one update; returns (delta, cumulative). The delta extends the
-    /// text already sent only where the new text still starts with it: a
-    /// partial the engine revised is held back until it settles again, so
-    /// nothing typed has to be erased.
+    /// Apply one update; returns (delta, cumulative). The delta is whole
+    /// words, space-separated, with no leading or trailing space.
     pub fn apply(&mut self, u: &Update) -> (String, String) {
         let cumulative = self.cumulative(&u.text);
         if u.is_final && !u.text.is_empty() {
@@ -1434,10 +1443,22 @@ impl Transcript {
         } else {
             cumulative.clone()
         };
-        let delta = if let Some(rest) = target.strip_prefix(self.sent.as_str()) {
-            let d = rest.to_string();
-            self.sent = target;
-            d
+        let words: Vec<&str> = target.split_whitespace().collect();
+        let stable = if u.is_final {
+            words.len()
+        } else {
+            words.len().saturating_sub(1)
+        };
+        let agree = self
+            .sent
+            .iter()
+            .zip(&words)
+            .take_while(|(a, b)| a.as_str() == **b)
+            .count();
+        let delta = if (agree == self.sent.len() || u.is_final) && stable > self.sent.len() {
+            let fresh = &words[self.sent.len()..stable];
+            self.sent.extend(fresh.iter().map(|w| w.to_string()));
+            fresh.join(" ")
         } else {
             String::new()
         };
@@ -1555,24 +1576,36 @@ mod tests {
     }
 
     #[test]
-    fn deltas_only_ever_append() {
+    fn deltas_only_ever_append_whole_words() {
         let mut t = Transcript::default();
-        assert_eq!(t.apply(&up("Mi dici", false)).0, "Mi dici");
-        assert_eq!(t.apply(&up("Mi dici che cosa", false)).0, " che cosa");
-        assert_eq!(t.apply(&up("Mi dici che cosa c'è.", true)).0, " c'è.");
-        assert_eq!(t.apply(&up("Prova", false)).0, " Prova");
+        assert_eq!(t.apply(&up("Mi dici", false)).0, "Mi");
+        assert_eq!(t.apply(&up("Mi dici che cosa", false)).0, "dici che");
+        assert_eq!(t.apply(&up("Mi dici che cosa c'è.", true)).0, "cosa c'è.");
+        assert_eq!(t.apply(&up("Prova", false)).0, "");
         assert_eq!(t.text(), "Mi dici che cosa c'è.");
     }
 
     #[test]
-    fn a_revised_partial_is_held_back_not_erased() {
+    fn a_word_still_forming_is_never_typed_in_pieces() {
+        // The 2026-10-30 report: "informa" + "zioni" typed as "informa zioni".
         let mut t = Transcript::default();
-        assert_eq!(t.apply(&up("chiavi PI", false)).0, "chiavi PI");
-        // The engine changes its mind: nothing is typed until the text
-        // again extends what is already on screen.
-        assert_eq!(t.apply(&up("chiavi API", false)).0, "");
+        assert_eq!(t.apply(&up("informa", false)).0, "");
+        assert_eq!(t.apply(&up("informazioni", false)).0, "");
+        assert_eq!(t.apply(&up("informazioni sul", false)).0, "informazioni");
+        assert_eq!(t.apply(&up("informazioni sul file.", true)).0, "sul file.");
+        assert_eq!(t.text(), "informazioni sul file.");
+    }
+
+    #[test]
+    fn a_revised_word_is_kept_and_the_rest_follows_at_the_close() {
+        let mut t = Transcript::default();
+        assert_eq!(t.apply(&up("chiavi PI in", false)).0, "chiavi PI");
+        // The engine changes its mind about a word already typed: nothing
+        // more is typed while the utterance is open...
+        assert_eq!(t.apply(&up("chiavi API in un", false)).0, "");
+        // ...and when it closes the rest follows what is on screen.
         let (delta, cumulative) = t.apply(&up("chiavi API in un file", true));
-        assert_eq!(delta, "");
+        assert_eq!(delta, "in un file");
         assert_eq!(cumulative, "chiavi API in un file");
         assert_eq!(t.text(), "chiavi API in un file");
     }
@@ -1580,7 +1613,7 @@ mod tests {
     #[test]
     fn empty_finals_add_nothing() {
         let mut t = Transcript::default();
-        t.apply(&up("ciao", true));
+        assert_eq!(t.apply(&up("ciao", true)).0, "ciao");
         assert_eq!(t.apply(&up("", true)).0, "");
         assert_eq!(t.text(), "ciao");
     }
