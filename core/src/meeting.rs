@@ -878,9 +878,54 @@ struct SttThreadCtx {
 struct NemoTracks {
     mic: Option<crate::nemotron::MeetingTrack>,
     system: Option<crate::nemotron::MeetingTrack>,
-    /// Seconds of compute per second of window, smoothed: above 0.9 the
-    /// queue is filling and windows are about to be dropped.
-    load: f64,
+    load: SpeakerLoad,
+}
+
+/// Seconds of compute per second of window, smoothed. Dropping the live
+/// speakers is final for the meeting and costs a full pass afterwards.
+///
+/// A CPU drops them early: they are most of its work, and text that lags costs
+/// more than labels. On a GPU they cost almost nothing, since the one model
+/// runs the diarizer on every stream anyway, and a passing peak must not take
+/// them: one at 0.95 cost a 51-minute meeting its speakers with the GPU at 30%
+/// for the 45 minutes after it (2026-10-30). There, only a load past 1 that
+/// lasts, which is the queue really filling, counts.
+struct SpeakerLoad {
+    value: f64,
+    keep: f64,
+    limit: f64,
+}
+
+impl SpeakerLoad {
+    fn for_engine(gpu: bool) -> Self {
+        // About ten seconds of memory on a CPU, fifty on a GPU, at half-second
+        // windows, from zero: the first heavy window is nothing.
+        let (keep, limit) = if gpu { (0.99, 1.0) } else { (0.95, 0.9) };
+        Self {
+            value: 0.0,
+            keep,
+            limit,
+        }
+    }
+
+    fn observe(&mut self, ratio: f64) {
+        assert!(ratio.is_finite() && ratio >= 0.0, "load ratio {ratio}");
+        self.value = self.keep * self.value + (1.0 - self.keep) * ratio;
+    }
+
+    fn overloaded(&self) -> bool {
+        self.value > self.limit
+    }
+}
+
+/// Past this the pass after a Nemotron meeting does not start by itself: it
+/// transcribes every track again (a 51-minute meeting, 15 minutes or more at
+/// 100% GPU), and the text is already there. "Regenerate transcript" runs it.
+const NEMOTRON_AUTO_PASS_MAX_SECS: f64 = 300.0;
+
+/// Whether the host should run the speaker pass right after this meeting.
+pub fn speaker_pass_after_stop(labeled: bool, backend: &str, duration_secs: f64) -> bool {
+    !labeled && (backend != "nemotron" || duration_secs <= NEMOTRON_AUTO_PASS_MAX_SECS)
 }
 
 /// The diarizer needs a recognizer of its own, and with little memory left it
@@ -926,10 +971,11 @@ impl NemoTracks {
                 &serde_json::json!({ "engine": "nemotron", "elapsed_secs": 0 }).to_string(),
             );
         }
+        let gpu = [&mic, &system].into_iter().flatten().any(|t| t.on_gpu());
         Self {
             mic,
             system,
-            load: 0.0,
+            load: SpeakerLoad::for_engine(gpu),
         }
     }
 
@@ -962,13 +1008,10 @@ impl NemoTracks {
             }
         }
         if fresh_secs > 0.0 {
-            let ratio = started.elapsed().as_secs_f64() / fresh_secs;
-            // About ten seconds of memory at half-second windows, from zero:
-            // one heavy window, the first above all, is nothing; a sustained
-            // overload is what counts.
-            self.load = 0.95 * self.load + 0.05 * ratio;
+            self.load
+                .observe(started.elapsed().as_secs_f64() / fresh_secs);
         }
-        if self.load > 0.9 {
+        if self.load.overloaded() {
             for (track, label) in [
                 (self.mic.as_mut(), mic_label),
                 (self.system.as_mut(), "system"),
@@ -977,8 +1020,8 @@ impl NemoTracks {
                     continue;
                 };
                 crate::log(&format!(
-                    "[Meeting] live speakers cannot keep up (load {:.2}); speakers will be labelled after the meeting",
-                    self.load
+                    "[Meeting] live speakers cannot keep up (load {:.2}); dropped for the rest of the meeting",
+                    self.load.value
                 ));
                 match t.drop_speakers() {
                     Ok(lines) => words += sink.write(label, &lines),
@@ -3046,7 +3089,46 @@ mod encoding_is_not_the_bottleneck {
 
 #[cfg(test)]
 mod nemotron_track_fallback {
-    use super::with_or_without_speakers;
+    use super::{speaker_pass_after_stop, with_or_without_speakers, SpeakerLoad};
+
+    #[test]
+    fn a_passing_peak_leaves_the_speakers_on_a_gpu() {
+        let mut load = SpeakerLoad::for_engine(true);
+        // The 51-minute meeting: 0.35, then ten seconds of heavy windows.
+        for _ in 0..600 {
+            load.observe(0.35);
+        }
+        for _ in 0..20 {
+            load.observe(1.9);
+        }
+        assert!(!load.overloaded(), "load {}", load.value);
+    }
+
+    #[test]
+    fn a_gpu_that_really_falls_behind_still_drops_them() {
+        let mut load = SpeakerLoad::for_engine(true);
+        for _ in 0..360 {
+            load.observe(1.3);
+        }
+        assert!(load.overloaded(), "load {}", load.value);
+    }
+
+    #[test]
+    fn a_cpu_drops_them_early() {
+        let mut load = SpeakerLoad::for_engine(false);
+        for _ in 0..60 {
+            load.observe(1.1);
+        }
+        assert!(load.overloaded(), "load {}", load.value);
+    }
+
+    #[test]
+    fn a_long_nemotron_meeting_does_not_start_the_pass_by_itself() {
+        assert!(!speaker_pass_after_stop(false, "nemotron", 3054.0));
+        assert!(speaker_pass_after_stop(false, "nemotron", 120.0));
+        assert!(!speaker_pass_after_stop(true, "nemotron", 120.0));
+        assert!(speaker_pass_after_stop(false, "whisper", 3054.0));
+    }
 
     #[test]
     fn a_track_refused_with_speakers_opens_without_them() {

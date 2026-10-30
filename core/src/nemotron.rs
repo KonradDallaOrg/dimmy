@@ -234,6 +234,21 @@ fn running_model() -> &'static Pinned {
     )
 }
 
+/// What the pass after a meeting adds to a loaded model: 3.9 GB at Q8_0 and
+/// 5.8 GB at F32 on a GPU, 2.2 GB on a CPU (2026-10-30). It loads nothing, so
+/// the check in `recognizer` does not see it, and an allocation that fails aborts.
+const PASS_GPU_BYTES: u64 = 6 * 1024 * 1024 * 1024;
+const PASS_CPU_BYTES: u64 = 2500 * 1024 * 1024;
+
+pub fn pass_fits() -> bool {
+    let needed = if loaded_on_gpu().is_some() {
+        PASS_GPU_BYTES
+    } else {
+        PASS_CPU_BYTES
+    };
+    enough_memory(crate::setup::available_memory_bytes(), needed)
+}
+
 /// True when Settings asks for a model other than the one loaded on the GPU.
 pub fn restart_needed() -> bool {
     loaded_on_gpu().is_some_and(|f32| f32 != f32_wanted())
@@ -1695,6 +1710,10 @@ impl MeetingTrack {
 
     pub fn has_speakers(&self) -> bool {
         self.speakers
+    }
+
+    pub fn on_gpu(&self) -> bool {
+        self.stream.recognizer.spec().gpu.is_some()
     }
 
     /// Push the new part of a window that starts at `track_start`, and

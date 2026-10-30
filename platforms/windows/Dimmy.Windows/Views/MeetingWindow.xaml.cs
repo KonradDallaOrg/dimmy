@@ -609,9 +609,10 @@ public sealed partial class MeetingWindow : Window
             DoneMeta.Text = $"{FormatDuration(dur)} · {chunks} chunks · {DateTime.Now:yyyy-MM-dd HH:mm}"
                 + (string.IsNullOrWhiteSpace(stopError) ? "" : " · ⚠ audio incomplete");
             RefreshDoneCalendarRow(dir);
-            // Labelled while recording: nothing left to do here.
-            bool labeled = root.TryGetProperty("speakers_labeled", out var slEl)
-                && slEl.ValueKind == JsonValueKind.True;
+            // Labelled while recording, or too long to redo by itself: the
+            // core decides, and "Regenerate transcript" still runs the pass.
+            bool labeled = !(root.TryGetProperty("speaker_pass", out var slEl)
+                && slEl.ValueKind == JsonValueKind.True);
             if (!labeled && Services.DiarizationService.Enabled())
             {
                 ProcStep2Text.Text = "Identifying speakers…";

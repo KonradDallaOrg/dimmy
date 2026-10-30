@@ -112,6 +112,17 @@ public static class WindowHelper
         appWindow.Resize(new global::Windows.Graphics.SizeInt32(physW, physH));
     }
 
+    public static void SetDimmyIcon(Window window)
+    {
+        try
+        {
+            var iconPath = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "dimmy.ico");
+            if (System.IO.File.Exists(iconPath))
+                GetAppWindow(window)?.SetIcon(iconPath);
+        }
+        catch { }
+    }
+
     public static AppWindow? GetAppWindow(Window window)
     {
         try

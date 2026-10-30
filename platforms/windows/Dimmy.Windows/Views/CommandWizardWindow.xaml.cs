@@ -61,6 +61,7 @@ public sealed partial class CommandWizardWindow : Window
     public CommandWizardWindow()
     {
         InitializeComponent();
+        Dimmy.Windows.Helpers.WindowHelper.SetDimmyIcon(this);
         // Taller than the other two wizards: step 3 stacks a hint, the sample
         // box, the speak-don't-type note, a status bar and the result.
         WindowHelper.ResizeLogical(this, 660, 620);

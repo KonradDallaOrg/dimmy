@@ -99,6 +99,13 @@ F32, which the GPU check covers. The pass adds about 4 GB (11 GB and 14.4 GB) an
 has no check of its own when the recognizer is already loaded, so it is the path
 left where an allocation can still abort.
 
+A 51-minute GPU meeting (F32, 2026-10-30) held 8.76 GB of commit and 2.9 GB of VRAM
+flat, with 0.5 GB of RAM and the GPU at 30-37%. The pass after it transcribed both
+tracks again: 14.3 GB, GPU at 100%, 0.6 GB of commit left, 15 minutes or more. So it
+no longer starts by itself past 5 minutes (`speaker_pass_after_stop`, stop JSON
+`speaker_pass`), and refuses with rc -8 when memory is short (`pass_fits`). Why the
+pass adds 5.5 GB without loading a model is not known yet.
+
 A CPU recognizer commits 3.1 GB at Q8_0 without the diarizer and 4.4 GB with it,
 so a meeting on CPU needs about 7.5 GB. The CPU engine always runs Q8_0, also when
 F32 is on disk. `RECOGNIZERS` changes only after a new recognizer exists, because
@@ -157,11 +164,12 @@ untouched (THE AUDIO RULE, `docs/dev/meeting-audio-durability.md`).
 - The system track with the live diarizer writes `[HH:MM:SS] [Speaker N] text`
   per turn; flicker turns under 3 words (`MIN_TURN_WORDS`) are folded into the
   neighbour.
-- **Load guard.** Seconds of compute per second of window, averaged over about
-  ten seconds and starting from zero, so a heavy first window means nothing.
-  Above **0.9** the live speakers are dropped for the rest of the meeting
-  (`drop_speakers`, event `meeting_speakers_deferred`) and the stop-time speaker
-  pass labels the turns instead. Dropping labels is correct; falling behind is not.
+- **Load guard.** Seconds of compute per second of window, smoothed from zero, so
+  a heavy first window means nothing. On a CPU, about ten seconds of memory and a
+  limit of **0.9**; on a GPU, about fifty seconds and a limit of **1.0**, because a
+  passing peak must not cost the meeting its speakers. Past the limit they are
+  dropped for the rest of the meeting (`drop_speakers`, event
+  `meeting_speakers_deferred`). Dropping labels is correct; falling behind is not.
 - **Skipping the second pass.** When live labels cover the whole meeting (and no
   window was lost), `speakers.json` is written from them
   (`diarize::save_speakers`) and the stop pass is skipped.

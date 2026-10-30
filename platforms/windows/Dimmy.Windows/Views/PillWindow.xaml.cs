@@ -1445,7 +1445,7 @@ public sealed partial class PillWindow : Window
                     // land here) swallowed them.
                     var err = root.TryGetProperty("error", out var e)
                         ? e.GetString() : null;
-                    bool lab = root.TryGetProperty("speakers_labeled", out var sl) && sl.ValueKind == System.Text.Json.JsonValueKind.True;
+                    bool lab = !(root.TryGetProperty("speaker_pass", out var sl) && sl.ValueKind == System.Text.Json.JsonValueKind.True);
                     return (code, d, t, string.IsNullOrWhiteSpace(err) ? null : err, lab);
                 }
                 catch { return (code, "", "", (string?)null, false); }
