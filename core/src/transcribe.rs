@@ -804,7 +804,7 @@ pub fn transcribe_audio_local_nemotron_words(
         "transcribe_audio_local_nemotron: downsampled samples must not be empty"
     );
     let (text, words) =
-        crate::nemotron::app_recognizer()?.transcribe(&samples_16k, language, keywords)?;
+        crate::nemotron::app_recognizer(false)?.transcribe(&samples_16k, language, keywords)?;
     if text.trim().is_empty() {
         return Err(crate::error::TranscribeError::Empty);
     }

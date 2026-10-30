@@ -226,37 +226,40 @@ pub fn bundle_files() -> Vec<PathBuf> {
     vec![model_path(), diarizer_path(), engine_root()]
 }
 
-/// The spec the app runs with: the best engine build that is on disk, the
-/// model, and the diarizer when it is there (words then carry speakers; a
-/// stream that did not ask for speakers pays nothing for it).
-pub fn default_spec() -> Option<EngineSpec> {
+/// The spec the app runs with: the best engine build on disk, the model,
+/// and the diarizer only when the caller wants speakers. A recognizer that
+/// carries the diarizer runs it on EVERY stream, asked for speakers or not:
+/// a dictation measured 2.6x realtime without it and 1.4-1.6x with it loaded
+/// and unused (CPU, 2026-10-30). So speakers get a recognizer of their own.
+pub fn default_spec(speakers: bool) -> Option<EngineSpec> {
     let flavor = wanted_flavors()
         .into_iter()
         .find(|f| library_path(*f).is_file())?;
-    Some(spec_for(flavor))
+    Some(spec_for(flavor, speakers))
 }
 
-fn spec_for(flavor: Flavor) -> EngineSpec {
+fn spec_for(flavor: Flavor, speakers: bool) -> EngineSpec {
     EngineSpec {
         library: library_path(flavor),
         model: model_path(),
         gpu: flavor.is_gpu().then_some(0),
-        diarizer: diarizer_present().then(diarizer_path),
+        diarizer: (speakers && diarizer_present()).then(diarizer_path),
     }
 }
 
 /// The recognizer for this machine: the GPU build when it loads, the CPU
 /// build when the GPU one does not (driver too old, no device after all).
-pub fn app_recognizer() -> Result<Arc<Recognizer>, TranscribeError> {
+/// `speakers` picks the one that carries the diarizer.
+pub fn app_recognizer(speakers: bool) -> Result<Arc<Recognizer>, TranscribeError> {
     let not_installed = || TranscribeError::LocalModel("Nemotron is not downloaded".into());
-    let spec = default_spec().ok_or_else(not_installed)?;
+    let spec = default_spec(speakers).ok_or_else(not_installed)?;
     match recognizer(&spec) {
         Ok(r) => Ok(r),
         Err(e) if spec.gpu.is_some() && library_path(Flavor::Cpu).is_file() => {
             crate::log(&format!(
                 "[Nemotron] GPU engine failed ({e}); using the CPU engine"
             ));
-            recognizer(&spec_for(Flavor::Cpu))
+            recognizer(&spec_for(Flavor::Cpu, speakers))
         }
         Err(e) => Err(e),
     }
@@ -1010,19 +1013,26 @@ impl Drop for Stream {
 
 // ---- Process-wide recognizer -------------------------------------------
 
-static RECOGNIZER: Mutex<Option<Arc<Recognizer>>> = Mutex::new(None);
+/// At most two: one without the diarizer (dictation, the mic of a call,
+/// one-shot transcription) and one with it (a track that wants speakers).
+static RECOGNIZERS: Mutex<Vec<Arc<Recognizer>>> = Mutex::new(Vec::new());
 
 /// The recognizer for `spec`, loaded on first use and kept: loading the
-/// model costs seconds and a dictation must not pay it twice. A different
-/// spec (model variant, device, diarizer) replaces it.
+/// model costs seconds and a dictation must not pay it twice. A new spec of
+/// the same kind (with or without diarizer) replaces the old one.
 pub fn recognizer(spec: &EngineSpec) -> Result<Arc<Recognizer>, TranscribeError> {
-    let mut slot = RECOGNIZER.lock().unwrap_or_else(|p| p.into_inner());
-    if let Some(r) = slot.as_ref().filter(|r| r.spec() == spec) {
+    let mut slot = RECOGNIZERS.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(r) = slot.iter().find(|r| r.spec() == spec) {
         return Ok(Arc::clone(r));
     }
     let r = Arc::new(Recognizer::create(spec.clone())?);
     warm_up(&r)?;
-    *slot = Some(Arc::clone(&r));
+    slot.retain(|old| old.spec().diarizer.is_some() != spec.diarizer.is_some());
+    slot.push(Arc::clone(&r));
+    assert!(
+        slot.len() <= 2,
+        "one recognizer with and one without the diarizer"
+    );
     Ok(r)
 }
 
@@ -1125,7 +1135,7 @@ fn run_stream(
     final_text: &Mutex<String>,
     on_chunk: &ChunkCallback,
 ) -> Result<(), TranscribeError> {
-    let recognizer = app_recognizer()?;
+    let recognizer = app_recognizer(false)?;
     let mut stream = recognizer.stream(language, keywords, false)?;
     let mut transcript = Transcript::default();
     let mut cursor = 0usize;
@@ -1307,7 +1317,7 @@ impl MeetingTrack {
         keywords: &[String],
         speakers: bool,
     ) -> Result<Self, TranscribeError> {
-        let r = app_recognizer()?;
+        let r = app_recognizer(speakers)?;
         let speakers = speakers && r.spec().diarizer.is_some();
         Ok(Self {
             stream: r.stream(language, keywords, speakers)?,
@@ -1352,7 +1362,7 @@ impl MeetingTrack {
         }
         let tail = self.stream.finish()?;
         let lines = self.lines(tail);
-        let r = app_recognizer()?;
+        let r = app_recognizer(false)?;
         self.stream = r.stream(&self.language, &self.keywords, false)?;
         self.stream_origin = self.pushed_until as f64 / self.rate as f64;
         self.speakers = false;

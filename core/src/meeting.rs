@@ -921,17 +921,27 @@ impl NemoTracks {
     ) -> usize {
         let started = Instant::now();
         let mut words = 0;
-        if let Some(t) = self.mic.as_mut() {
-            match t.feed(mic, track_start) {
-                Ok(lines) => words += sink.write(sink.mic_label, &lines),
-                Err(e) => crate::log(&format!("[Meeting] nemotron mic: {e}")),
-            }
+        // The two tracks run side by side: each stream is single-threaded
+        // inside the engine, and one after the other they cost the sum of
+        // both on a machine with cores to spare.
+        let (mic_out, system_out) = std::thread::scope(|scope| {
+            let mic_job = self
+                .mic
+                .as_mut()
+                .map(|t| scope.spawn(move || t.feed(mic, track_start)));
+            let system_out = self.system.as_mut().map(|t| t.feed(system, track_start));
+            let mic_out = mic_job.map(|h| h.join().expect("nemotron mic feed panicked"));
+            (mic_out, system_out)
+        });
+        match mic_out {
+            Some(Ok(lines)) => words += sink.write(sink.mic_label, &lines),
+            Some(Err(e)) => crate::log(&format!("[Meeting] nemotron mic: {e}")),
+            None => {}
         }
-        if let Some(t) = self.system.as_mut() {
-            match t.feed(system, track_start) {
-                Ok(lines) => words += sink.write("system", &lines),
-                Err(e) => crate::log(&format!("[Meeting] nemotron system: {e}")),
-            }
+        match system_out {
+            Some(Ok(lines)) => words += sink.write("system", &lines),
+            Some(Err(e)) => crate::log(&format!("[Meeting] nemotron system: {e}")),
+            None => {}
         }
         let window_secs = mic.len().max(1) as f64 / mic_rate as f64;
         let ratio = started.elapsed().as_secs_f64() / window_secs;

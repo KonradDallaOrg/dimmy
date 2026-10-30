@@ -18,6 +18,7 @@ fn main() {
     let mut a = std::env::args().skip(1);
     let (mut lib, mut model, mut diar, mut wav) = (None, None, None, None);
     let (mut gpu, mut lang, mut keywords, mut oneshot) = (None, String::new(), Vec::new(), false);
+    let mut no_speakers = false;
     while let Some(x) = a.next() {
         match x.as_str() {
             "--lib" => lib = a.next().map(PathBuf::from),
@@ -34,6 +35,7 @@ fn main() {
                     .collect()
             }
             "--oneshot" => oneshot = true,
+            "--no-speakers" => no_speakers = true,
             _ => wav = Some(PathBuf::from(x)),
         }
     }
@@ -41,7 +43,9 @@ fn main() {
         eprintln!("usage: nemotron_smoke --lib <dll> --model <gguf> [--gpu N] [--diar <gguf>] [--lang it] [--keywords a,b] [--oneshot] <wav>");
         std::process::exit(2);
     };
-    let speakers = diar.is_some();
+    // --no-speakers loads the diarizer but asks no stream for speakers:
+    // what a dictation pays in the app, where the diarizer is always loaded.
+    let speakers = diar.is_some() && !no_speakers;
     let spec = EngineSpec {
         library,
         model,
