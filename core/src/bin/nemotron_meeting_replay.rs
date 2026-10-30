@@ -4,7 +4,10 @@
 //! would put it. What `nemotron_meeting_bench` measures with a simulated clock,
 //! this measures on a wall clock.
 //!
-//! Usage: nemotron_meeting_replay <meeting dir> [--no-speakers] [--seconds 120]
+//! Usage: nemotron_meeting_replay [--download] <meeting dir> [--no-speakers] [--seconds 120]
+//!
+//! `--download` first fetches the bundle and, on a GPU machine, the F32 model,
+//! through the functions the download center calls.
 //!
 //! DIMMY_FORCE_CPU=1 forces the CPU engine. Writes a meeting into the app's
 //! meetings folder and removes it at the end.
@@ -50,12 +53,28 @@ extern "C" fn on_event(json: *const c_char) {
     }
 }
 
+fn download_models() {
+    use dimmy_lib::nemotron;
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    rt.block_on(nemotron::download_bundle(|_, _| {}))
+        .expect("bundle download");
+    if nemotron::full_precision_available() {
+        rt.block_on(nemotron::download_full_precision(|_, _| {}))
+            .expect("F32 download");
+    }
+    eprintln!(
+        "downloaded: F32 present = {}",
+        nemotron::full_precision_present()
+    );
+}
+
 fn main() {
     let mut args = std::env::args().skip(1);
     let (mut dir, mut speakers, mut limit) = (None, true, f64::MAX);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--no-speakers" => speakers = false,
+            "--download" => download_models(),
             "--seconds" => {
                 limit = args
                     .next()
