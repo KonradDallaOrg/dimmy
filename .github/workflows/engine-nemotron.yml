@@ -44,8 +44,12 @@ env:
 jobs:
   windows:
     name: Windows ${{ matrix.backend }}
-    # windows-ci.md I8: keep the explicit label.
-    runs-on: windows-2025
+    # windows-ci.md I8 pins windows-2025 for the jobs that build dimmy_lib.dll
+    # (MSVC 14.50, VS 2026). This engine is a separate library, and nvcc's
+    # host compiler on Windows must be VS 2022, which windows-2025 no longer
+    # carries ("No VS install with the C++ toolset", run 41014249300). NVIDIA
+    # builds its own Windows release on windows-2022 for the same reason.
+    runs-on: windows-2022
     timeout-minutes: 240
     strategy:
       fail-fast: false
