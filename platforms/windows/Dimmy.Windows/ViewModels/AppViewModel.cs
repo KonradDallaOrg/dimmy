@@ -377,6 +377,9 @@ public partial class AppViewModel : ObservableObject
     /// problem. Arg: the engine that fell behind (whisper|parakeet|cloud).</summary>
     public event Action<string>? MeetingTranscriptionBehind;
 
+    /// <summary>Raised once per launch when Nemotron cannot load on the GPU.</summary>
+    public event Action? NemotronCpuFallback;
+
     /// <summary>Raised at stop while the core drains the transcriber's
     /// backlog, before the recap is dispatched. Arg: how many windows were
     /// dropped during the meeting (0 when the transcriber kept up).</summary>
@@ -783,6 +786,10 @@ public partial class AppViewModel : ObservableObject
                         Log?.Invoke($"transcription behind (engine={engine}) — audio recording unaffected", "Meeting");
                         MeetingTranscriptionBehind?.Invoke(engine);
                     }
+                    break;
+                case "nemotron_cpu_fallback":
+                    Log?.Invoke("Nemotron fell back to the CPU engine", "Meeting");
+                    NemotronCpuFallback?.Invoke();
                     break;
                 case "audio.stream_error":
                     {

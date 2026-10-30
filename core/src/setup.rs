@@ -303,6 +303,14 @@ pub fn settings() -> Vec<Setting> {
             help: "Which Whisper model the on-device Whisper engine uses: bigger is more accurate and slower.",
         },
         Setting {
+            key: "nemotron_model",
+            kind: Kind::Enum(strs(&[
+                crate::nemotron::MODEL_CHOICE_Q8,
+                crate::nemotron::MODEL_CHOICE_F32,
+            ])),
+            help: "Which Nemotron model to run: q8 is lighter, f32 is the full-precision one and needs a GPU. Each is downloaded once; a change applies at the next launch if a model is already loaded.",
+        },
+        Setting {
             key: "qwen_asr_model",
             kind: Kind::Enum(
                 crate::qwen_asr::AVAILABLE_MODELS
@@ -621,6 +629,7 @@ pub fn config_value(cfg: &AppConfig, key: &str) -> Value {
         "local_stt_backend" => json!(cfg.local_stt_backend),
         "local_model" => json!(cfg.local_model),
         "qwen_asr_model" => json!(cfg.qwen_asr_model),
+        "nemotron_model" => json!(cfg.nemotron_model),
         "language" => json!(cfg.language),
         "streaming_dictation" => json!(cfg.streaming_dictation),
         "llm_enabled" => json!(cfg.llm_enabled),

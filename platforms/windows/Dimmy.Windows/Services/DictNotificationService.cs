@@ -193,6 +193,14 @@ public static class DictNotificationService
              $"Your recording is safe and continues normally. {hint} You can also regenerate the transcript from the audio after the meeting.");
     }
 
+    /// <summary>Nemotron could not load on the GPU. Without this the only
+    /// symptom is a slow transcript.</summary>
+    public static void ShowNemotronOnCpu()
+    {
+        Show("Nemotron is running on the CPU",
+             "The GPU needs more free memory or a newer driver, so transcription is slower and speakers may appear only after the meeting. Close some programs and restart Dimmy to use the GPU.");
+    }
+
     /// <summary>The meeting recap failed. Until now this was logged and
     /// nothing else: the user waited in front of a recap that never
     /// arrived, with no way to tell "still working" from "dead". 21 of 57

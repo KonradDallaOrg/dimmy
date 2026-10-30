@@ -1062,6 +1062,14 @@ final class DimmyCore {
         Int(dimmy_nemotron_full_size_mb())
     }
 
+    func downloadNemotronFull() -> Bool {
+        dimmy_nemotron_full_download() == 0
+    }
+
+    func nemotronRestartNeeded() -> Bool {
+        dimmy_nemotron_restart_needed() == 1
+    }
+
     /// BLOCKING — call from a background thread. Progress arrives as
     /// "nemotron_download_progress" events on the global handler.
     @discardableResult
@@ -1672,6 +1680,14 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
             title: "Transcription is falling behind",
             body: "Your recording is safe and continues normally. \(hint) "
                 + "You can also regenerate the transcript from the audio after the meeting.")
+
+    case "nemotron_cpu_fallback":
+        NSLog("[DimmyCore] Nemotron fell back to the CPU engine")
+        DictToastWindow.show(
+            kind: .error,
+            title: "Nemotron is running on the CPU",
+            body: "It could not load on the GPU, so transcription is slower and speakers "
+                + "may appear only after the meeting. Close some programs and restart Dimmy.")
 
     case "meeting_chunk":
         // Emitted by the Rust meeting worker every time it processes

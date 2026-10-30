@@ -630,6 +630,7 @@ fn dimmy_init_inner() -> c_int {
         local_model: Mutex::new(file_cfg.local_model),
         local_stt_backend: Mutex::new(file_cfg.local_stt_backend),
         qwen_asr_model: Mutex::new(file_cfg.qwen_asr_model),
+        nemotron_model: Mutex::new(file_cfg.nemotron_model),
         live_captions_enabled: Mutex::new(file_cfg.live_captions_enabled),
         call_detect_enabled: Mutex::new(file_cfg.call_detect_enabled),
         call_detect_auto_record: Mutex::new(file_cfg.call_detect_auto_record),
@@ -927,9 +928,32 @@ pub extern "C" fn dimmy_set_event_callback(cb: extern "C" fn(*const c_char)) {
 /// the dictation hotkey — having two captures running concurrently
 /// would clobber the meeting's audio_buffer / aec_mic_ring and corrupt
 /// the active meeting recording).
+/// True from the moment a stop releases `recording` until it has taken the
+/// audio buffer: the window in which a new recording would destroy it.
+static STOP_DRAINING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn stop_drain_settled(flag: &std::sync::atomic::AtomicBool, timeout: std::time::Duration) -> bool {
+    let started = std::time::Instant::now();
+    while flag.load(std::sync::atomic::Ordering::SeqCst) {
+        if started.elapsed() >= timeout {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    true
+}
+
 #[no_mangle]
 pub extern "C" fn dimmy_start_recording() -> c_int {
     let st = state();
+
+    // A new press during the previous stop's drain would clear the buffer the
+    // stop has not read yet: a 1.7 s dictation vanished that way, press to
+    // press under a fast hand (2026-10-30). Wait for the audio, not past it.
+    if !stop_drain_settled(&STOP_DRAINING, std::time::Duration::from_millis(1500)) {
+        log("[StartRec] previous stop still draining — press ignored (rc=-2)");
+        return -2;
+    }
 
     // Block dictation when a meeting is recording. The audio thread
     // can only host one capture configuration at a time — letting the
@@ -1422,6 +1446,14 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
         }
         Err(_) => log("[StopRec] WARN audio_tx lock poisoned — Stop command not sent"),
     }
+    struct DrainGuard;
+    impl Drop for DrainGuard {
+        fn drop(&mut self) {
+            STOP_DRAINING.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    STOP_DRAINING.store(true, std::sync::atomic::Ordering::SeqCst);
+    let drain_guard = DrainGuard;
     if let Ok(mut r) = st.recording.lock() {
         *r = false;
     }
@@ -1472,6 +1504,7 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
         }
         Err(_) => return -1,
     };
+    drop(drain_guard);
 
     // Diagnostic: log buffer stats
     let buf_len_samples = buffer.len();
@@ -2272,6 +2305,7 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         "local_model": *st.local_model.lock().unwrap_or_else(|e| e.into_inner()),
         "local_stt_backend": *st.local_stt_backend.lock().unwrap_or_else(|e| e.into_inner()),
         "qwen_asr_model": *st.qwen_asr_model.lock().unwrap_or_else(|e| e.into_inner()),
+        "nemotron_model": *st.nemotron_model.lock().unwrap_or_else(|e| e.into_inner()),
         "live_captions_enabled": *st.live_captions_enabled.lock().unwrap_or_else(|e| e.into_inner()),
         "call_detect_enabled": *st.call_detect_enabled.lock().unwrap_or_else(|e| e.into_inner()),
         "call_detect_auto_record": *st.call_detect_auto_record.lock().unwrap_or_else(|e| e.into_inner()),
@@ -2873,6 +2907,18 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
         } else if !s.is_empty() {
             log(&format!(
                 "[Config] WARN unknown qwen_asr_model '{}' — kept",
+                s
+            ));
+        }
+    }
+    if let Some(s) = v["nemotron_model"].as_str() {
+        if s == crate::nemotron::MODEL_CHOICE_Q8 || s == crate::nemotron::MODEL_CHOICE_F32 {
+            if let Ok(mut m) = st.nemotron_model.lock() {
+                *m = s.to_string();
+            }
+        } else if !s.is_empty() {
+            log(&format!(
+                "[Config] WARN unknown nemotron_model '{}' — kept",
                 s
             ));
         }
@@ -7980,6 +8026,54 @@ pub extern "C" fn dimmy_nemotron_full_size_mb() -> c_int {
     crate::nemotron::full_precision_size_mb() as c_int
 }
 
+/// 1 when the model picked in Settings differs from the one already loaded on
+/// the GPU, which stays until Dimmy restarts; 0 otherwise.
+#[no_mangle]
+pub extern "C" fn dimmy_nemotron_restart_needed() -> c_int {
+    crate::nemotron::restart_needed() as c_int
+}
+
+/// Download the full-precision Nemotron model. BLOCKING -- call from a
+/// background thread. Emits `nemotron_download_progress`. Returns 0, or -1.
+#[no_mangle]
+pub extern "C" fn dimmy_nemotron_full_download() -> c_int {
+    let slot = model_download_slot(crate::download_center::NEMOTRON_F32_ID);
+    let _busy = slot.lock().unwrap_or_else(|e| e.into_inner());
+    if crate::nemotron::full_precision_present() {
+        return 0;
+    }
+    let Ok(rt) = tokio::runtime::Runtime::new() else {
+        return -1;
+    };
+    let result = rt.block_on(crate::nemotron::download_full_precision(
+        |downloaded, total| {
+            let payload = format!(r#"{{"downloaded":{},"total":{}}}"#, downloaded, total);
+            emit_event("nemotron_download_progress", &payload);
+        },
+    ));
+    crate::telemetry::track(crate::telemetry::Event::ModelDownloadCompleted {
+        kind: "nemotron",
+        success: result.is_ok(),
+    });
+    match result {
+        Ok(()) => 0,
+        Err(e) => {
+            log(&format!("[Nemotron] F32 download failed: {e}"));
+            -1
+        }
+    }
+}
+
+/// The model picked in Settings, for `nemotron::running_model`. False before
+/// init: the benchmarks and smoke tools choose with DIMMY_NEMOTRON_F32 instead.
+pub fn nemotron_f32_selected() -> bool {
+    GLOBAL_STATE.get().is_some_and(|st| {
+        st.nemotron_model
+            .lock()
+            .is_ok_and(|m| m.as_str() == crate::nemotron::MODEL_CHOICE_F32)
+    })
+}
+
 /// Download Nemotron. BLOCKING -- call from a background thread. Emits
 /// `nemotron_download_progress` as `{"downloaded":N,"total":N}`.
 /// Returns 0, or -1 on error.
@@ -12624,6 +12718,7 @@ mod tests {
                 local_model: Mutex::new("ggml-base-q8_0.bin".to_string()),
                 local_stt_backend: Mutex::new("whisper".to_string()),
                 qwen_asr_model: Mutex::new(crate::qwen_asr::DEFAULT_MODEL.to_string()),
+                nemotron_model: Mutex::new(crate::nemotron::MODEL_CHOICE_Q8.to_string()),
                 live_captions_enabled: Mutex::new(true),
                 call_detect_enabled: Mutex::new(true),
                 call_detect_auto_record: Mutex::new(false),
@@ -14335,5 +14430,35 @@ pub extern "C" fn dimmy_calendar_spawn_setup() -> c_int {
             log(&format!("[Calendar] setup spawn failed: {}", e));
             -1
         }
+    }
+}
+
+#[cfg(test)]
+mod stop_drain_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    #[test]
+    fn a_press_waits_for_the_stop_that_is_still_reading_the_audio() {
+        let flag = Arc::new(AtomicBool::new(true));
+        let stop = Arc::clone(&flag);
+        let drain = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            stop.store(false, Ordering::SeqCst);
+        });
+        assert!(stop_drain_settled(&flag, Duration::from_secs(5)));
+        assert!(
+            !flag.load(Ordering::SeqCst),
+            "returned before the drain ended"
+        );
+        drain.join().expect("drain");
+    }
+
+    #[test]
+    fn a_stop_that_never_finishes_refuses_the_press_instead_of_losing_its_audio() {
+        let flag = AtomicBool::new(true);
+        assert!(!stop_drain_settled(&flag, Duration::from_millis(20)));
     }
 }

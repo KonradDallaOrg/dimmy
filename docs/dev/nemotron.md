@@ -78,6 +78,11 @@ the recording. So `recognizer()` checks `setup::available_memory_bytes` (Windows
 the commit charge left, not free RAM) and returns an error instead, which falls
 back from GPU to CPU. Keep this check in front of any new load.
 
+Q8_0 and F32 are two rows of the model picker (`nemotron_model`: `q8` or `f32`).
+The file on disk no longer decides. A model already on the GPU stays until the
+next launch (`nemotron::restart_needed` tells the host), because it could not be
+freed for the other one. Benchmarks without a config use `DIMMY_NEMOTRON_F32=1`.
+
 A CPU recognizer commits 3.1 GB at Q8_0 without the diarizer and 4.4 GB with it,
 so a meeting on CPU needs about 7.5 GB. The CPU engine always runs Q8_0, also when
 F32 is on disk. `RECOGNIZERS` changes only after a new recognizer exists, because

@@ -42,6 +42,9 @@ struct MacVoicePage: View {
     @State private var qwenModels: [[String: Any]] = []
     @State private var whistleSizeMb: Int = 0
     @State private var nemotronSizeMb: Int = 0
+    @State private var nemotronFullStatus: Int = -1
+    @State private var nemotronFullSizeMb: Int = 0
+    @State private var nemotronRestartNeeded = false
 
     /// Text-field state for the "add a word" row in the custom-dictionary
     /// section. Kept inline to avoid a parallel view-model class, the
@@ -58,6 +61,7 @@ struct MacVoicePage: View {
     private static let whistleTag = "whistle"
     /// Nemotron entry. Mirrors `NemotronTag` in SettingsWindow.xaml.cs.
     private static let nemotronTag = "nemotron"
+    private static let nemotronF32Tag = "nemotron-f32"
 
     /// Qwen3-ASR rows carry the variant in the tag, because unlike
     /// Parakeet there is more than one of them. Mirrors QwenTagPrefix in
@@ -155,14 +159,16 @@ struct MacVoicePage: View {
     }
 
     @ViewBuilder
-    fileprivate static func nemotronPickerItem(sizeMb: Int, present: Bool) -> some View {
-        let label = "Nemotron 3.5 (live, NVIDIA) · \(sizeMb) MB · GPU"
+    fileprivate static func nemotronPickerItem(
+        name: String, tag: String, sizeMb: Int, present: Bool
+    ) -> some View {
+        let label = "\(name) · \(sizeMb) MB · GPU"
         if present {
             Label(label, systemImage: "checkmark.circle.fill")
                 .foregroundStyle(.green)
-                .tag(nemotronTag)
+                .tag(tag)
         } else {
-            Text(label).tag(nemotronTag)
+            Text(label).tag(tag)
         }
     }
 
@@ -574,9 +580,19 @@ struct MacVoicePage: View {
                             if appState.nemotronStatus >= 0 {
                                 Section("Nemotron") {
                                     Self.nemotronPickerItem(
+                                        name: "Nemotron 3.5 Q8 (live, NVIDIA)",
+                                        tag: Self.nemotronTag,
                                         sizeMb: nemotronSizeMb,
                                         present: appState.nemotronStatus == 1
                                     )
+                                    if nemotronFullStatus >= 0 {
+                                        Self.nemotronPickerItem(
+                                            name: "Nemotron 3.5 F32 (full precision)",
+                                            tag: Self.nemotronF32Tag,
+                                            sizeMb: nemotronFullSizeMb,
+                                            present: nemotronFullStatus == 1
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -594,6 +610,13 @@ struct MacVoicePage: View {
                             progress: downloadingProgress,
                             label: "Downloading \(downloadingLabel)..."
                         )
+                    } else if localBackendIsNemotron && localModelReady && nemotronRestartNeeded {
+                        MacRow(
+                            "Restart Dimmy to switch",
+                            description: "The other Nemotron model is already loaded."
+                        ) {
+                            EmptyView()
+                        }
                     } else if !localModelReady {
                         MacRow(
                             "Download",
@@ -742,6 +765,7 @@ struct MacVoicePage: View {
         }
         if localBackendIsNemotron {
             return appState.nemotronStatus == 1
+                && (appState.nemotronModel != "f32" || nemotronFullStatus == 1)
         }
         return localModelExists
     }
@@ -761,7 +785,7 @@ struct MacVoicePage: View {
                     return Self.whistleTag
                 }
                 if localBackendIsNemotron {
-                    return Self.nemotronTag
+                    return appState.nemotronModel == "f32" ? Self.nemotronF32Tag : Self.nemotronTag
                 }
                 return localBackendIsParakeet ? Self.parakeetTag : appState.localModel
             },
@@ -776,8 +800,10 @@ struct MacVoicePage: View {
                 } else if newValue == Self.whistleTag {
                     appState.localSttBackend = "whistle"
                     appState.chunkStreamingEnabled = true
-                } else if newValue == Self.nemotronTag {
+                } else if newValue == Self.nemotronTag || newValue == Self.nemotronF32Tag {
                     appState.localSttBackend = "nemotron"
+                    appState.nemotronModel = newValue == Self.nemotronF32Tag ? "f32" : "q8"
+                    refreshLocalModelStatus()
                     // Typing as you speak is what this engine is for; the
                     // other local engines only fake it with chunks, so they
                     // leave it off.
@@ -829,6 +855,9 @@ struct MacVoicePage: View {
             let whistleMb = DimmyCore.shared.whistleSizeMb()
             let nemotron = DimmyCore.shared.nemotronStatus()
             let nemotronMb = DimmyCore.shared.nemotronSizeMb()
+            let nemotronFull = DimmyCore.shared.nemotronFullStatus()
+            let nemotronFullMb = DimmyCore.shared.nemotronFullSizeMb()
+            let restartNeeded = DimmyCore.shared.nemotronRestartNeeded()
             let coremlStatus = DimmyCore.shared.coremlEncoderStatus(modelName)
             var ready = Set<String>()
             for m in models {
@@ -847,6 +876,9 @@ struct MacVoicePage: View {
                 self.whistleSizeMb = whistleMb
                 self.appState.nemotronStatus = nemotron
                 self.nemotronSizeMb = nemotronMb
+                self.nemotronFullStatus = nemotronFull
+                self.nemotronFullSizeMb = nemotronFullMb
+                self.nemotronRestartNeeded = restartNeeded
                 if !qwenList.isEmpty { self.qwenModels = qwenList }
                 self.downloadFailed = nil
                 if !models.isEmpty { self.localModels = models }
@@ -901,10 +933,13 @@ struct MacVoicePage: View {
             // Shares Parakeet's progress value: one bundle, one bar.
             downloadingIsParakeet = true
             downloadingTarget = "nemotron"
-            downloadingLabel = "Nemotron 3.5 (\(nemotronSizeMb) MB)"
+            let wantsF32 = appState.nemotronModel == "f32"
+            let downloadMb = nemotronSizeMb + (wantsF32 ? nemotronFullSizeMb : 0)
+            downloadingLabel = "Nemotron 3.5 (\(downloadMb) MB)"
             appState.parakeetDownloadProgress = 0
             DispatchQueue.global(qos: .userInitiated).async {
                 let ok = DimmyCore.shared.downloadNemotron()
+                    && (!wantsF32 || DimmyCore.shared.downloadNemotronFull())
                 DispatchQueue.main.async {
                     downloadInFlight = false
                     if ok {

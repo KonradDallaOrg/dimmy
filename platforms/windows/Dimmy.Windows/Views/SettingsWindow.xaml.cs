@@ -2797,6 +2797,7 @@ public sealed partial class SettingsWindow : Window
     private const string ParakeetTag = "parakeet:fp32";
     private const string WhistleTag = "whistle";
     private const string NemotronTag = "nemotron";
+    private const string NemotronF32Tag = "nemotron-f32";
     // Qwen3-ASR rows carry the variant in the tag, because unlike Parakeet
     // there is more than one of them.
     private const string QwenTagPrefix = "qwen:";
@@ -2969,13 +2970,28 @@ public sealed partial class SettingsWindow : Window
             {
                 int nemotronMb = DimmyNative.dimmy_nemotron_size_mb();
                 var nemotronLabel = nemotronStatus == 1
-                    ? "Nemotron 3.5 (live, NVIDIA)"
-                    : $"Nemotron 3.5 (live, NVIDIA) ({nemotronMb}MB)";
+                    ? "Nemotron 3.5 Q8 (live, NVIDIA)"
+                    : $"Nemotron 3.5 Q8 (live, NVIDIA) ({nemotronMb}MB)";
                 LocalModelComboBox.Items.Add(
                     MakeLocalModelItem(nemotronLabel, NemotronTag, nemotronStatus == 1, nemotronMb));
-                if (ViewModel.LocalSttBackend == "nemotron")
+                if (ViewModel.LocalSttBackend == "nemotron" && ViewModel.NemotronModel != "f32")
                     selectedIdx = idx;
                 idx++;
+
+                // Hidden where there is no GPU build to run it.
+                int f32Status = DimmyNative.dimmy_nemotron_full_status();
+                if (f32Status >= 0)
+                {
+                    int f32Mb = DimmyNative.dimmy_nemotron_full_size_mb();
+                    var f32Label = f32Status == 1
+                        ? "Nemotron 3.5 F32 (full precision, GPU)"
+                        : $"Nemotron 3.5 F32 (full precision, GPU) ({f32Mb}MB)";
+                    LocalModelComboBox.Items.Add(
+                        MakeLocalModelItem(f32Label, NemotronF32Tag, f32Status == 1, f32Mb));
+                    if (ViewModel.LocalSttBackend == "nemotron" && ViewModel.NemotronModel == "f32")
+                        selectedIdx = idx;
+                    idx++;
+                }
             }
 
             // Qwen3-ASR: one row per variant. Each is a PAIR of files on
@@ -3041,9 +3057,10 @@ public sealed partial class SettingsWindow : Window
                 ViewModel.ChunkStreamingEnabled = true;
                 App.Log("-> set LocalSttBackend=whistle", "Settings");
             }
-            else if (tag == NemotronTag)
+            else if (tag == NemotronTag || tag == NemotronF32Tag)
             {
                 ViewModel.LocalSttBackend = "nemotron";
+                ViewModel.NemotronModel = tag == NemotronF32Tag ? "f32" : "q8";
                 ViewModel.ChunkStreamingEnabled = true;
                 // Typing as you speak is what this engine is for; the other
                 // local engines only fake it with chunks, so they leave it off.
@@ -3272,12 +3289,15 @@ public sealed partial class SettingsWindow : Window
         bool isQwen = ViewModel.LocalSttBackend == "qwen";
         bool isWhistle = ViewModel.LocalSttBackend == "whistle";
         bool isNemotron = ViewModel.LocalSttBackend == "nemotron";
+        bool isNemotronF32 = isNemotron && ViewModel.NemotronModel == "f32";
         try
         {
             int exists = isQwen
                 ? DimmyNative.dimmy_qwen_asr_bundle_present(ViewModel.QwenAsrModel)
                 : isNemotron
-                    ? DimmyNative.dimmy_nemotron_status()
+                    ? (isNemotronF32
+                        ? Math.Min(DimmyNative.dimmy_nemotron_status(), DimmyNative.dimmy_nemotron_full_status())
+                        : DimmyNative.dimmy_nemotron_status())
                 : isWhistle
                     ? DimmyNative.dimmy_whistle_status()
                 : isParakeet
@@ -3285,7 +3305,9 @@ public sealed partial class SettingsWindow : Window
                     : DimmyNative.dimmy_model_exists(ViewModel.LocalModel);
             if (exists == 1)
             {
-                LocalModelStatus.Text = "Ready";
+                LocalModelStatus.Text = isNemotron && DimmyNative.dimmy_nemotron_restart_needed() == 1
+                    ? "Ready. Restart Dimmy to switch: the other model is loaded"
+                    : "Ready";
                 DownloadModelBtn.Visibility = Visibility.Collapsed;
             }
             else
@@ -3298,7 +3320,9 @@ public sealed partial class SettingsWindow : Window
                 }
                 else if (isNemotron)
                 {
-                    sizeInfo = $" ({DimmyNative.dimmy_nemotron_size_mb()}MB)";
+                    int mb = DimmyNative.dimmy_nemotron_status() == 1 ? 0 : DimmyNative.dimmy_nemotron_size_mb();
+                    if (isNemotronF32) mb += DimmyNative.dimmy_nemotron_full_size_mb();
+                    sizeInfo = $" ({mb}MB)";
                 }
                 else if (isWhistle)
                 {
@@ -3332,6 +3356,7 @@ public sealed partial class SettingsWindow : Window
         bool isQwen = ViewModel.LocalSttBackend == "qwen";
         bool isWhistle = ViewModel.LocalSttBackend == "whistle";
         bool isNemotron = ViewModel.LocalSttBackend == "nemotron";
+        bool isNemotronF32 = isNemotron && ViewModel.NemotronModel == "f32";
         DownloadModelBtn.IsEnabled = false;
         DownloadModelBtn.Content = "Downloading...";
         DownloadProgress.IsIndeterminate = true;
@@ -3344,7 +3369,8 @@ public sealed partial class SettingsWindow : Window
             int result = await Task.Run(() => isQwen
                 ? DimmyNative.dimmy_qwen_asr_download(ViewModel.QwenAsrModel)
                 : isNemotron
-                    ? DimmyNative.dimmy_nemotron_download()
+                    ? (DimmyNative.dimmy_nemotron_download() != 0 ? -1
+                        : isNemotronF32 ? DimmyNative.dimmy_nemotron_full_download() : 0)
                 : isWhistle
                     ? DimmyNative.dimmy_whistle_download()
                 : isParakeet

@@ -103,7 +103,7 @@ enum ProviderCatalog {
                 stt: true, llm: false, recap: false, localFilename: "nemotron"))
             if DimmyCore.shared.nemotronFullStatus() >= 0 {
                 list.append(ProviderModel(
-                    name: "Nemotron 3.5, full precision (GPU, replaces the above when present), \(DimmyCore.shared.nemotronFullSizeMb()) MB",
+                    name: "Nemotron 3.5 F32, full precision (GPU), \(DimmyCore.shared.nemotronFullSizeMb()) MB",
                     stt: true, llm: false, recap: false, localFilename: "nemotron-f32"))
             }
         }

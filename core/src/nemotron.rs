@@ -183,29 +183,60 @@ const CPU_RUNTIME_BYTES: u64 = 3686 * 1024 * 1024;
 /// What F32 must find free before it is preferred over Q8_0.
 const F32_HEADROOM_BYTES: u64 = GPU_RUNTIME_BYTES + 1024 * 1024 * 1024;
 
-/// The file being on disk is the choice: someone downloaded it to use it. It
-/// needs a GPU, since a CPU could not keep up (0.6-1.3x realtime for one
-/// stream), and the memory to load it, or Q8_0 does the job.
-fn pick_model(wanted: bool, loaded: bool, available: Option<u64>) -> &'static Pinned {
+/// Values of the `nemotron_model` config field.
+pub const MODEL_CHOICE_Q8: &str = "q8";
+pub const MODEL_CHOICE_F32: &str = "f32";
+
+/// The choice is made in Settings. F32 needs a GPU, since a CPU could not keep
+/// up (0.6-1.3x realtime for one stream), and the memory to load it, or Q8_0
+/// does the job. A model already on the GPU stays until the next launch: it
+/// could not be freed for the other one, and two do not fit (see `recognizer`).
+fn pick_model(
+    wanted: bool,
+    loaded_on_gpu: Option<bool>,
+    available: Option<u64>,
+) -> &'static Pinned {
     let fits = available.is_none_or(|free| free >= MODEL_F32.bytes + F32_HEADROOM_BYTES);
-    if wanted && (loaded || fits) {
+    let f32 = match loaded_on_gpu {
+        Some(loaded_is_f32) => loaded_is_f32,
+        None => wanted && fits,
+    };
+    if f32 {
         &MODEL_F32
     } else {
         &MODEL
     }
 }
 
-fn running_model() -> &'static Pinned {
-    let wanted = full_precision_available()
+fn f32_wanted() -> bool {
+    full_precision_available()
         && full_precision_present()
-        && std::env::var_os("DIMMY_NEMOTRON_Q8").is_none();
+        && std::env::var_os("DIMMY_NEMOTRON_Q8").is_none()
+        && (crate::ffi::nemotron_f32_selected() || std::env::var_os("DIMMY_NEMOTRON_F32").is_some())
+}
+
+/// Whether the model on the GPU is F32, when one is loaded.
+fn loaded_on_gpu() -> Option<bool> {
     let f32_path = full_precision_path();
-    let loaded = RECOGNIZERS
+    RECOGNIZERS
         .lock()
         .unwrap_or_else(|p| p.into_inner())
         .iter()
-        .any(|r| r.spec().model == f32_path);
-    pick_model(wanted, loaded, crate::setup::available_memory_bytes())
+        .find(|r| r.spec().gpu.is_some())
+        .map(|r| r.spec().model == f32_path)
+}
+
+fn running_model() -> &'static Pinned {
+    pick_model(
+        f32_wanted(),
+        loaded_on_gpu(),
+        crate::setup::available_memory_bytes(),
+    )
+}
+
+/// True when Settings asks for a model other than the one loaded on the GPU.
+pub fn restart_needed() -> bool {
+    loaded_on_gpu().is_some_and(|f32| f32 != f32_wanted())
 }
 
 pub fn model_path() -> PathBuf {
@@ -353,6 +384,12 @@ pub fn app_recognizer(speakers: bool) -> Result<Arc<Recognizer>, TranscribeError
             crate::log(&format!(
                 "[Nemotron] GPU engine failed ({e}); using the CPU engine"
             ));
+            // Once: this path runs for every track of every meeting. Without
+            // it the only symptom of a refused GPU is a slow transcript.
+            static TOLD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if !TOLD.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                crate::ffi::emit_event("nemotron_cpu_fallback", "{}");
+            }
             recognizer(&spec_for(Flavor::Cpu, speakers))
         }
         Err(e) => Err(e),
@@ -2051,15 +2088,22 @@ mod tests {
     fn full_precision_runs_only_when_wanted_and_it_fits() {
         let plenty = Some(MODEL_F32.bytes + F32_HEADROOM_BYTES);
         let short = Some(MODEL_F32.bytes);
-        assert_eq!(pick_model(false, false, plenty).file, MODEL.file);
-        assert_eq!(pick_model(true, false, plenty).file, MODEL_F32.file);
-        assert_eq!(pick_model(true, false, short).file, MODEL.file);
-        assert_eq!(pick_model(true, false, None).file, MODEL_F32.file);
+        assert_eq!(pick_model(false, None, plenty).file, MODEL.file);
+        assert_eq!(pick_model(true, None, plenty).file, MODEL_F32.file);
+        assert_eq!(pick_model(true, None, short).file, MODEL.file);
+        assert_eq!(pick_model(true, None, None).file, MODEL_F32.file);
         assert_eq!(
-            pick_model(true, true, short).file,
+            pick_model(true, Some(true), short).file,
             MODEL_F32.file,
             "already loaded: its own weights are why memory reads short"
         );
+    }
+
+    #[test]
+    fn the_model_on_the_gpu_stays_whatever_settings_now_say() {
+        let plenty = Some(MODEL_F32.bytes + F32_HEADROOM_BYTES);
+        assert_eq!(pick_model(true, Some(false), plenty).file, MODEL.file);
+        assert_eq!(pick_model(false, Some(true), plenty).file, MODEL_F32.file);
     }
 
     #[test]

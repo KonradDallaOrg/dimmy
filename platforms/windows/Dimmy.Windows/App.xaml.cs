@@ -185,6 +185,15 @@ public partial class App : Application
         catch (Exception ex) { PttLog($"OnMeetingTranscriptionBehind exc: {ex.Message}"); }
     }
 
+    private void OnNemotronCpuFallback()
+    {
+        try
+        {
+            RunOnUI(() => Services.DictNotificationService.ShowNemotronOnCpu());
+        }
+        catch (Exception ex) { PttLog($"OnNemotronCpuFallback exc: {ex.Message}"); }
+    }
+
     private void OnDictationLongWarning()
     {
         try
@@ -622,6 +631,7 @@ public partial class App : Application
             // from its window, so closing the window must not silence the one
             // warning the user can still act on.
             _appViewModel.MeetingTranscriptionBehind += OnMeetingTranscriptionBehind;
+            _appViewModel.NemotronCpuFallback += OnNemotronCpuFallback;
 
             // 3. Load config into ViewModel
             LoadConfigIntoViewModel();
