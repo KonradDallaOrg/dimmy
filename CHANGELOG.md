@@ -6,6 +6,25 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Nemotron (NVIDIA Nemotron 3.5 ASR Streaming 0.6B) as a fifth local speech
+  engine. Dictation types as you speak, whole words at a time, and corrects a
+  word it just typed when it hears it better. The language is detected on its
+  own, so meetings that mix Italian and English no longer turn the English into
+  made-up Italian. Runs on the CPU (Windows, Linux), on NVIDIA GPUs (CUDA) and
+  on Apple silicon (Metal); downloaded from Settings (about 850 MB plus the
+  engine), not bundled.
+- Meetings with Nemotron write the transcript while you talk, with
+  "Speaker N" labels for the other people on the call. If the computer cannot
+  keep up with live speakers, they are switched off and labelled when the
+  meeting ends. When the live labels cover the whole meeting, the second
+  speaker pass is skipped.
+- Meetings with Nemotron show the sentence as it is being said and close it at
+  the pause, instead of writing everything when the meeting stops. With a GPU
+  the transcript and the speakers are ready the moment you stop.
+- Optional full-precision Nemotron model for machines with a GPU.
+
 ## [0.7.14] - 2026-10-23
 
 ### Fixed

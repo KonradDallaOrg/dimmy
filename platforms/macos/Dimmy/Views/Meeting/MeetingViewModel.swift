@@ -625,6 +625,7 @@ final class MeetingViewModel: ObservableObject {
         // DimmyCore.handleEvent on every `meeting_chunk` event).
         AppState.shared.meetingActiveDir = ""
         AppState.shared.meetingLiveTranscript = ""
+        AppState.shared.meetingLivePartials = [:]
         AppState.shared.meetingChunkCount = 0
         AppState.shared.meetingLastChunkSpeaker = ""
 

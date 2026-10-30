@@ -36,6 +36,7 @@ public sealed partial class MeetingWindow : Window
     private string? _recordingNotesDir;      // meeting dir for live note writes (known at Start, before the first chunk)
     private string? _viewingMeetingDir;      // dir currently shown in main panel (may differ)
     private readonly System.Text.StringBuilder _liveTranscriptBuilder = new();
+    private readonly Dictionary<string, string> _livePartials = new();
     private MeetingState _state = MeetingState.Idle;
     /// Bumped by every successful start. The stop pipeline of an earlier
     /// meeting (speaker pass + recap, minutes with a local model) checks it
@@ -219,6 +220,7 @@ public sealed partial class MeetingWindow : Window
         if (App.Instance?.AppViewModel is { } vm)
         {
             vm.MeetingChunkReceived += OnMeetingChunkReceived;
+            vm.MeetingPartialReceived += OnMeetingPartialReceived;
             vm.MeetingFinishingTranscription += OnFinishingTranscription;
             // Drive the Done-view regenerate progress bar from the
             // file_transcribe_progress event the core already emits per
@@ -245,6 +247,7 @@ public sealed partial class MeetingWindow : Window
             if (App.Instance?.AppViewModel is { } vmClose)
             {
                 vmClose.MeetingChunkReceived -= OnMeetingChunkReceived;
+                vmClose.MeetingPartialReceived -= OnMeetingPartialReceived;
                 vmClose.MeetingFinishingTranscription -= OnFinishingTranscription;
                 vmClose.FileTranscribeProgress -= OnRegenTranscribeProgress;
                 vmClose.MeetingRetranscribeProgress -= OnRetranscribeProgress;
@@ -1064,6 +1067,20 @@ public sealed partial class MeetingWindow : Window
         TranscriptText.Text = HumanizeTranscript(_liveTranscriptBuilder.ToString());
         RecChunks.Text = $"{chunkCount} chunks";
         TranscriptMeta.Text = $"{chunkCount} chunks";
+        TranscriptScroll?.ChangeView(null, double.MaxValue, null, true);
+    }
+
+    /// The sentence still being said, one per track, under the finished
+    /// lines. Its own TextBlock: this fires twice a second per track, and the
+    /// transcript above can be an hour long.
+    private void OnMeetingPartialReceived(string dir, string track, string text)
+    {
+        if (!string.IsNullOrEmpty(_activeMeetingDir)
+            && !dir.Equals(_activeMeetingDir, StringComparison.OrdinalIgnoreCase)) return;
+        _livePartials[track] = text;
+        var shown = string.Join("\n", _livePartials.Values.Where(t => t.Length > 0));
+        TranscriptPartial.Text = shown;
+        TranscriptPartial.Visibility = shown.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         TranscriptScroll?.ChangeView(null, double.MaxValue, null, true);
     }
 

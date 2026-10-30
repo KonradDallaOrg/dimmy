@@ -197,12 +197,27 @@ struct MeetingRecordingView: View {
         .padding(.vertical, 10)
     }
 
+    @ObservedObject private var appState = AppState.shared
+
     private var liveTranscriptScroll: some View {
-        LiveTranscriptTextView(
-            text: vm.transcript,
-            placeholder: "🎙️ Listening... first chunk lands in ~15 s."
-        )
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        VStack(alignment: .leading, spacing: 6) {
+            LiveTranscriptTextView(
+                text: vm.transcript,
+                placeholder: "🎙️ Listening..."
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            let partial = appState.meetingLivePartials.values
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n")
+            if !partial.isEmpty {
+                Text(partial)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color.macTextSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 8)
+            }
+        }
     }
 
     /// Notes during a recording, the way Windows does them: write a note,

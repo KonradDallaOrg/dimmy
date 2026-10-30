@@ -38,6 +38,16 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 /// Override at runtime via the AppState.meeting_chunk_secs config knob.
 const DEFAULT_CHUNK_SECS: f32 = 15.0;
 const DEFAULT_OVERLAP_MS: u32 = 500;
+/// Window for Nemotron, which streams: each window only carries the audio
+/// since the last one into a stream that is already open, so a short window
+/// is what makes the transcript live. Half a second: the model consumes
+/// 320 ms chunks, so the text never trails the voice by more than this.
+const NEMOTRON_WINDOW_SECS: f32 = 0.5;
+/// Its queue, in windows: a minute of backlog before anything is dropped. The
+/// point of a stream is that a slow patch catches up; `STT_QUEUE_DEPTH` is
+/// sized for 15 s windows and would be two seconds here. Each job holds one
+/// second of audio per track, so this tops out around 90 MB.
+const NEMOTRON_QUEUE_DEPTH: usize = 120;
 const FSYNC_INTERVAL: Duration = Duration::from_secs(1);
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -856,6 +866,223 @@ struct SttThreadCtx {
     windows_lost: Arc<AtomicBool>,
 }
 
+/// Nemotron's live meeting transcription: one stream per track for the
+/// whole meeting, fed the new part of every window, writing a line per
+/// speaker turn the moment the engine closes it. Runs on the transcription
+/// thread like every other engine; nothing here touches capture.
+///
+/// The system track carries the diarizer (who is speaking among the others);
+/// the mic is the person recording, so it keeps its own label. If the
+/// diarizer cannot keep up on this machine, it is dropped for the rest of the
+/// meeting and the stop's speaker pass labels the turns instead.
+struct NemoTracks {
+    mic: Option<crate::nemotron::MeetingTrack>,
+    system: Option<crate::nemotron::MeetingTrack>,
+    /// Seconds of compute per second of window, smoothed: above 0.9 the
+    /// queue is filling and windows are about to be dropped.
+    load: f64,
+}
+
+impl NemoTracks {
+    fn open(ctx: &SttThreadCtx) -> Self {
+        let keywords = crate::ffi::dictionary_keywords();
+        let open = |rate: u32, speakers: bool| {
+            crate::nemotron::MeetingTrack::open(rate, &ctx.language, &keywords, speakers)
+                .map_err(|e| crate::log(&format!("[Meeting] nemotron track unavailable: {e}")))
+                .ok()
+        };
+        // People in one room have only the mic: it carries the speakers
+        // then. On a call it is the person recording, and keeps its label.
+        let mic = open(
+            ctx.device_sample_rate,
+            ctx.stt.speaker_labels && !ctx.mix_active,
+        );
+        let system = if ctx.mix_active {
+            open(ctx.system_sample_rate, ctx.stt.speaker_labels)
+        } else {
+            None
+        };
+        crate::log(&format!(
+            "[Meeting] nemotron live: mic={} system={} speakers={}",
+            mic.is_some(),
+            system.is_some(),
+            system.as_ref().is_some_and(|s| s.has_speakers())
+        ));
+        Self {
+            mic,
+            system,
+            load: 0.0,
+        }
+    }
+
+    /// Feed one window of both tracks; returns the words written.
+    fn feed(
+        &mut self,
+        sink: &mut LineSink<'_>,
+        mic: &[f32],
+        system: &[f32],
+        track_start: usize,
+    ) -> usize {
+        let started = Instant::now();
+        let mic_label = sink.mic_label;
+        let mut words = 0;
+        let mut fresh_secs = 0.0f64;
+        for (track, label, window) in [
+            (self.mic.as_mut(), mic_label, mic),
+            (self.system.as_mut(), "system", system),
+        ] {
+            let Some(t) = track else { continue };
+            match t.feed(window, track_start) {
+                Ok(fed) => {
+                    fresh_secs = fresh_secs.max(fed.fresh_secs);
+                    words += sink.write(label, &fed.lines);
+                    if let Some(text) = fed.partial {
+                        sink.partial(label, &text);
+                    }
+                }
+                Err(e) => crate::log(&format!("[Meeting] nemotron {label}: {e}")),
+            }
+        }
+        if fresh_secs > 0.0 {
+            let ratio = started.elapsed().as_secs_f64() / fresh_secs;
+            // About ten seconds of memory at half-second windows, from zero:
+            // one heavy window, the first above all, is nothing; a sustained
+            // overload is what counts.
+            self.load = 0.95 * self.load + 0.05 * ratio;
+        }
+        if self.load > 0.9 {
+            for (track, label) in [
+                (self.mic.as_mut(), mic_label),
+                (self.system.as_mut(), "system"),
+            ] {
+                let Some(t) = track.filter(|t| t.has_speakers()) else {
+                    continue;
+                };
+                crate::log(&format!(
+                    "[Meeting] live speakers cannot keep up (load {:.2}); speakers will be labelled after the meeting",
+                    self.load
+                ));
+                match t.drop_speakers() {
+                    Ok(lines) => words += sink.write(label, &lines),
+                    Err(e) => crate::log(&format!("[Meeting] nemotron {label}: {e}")),
+                }
+                crate::ffi::emit_event(
+                    "meeting_speakers_deferred",
+                    &serde_json::json!({ "dir": sink.dir }).to_string(),
+                );
+            }
+        }
+        words
+    }
+
+    /// Flush both tracks. Returns true when the live labels covered the
+    /// whole meeting and `speakers.json` was written from them: the stop
+    /// then skips the speaker pass, as it does for diarize.rs's live labels.
+    fn finish(self, sink: &mut LineSink<'_>, wanted: bool, windows_lost: bool) -> bool {
+        let mic_label = sink.mic_label;
+        let mut speakers = Vec::new();
+        let mut labelled = false;
+        let mut complete = true;
+        for (track, label) in [(self.mic, mic_label), (self.system, "system")] {
+            let Some(t) = track else { continue };
+            let had_speakers = t.has_speakers() || label == "system";
+            match t.finish() {
+                Ok((lines, spoken)) => {
+                    sink.write(label, &lines);
+                    sink.partial(label, "");
+                    if spoken.covered {
+                        labelled = true;
+                        speakers.extend(crate::nemotron::speaker_list(label, &spoken.segments));
+                    } else if had_speakers {
+                        complete = false;
+                    }
+                }
+                Err(e) => {
+                    complete = false;
+                    crate::log(&format!("[Meeting] nemotron {label} flush: {e}"));
+                }
+            }
+        }
+        if !(wanted && labelled && complete && !windows_lost) {
+            return false;
+        }
+        match crate::diarize::save_speakers(std::path::Path::new(sink.dir), &speakers) {
+            Ok(()) => {
+                crate::log(&format!(
+                    "[Meeting] nemotron live speakers cover the meeting: {} speaker(s), no second pass",
+                    speakers.len()
+                ));
+                true
+            }
+            Err(e) => {
+                crate::log(&format!("[Meeting] nemotron speakers.json not saved: {e}"));
+                false
+            }
+        }
+    }
+}
+
+/// The parts of the transcription context a line writer touches, borrowed
+/// field by field so the per-window closures can keep theirs.
+struct LineSink<'a> {
+    file: &'a mut std::fs::File,
+    chunk_count: &'a std::sync::atomic::AtomicU32,
+    dir: &'a str,
+    mic_label: &'static str,
+}
+
+impl LineSink<'_> {
+    /// The sentence still being said on a track, for the live view. An empty
+    /// text clears it: the utterance closed and arrives as a line.
+    fn partial(&self, track_label: &str, text: &str) {
+        let payload = serde_json::json!({
+            "dir": self.dir,
+            "track": track_label,
+            "text": text,
+        })
+        .to_string();
+        crate::ffi::emit_event("meeting_partial", &payload);
+    }
+
+    /// Append Nemotron lines to transcripts.txt and tell the hosts, in the
+    /// format every other engine writes (`[HH:MM:SS] [speaker] text`). The
+    /// time is the turn's first word, on the track's timeline. Returns the
+    /// words written.
+    fn write(&mut self, track_label: &str, lines: &[crate::nemotron::Line]) -> usize {
+        use std::io::Write as _;
+        let mut words = 0;
+        for l in lines {
+            let text = l.text.trim();
+            if text.is_empty() {
+                continue;
+            }
+            let speaker = match l.speaker {
+                Some(n) => format!("Speaker {n}"),
+                None => track_label.to_string(),
+            };
+            let elapsed_ms = (l.start.max(0.0) * 1000.0) as u128;
+            let line = format!("[{}] [{}] {}\n", format_elapsed(elapsed_ms), speaker, text);
+            let _ = self.file.write_all(line.as_bytes());
+            let _ = self.file.flush();
+            let count = self
+                .chunk_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                + 1;
+            let payload = serde_json::json!({
+                "dir": self.dir,
+                "speaker": speaker,
+                "elapsed_ms": elapsed_ms as u64,
+                "chunk_count": count,
+                "line": line,
+            })
+            .to_string();
+            crate::ffi::emit_event("meeting_chunk", &payload);
+            words += text.split_whitespace().count();
+        }
+        words
+    }
+}
+
 /// What the transcription thread hands back at stop.
 struct SttOutcome {
     /// Per-speaker accumulators, used only when transcripts.txt cannot be
@@ -880,7 +1107,9 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
     let mut mic_accum = String::new();
     let mut system_accum = String::new();
 
-    let mut live = if ctx.stt.speaker_labels && ctx.stt.mode == "local" {
+    let mut nemo = (ctx.stt.mode == "local" && ctx.stt.local_backend == "nemotron")
+        .then(|| NemoTracks::open(&ctx));
+    let mut live = if ctx.stt.speaker_labels && ctx.stt.mode == "local" && nemo.is_none() {
         match crate::diarize::LiveSpeakers::start() {
             Ok(l) => Some(l),
             Err(e) => {
@@ -1067,6 +1296,20 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
             } => (mic, system, elapsed_ms, track_start, stats_secs),
         };
 
+        if let Some(n) = nemo.as_mut() {
+            let mut sink = LineSink {
+                file: &mut ctx.transcripts_file,
+                chunk_count: &ctx.chunk_count,
+                dir: &ctx.dir_str,
+                mic_label: ctx.mic_label,
+            };
+            let words = n.feed(&mut sink, &mic_slice, &system_slice, track_start);
+            if words > 0 || stats_secs > 0.0 {
+                let _ = crate::ffi::dimmy_update_stats(words as std::os::raw::c_int, stats_secs);
+            }
+            continue;
+        }
+
         let mic_audio = live.as_ref().map(|_| mic_slice.clone());
         let (mic_text, mic_words) = transcribe(mic_slice, ctx.device_sample_rate);
         let system_audio = live
@@ -1167,15 +1410,34 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
         }
     }
 
-    let speakers_labeled = match live {
-        Some(mut l) => {
-            if ctx.windows_lost.load(Ordering::SeqCst) {
-                l.mark_broken("some audio never reached the transcriber");
-            }
-            write_live_speakers(&mut ctx, l)
+    let nemo_labeled = match nemo.take() {
+        Some(n) => {
+            let wanted = ctx.stt.speaker_labels;
+            let lost = ctx.windows_lost.load(Ordering::SeqCst);
+            n.finish(
+                &mut LineSink {
+                    file: &mut ctx.transcripts_file,
+                    chunk_count: &ctx.chunk_count,
+                    dir: &ctx.dir_str,
+                    mic_label: ctx.mic_label,
+                },
+                wanted,
+                lost,
+            )
         }
         None => false,
     };
+
+    let speakers_labeled = nemo_labeled
+        || match live {
+            Some(mut l) => {
+                if ctx.windows_lost.load(Ordering::SeqCst) {
+                    l.mark_broken("some audio never reached the transcriber");
+                }
+                write_live_speakers(&mut ctx, l)
+            }
+            None => false,
+        };
 
     let mut fallback = String::new();
     if !mic_accum.trim().is_empty() {
@@ -1290,10 +1552,13 @@ fn worker_loop(
     paused: Arc<AtomicBool>,
     claim: u64,
 ) -> MeetingResult {
-    let chunk_secs = stt
-        .chunk_secs
-        .map(|s| s.clamp(5.0, 60.0))
-        .unwrap_or(DEFAULT_CHUNK_SECS);
+    let chunk_secs = if stt.mode == "local" && stt.local_backend == "nemotron" {
+        NEMOTRON_WINDOW_SECS
+    } else {
+        stt.chunk_secs
+            .map(|s| s.clamp(5.0, 60.0))
+            .unwrap_or(DEFAULT_CHUNK_SECS)
+    };
     let chunk_samples = (chunk_secs * device_sample_rate as f32) as usize;
     let overlap_samples =
         ((DEFAULT_OVERLAP_MS as f32 / 1000.0) * device_sample_rate as f32) as usize;
@@ -1416,7 +1681,12 @@ fn worker_loop(
     // why that separation is not negotiable.
     let chunk_count_shared = Arc::new(std::sync::atomic::AtomicU32::new(0));
     let windows_lost = Arc::new(AtomicBool::new(false));
-    let (stt_tx, stt_rx) = std::sync::mpsc::sync_channel::<SttJob>(STT_QUEUE_DEPTH);
+    let queue_depth = if stt.mode == "local" && stt.local_backend == "nemotron" {
+        NEMOTRON_QUEUE_DEPTH
+    } else {
+        STT_QUEUE_DEPTH
+    };
+    let (stt_tx, stt_rx) = std::sync::mpsc::sync_channel::<SttJob>(queue_depth);
     let stt_ctx = SttThreadCtx {
         stt: stt.clone(),
         resolved_local_model,
@@ -1866,6 +2136,8 @@ fn worker_loop(
                             "parakeet"
                         } else if stt.local_backend == "whistle" {
                             "whistle"
+                        } else if stt.local_backend == "nemotron" {
+                            "nemotron"
                         } else {
                             "whisper"
                         };

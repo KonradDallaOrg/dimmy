@@ -148,6 +148,22 @@ int32_t dimmy_whistle_size_mb(void);
 /// Returns 0=OK, -1=error.
 int32_t dimmy_whistle_download(void);
 
+// ── Nemotron (streaming local STT backend, runs on the GPU) ──────────
+
+/// 1 = model on disk, 0 = not downloaded, -1 = not available on this
+/// platform (hide the entry).
+int32_t dimmy_nemotron_status(void);
+
+/// Size of the download in MB.
+int32_t dimmy_nemotron_size_mb(void);
+int32_t dimmy_nemotron_full_status(void);
+int32_t dimmy_nemotron_full_size_mb(void);
+
+/// Download the model. BLOCKING — call from a background thread.
+/// Emits "nemotron_download_progress" with {downloaded,total}.
+/// Returns 0=OK, -1=error.
+int32_t dimmy_nemotron_download(void);
+
 // ── Download center (one queue for every on-device model) ───────────
 
 /// Queue a download of the On-device row `id` (whisper .bin, LLM .gguf,

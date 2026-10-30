@@ -104,6 +104,18 @@ path = "src/bin/window_ab.rs"
 required-features = ["local-stt-parakeet", "local-stt", "local-stt-qwen"]
 
 [[bin]]
+name = "nemotron_meeting_bench"
+path = "src/bin/nemotron_meeting_bench.rs"
+
+[[bin]]
+name = "nemotron_meeting_replay"
+path = "src/bin/nemotron_meeting_replay.rs"
+
+[[bin]]
+name = "nemotron_smoke"
+path = "src/bin/nemotron_smoke.rs"
+
+[[bin]]
 name = "qwen_asr_smoke"
 path = "src/bin/qwen_asr_smoke.rs"
 required-features = ["local-stt-qwen"]

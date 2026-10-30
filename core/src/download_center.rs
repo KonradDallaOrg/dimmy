@@ -365,10 +365,14 @@ enum Kind<'a> {
     Parakeet,
     Qwen(&'a str),
     Whistle,
+    Nemotron,
+    NemotronFull,
 }
 
 pub const PARAKEET_ID: &str = "parakeet:fp32";
 pub const WHISTLE_ID: &str = "whistle";
+pub const NEMOTRON_ID: &str = "nemotron";
+pub const NEMOTRON_F32_ID: &str = "nemotron-f32";
 
 /// Only ids of models Dimmy ships: the id becomes a path under the model
 /// directory, so anything outside the catalogs is refused.
@@ -378,6 +382,12 @@ fn parse(id: &str) -> Option<Kind<'_>> {
     }
     if id == WHISTLE_ID {
         return crate::whistle::engine_available().then_some(Kind::Whistle);
+    }
+    if id == NEMOTRON_ID {
+        return crate::nemotron::engine_available().then_some(Kind::Nemotron);
+    }
+    if id == NEMOTRON_F32_ID {
+        return crate::nemotron::full_precision_available().then_some(Kind::NemotronFull);
     }
     if let Some(file) = id.strip_prefix("qwen:") {
         return crate::qwen_asr::find(file).map(|_| Kind::Qwen(file));
@@ -419,6 +429,8 @@ fn present(kind: Kind<'_>) -> bool {
         Kind::Parakeet => crate::parakeet::active_bundle_present(),
         Kind::Qwen(f) => crate::qwen_asr::bundle_present(f),
         Kind::Whistle => crate::whistle::bundle_present(),
+        Kind::Nemotron => crate::nemotron::bundle_present(),
+        Kind::NemotronFull => crate::nemotron::full_precision_present(),
     }
 }
 
@@ -469,6 +481,18 @@ fn real_fetch(
                 Kind::Whistle => (
                     "whistle",
                     crate::whistle::download_bundle(progress)
+                        .await
+                        .map_err(|e| e.to_string()),
+                ),
+                Kind::Nemotron => (
+                    "nemotron",
+                    crate::nemotron::download_bundle(progress)
+                        .await
+                        .map_err(|e| e.to_string()),
+                ),
+                Kind::NemotronFull => (
+                    "nemotron",
+                    crate::nemotron::download_full_precision(progress)
                         .await
                         .map_err(|e| e.to_string()),
                 ),
@@ -557,6 +581,18 @@ fn real_remove(id: &str) -> Result<bool, String> {
         // Same for a loaded Whistle engine library.
         Kind::Whistle => {
             for file in crate::whistle::bundle_files() {
+                paths.extend(with_partials(file));
+            }
+        }
+        // The engine folder goes whole; a loaded engine library is locked
+        // until Dimmy restarts, like Whistle's.
+        Kind::Nemotron => {
+            for file in crate::nemotron::bundle_files() {
+                paths.extend(with_partials(file));
+            }
+        }
+        Kind::NemotronFull => {
+            for file in crate::nemotron::full_precision_files() {
                 paths.extend(with_partials(file));
             }
         }

@@ -62,6 +62,7 @@ pub mod local_stt;
 /// Swift host through dimmy_process_with_llm to keep async runtime
 /// concerns out of the meeting worker.
 pub mod meeting;
+pub mod nemotron;
 pub mod notion;
 /// Realtime streaming dictation over OpenAI's Realtime WebSocket
 /// (`gpt-live-transcribe`). Sibling of `deepgram_stream`, same

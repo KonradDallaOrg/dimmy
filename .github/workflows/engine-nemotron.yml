@@ -1,0 +1,346 @@
+# Builds the Nemotron STT engine (NeMo-Speech.cpp's C ABI, ASR + diarization)
+# that core/src/nemotron.rs loads at run time, and publishes it as assets of a
+# dedicated GitHub release. Manual trigger only: nothing here runs on push, and
+# it touches neither release.yml nor the staging pipelines.
+#
+# Why we build it instead of shipping NVIDIA's archive: NVIDIA's release
+# carries ggml.dll and llama.dll, the same names local-stt-qwen and local-llm
+# already load into dimmy_lib's process. Here ggml is linked STATICALLY into
+# nemo_speech_asr (BUILD_SHARED_LIBS=OFF), so the engine is two libraries with
+# names nothing else uses. GGML_NATIVE=OFF + AVX2 keeps the CPU build portable,
+# and the project's AVX-512 gate (windows-ci.md I11) checks it like dimmy_lib.
+#
+# The release is a pre-release that never becomes "Latest" (the site's download
+# buttons follow Latest) and carries no Velopack manifest, so no updater sees
+# it. Its tag is engine-nemotron-<short sha>, outside check-release-tag.sh's v*.
+#
+# After a run: copy each archive's SHA-256 from SHA256SUMS into
+# core/src/nemotron.rs. A changed archive then fails the download, never loads.
+
+name: Engine — Nemotron (NeMo-Speech)
+
+on:
+  # A tag push runs the workflow file of the tagged commit, so this works from
+  # a feature branch; workflow_dispatch only does once the file is on main.
+  # No other workflow matches engine-nemotron-* (release.yml takes v*,
+  # staging-tester.yml v*-staging*, agent-preview.yml agent-preview.*).
+  push:
+    tags: ["engine-nemotron-*"]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish the archives as a GitHub release (off = artifacts only)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+env:
+  NEMO_COMMIT: 66d50d91b75a406becd95fbaf39d2c9c13e95d7c
+  NEMO_SHORT: 66d50d9
+  LLAMA_COMMIT: bd4f514db14d87fded667787a7a963bfbaa98e89
+
+jobs:
+  windows:
+    name: Windows ${{ matrix.backend }}
+    # windows-ci.md I8 pins windows-2025 for the jobs that build dimmy_lib.dll
+    # (MSVC 14.50, VS 2026). This engine is a separate library, and nvcc's
+    # host compiler on Windows must be VS 2022, which windows-2025 no longer
+    # carries ("No VS install with the C++ toolset", run 41014249300). NVIDIA
+    # builds its own Windows release on windows-2022 for the same reason.
+    runs-on: windows-2022
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - backend: cpu
+          - backend: cuda
+            # Turing (GTX 16 / RTX 20) and newer; older cards fall back to CPU.
+            cuda_arch: "75-real;80-virtual;86-real;89-real;120a-real"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Fetch NeMo-Speech.cpp at the pinned commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init -q nemo && cd nemo
+          git remote add origin https://github.com/NVIDIA/NeMo-Speech.cpp.git
+          git fetch -q --depth 1 origin "$NEMO_COMMIT"
+          git checkout -q FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$NEMO_COMMIT"
+          git submodule update --init --depth 1 llama.cpp
+          test "$(git -C llama.cpp rev-parse HEAD)" = "$LLAMA_COMMIT"
+      - name: Install the CUDA toolkit
+        if: matrix.backend == 'cuda'
+        uses: Jimver/cuda-toolkit@b8bf9c6c28f8a92fbb04dcfcaee872e60c57462d # v0.2.36
+        with:
+          cuda: "13.0.0"
+          method: network
+      - name: Restore vcpkg binaries
+        uses: actions/cache@v5
+        with:
+          path: ~\AppData\Local\vcpkg\archives
+          key: nemo-vcpkg-windows-${{ env.NEMO_COMMIT }}
+          restore-keys: nemo-vcpkg-windows-
+      - name: Build
+        shell: pwsh
+        working-directory: nemo
+        env:
+          BACKEND: ${{ matrix.backend }}
+          CUDA_ARCH: ${{ matrix.cuda_arch }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $arguments = @{
+            Backend   = $env:BACKEND
+            AsrOnly   = $true
+            BuildDir  = "$env:GITHUB_WORKSPACE\build\$env:BACKEND"
+            # windows-ci.md I2: VS 2022 by explicit version range.
+            VsVersion = '[17.0,18.0)'
+            CMakeArgs = @(
+              '-DBUILD_SHARED_LIBS=OFF', '-DGGML_NATIVE=OFF', '-DGGML_AVX2=ON', '-DGGML_AVX512=OFF',
+              '-DNEMO_SPEECH_BUILD_CLI=OFF', '-DNEMO_SPEECH_BUILD_MIC_CAPTURE=OFF')
+          }
+          if ($env:BACKEND -eq 'cuda') {
+            $arguments.CudaArch = $env:CUDA_ARCH
+            # In-tree GEMM instead of cuBLAS/cuBLASLt: the CUDA archive stays
+            # small, and nothing depends on the user's CUDA install.
+            $arguments.CublasShim = $true
+            $arguments.CMakeArgs += '-DCMAKE_CUDA_RUNTIME_LIBRARY=Static'
+          }
+          .\scripts\windows\build.ps1 @arguments
+      - name: Gate — no ggml/llama import, no AVX-512
+        shell: pwsh
+        env:
+          BACKEND: ${{ matrix.backend }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bin = "$env:GITHUB_WORKSPACE\build\$env:BACKEND\bin"
+          # windows-ci.md I9: newest MSVC first.
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -version '[17.0,18.0)' -property installationPath
+          $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" |
+            Sort-Object { [version]$_.Directory.Parent.Parent.Parent.Name } -Descending | Select-Object -First 1
+          if (-not $dumpbin) { throw 'dumpbin not found' }
+          foreach ($dll in Get-ChildItem "$bin\*.dll") {
+            $deps = & $dumpbin.FullName /nologo /dependents $dll.FullName | Select-String '\.dll' | ForEach-Object { $_.Line.Trim() }
+            $bad = $deps | Where-Object { $_ -match '^(ggml|llama)' }
+            if ($bad) { throw "$($dll.Name) imports $($bad -join ', ')" }
+            Write-Host "$($dll.Name): $(($deps | Select-Object -Skip 1) -join ', ')"
+          }
+          $env:VS2026_PATH = $vs
+          & "$env:GITHUB_WORKSPACE\scripts\dev\avx512-gate.ps1" -Dll "$bin\nemo_speech_asr.dll" -EvidenceDir "$env:RUNNER_TEMP\avx512"
+          if ($LASTEXITCODE -ne 0) { throw "AVX-512 gate failed ($LASTEXITCODE)" }
+      - name: Smoke — the C library loads and answers
+        shell: pwsh
+        env:
+          BACKEND: ${{ matrix.backend }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dll = "$env:GITHUB_WORKSPACE\build\$env:BACKEND\bin\nemo_speech_asr_c.dll"
+          python -c "import ctypes,sys; l=ctypes.CDLL(sys.argv[1]); l.nemo_speech_asr_version.restype=ctypes.c_char_p; v=l.nemo_speech_asr_version(); print(v.decode()); assert v" $dll
+      - name: Package
+        shell: pwsh
+        env:
+          BACKEND: ${{ matrix.backend }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $name = "nemotron-engine-$env:NEMO_SHORT-windows-x86_64-$env:BACKEND"
+          $stage = "$env:RUNNER_TEMP\$name"
+          New-Item -ItemType Directory -Force $stage | Out-Null
+          Copy-Item "$env:GITHUB_WORKSPACE\build\$env:BACKEND\bin\*.dll" $stage
+          Copy-Item nemo\LICENSE, nemo\NOTICE, nemo\THIRD_PARTY_NOTICES.md $stage
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -Path "$stage\*" -DestinationPath "dist\$name.zip"
+          Get-ChildItem $stage | Format-Table Name, Length
+      - uses: actions/upload-artifact@v5
+        with:
+          name: engine-windows-${{ matrix.backend }}
+          path: dist/*.zip
+          if-no-files-found: error
+
+  linux:
+    name: Linux ${{ matrix.backend }}
+    # The same base the Linux app builds on, so the glibc floor matches.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - backend: cpu
+            preset: cpu-asr
+          - backend: cuda
+            preset: cuda-asr
+            cuda_arch: "75-real;80-virtual;86-real;89-real;120a-real"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Fetch NeMo-Speech.cpp at the pinned commit
+        run: |
+          set -euo pipefail
+          git init -q nemo && cd nemo
+          git remote add origin https://github.com/NVIDIA/NeMo-Speech.cpp.git
+          git fetch -q --depth 1 origin "$NEMO_COMMIT"
+          git checkout -q FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$NEMO_COMMIT"
+          git submodule update --init --depth 1 llama.cpp
+          test "$(git -C llama.cpp rev-parse HEAD)" = "$LLAMA_COMMIT"
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y build-essential ninja-build pkg-config
+      - uses: lukka/get-cmake@latest
+      - name: Install the CUDA toolkit
+        if: matrix.backend == 'cuda'
+        uses: Jimver/cuda-toolkit@b8bf9c6c28f8a92fbb04dcfcaee872e60c57462d # v0.2.36
+        with:
+          cuda: "13.0.0"
+          method: network
+      - name: Build SentencePiece (static, private)
+        working-directory: nemo
+        run: JOBS="$(nproc)" scripts/build_sentencepiece_static.sh
+      - name: Configure and build
+        working-directory: nemo
+        env:
+          PRESET: ${{ matrix.preset }}
+          CUDA_ARCH: ${{ matrix.cuda_arch }}
+        run: |
+          set -euo pipefail
+          extra=()
+          if [ "${{ matrix.backend }}" = cuda ]; then
+            extra+=(-DCMAKE_CUDA_ARCHITECTURES="$CUDA_ARCH" -DNEMO_SPEECH_CUBLAS_SHIM=ON -DCMAKE_CUDA_RUNTIME_LIBRARY=Static)
+          fi
+          # -Bsymbolic + --exclude-libs: the static ggml inside binds to itself
+          # and exports nothing, so it can never interpose with (or be
+          # interposed by) a ggml the host process already loaded.
+          scripts/configure.sh "$PRESET" \
+            -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF -DGGML_AVX2=ON -DGGML_AVX512=OFF \
+            -DNEMO_SPEECH_BUILD_TTS=OFF -DNEMO_SPEECH_BUILD_NMT=OFF \
+            -DNEMO_SPEECH_BUILD_CLI=OFF -DNEMO_SPEECH_BUILD_MIC_CAPTURE=OFF \
+            -DCMAKE_SHARED_LINKER_FLAGS="-Wl,-Bsymbolic -Wl,--exclude-libs,ALL" \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+            "${extra[@]}"
+          cmake --build --preset "$PRESET" --target nemo_speech_asr_c --parallel
+      - name: Gate — no ggml import or export
+        working-directory: nemo
+        run: |
+          set -euo pipefail
+          libs=$(find "build/${{ matrix.preset }}" -name 'libnemo_speech_asr*.so*' -o -name 'libcublas*.so*' | grep -v '\.a$')
+          for l in $libs; do
+            echo "== $l"; readelf -d "$l" | grep -E 'NEEDED|RUNPATH' || true
+            if readelf -d "$l" | grep -E 'NEEDED.*(ggml|llama)'; then echo "::error::$l imports ggml/llama"; exit 1; fi
+            n=$(nm -D --defined-only "$l" | grep -c ' ggml_' || true)
+            if [ "$n" -ne 0 ]; then echo "::error::$l exports $n ggml symbols"; exit 1; fi
+          done
+      - name: Smoke — the C library loads and answers
+        working-directory: nemo
+        run: |
+          lib=$(find "build/${{ matrix.preset }}" -name 'libnemo_speech_asr_c.so' | head -n1)
+          python3 -c "import ctypes,sys; l=ctypes.CDLL(sys.argv[1]); l.nemo_speech_asr_version.restype=ctypes.c_char_p; v=l.nemo_speech_asr_version(); print(v.decode()); assert v" "$lib"
+      - name: Package
+        run: |
+          set -euo pipefail
+          name="nemotron-engine-$NEMO_SHORT-linux-x86_64-${{ matrix.backend }}"
+          stage="$RUNNER_TEMP/$name"; mkdir -p "$stage" dist
+          find "nemo/build/${{ matrix.preset }}" \( -name 'libnemo_speech_asr*.so*' -o -name 'libcublas*.so*' \) -exec cp -P {} "$stage" \;
+          cp nemo/LICENSE nemo/NOTICE nemo/THIRD_PARTY_NOTICES.md "$stage"
+          (cd "$RUNNER_TEMP" && zip -qry "$GITHUB_WORKSPACE/dist/$name.zip" "$name")
+          ls -la "$stage"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: engine-linux-${{ matrix.backend }}
+          path: dist/*.zip
+          if-no-files-found: error
+
+  macos:
+    name: macOS arm64 metal
+    runs-on: macos-15
+    timeout-minutes: 180
+    env:
+      # The app's own floor (Dimmy.xcodeproj MACOSX_DEPLOYMENT_TARGET).
+      MACOSX_DEPLOYMENT_TARGET: "14.0"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Fetch NeMo-Speech.cpp at the pinned commit
+        run: |
+          set -euo pipefail
+          git init -q nemo && cd nemo
+          git remote add origin https://github.com/NVIDIA/NeMo-Speech.cpp.git
+          git fetch -q --depth 1 origin "$NEMO_COMMIT"
+          git checkout -q FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$NEMO_COMMIT"
+          git submodule update --init --depth 1 llama.cpp
+          test "$(git -C llama.cpp rev-parse HEAD)" = "$LLAMA_COMMIT"
+      - name: Install build tools
+        run: brew install bash ninja
+      - name: Build SentencePiece (static, private)
+        working-directory: nemo
+        run: JOBS="$(sysctl -n hw.ncpu)" scripts/build_sentencepiece_static.sh
+      - name: Configure and build
+        working-directory: nemo
+        run: |
+          set -euo pipefail
+          "$(brew --prefix)/bin/bash" scripts/configure.sh metal-asr \
+            -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF \
+            -DNEMO_SPEECH_BUILD_TTS=OFF -DNEMO_SPEECH_BUILD_NMT=OFF \
+            -DNEMO_SPEECH_BUILD_CLI=OFF -DNEMO_SPEECH_BUILD_MIC_CAPTURE=OFF \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET" \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON -DCMAKE_INSTALL_NAME_DIR='@rpath' \
+            -DCMAKE_INSTALL_RPATH='@loader_path'
+          cmake --build --preset metal-asr --target nemo_speech_asr_c --parallel
+      - name: Gate — no ggml import
+        working-directory: nemo
+        run: |
+          set -euo pipefail
+          for l in $(find build/metal-asr -name 'libnemo_speech_asr*.dylib'); do
+            echo "== $l"; otool -L "$l"
+            if otool -L "$l" | tail -n +2 | grep -E '(ggml|llama)'; then echo "::error::$l links ggml/llama"; exit 1; fi
+          done
+      - name: Smoke — the C library loads and answers
+        working-directory: nemo
+        run: |
+          lib=$(find build/metal-asr -name 'libnemo_speech_asr_c.dylib' | head -n1)
+          python3 -c "import ctypes,sys; l=ctypes.CDLL(sys.argv[1]); l.nemo_speech_asr_version.restype=ctypes.c_char_p; v=l.nemo_speech_asr_version(); print(v.decode()); assert v" "$lib"
+      - name: Package
+        run: |
+          set -euo pipefail
+          name="nemotron-engine-$NEMO_SHORT-macos-aarch64-metal"
+          stage="$RUNNER_TEMP/$name"; mkdir -p "$stage" dist
+          find nemo/build/metal-asr -name 'libnemo_speech_asr*.dylib' -exec cp -P {} "$stage" \;
+          cp nemo/LICENSE nemo/NOTICE nemo/THIRD_PARTY_NOTICES.md "$stage"
+          (cd "$RUNNER_TEMP" && zip -qry "$GITHUB_WORKSPACE/dist/$name.zip" "$name")
+          ls -la "$stage"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: engine-macos-metal
+          path: dist/*.zip
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: [windows, linux, macos]
+    if: github.ref_type == 'tag' || inputs.publish
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: engine-*
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum *.zip | tee SHA256SUMS
+      - name: Create the pre-release (never Latest)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          [ "$GITHUB_REF_TYPE" = tag ] || tag="engine-nemotron-$NEMO_SHORT"
+          notes="NeMo-Speech.cpp $NEMO_COMMIT (llama.cpp $LLAMA_COMMIT), ASR + diarization C ABI, ggml static. Loaded at run time by core/src/nemotron.rs; pin the SHA-256 from SHA256SUMS. Not an app release."
+          gh release create "$tag" dist/*.zip dist/SHA256SUMS -R "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" --title "Nemotron engine $NEMO_SHORT" --notes "$notes" \
+            --prerelease --latest=false

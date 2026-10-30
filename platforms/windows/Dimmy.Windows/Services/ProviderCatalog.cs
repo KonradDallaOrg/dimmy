@@ -118,6 +118,16 @@ public static class ProviderCatalog
                     $"Whistle · {Interop.DimmyNative.dimmy_whistle_size_mb()} MB", true, false, false, "whistle"));
         }
         catch { }
+        try
+        {
+            if (Interop.DimmyNative.dimmy_nemotron_status() >= 0)
+                list.Add(new ProviderModel(
+                    $"Nemotron 3.5 (live, NVIDIA) · {Interop.DimmyNative.dimmy_nemotron_size_mb()} MB", true, false, false, "nemotron"));
+            if (Interop.DimmyNative.dimmy_nemotron_full_status() >= 0)
+                list.Add(new ProviderModel(
+                    $"Nemotron 3.5, full precision (GPU, replaces the above when present) · {Interop.DimmyNative.dimmy_nemotron_full_size_mb()} MB", true, false, false, "nemotron-f32"));
+        }
+        catch { }
         list.AddRange(ParseLocalModels(SafeFfi(Interop.DimmyNative.ListLocalLlmModels), stt: false));
         return list;
     }

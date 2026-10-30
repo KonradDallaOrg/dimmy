@@ -1700,12 +1700,21 @@ public partial class App : Application
     /// Uses Unicode SendInput rather than clipboard paste so repeated
     /// per-segment injection doesn't thrash the user's clipboard. A
     /// trailing space keeps segments separated as they accrue.</summary>
-    private void OnStreamingSegmentFinalized(string segment)
+    // The window the last streaming segment was typed into. A correction
+    // only deletes text there: if the person has moved to another window,
+    // backspaces would land in whatever they are doing now.
+    private IntPtr _streamTypedInto;
+
+    private void OnStreamingSegmentFinalized(string segment, int backspace)
     {
-        if (string.IsNullOrWhiteSpace(segment)) return;
         try
         {
+            var foreground = TextInjectionService.ForegroundWindow();
+            if (backspace > 0 && foreground == _streamTypedInto)
+                TextInjectionService.SendBackspaces(backspace);
+            if (string.IsNullOrWhiteSpace(segment)) return;
             TextInjectionService.TypeUnicodeText(segment.TrimEnd() + " ");
+            _streamTypedInto = foreground;
         }
         catch (Exception ex)
         {

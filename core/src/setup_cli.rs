@@ -820,6 +820,28 @@ fn model_rows() -> Vec<ModelRow> {
             prepared: None,
         });
     }
+    if crate::nemotron::engine_available() {
+        rows.push(ModelRow {
+            id: crate::download_center::NEMOTRON_ID.into(),
+            kind: "nemotron",
+            name: "Nemotron 3.5 ASR".into(),
+            size_mb: crate::nemotron::size_mb() as u64,
+            present: crate::nemotron::bundle_present(),
+            dir: Some(stt_dir.clone()),
+            prepared: None,
+        });
+    }
+    if crate::nemotron::full_precision_available() {
+        rows.push(ModelRow {
+            id: crate::download_center::NEMOTRON_F32_ID.into(),
+            kind: "nemotron",
+            name: "Nemotron 3.5 ASR, full precision (GPU)".into(),
+            size_mb: crate::nemotron::full_precision_size_mb() as u64,
+            present: crate::nemotron::full_precision_present(),
+            dir: Some(stt_dir.clone()),
+            prepared: None,
+        });
+    }
     if crate::whistle::engine_available() {
         rows.push(ModelRow {
             id: crate::download_center::WHISTLE_ID.into(),
@@ -1141,6 +1163,7 @@ fn test_stt(file: &Path) -> CmdResult {
         "parakeet" => crate::parakeet::active_bundle_present(),
         "qwen" => crate::qwen_asr::bundle_present(&qwen),
         "whistle" => crate::whistle::bundle_present(),
+        "nemotron" => crate::nemotron::bundle_present(),
         _ => crate::local_stt::model_exists(&whisper_model),
     };
     if !ready {
@@ -1148,6 +1171,7 @@ fn test_stt(file: &Path) -> CmdResult {
             "parakeet" => crate::download_center::PARAKEET_ID.to_string(),
             "qwen" => format!("qwen:{qwen}"),
             "whistle" => crate::download_center::WHISTLE_ID.to_string(),
+            "nemotron" => crate::download_center::NEMOTRON_ID.to_string(),
             _ => whisper_model.clone(),
         };
         return Err(CliError::failed(
@@ -1191,6 +1215,9 @@ fn test_stt(file: &Path) -> CmdResult {
             "parakeet" => crate::transcribe::transcribe_audio_local_parakeet(&chunk),
             "qwen" => crate::transcribe::transcribe_audio_local_qwen(&chunk, &qwen, &language),
             "whistle" => crate::transcribe::transcribe_audio_local_whistle(&chunk, &language, &[]),
+            "nemotron" => {
+                crate::transcribe::transcribe_audio_local_nemotron(&chunk, &language, &[])
+            }
             _ => crate::transcribe::transcribe_audio_local(&chunk, &language, &whisper_model, ""),
         }
         .map_err(|e| {

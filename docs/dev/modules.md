@@ -339,6 +339,14 @@ Full reference: [`audio-pipeline.md`](audio-pipeline.md). Headline:
   so the bridge writes a temp WAV per call (~320 KB I/O for a 5 s
   chunk, negligible vs ANE inference time).
 
+## `nemotron.rs` — Nemotron 3.5 ASR Streaming (fifth local STT backend)
+
+Real-streaming local STT through NeMo-Speech.cpp's C ABI (`asr.h` v1), loaded in-process with `libloading` from a project-built library (ggml static). Model, diarizer and engine archives are downloaded and SHA-256-pinned here, like Whistle's engine.
+- `app_recognizer(speakers)` / `default_spec(speakers)`: GPU build when the hardware is there, CPU build as fallback; two cached recognizers (with / without the diarizer, since a loaded diarizer runs on every stream).
+- `Streamer` (dictation, one never-reset stream, whole words only), `Transcript::apply` (corrections as `backspace` within the last 8 words), `MeetingTrack` (2 s windows, speaker turns via `turns`, `drop_speakers` when load > 0.9, `speaker_list` for `speakers.json`).
+- FFI: `dimmy_nemotron_status` (1 / 0 / -1 no engine here), `_size_mb`, `_download` (blocking, `nemotron_download_progress`).
+- Full write-up, measurements and engine rebuild steps: [`nemotron.md`](nemotron.md).
+
 ## `app_rules.rs` — per-app LLM style override
 
 - Resolves the captured app id (process name on Win, bundle id on Mac,

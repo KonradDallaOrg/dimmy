@@ -1043,6 +1043,36 @@ final class DimmyCore {
         return result == 0
     }
 
+    // MARK: - Nemotron (streaming local STT backend)
+
+    /// 1 = on disk, 0 = not downloaded, -1 = not available on this Mac.
+    func nemotronStatus() -> Int {
+        Int(dimmy_nemotron_status())
+    }
+
+    func nemotronSizeMb() -> Int {
+        Int(dimmy_nemotron_size_mb())
+    }
+
+    func nemotronFullStatus() -> Int {
+        Int(dimmy_nemotron_full_status())
+    }
+
+    func nemotronFullSizeMb() -> Int {
+        Int(dimmy_nemotron_full_size_mb())
+    }
+
+    /// BLOCKING — call from a background thread. Progress arrives as
+    /// "nemotron_download_progress" events on the global handler.
+    @discardableResult
+    func downloadNemotron() -> Bool {
+        let result = dimmy_nemotron_download()
+        if result != 0 {
+            print("[DimmyCore] ERROR: downloadNemotron failed with code \(result)")
+        }
+        return result == 0
+    }
+
     // MARK: - Parakeet (alternative local STT backend)
 
     /// 1 = bundle complete on disk, 0 = missing or partial.
@@ -1245,7 +1275,8 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
     switch event {
     case "recording_started":
         // Recording state is set by HotkeyManager before calling startRecording
-        break
+        // New session: a prior live-typed one must not suppress this paste.
+        appState.streamingDictationActive = false
 
     case "status":
         // Only while a dictation/command cycle is actually in flight.
@@ -1419,6 +1450,7 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
             case "parakeet": name = "Parakeet"
             case "qwen": name = "Qwen3-ASR"
             case "whistle": name = "Whistle"
+            case "nemotron": name = "Nemotron"
             default: name = requested
             }
             DictToastWindow.show(
@@ -1499,8 +1531,9 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
             appState.llmModelDownloadFilename = payload["filename"] as? String ?? ""
         }
 
-    // Whistle reports the same {downloaded,total} and drives the same bar.
-    case "parakeet_bundle_download_progress", "whistle_download_progress":
+    // Whistle and Nemotron report the same {downloaded,total} and drive the same bar.
+    case "parakeet_bundle_download_progress", "whistle_download_progress",
+         "nemotron_download_progress":
         if let downloaded = payload["downloaded"] as? Int,
            let total = payload["total"] as? Int,
            total > 0 {
@@ -1594,6 +1627,17 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
         appState.liveCaptionIsFinal = isFinal
         appState.liveCaptionTick &+= 1
 
+        // Whitelist, same as Windows: a new streaming engine is inert (captions
+        // only, full paste at stop) until its name is added here.
+        let engine = (payload["engine"] as? String) ?? ""
+        if engine == "deepgram" || engine == "openai" || engine == "local-stream" {
+            appState.streamingDictationActive = true
+            let backspace = (payload["backspace"] as? Int) ?? 0
+            if backspace > 0 || !delta.isEmpty {
+                TextInjector.shared.typeStreamed(delta: delta, backspace: backspace)
+            }
+        }
+
     case "meeting_finishing_transcription":
         // The audio is already finalized; the core is draining the
         // transcriber's backlog before the recap can be dispatched. Without
@@ -1656,6 +1700,16 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
         appState.meetingChunkCount = chunkCount
         appState.meetingLastChunkSpeaker = speaker
         appState.meetingChunkTick &+= 1
+
+    case "meeting_partial":
+        // An empty text means the sentence closed and arrives as a
+        // `meeting_chunk` line.
+        let dir = (payload["dir"] as? String) ?? ""
+        let track = (payload["track"] as? String) ?? ""
+        if !appState.meetingActiveDir.isEmpty && appState.meetingActiveDir != dir {
+            break
+        }
+        appState.meetingLivePartials[track] = (payload["text"] as? String) ?? ""
 
     case "call_detected":
         let app = payload["app"] as? String

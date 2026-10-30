@@ -1026,6 +1026,9 @@ final class AppState: ObservableObject {
     /// receive. MeetingViewModel binds its live-transcript view to
     /// this property.
     @Published var meetingLiveTranscript: String = ""
+    /// The sentence still being said, per track ("mic" / "system"), while a
+    /// streaming engine is hearing it. Fed by `meeting_partial`.
+    @Published var meetingLivePartials: [String: String] = [:]
     /// Last `chunk_count` reported by the Rust meeting worker —
     /// drives the "N chunks" pill in the meeting recording UI.
     @Published var meetingChunkCount: Int = 0
@@ -1143,6 +1146,8 @@ final class AppState: ObservableObject {
             return "Parakeet"
         case "whistle":
             return "Whistle"
+        case "nemotron":
+            return "Nemotron 3.5"
         case "qwen":
             return qwenModel.hasPrefix("fluid:") ? "Qwen3-ASR · Neural Engine" : "Qwen3-ASR"
         default:
@@ -1157,6 +1162,8 @@ final class AppState: ObservableObject {
     @Published var parakeetBundlePresent: Bool = false
     /// 1 = on disk, 0 = not downloaded, -1 = no engine for this Mac.
     @Published var whistleStatus: Int = -1
+    /// 1 = on disk, 0 = not downloaded, -1 = not available on this Mac.
+    @Published var nemotronStatus: Int = -1
 
     /// Label meeting transcripts by speaker. Mirror of Rust
     /// Config::diarization_enabled (off by default) and of Win
@@ -1414,6 +1421,10 @@ final class AppState: ObservableObject {
     // show the toggle ON while the audio path runs OFF.
     @Published var preprocessingEnabled: Bool = false
     @Published var chunkStreamingEnabled: Bool = false
+    /// Mirror of Rust Config::streaming_dictation: type at the cursor as you speak.
+    @Published var streamingDictation: Bool = false
+    /// True once this session's segments were typed live; the final paste is skipped.
+    var streamingDictationActive = false
     @Published var audioDebugEnabled: Bool = false
     @Published var inputGain: Float = 0.5
 
@@ -1892,6 +1903,7 @@ final class AppState: ObservableObject {
         // Audio
         if let pe = config["preprocessing_enabled"] as? Bool { preprocessingEnabled = pe }
         if let cs = config["chunk_streaming_enabled"] as? Bool { chunkStreamingEnabled = cs }
+        if let sd = config["streaming_dictation"] as? Bool { streamingDictation = sd }
         if let ad = config["audio_debug_enabled"] as? Bool { audioDebugEnabled = ad }
         if let ig = config["input_gain"] as? Double { inputGain = Float(ig) }
 
@@ -2341,6 +2353,7 @@ final class AppState: ObservableObject {
             "call_detect_excluded_apps": callDetectExcludedApps,
             "preprocessing_enabled": preprocessingEnabled,
             "chunk_streaming_enabled": chunkStreamingEnabled,
+            "streaming_dictation": streamingDictation,
             "audio_debug_enabled": audioDebugEnabled,
             "input_gain": Double(inputGain),
             "border_style": borderStyle,

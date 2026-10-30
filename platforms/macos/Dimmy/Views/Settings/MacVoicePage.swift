@@ -41,6 +41,7 @@ struct MacVoicePage: View {
     @State private var localModels: [[String: Any]] = []
     @State private var qwenModels: [[String: Any]] = []
     @State private var whistleSizeMb: Int = 0
+    @State private var nemotronSizeMb: Int = 0
 
     /// Text-field state for the "add a word" row in the custom-dictionary
     /// section. Kept inline to avoid a parallel view-model class, the
@@ -55,6 +56,8 @@ struct MacVoicePage: View {
     private static let parakeetTag = "parakeet:fp32"
     /// Whistle entry. Mirrors `WhistleTag` in SettingsWindow.xaml.cs.
     private static let whistleTag = "whistle"
+    /// Nemotron entry. Mirrors `NemotronTag` in SettingsWindow.xaml.cs.
+    private static let nemotronTag = "nemotron"
 
     /// Qwen3-ASR rows carry the variant in the tag, because unlike
     /// Parakeet there is more than one of them. Mirrors QwenTagPrefix in
@@ -148,6 +151,18 @@ struct MacVoicePage: View {
                 .tag(whistleTag)
         } else {
             Text(label).tag(whistleTag)
+        }
+    }
+
+    @ViewBuilder
+    fileprivate static func nemotronPickerItem(sizeMb: Int, present: Bool) -> some View {
+        let label = "Nemotron 3.5 (live, NVIDIA) · \(sizeMb) MB · GPU"
+        if present {
+            Label(label, systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+                .tag(nemotronTag)
+        } else {
+            Text(label).tag(nemotronTag)
         }
     }
 
@@ -522,7 +537,7 @@ struct MacVoicePage: View {
                 } else {
                     MacRow(
                         "Local model",
-                        hint: "Everything here runs offline. Whisper is the broadest, and moves onto the Neural Engine once its encoder is downloaded. Parakeet TDT v3 is the fastest and always runs on the Neural Engine. Qwen3-ASR is the strongest on conversational speech; its 0.6B variant also has a Neural Engine build. Whistle is a 17 MB model that runs on the CPU alone and covers English, Italian, German, French, Spanish, Dutch and Polish.",
+                        hint: "Everything here runs offline. Whisper is the broadest, and moves onto the Neural Engine once its encoder is downloaded. Parakeet TDT v3 is the fastest and always runs on the Neural Engine. Qwen3-ASR is the strongest on conversational speech; its 0.6B variant also has a Neural Engine build. Whistle is a 17 MB model that runs on the CPU alone and covers English, Italian, German, French, Spanish, Dutch and Polish. Nemotron 3.5 is NVIDIA's streaming model: text appears as you speak, 40 languages are auto-detected, and meetings get speakers. About 850 MB; it runs on the Mac's GPU (Metal).",
                         hintURL: URL(string: "https://dimmy.app/help/whisper-models"),
                         showsDivider: !localModelReady || downloadInFlight || coremlRowVisible
                     ) {
@@ -553,6 +568,14 @@ struct MacVoicePage: View {
                                     Self.whistlePickerItem(
                                         sizeMb: whistleSizeMb,
                                         present: appState.whistleStatus == 1
+                                    )
+                                }
+                            }
+                            if appState.nemotronStatus >= 0 {
+                                Section("Nemotron") {
+                                    Self.nemotronPickerItem(
+                                        sizeMb: nemotronSizeMb,
+                                        present: appState.nemotronStatus == 1
                                     )
                                 }
                             }
@@ -700,6 +723,10 @@ struct MacVoicePage: View {
         appState.localSttBackend == "whistle"
     }
 
+    private var localBackendIsNemotron: Bool {
+        appState.localSttBackend == "nemotron"
+    }
+
     /// True when the currently-selected local backend has its data on
     /// disk and is ready to transcribe. Whisper: ggml file present.
     /// Parakeet: full CoreML bundle (about 466 MB) present.
@@ -712,6 +739,9 @@ struct MacVoicePage: View {
         }
         if localBackendIsWhistle {
             return appState.whistleStatus == 1
+        }
+        if localBackendIsNemotron {
+            return appState.nemotronStatus == 1
         }
         return localModelExists
     }
@@ -730,6 +760,9 @@ struct MacVoicePage: View {
                 if localBackendIsWhistle {
                     return Self.whistleTag
                 }
+                if localBackendIsNemotron {
+                    return Self.nemotronTag
+                }
                 return localBackendIsParakeet ? Self.parakeetTag : appState.localModel
             },
             set: { newValue in
@@ -743,6 +776,12 @@ struct MacVoicePage: View {
                 } else if newValue == Self.whistleTag {
                     appState.localSttBackend = "whistle"
                     appState.chunkStreamingEnabled = true
+                } else if newValue == Self.nemotronTag {
+                    appState.localSttBackend = "nemotron"
+                    // Typing as you speak is what this engine is for; the
+                    // other local engines only fake it with chunks, so they
+                    // leave it off.
+                    appState.streamingDictation = true
                 } else if newValue == Self.parakeetTag {
                     appState.localSttBackend = "parakeet"
                     // Auto-enable chunk streaming on Parakeet pick. Mirror
@@ -767,6 +806,7 @@ struct MacVoicePage: View {
             appState.parakeetBundlePresent = false
             appState.qwenBundlePresent = false
             appState.whistleStatus = -1
+            appState.nemotronStatus = -1
             return
         }
         // Move the FFI probes off the main thread. Each call is a
@@ -787,6 +827,8 @@ struct MacVoicePage: View {
             let qwenList = DimmyCore.shared.listQwenAsrModels() ?? []
             let whistle = DimmyCore.shared.whistleStatus()
             let whistleMb = DimmyCore.shared.whistleSizeMb()
+            let nemotron = DimmyCore.shared.nemotronStatus()
+            let nemotronMb = DimmyCore.shared.nemotronSizeMb()
             let coremlStatus = DimmyCore.shared.coremlEncoderStatus(modelName)
             var ready = Set<String>()
             for m in models {
@@ -803,6 +845,8 @@ struct MacVoicePage: View {
                 self.appState.qwenBundlePresent = qwen
                 self.appState.whistleStatus = whistle
                 self.whistleSizeMb = whistleMb
+                self.appState.nemotronStatus = nemotron
+                self.nemotronSizeMb = nemotronMb
                 if !qwenList.isEmpty { self.qwenModels = qwenList }
                 self.downloadFailed = nil
                 if !models.isEmpty { self.localModels = models }
@@ -850,6 +894,23 @@ struct MacVoicePage: View {
                         refreshLocalModelStatus()
                     } else {
                         downloadFailed = "Whistle download failed. Check your connection and try again."
+                    }
+                }
+            }
+        } else if localBackendIsNemotron {
+            // Shares Parakeet's progress value: one bundle, one bar.
+            downloadingIsParakeet = true
+            downloadingTarget = "nemotron"
+            downloadingLabel = "Nemotron 3.5 (\(nemotronSizeMb) MB)"
+            appState.parakeetDownloadProgress = 0
+            DispatchQueue.global(qos: .userInitiated).async {
+                let ok = DimmyCore.shared.downloadNemotron()
+                DispatchQueue.main.async {
+                    downloadInFlight = false
+                    if ok {
+                        refreshLocalModelStatus()
+                    } else {
+                        downloadFailed = "Nemotron download failed. Check your connection and try again."
                     }
                 }
             }
@@ -933,6 +994,7 @@ struct MacVoicePage: View {
 
     private var coremlRowVisible: Bool {
         !localBackendIsParakeet && !localBackendIsQwen && !localBackendIsWhistle
+            && !localBackendIsNemotron
             && localModelReady && !downloadInFlight && coreml.available
     }
 

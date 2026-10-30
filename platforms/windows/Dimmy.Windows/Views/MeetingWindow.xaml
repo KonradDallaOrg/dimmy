@@ -383,10 +383,14 @@
                                 HorizontalScrollBarVisibility="Disabled">
                     <StackPanel Padding="14" Spacing="10">
                       <TextBlock x:Name="TranscriptText"
-                                 Text="🎙️ Listening… first chunk lands in ~15 s."
+                                 Text="🎙️ Listening…"
                                  TextWrapping="Wrap" FontSize="14"
                                  IsTextSelectionEnabled="True"
                                  Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
+                      <TextBlock x:Name="TranscriptPartial"
+                                 Visibility="Collapsed"
+                                 TextWrapping="Wrap" FontSize="14"
+                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                     </StackPanel>
                   </ScrollViewer>
 
