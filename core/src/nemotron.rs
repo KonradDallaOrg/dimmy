@@ -700,6 +700,8 @@ struct Api {
     stream_finish: unsafe extern "C" fn(*mut StreamHandle) -> Status,
     stream_next: unsafe extern "C" fn(*mut StreamHandle, *mut *mut ResultHandle) -> Status,
     stream_close: unsafe extern "C" fn(*mut StreamHandle),
+    #[cfg(target_os = "macos")]
+    destroy: unsafe extern "C" fn(*mut RecognizerHandle),
     result_is_final: unsafe extern "C" fn(*const ResultHandle) -> bool,
     result_transcript: unsafe extern "C" fn(*const ResultHandle, usize) -> *const c_char,
     result_word_count: unsafe extern "C" fn(*const ResultHandle, usize) -> usize,
@@ -761,6 +763,8 @@ impl Api {
             stream_finish: sym!("nemo_speech_asr_stream_finish"),
             stream_next: sym!("nemo_speech_asr_stream_next"),
             stream_close: sym!("nemo_speech_asr_stream_close"),
+            #[cfg(target_os = "macos")]
+            destroy: sym!("nemo_speech_asr_destroy"),
             result_is_final: sym!("nemo_speech_asr_result_is_final"),
             result_transcript: sym!("nemo_speech_asr_result_transcript"),
             result_word_count: sym!("nemo_speech_asr_result_word_count"),
@@ -1219,6 +1223,8 @@ pub fn recognizer(spec: &EngineSpec) -> Result<Arc<Recognizer>, TranscribeError>
         return Ok(Arc::clone(r));
     }
     if spec.gpu.is_some() {
+        // Forgets it, and does not free it (see `Drop for Recognizer`). Only a
+        // model downloaded or removed mid-session gets here.
         slot.clear();
     } else {
         slot.retain(|old| old.spec().diarizer.is_some() != spec.diarizer.is_some());
@@ -1237,6 +1243,7 @@ pub fn recognizer(spec: &EngineSpec) -> Result<Arc<Recognizer>, TranscribeError>
     }
     let r = Arc::new(Recognizer::create(spec.clone())?);
     warm_up(&r)?;
+    release_before_ggml_exits();
     slot.push(Arc::clone(&r));
     assert!(
         slot.len() <= 2,
@@ -1244,6 +1251,32 @@ pub fn recognizer(spec: &EngineSpec) -> Result<Arc<Recognizer>, TranscribeError>
     );
     Ok(r)
 }
+
+/// ggml-metal's device is torn down by an exit handler and asserts that no
+/// buffer is left (`GGML_ASSERT([rsets->data count] == 0)`, exit 134), so a
+/// Dimmy that quit with a model loaded would report a crash on every quit.
+/// Exit handlers run last-registered first, and the device registers its own
+/// while the first recognizer is created: this one, registered after it, runs
+/// before it. Metal only; CUDA exits clean.
+#[cfg(target_os = "macos")]
+fn release_before_ggml_exits() {
+    extern "C" fn release() {
+        if let Ok(mut slot) = RECOGNIZERS.try_lock() {
+            for r in slot.drain(..) {
+                // SAFETY: the process is exiting and nothing will use it again.
+                unsafe { (r.api.destroy)(r.handle) };
+            }
+        }
+    }
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    // SAFETY: registers a function with no arguments that lives for the process.
+    ONCE.call_once(|| unsafe {
+        libc::atexit(release);
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn release_before_ggml_exits() {}
 
 fn spec_bytes(spec: &EngineSpec) -> u64 {
     [Some(&spec.model), spec.diarizer.as_ref()]
