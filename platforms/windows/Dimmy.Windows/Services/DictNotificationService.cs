@@ -94,6 +94,7 @@ public static class DictNotificationService
             "parakeet" => "Parakeet",
             "qwen" => "Qwen3-ASR",
             "whistle" => "Whistle",
+            "nemotron" => "Nemotron",
             _ => requested,
         };
         Show("Used Whisper instead",

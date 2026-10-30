@@ -406,6 +406,18 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_whistle_download();
 
+    // ── Nemotron (NVIDIA streaming local STT backend) ────────────
+    /// <summary>1 on disk, 0 not downloaded, -1 no engine for this platform.</summary>
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_nemotron_status();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_nemotron_size_mb();
+
+    /// <summary>Blocking. Progress arrives as nemotron_download_progress.</summary>
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_nemotron_download();
+
     // ── Speaker diarization (Nemotron-3-Diarization) ─────────────
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_diarization_model_present();

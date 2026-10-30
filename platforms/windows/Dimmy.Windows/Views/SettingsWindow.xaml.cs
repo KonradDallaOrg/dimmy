@@ -2796,6 +2796,7 @@ public sealed partial class SettingsWindow : Window
     /// whisper-model filename — distinguished from `*.bin` by prefix.
     private const string ParakeetTag = "parakeet:fp32";
     private const string WhistleTag = "whistle";
+    private const string NemotronTag = "nemotron";
     // Qwen3-ASR rows carry the variant in the tag, because unlike Parakeet
     // there is more than one of them.
     private const string QwenTagPrefix = "qwen:";
@@ -2923,6 +2924,7 @@ public sealed partial class SettingsWindow : Window
                 if (ViewModel.LocalSttBackend != "parakeet"
                     && ViewModel.LocalSttBackend != "qwen"
                     && ViewModel.LocalSttBackend != "whistle"
+                    && ViewModel.LocalSttBackend != "nemotron"
                     && filename == ViewModel.LocalModel)
                     selectedIdx = idx;
                 idx++;
@@ -2955,6 +2957,23 @@ public sealed partial class SettingsWindow : Window
                 LocalModelComboBox.Items.Add(
                     MakeLocalModelItem(whistleLabel, WhistleTag, whistleStatus == 1, whistleMb));
                 if (ViewModel.LocalSttBackend == "whistle")
+                    selectedIdx = idx;
+                idx++;
+            }
+
+            // Nemotron: NVIDIA streaming model. Hidden where the core has no engine.
+            int nemotronStatus = -1;
+            try { nemotronStatus = DimmyNative.dimmy_nemotron_status(); }
+            catch { }
+            if (nemotronStatus >= 0)
+            {
+                int nemotronMb = DimmyNative.dimmy_nemotron_size_mb();
+                var nemotronLabel = nemotronStatus == 1
+                    ? "Nemotron 3.5 (live, NVIDIA)"
+                    : $"Nemotron 3.5 (live, NVIDIA) ({nemotronMb}MB)";
+                LocalModelComboBox.Items.Add(
+                    MakeLocalModelItem(nemotronLabel, NemotronTag, nemotronStatus == 1, nemotronMb));
+                if (ViewModel.LocalSttBackend == "nemotron")
                     selectedIdx = idx;
                 idx++;
             }
@@ -3021,6 +3040,12 @@ public sealed partial class SettingsWindow : Window
                 ViewModel.LocalSttBackend = "whistle";
                 ViewModel.ChunkStreamingEnabled = true;
                 App.Log("-> set LocalSttBackend=whistle", "Settings");
+            }
+            else if (tag == NemotronTag)
+            {
+                ViewModel.LocalSttBackend = "nemotron";
+                ViewModel.ChunkStreamingEnabled = true;
+                App.Log("-> set LocalSttBackend=nemotron", "Settings");
             }
             else if (tag == ParakeetTag)
             {
@@ -3243,10 +3268,13 @@ public sealed partial class SettingsWindow : Window
         bool isParakeet = ViewModel.LocalSttBackend == "parakeet";
         bool isQwen = ViewModel.LocalSttBackend == "qwen";
         bool isWhistle = ViewModel.LocalSttBackend == "whistle";
+        bool isNemotron = ViewModel.LocalSttBackend == "nemotron";
         try
         {
             int exists = isQwen
                 ? DimmyNative.dimmy_qwen_asr_bundle_present(ViewModel.QwenAsrModel)
+                : isNemotron
+                    ? DimmyNative.dimmy_nemotron_status()
                 : isWhistle
                     ? DimmyNative.dimmy_whistle_status()
                 : isParakeet
@@ -3264,6 +3292,10 @@ public sealed partial class SettingsWindow : Window
                 {
                     var q = _localModels.Find(m => m.Filename == QwenTagPrefix + ViewModel.QwenAsrModel);
                     sizeInfo = q != null ? $" ({q.SizeMb}MB)" : "";
+                }
+                else if (isNemotron)
+                {
+                    sizeInfo = $" ({DimmyNative.dimmy_nemotron_size_mb()}MB)";
                 }
                 else if (isWhistle)
                 {
@@ -3296,6 +3328,7 @@ public sealed partial class SettingsWindow : Window
         bool isParakeet = ViewModel.LocalSttBackend == "parakeet";
         bool isQwen = ViewModel.LocalSttBackend == "qwen";
         bool isWhistle = ViewModel.LocalSttBackend == "whistle";
+        bool isNemotron = ViewModel.LocalSttBackend == "nemotron";
         DownloadModelBtn.IsEnabled = false;
         DownloadModelBtn.Content = "Downloading...";
         DownloadProgress.IsIndeterminate = true;
@@ -3307,6 +3340,8 @@ public sealed partial class SettingsWindow : Window
         {
             int result = await Task.Run(() => isQwen
                 ? DimmyNative.dimmy_qwen_asr_download(ViewModel.QwenAsrModel)
+                : isNemotron
+                    ? DimmyNative.dimmy_nemotron_download()
                 : isWhistle
                     ? DimmyNative.dimmy_whistle_download()
                 : isParakeet

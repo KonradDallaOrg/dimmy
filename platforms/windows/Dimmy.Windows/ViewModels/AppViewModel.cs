@@ -467,9 +467,10 @@ public partial class AppViewModel : ObservableObject
 
             switch (eventName)
             {
-                // Whistle reports the same {downloaded,total} and drives the
-                // same progress bar.
+                // Whistle and Nemotron report the same {downloaded,total} and
+                // drive the same progress bar.
                 case "whistle_download_progress":
+                case "nemotron_download_progress":
                 case "parakeet_bundle_download_progress":
                     ParakeetDownloadProgress?.Invoke(
                         payload.GetProperty("downloaded").GetInt64(),
