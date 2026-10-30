@@ -36,7 +36,7 @@ struct Pinned {
     magic: &'static [u8],
 }
 
-const F32_URL: &str = "https://huggingface.co/KonradDallaOrg/dimmy-nemotron-3.5-asr-gguf/resolve/main/nemotron-3.5-asr-streaming-0.6b.f32.gguf";
+const F32_URL: &str = "https://huggingface.co/KonradDallaOrg/dimmy-nemotron-3.5-asr-gguf/resolve/76599da3898c6152ab783eddc4f2625b94aa01aa/nemotron-3.5-asr-streaming-0.6b.f32.gguf";
 const F32_SHA256: &str = "2223d6e5d3f9e89ff54928f91b524bd827b35cb28b8f5951bfef4c1fb30b44cd";
 const F32_BYTES: u64 = 2_576_356_832;
 const GGUF_MAGIC: &[u8] = b"GGUF";
