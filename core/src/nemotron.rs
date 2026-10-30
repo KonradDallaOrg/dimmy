@@ -272,13 +272,13 @@ fn has_nvidia_gpu() -> bool {
 /// Whether this platform has any published engine build to fetch, or a
 /// build already on disk (a developer's own).
 pub fn engine_available() -> bool {
-    ENGINES.iter().any(|e| !e.sha256.is_empty()) || library_path(Flavor::Cpu).is_file()
+    ENGINES.iter().any(|e| !e.sha256.is_empty()) || engine_installed(Flavor::Cpu)
 }
 
 /// True when the model and at least one engine build are on disk.
 pub fn bundle_present() -> bool {
     crate::local_stt::model_path(MODEL.file).is_file()
-        && wanted_flavors().iter().any(|f| library_path(*f).is_file())
+        && wanted_flavors().iter().any(|f| engine_installed(*f))
 }
 
 pub fn diarizer_present() -> bool {
@@ -315,7 +315,7 @@ pub fn bundle_files() -> Vec<PathBuf> {
 pub fn default_spec(speakers: bool) -> Option<EngineSpec> {
     let flavor = wanted_flavors()
         .into_iter()
-        .find(|f| library_path(*f).is_file())?;
+        .find(|f| engine_installed(*f))?;
     Some(spec_for(flavor, speakers))
 }
 
@@ -339,7 +339,7 @@ pub fn app_recognizer(speakers: bool) -> Result<Arc<Recognizer>, TranscribeError
     let spec = default_spec(speakers).ok_or_else(not_installed)?;
     match recognizer(&spec) {
         Ok(r) => Ok(r),
-        Err(e) if spec.gpu.is_some() && library_path(Flavor::Cpu).is_file() => {
+        Err(e) if spec.gpu.is_some() && engine_installed(Flavor::Cpu) => {
             crate::log(&format!(
                 "[Nemotron] GPU engine failed ({e}); using the CPU engine"
             ));
@@ -365,7 +365,7 @@ where
                 .find(|e| e.flavor == *f && !e.sha256.is_empty())
         })
         .collect();
-    if engines.is_empty() && !library_path(Flavor::Cpu).is_file() {
+    if engines.is_empty() && !engine_installed(Flavor::Cpu) {
         return Err(err(
             "no engine build is published for this platform yet".into()
         ));
@@ -402,7 +402,7 @@ where
             magic: ZIP_MAGIC,
             sha256: e.sha256,
             bytes: e.bytes,
-            wanted: !library_path(e.flavor).is_file(),
+            wanted: !engine_installed(e.flavor),
         });
     }
     let total: u64 = jobs.iter().map(|j| j.bytes).sum();
@@ -433,7 +433,7 @@ where
     }
     for e in &engines {
         let zip = crate::local_stt::model_path(e.archive);
-        if !library_path(e.flavor).is_file() {
+        if !engine_installed(e.flavor) {
             extract_engine(&zip, e.flavor).map_err(err)?;
         }
         let _ = std::fs::remove_file(&zip);
@@ -504,7 +504,30 @@ fn extract_engine(zip_path: &Path, flavor: Flavor) -> Result<(), String> {
     let staging = engine_root().join(format!("{}.part", flavor.dir()));
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging).map_err(|e| format!("create {}: {e}", staging.display()))?;
+    let libraries = match unpack_engine(&mut zip, &staging) {
+        Ok(n) => n,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(e);
+        }
+    };
+    if !staging.join(LIBRARY_FILE).is_file() {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(format!(
+            "archive has no {LIBRARY_FILE} ({libraries} libraries)"
+        ));
+    }
+    let _ = std::fs::remove_dir_all(&dest);
+    std::fs::rename(&staging, &dest).map_err(|e| format!("install engine: {e}"))
+}
+
+fn unpack_engine(
+    zip: &mut zip::ZipArchive<std::fs::File>,
+    staging: &Path,
+) -> Result<usize, String> {
     let mut libraries = 0;
+    use std::io::Read;
+    let mut links = Vec::new();
     for i in 0..zip.len() {
         let mut member = zip
             .by_index(i)
@@ -521,19 +544,45 @@ fn extract_engine(zip_path: &Path, flavor: Flavor) -> Result<(), String> {
         if member.is_dir() || !(is_lib || is_notice) {
             continue;
         }
+        if member.is_symlink() {
+            let mut target = String::new();
+            member
+                .read_to_string(&mut target)
+                .map_err(|e| format!("read link {n}: {e}"))?;
+            links.push((name.clone(), target));
+            continue;
+        }
         let mut out =
             std::fs::File::create(staging.join(&name)).map_err(|e| format!("create {n}: {e}"))?;
         std::io::copy(&mut member, &mut out).map_err(|e| format!("extract {n}: {e}"))?;
         libraries += usize::from(is_lib);
     }
-    if !staging.join(LIBRARY_FILE).is_file() {
-        let _ = std::fs::remove_dir_all(&staging);
-        return Err(format!(
-            "archive has no {LIBRARY_FILE} ({libraries} libraries)"
-        ));
+    // Mac and Linux archives name the library through a link. It arrives as a
+    // copy: a link needs privileges on Windows, and the folder is flat anyway,
+    // so a target with a path in it has no business being here.
+    for (name, target) in links {
+        let n = name.to_string_lossy();
+        let bare = Path::new(&target)
+            .file_name()
+            .is_some_and(|f| f == target.as_str());
+        if !bare {
+            return Err(format!("link {n} points outside the engine: {target}"));
+        }
+        std::fs::copy(staging.join(&target), staging.join(&name))
+            .map_err(|e| format!("resolve link {n} -> {target}: {e}"))?;
+        libraries += 1;
     }
-    let _ = std::fs::remove_dir_all(&dest);
-    std::fs::rename(&staging, &dest).map_err(|e| format!("install engine: {e}"))
+    Ok(libraries)
+}
+
+/// Present and a real library. A link written out as text by an earlier build
+/// is a few bytes under the right name, and only a new download mends it.
+fn is_library(path: &Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() >= 4096)
+}
+
+fn engine_installed(flavor: Flavor) -> bool {
+    is_library(&library_path(flavor))
 }
 
 // ---- C ABI (asr.h, NeMo-Speech.cpp v1) ----------------------------------
@@ -651,6 +700,8 @@ struct Api {
     stream_finish: unsafe extern "C" fn(*mut StreamHandle) -> Status,
     stream_next: unsafe extern "C" fn(*mut StreamHandle, *mut *mut ResultHandle) -> Status,
     stream_close: unsafe extern "C" fn(*mut StreamHandle),
+    #[cfg(target_os = "macos")]
+    destroy: unsafe extern "C" fn(*mut RecognizerHandle),
     result_is_final: unsafe extern "C" fn(*const ResultHandle) -> bool,
     result_transcript: unsafe extern "C" fn(*const ResultHandle, usize) -> *const c_char,
     result_word_count: unsafe extern "C" fn(*const ResultHandle, usize) -> usize,
@@ -712,6 +763,8 @@ impl Api {
             stream_finish: sym!("nemo_speech_asr_stream_finish"),
             stream_next: sym!("nemo_speech_asr_stream_next"),
             stream_close: sym!("nemo_speech_asr_stream_close"),
+            #[cfg(target_os = "macos")]
+            destroy: sym!("nemo_speech_asr_destroy"),
             result_is_final: sym!("nemo_speech_asr_result_is_final"),
             result_transcript: sym!("nemo_speech_asr_result_transcript"),
             result_word_count: sym!("nemo_speech_asr_result_word_count"),
@@ -1170,6 +1223,8 @@ pub fn recognizer(spec: &EngineSpec) -> Result<Arc<Recognizer>, TranscribeError>
         return Ok(Arc::clone(r));
     }
     if spec.gpu.is_some() {
+        // Forgets it, and does not free it (see `Drop for Recognizer`). Only a
+        // model downloaded or removed mid-session gets here.
         slot.clear();
     } else {
         slot.retain(|old| old.spec().diarizer.is_some() != spec.diarizer.is_some());
@@ -1188,6 +1243,7 @@ pub fn recognizer(spec: &EngineSpec) -> Result<Arc<Recognizer>, TranscribeError>
     }
     let r = Arc::new(Recognizer::create(spec.clone())?);
     warm_up(&r)?;
+    release_before_ggml_exits();
     slot.push(Arc::clone(&r));
     assert!(
         slot.len() <= 2,
@@ -1195,6 +1251,32 @@ pub fn recognizer(spec: &EngineSpec) -> Result<Arc<Recognizer>, TranscribeError>
     );
     Ok(r)
 }
+
+/// ggml-metal's device is torn down by an exit handler and asserts that no
+/// buffer is left (`GGML_ASSERT([rsets->data count] == 0)`, exit 134), so a
+/// Dimmy that quit with a model loaded would report a crash on every quit.
+/// Exit handlers run last-registered first, and the device registers its own
+/// while the first recognizer is created: this one, registered after it, runs
+/// before it. Metal only; CUDA exits clean.
+#[cfg(target_os = "macos")]
+fn release_before_ggml_exits() {
+    extern "C" fn release() {
+        if let Ok(mut slot) = RECOGNIZERS.try_lock() {
+            for r in slot.drain(..) {
+                // SAFETY: the process is exiting and nothing will use it again.
+                unsafe { (r.api.destroy)(r.handle) };
+            }
+        }
+    }
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    // SAFETY: registers a function with no arguments that lives for the process.
+    ONCE.call_once(|| unsafe {
+        libc::atexit(release);
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn release_before_ggml_exits() {}
 
 fn spec_bytes(spec: &EngineSpec) -> u64 {
     [Some(&spec.model), spec.diarizer.as_ref()]
@@ -1860,6 +1942,82 @@ mod tests {
             }]
         );
         assert!(turns(&[], "  ", 0.0).is_empty());
+    }
+
+    fn engine_zip(name: &str, entries: &[(&str, &[u8])], links: &[(&str, &str)]) -> PathBuf {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("dimmy-engine-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("engine.zip");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+        let opts = zip::write::SimpleFileOptions::default();
+        for (n, data) in entries {
+            zip.start_file(*n, opts).unwrap();
+            zip.write_all(data).unwrap();
+        }
+        for (n, target) in links {
+            zip.add_symlink(*n, *target, opts).unwrap();
+        }
+        zip.finish().unwrap();
+        path
+    }
+
+    fn unpack(zip_path: &Path) -> (PathBuf, Result<usize, String>) {
+        let out = zip_path.parent().unwrap().join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        let mut zip = zip::ZipArchive::new(std::fs::File::open(zip_path).unwrap()).unwrap();
+        let r = unpack_engine(&mut zip, &out);
+        (out, r)
+    }
+
+    #[test]
+    fn a_linked_library_arrives_as_the_library_not_as_the_link_text() {
+        // Mac and Linux archives carry libX.dylib -> libX.1.dylib. Written out
+        // as a plain file it held the 28 bytes of the target's name, and
+        // dlopen said "not an object file": Nemotron never ran there.
+        let path = engine_zip(
+            "link",
+            &[("e/libnemo_speech_asr_c.1.dylib", b"real library bytes")],
+            &[(
+                "e/libnemo_speech_asr_c.dylib",
+                "libnemo_speech_asr_c.1.dylib",
+            )],
+        );
+        let (out, r) = unpack(&path);
+        r.unwrap();
+        assert_eq!(
+            std::fs::read(out.join("libnemo_speech_asr_c.dylib")).unwrap(),
+            b"real library bytes"
+        );
+    }
+
+    #[test]
+    fn link_text_left_by_an_earlier_build_does_not_count_as_an_engine() {
+        let dir = std::env::temp_dir().join(format!("dimmy-islib-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let text = dir.join("text.dylib");
+        std::fs::write(&text, "libnemo_speech_asr_c.1.dylib").unwrap();
+        let real = dir.join("real.dylib");
+        std::fs::write(&real, vec![0u8; 4096]).unwrap();
+        assert!(!is_library(&text));
+        assert!(is_library(&real));
+        assert!(!is_library(&dir.join("missing.dylib")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_link_cannot_reach_outside_the_engine_folder() {
+        for target in ["../secret.dylib", "/etc/passwd", "sub/x.dylib"] {
+            let path = engine_zip(
+                "escape",
+                &[("e/real.dylib", b"bytes")],
+                &[("e/libnemo_speech_asr_c.dylib", target)],
+            );
+            let (out, r) = unpack(&path);
+            assert!(r.is_err(), "{target} must be refused");
+            assert!(!out.join("libnemo_speech_asr_c.dylib").exists());
+        }
     }
 
     #[test]
