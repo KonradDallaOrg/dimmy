@@ -883,13 +883,23 @@ struct NemoTracks {
     load: f64,
 }
 
+/// The diarizer needs a recognizer of its own, and with little memory left it
+/// is refused. Text without speakers still shares the one already loaded:
+/// losing the speakers is right, losing everything the others said is not
+/// (5-6 GB free: 3 lines instead of 10, the system track gone).
+fn with_or_without_speakers<T>(speakers: bool, open: impl Fn(bool) -> Option<T>) -> Option<T> {
+    open(speakers).or_else(|| if speakers { open(false) } else { None })
+}
+
 impl NemoTracks {
     fn open(ctx: &SttThreadCtx) -> Self {
         let keywords = crate::ffi::dictionary_keywords();
         let open = |rate: u32, speakers: bool| {
-            crate::nemotron::MeetingTrack::open(rate, &ctx.language, &keywords, speakers)
-                .map_err(|e| crate::log(&format!("[Meeting] nemotron track unavailable: {e}")))
-                .ok()
+            with_or_without_speakers(speakers, |speakers| {
+                crate::nemotron::MeetingTrack::open(rate, &ctx.language, &keywords, speakers)
+                    .map_err(|e| crate::log(&format!("[Meeting] nemotron track unavailable: {e}")))
+                    .ok()
+            })
         };
         // People in one room have only the mic: it carries the speakers
         // then. On a call it is the person recording, and keeps its label.
@@ -3031,6 +3041,33 @@ mod encoding_is_not_the_bottleneck {
             fraction * 100.0,
             BUDGET_FRACTION * 100.0
         );
+    }
+}
+
+#[cfg(test)]
+mod nemotron_track_fallback {
+    use super::with_or_without_speakers;
+
+    #[test]
+    fn a_track_refused_with_speakers_opens_without_them() {
+        let opened = with_or_without_speakers(true, |speakers| (!speakers).then_some("text only"));
+        assert_eq!(opened, Some("text only"));
+    }
+
+    #[test]
+    fn a_track_that_fits_keeps_its_speakers() {
+        assert_eq!(with_or_without_speakers(true, Some), Some(true));
+    }
+
+    #[test]
+    fn no_memory_at_all_means_no_track_and_one_attempt_without_speakers() {
+        let attempts = std::cell::Cell::new(0);
+        let opened = with_or_without_speakers(false, |_| {
+            attempts.set(attempts.get() + 1);
+            None::<()>
+        });
+        assert_eq!(opened, None);
+        assert_eq!(attempts.get(), 1);
     }
 }
 

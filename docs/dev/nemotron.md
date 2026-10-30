@@ -83,6 +83,22 @@ The file on disk no longer decides. A model already on the GPU stays until the
 next launch (`nemotron::restart_needed` tells the host), because it could not be
 freed for the other one. Benchmarks without a config use `DIMMY_NEMOTRON_F32=1`.
 
+`scripts/dev/nemotron-memory-test.ps1` runs a meeting and the pass after it at
+fixed levels of free commit, held by `commit_hog`. Run it after any change to these
+checks, with other programs closed. Results on T600, 45 s meeting, 2026-10-30:
+
+| Free commit | Engine | Live text | Speakers | Pass after the meeting |
+|---|---|---|---|---|
+| 12 GB, 9 GB | GPU, Q8_0 | both tracks | live | ok, 5 s |
+| 12 GB, F32 selected | GPU, F32 | both tracks | live | ok, 17 s |
+| 6 GB, 5 GB | CPU, Q8_0 | both tracks | at the pass | ok, 16 s |
+| 3 GB | none | none, the host is told | none | refused (rc -5) |
+
+Audio was complete in every run. Live peak commit is 7.0 GB at Q8_0 and 8.6 GB at
+F32, which the GPU check covers. The pass adds about 4 GB (11 GB and 14.4 GB) and
+has no check of its own when the recognizer is already loaded, so it is the path
+left where an allocation can still abort.
+
 A CPU recognizer commits 3.1 GB at Q8_0 without the diarizer and 4.4 GB with it,
 so a meeting on CPU needs about 7.5 GB. The CPU engine always runs Q8_0, also when
 F32 is on disk. `RECOGNIZERS` changes only after a new recognizer exists, because
