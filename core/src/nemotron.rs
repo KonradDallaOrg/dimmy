@@ -176,6 +176,10 @@ const LOAD_HEADROOM_BYTES: u64 = 256 * 1024 * 1024;
 /// Commit charge of the GPU runtime on top of the weights: 7.56 GB peak with
 /// 0.85 GB of Q8_0 and diarizer (CUDA, T600, 2026-10-30).
 const GPU_RUNTIME_BYTES: u64 = 7 * 1024 * 1024 * 1024;
+/// Commit charge of a CPU recognizer on top of the weights: 3.1 GB in all at
+/// Q8_0 without the diarizer, 4.4 GB with it (i7-12700H, 2026-10-30). Counting
+/// the weights alone let a load through with a third of what it takes.
+const CPU_RUNTIME_BYTES: u64 = 3686 * 1024 * 1024;
 /// What F32 must find free before it is preferred over Q8_0.
 const F32_HEADROOM_BYTES: u64 = GPU_RUNTIME_BYTES + 1024 * 1024 * 1024;
 
@@ -322,7 +326,13 @@ pub fn default_spec(speakers: bool) -> Option<EngineSpec> {
 fn spec_for(flavor: Flavor, speakers: bool) -> EngineSpec {
     EngineSpec {
         library: library_path(flavor),
-        model: model_path(),
+        // F32 on a CPU falls behind on a single stream: the fallback from a
+        // refused GPU load must not bring it along.
+        model: if flavor.is_gpu() {
+            model_path()
+        } else {
+            crate::local_stt::model_path(MODEL.file)
+        },
         gpu: flavor.is_gpu().then_some(0),
         // A GPU has the headroom and not the memory: one model serves every
         // stream there (T600, two tracks: load 0.38 at Q8, 0.54 at F32), where
@@ -1219,31 +1229,48 @@ static RECOGNIZERS: Mutex<Vec<Arc<Recognizer>>> = Mutex::new(Vec::new());
 /// the same kind (with or without diarizer) replaces the old one.
 pub fn recognizer(spec: &EngineSpec) -> Result<Arc<Recognizer>, TranscribeError> {
     let mut slot = RECOGNIZERS.lock().unwrap_or_else(|p| p.into_inner());
-    if let Some(r) = slot.iter().find(|r| r.spec() == spec) {
+    let available = crate::setup::available_memory_bytes();
+    load_into(&mut slot, spec, available, Recognizer::spec, || {
+        let r = Arc::new(Recognizer::create(spec.clone())?);
+        warm_up(&r)?;
+        release_before_ggml_exits();
+        Ok(r)
+    })
+}
+
+/// Touches the slot only after the new recognizer exists, because what leaves
+/// the slot is forgotten and not freed (see `Drop for Recognizer`): a GPU load
+/// refused for memory must not throw away the CPU models the fallback is about
+/// to ask for, or every call leaks one and loads another (15 GB and an abort
+/// in a 3-minute meeting, 2026-10-30).
+fn load_into<R>(
+    slot: &mut Vec<Arc<R>>,
+    spec: &EngineSpec,
+    available: Option<u64>,
+    spec_of: impl Fn(&R) -> &EngineSpec,
+    create: impl FnOnce() -> Result<Arc<R>, TranscribeError>,
+) -> Result<Arc<R>, TranscribeError> {
+    if let Some(r) = slot.iter().find(|r| spec_of(r) == spec) {
         return Ok(Arc::clone(r));
-    }
-    if spec.gpu.is_some() {
-        // Forgets it, and does not free it (see `Drop for Recognizer`). Only a
-        // model downloaded or removed mid-session gets here.
-        slot.clear();
-    } else {
-        slot.retain(|old| old.spec().diarizer.is_some() != spec.diarizer.is_some());
     }
     let runtime = if spec.gpu.is_some() {
         GPU_RUNTIME_BYTES
     } else {
-        0
+        CPU_RUNTIME_BYTES
     };
     let needed = spec_bytes(spec) + runtime + LOAD_HEADROOM_BYTES;
-    if !enough_memory(crate::setup::available_memory_bytes(), needed) {
+    if !enough_memory(available, needed) {
         return Err(TranscribeError::LocalModel(format!(
             "not enough free memory to load Nemotron ({} MB needed)",
             needed / (1024 * 1024)
         )));
     }
-    let r = Arc::new(Recognizer::create(spec.clone())?);
-    warm_up(&r)?;
-    release_before_ggml_exits();
+    let r = create()?;
+    if spec.gpu.is_some() {
+        slot.clear();
+    } else {
+        slot.retain(|old| spec_of(old).diarizer.is_some() != spec.diarizer.is_some());
+    }
     slot.push(Arc::clone(&r));
     assert!(
         slot.len() <= 2,
@@ -2040,6 +2067,78 @@ mod tests {
         assert!(enough_memory(Some(100), 100));
         assert!(!enough_memory(Some(99), 100));
         assert!(enough_memory(None, u64::MAX));
+    }
+
+    fn fake_spec(gpu: bool, diarizer: bool) -> EngineSpec {
+        EngineSpec {
+            library: "engine".into(),
+            model: "model".into(),
+            gpu: gpu.then_some(0),
+            diarizer: diarizer.then(|| "diarizer".into()),
+        }
+    }
+
+    fn fake_load(
+        slot: &mut Vec<Arc<EngineSpec>>,
+        spec: &EngineSpec,
+        available: Option<u64>,
+        loads: &mut usize,
+    ) -> Result<Arc<EngineSpec>, TranscribeError> {
+        load_into(
+            slot,
+            spec,
+            available,
+            |s| s,
+            || {
+                *loads += 1;
+                Ok(Arc::new(spec.clone()))
+            },
+        )
+    }
+
+    #[test]
+    fn a_refused_gpu_load_keeps_the_cpu_recognizers_it_falls_back_to() {
+        let (mut slot, mut loads) = (Vec::new(), 0);
+        let (gpu, cpu) = (fake_spec(true, true), fake_spec(false, false));
+        for _ in 0..4 {
+            let refused = fake_load(&mut slot, &gpu, Some(0), &mut loads);
+            assert!(refused.is_err(), "no memory, no GPU");
+            fake_load(&mut slot, &cpu, None, &mut loads).expect("CPU fallback");
+        }
+        assert_eq!(loads, 1, "the fallback reuses the model it already loaded");
+        assert_eq!(slot.len(), 1);
+    }
+
+    #[test]
+    fn a_gpu_load_that_fails_keeps_the_cpu_recognizers_too() {
+        let (mut slot, mut loads) = (Vec::new(), 0);
+        let (gpu, cpu) = (fake_spec(true, true), fake_spec(false, false));
+        fake_load(&mut slot, &cpu, None, &mut loads).expect("CPU");
+        let failed = load_into(
+            &mut slot,
+            &gpu,
+            None,
+            |s| s,
+            || Err(TranscribeError::LocalModel("driver too old".into())),
+        );
+        assert!(failed.is_err());
+        assert_eq!(slot.len(), 1);
+    }
+
+    #[test]
+    fn a_gpu_recognizer_replaces_the_cpu_ones_once_it_exists() {
+        let (mut slot, mut loads) = (Vec::new(), 0);
+        fake_load(&mut slot, &fake_spec(false, false), None, &mut loads).expect("CPU");
+        fake_load(&mut slot, &fake_spec(false, true), None, &mut loads).expect("CPU, speakers");
+        assert_eq!(slot.len(), 2, "one with and one without the diarizer");
+        fake_load(&mut slot, &fake_spec(true, true), None, &mut loads).expect("GPU");
+        assert_eq!(slot.len(), 1, "one model serves every stream on a GPU");
+    }
+
+    #[test]
+    fn the_cpu_engine_never_runs_f32() {
+        let spec = spec_for(Flavor::Cpu, false);
+        assert!(spec.model.ends_with(MODEL.file), "{:?}", spec.model);
     }
 
     #[test]
