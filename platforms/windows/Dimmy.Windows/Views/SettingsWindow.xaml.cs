@@ -3045,6 +3045,9 @@ public sealed partial class SettingsWindow : Window
             {
                 ViewModel.LocalSttBackend = "nemotron";
                 ViewModel.ChunkStreamingEnabled = true;
+                // Typing as you speak is what this engine is for; the other
+                // local engines only fake it with chunks, so they leave it off.
+                ViewModel.StreamingDictation = true;
                 App.Log("-> set LocalSttBackend=nemotron", "Settings");
             }
             else if (tag == ParakeetTag)
