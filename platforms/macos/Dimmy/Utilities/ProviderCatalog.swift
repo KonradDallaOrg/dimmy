@@ -95,6 +95,13 @@ enum ProviderCatalog {
                 name: "Whistle, \(DimmyCore.shared.whistleSizeMb()) MB",
                 stt: true, llm: false, recap: false, localFilename: "whistle"))
         }
+        // Nemotron: one model, flagged by the "nemotron" id the download
+        // center knows. Absent where the core cannot run it.
+        if DimmyCore.shared.nemotronStatus() >= 0 {
+            list.append(ProviderModel(
+                name: "Nemotron 3.5 (live, NVIDIA), \(DimmyCore.shared.nemotronSizeMb()) MB",
+                stt: true, llm: false, recap: false, localFilename: "nemotron"))
+        }
         list.append(contentsOf: parseLocal(DimmyCore.shared.listLLMModels(), stt: false))
         return list
     }

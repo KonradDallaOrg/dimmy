@@ -579,7 +579,10 @@ final class HotkeyManager {
                 appState.recordingState = .completing
 
                 // Inject text (paste into active app)
-                if !appState.keepInClipboard {
+                if appState.streamingDictationActive {
+                    // Segments were already typed at the cursor; pasting the
+                    // whole transcript again would duplicate it.
+                } else if !appState.keepInClipboard {
                     // Restore the recorded target to the foreground BEFORE the
                     // synthetic Cmd+V. If the user stopped via the pill Stop
                     // button, the pill is now the key window and a naive paste
