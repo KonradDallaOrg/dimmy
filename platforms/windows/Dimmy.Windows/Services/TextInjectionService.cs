@@ -245,6 +245,31 @@ public static class TextInjectionService
         SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
     }
 
+    private const ushort VK_BACK = 0x08;
+
+    /// <summary>
+    /// Press Backspace <paramref name="count"/> times, one SendInput batch.
+    /// Streaming dictation uses it to take back a word the engine corrected
+    /// just after typing it. Capped: a correction never reaches far back.
+    /// </summary>
+    public static void SendBackspaces(int count)
+    {
+        count = Math.Clamp(count, 0, 200);
+        if (count == 0) return;
+        var inputs = new INPUT[count * 2];
+        for (int i = 0; i < count; i++)
+        {
+            inputs[i * 2] = MakeKeyDown(VK_BACK);
+            inputs[i * 2 + 1] = MakeKeyUp(VK_BACK);
+        }
+        SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+    }
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    public static IntPtr ForegroundWindow() => GetForegroundWindow();
+
     private static INPUT MakeUnicodeKey(char c, bool keyUp) => new()
     {
         type = (uint)INPUT_KEYBOARD,

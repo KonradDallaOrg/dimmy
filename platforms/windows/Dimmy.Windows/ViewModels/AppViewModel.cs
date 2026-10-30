@@ -345,8 +345,10 @@ public partial class AppViewModel : ObservableObject
     /// Args: (segmentText). Only fires for `engine == "deepgram"` chunks
     /// with a non-empty delta — interim previews carry an empty delta and
     /// are shown only in the live caption, never injected. The host types
-    /// each segment at the cursor as the user speaks.
-    public event Action<string>? StreamingSegmentFinalized;
+    /// each segment at the cursor as the user speaks. The int is how many
+    /// characters to delete first: a word a local streaming engine typed and
+    /// then corrected (0 for every cloud engine).
+    public event Action<string, int>? StreamingSegmentFinalized;
 
     /// True once the current dictation session has produced at least one
     /// streaming (Deepgram) chunk. The host uses this to SUPPRESS the
@@ -572,8 +574,9 @@ public partial class AppViewModel : ObservableObject
                         if (engine == "deepgram" || engine == "openai" || engine == "local-stream")
                         {
                             StreamingDictationActive = true;
-                            if (!string.IsNullOrEmpty(delta))
-                                StreamingSegmentFinalized?.Invoke(delta);
+                            var backspace = payload.TryGetProperty("backspace", out var bs) ? bs.GetInt32() : 0;
+                            if (!string.IsNullOrEmpty(delta) || backspace > 0)
+                                StreamingSegmentFinalized?.Invoke(delta, backspace);
                         }
                     }
                     break;

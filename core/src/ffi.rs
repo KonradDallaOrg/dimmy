@@ -1197,9 +1197,12 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
         } else {
             "nemotron"
         };
-        let on_chunk: Arc<crate::nemotron::ChunkCallback> =
-            Arc::new(move |delta: &str, cumulative: &str, is_final: bool| {
+        let on_chunk: Arc<crate::nemotron::ChunkCallback> = Arc::new(
+            move |backspace: usize, delta: &str, cumulative: &str, is_final: bool| {
+                // `backspace`: characters the host deletes before typing
+                // `delta` (a word the engine corrected). Absent elsewhere.
                 let payload = serde_json::json!({
+                    "backspace": backspace,
                     "delta": delta,
                     "cumulative": cumulative,
                     "is_final": is_final,
@@ -1207,7 +1210,8 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
                 })
                 .to_string();
                 emit_event("stt_chunk", &payload);
-            });
+            },
+        );
         log(&format!(
             "[StartRec] nemotron live dictation spawned ({engine})"
         ));

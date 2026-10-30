@@ -1045,9 +1045,9 @@ fn warm_up(r: &Arc<Recognizer>) -> Result<(), TranscribeError> {
 
 // ---- Live dictation ------------------------------------------------------
 
-/// Callback shape shared with the cloud streamers and the chunked engine:
-/// `(delta, cumulative, is_final)`, fanned out as `stt_chunk`.
-pub type ChunkCallback = dyn Fn(&str, &str, bool) + Send + Sync + 'static;
+/// `(backspace, delta, cumulative, is_final)`, fanned out as `stt_chunk`:
+/// the cloud streamers' shape plus how many characters to delete first.
+pub type ChunkCallback = dyn Fn(usize, &str, &str, bool) + Send + Sync + 'static;
 
 /// How often new capture is handed to the engine. The model consumes 320 ms
 /// chunks; 100 ms keeps the text within a chunk of the voice, the cadence
@@ -1131,9 +1131,9 @@ fn run_stream(
     let mut cursor = 0usize;
     let emit = |updates: Vec<Update>, transcript: &mut Transcript| {
         for u in updates {
-            let (delta, cumulative) = transcript.apply(&u);
-            if !delta.is_empty() || u.is_final {
-                on_chunk(&delta, &cumulative, u.is_final);
+            let t = transcript.apply(&u);
+            if !t.delta.is_empty() || t.backspace > 0 || u.is_final {
+                on_chunk(t.backspace, &t.delta, &t.cumulative, u.is_final);
             }
         }
     };
@@ -1401,8 +1401,26 @@ impl MeetingTrack {
 
 // ---- Turning results into text the app can use --------------------------
 
-/// Keeps the committed text of a stream and turns each result into the
-/// delta the host types at the cursor.
+/// The furthest back a correction reaches: the words of the open
+/// utterance that were already typed and that the engine has since
+/// changed. Past this many, the words on screen stay as they are rather
+/// than have a long run of text deleted under the person's cursor.
+const MAX_REVISE_WORDS: usize = 8;
+
+/// What to do at the cursor for one update.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Typed {
+    /// Characters to delete before typing `delta`: the revised words and
+    /// the space the host typed after each.
+    pub backspace: usize,
+    /// Whole words, space-separated, no leading or trailing space.
+    pub delta: String,
+    /// Everything recognised so far, for captions and history.
+    pub cumulative: String,
+}
+
+/// Keeps what was typed at the cursor and turns each result into the edit
+/// the host makes there.
 ///
 /// Whole words only. The engine's partials grow inside a word ("informa",
 /// then "informazioni"), and the hosts type each delta followed by a space,
@@ -1411,14 +1429,18 @@ impl MeetingTrack {
 /// utterance is held back until the next one starts, and a closed one is
 /// typed out whole, punctuation included.
 ///
-/// Append-only: a word, once typed, is never taken back. When the engine
-/// revises a word already on screen, nothing more is typed until the
-/// utterance closes, and then the rest follows the word that stayed.
+/// When the engine changes a word already typed ("PI" becomes "API"), the
+/// edit deletes back to it and retypes from there, within the last
+/// `MAX_REVISE_WORDS` words. Closed utterances are never touched: the
+/// engine does not change them, and nobody wants a sentence from a minute
+/// ago rewritten under their cursor.
 #[derive(Debug, Default)]
 pub struct Transcript {
     finals: Vec<String>,
     /// Words already handed to the host, in order.
     sent: Vec<String>,
+    /// How many of `sent` belong to closed utterances: fixed for good.
+    fixed: usize,
 }
 
 impl Transcript {
@@ -1431,9 +1453,7 @@ impl Transcript {
         parts.join(" ")
     }
 
-    /// Apply one update; returns (delta, cumulative). The delta is whole
-    /// words, space-separated, with no leading or trailing space.
-    pub fn apply(&mut self, u: &Update) -> (String, String) {
+    pub fn apply(&mut self, u: &Update) -> Typed {
         let cumulative = self.cumulative(&u.text);
         if u.is_final && !u.text.is_empty() {
             self.finals.push(u.text.clone());
@@ -1455,14 +1475,38 @@ impl Transcript {
             .zip(&words)
             .take_while(|(a, b)| a.as_str() == **b)
             .count();
-        let delta = if (agree == self.sent.len() || u.is_final) && stable > self.sent.len() {
-            let fresh = &words[self.sent.len()..stable];
-            self.sent.extend(fresh.iter().map(|w| w.to_string()));
-            fresh.join(" ")
+        // Delete back to the first changed word when it is recent and the
+        // replacement is already settled; otherwise keep the screen and
+        // carry on after it.
+        let revisable =
+            agree >= self.fixed && self.sent.len() - agree <= MAX_REVISE_WORDS && stable > agree;
+        let from = if agree == self.sent.len() || revisable {
+            agree
         } else {
-            String::new()
+            self.sent.len()
         };
-        (delta, cumulative)
+        let backspace: usize = self.sent[from..]
+            .iter()
+            .map(|w| w.chars().count() + 1)
+            .sum();
+        let mut typed = Typed {
+            backspace,
+            delta: String::new(),
+            cumulative,
+        };
+        let can_type = from == agree || u.is_final;
+        if can_type && stable > from {
+            self.sent.truncate(from);
+            let fresh = &words[from..stable];
+            self.sent.extend(fresh.iter().map(|w| w.to_string()));
+            typed.delta = fresh.join(" ");
+        } else {
+            typed.backspace = 0;
+        }
+        if u.is_final {
+            self.fixed = self.sent.len();
+        }
+        typed
     }
 
     /// Everything said, closed utterances joined.
@@ -1575,13 +1619,24 @@ mod tests {
         assert!(speaker_list("system", &[]).is_empty());
     }
 
+    fn typed(t: &mut Transcript, text: &str, is_final: bool) -> (usize, String) {
+        let r = t.apply(&up(text, is_final));
+        (r.backspace, r.delta)
+    }
+
     #[test]
     fn deltas_only_ever_append_whole_words() {
         let mut t = Transcript::default();
-        assert_eq!(t.apply(&up("Mi dici", false)).0, "Mi");
-        assert_eq!(t.apply(&up("Mi dici che cosa", false)).0, "dici che");
-        assert_eq!(t.apply(&up("Mi dici che cosa c'è.", true)).0, "cosa c'è.");
-        assert_eq!(t.apply(&up("Prova", false)).0, "");
+        assert_eq!(typed(&mut t, "Mi dici", false), (0, "Mi".into()));
+        assert_eq!(
+            typed(&mut t, "Mi dici che cosa", false),
+            (0, "dici che".into())
+        );
+        assert_eq!(
+            typed(&mut t, "Mi dici che cosa c'è.", true),
+            (0, "cosa c'è.".into())
+        );
+        assert_eq!(typed(&mut t, "Prova", false), (0, String::new()));
         assert_eq!(t.text(), "Mi dici che cosa c'è.");
     }
 
@@ -1589,32 +1644,86 @@ mod tests {
     fn a_word_still_forming_is_never_typed_in_pieces() {
         // The 2026-10-30 report: "informa" + "zioni" typed as "informa zioni".
         let mut t = Transcript::default();
-        assert_eq!(t.apply(&up("informa", false)).0, "");
-        assert_eq!(t.apply(&up("informazioni", false)).0, "");
-        assert_eq!(t.apply(&up("informazioni sul", false)).0, "informazioni");
-        assert_eq!(t.apply(&up("informazioni sul file.", true)).0, "sul file.");
+        assert_eq!(typed(&mut t, "informa", false), (0, String::new()));
+        assert_eq!(typed(&mut t, "informazioni", false), (0, String::new()));
+        assert_eq!(
+            typed(&mut t, "informazioni sul", false),
+            (0, "informazioni".into())
+        );
+        assert_eq!(
+            typed(&mut t, "informazioni sul file.", true),
+            (0, "sul file.".into())
+        );
         assert_eq!(t.text(), "informazioni sul file.");
     }
 
     #[test]
-    fn a_revised_word_is_kept_and_the_rest_follows_at_the_close() {
+    fn a_revised_word_is_deleted_and_retyped() {
+        // The 2026-10-30 report: a word typed wrong and then corrected
+        // stayed wrong on screen.
         let mut t = Transcript::default();
-        assert_eq!(t.apply(&up("chiavi PI in", false)).0, "chiavi PI");
-        // The engine changes its mind about a word already typed: nothing
-        // more is typed while the utterance is open...
-        assert_eq!(t.apply(&up("chiavi API in un", false)).0, "");
-        // ...and when it closes the rest follows what is on screen.
-        let (delta, cumulative) = t.apply(&up("chiavi API in un file", true));
-        assert_eq!(delta, "in un file");
-        assert_eq!(cumulative, "chiavi API in un file");
-        assert_eq!(t.text(), "chiavi API in un file");
+        assert_eq!(
+            typed(&mut t, "chiavi PI in", false),
+            (0, "chiavi PI".into())
+        );
+        // "PI " (3 characters with the space the host added) goes, and the
+        // settled words come back in its place.
+        assert_eq!(
+            typed(&mut t, "chiavi API in un", false),
+            (3, "API in".into())
+        );
+        assert_eq!(
+            typed(&mut t, "chiavi API in un file.", true),
+            (0, "un file.".into())
+        );
+        assert_eq!(t.text(), "chiavi API in un file.");
+    }
+
+    #[test]
+    fn a_closed_sentence_is_never_rewritten() {
+        let mut t = Transcript::default();
+        assert_eq!(
+            typed(&mut t, "Ciao a tutti.", true),
+            (0, "Ciao a tutti.".into())
+        );
+        // After a final the engine sends only the next utterance; nothing it
+        // says from here on may delete the closed one.
+        assert_eq!(typed(&mut t, "Come", false), (0, String::new()));
+        assert_eq!(typed(&mut t, "Come va", false), (0, "Come".into()));
+        assert_eq!(typed(&mut t, "Cosa va?", true), (5, "Cosa va?".into()));
+        assert_eq!(t.text(), "Ciao a tutti. Cosa va?");
+    }
+
+    #[test]
+    fn a_correction_too_far_back_leaves_the_screen_alone() {
+        let mut t = Transcript::default();
+        let long = "uno due tre quattro cinque sei sette otto nove dieci undici";
+        typed(&mut t, long, false);
+        let changed = "UNO due tre quattro cinque sei sette otto nove dieci undici dodici";
+        // Ten words back is past the limit: nothing deleted, nothing typed
+        // until the utterance closes.
+        assert_eq!(typed(&mut t, changed, false), (0, String::new()));
+        let (bs, delta) = typed(&mut t, &format!("{changed} tredici."), true);
+        assert_eq!(bs, 0);
+        assert_eq!(delta, "undici dodici tredici.");
+    }
+
+    #[test]
+    fn backspace_counts_characters_not_bytes() {
+        let mut t = Transcript::default();
+        typed(&mut t, "perché così no", false);
+        // "così " is five characters and six bytes.
+        assert_eq!(
+            typed(&mut t, "perché cosa no ma", false),
+            (5, "cosa no".into())
+        );
     }
 
     #[test]
     fn empty_finals_add_nothing() {
         let mut t = Transcript::default();
-        assert_eq!(t.apply(&up("ciao", true)).0, "ciao");
-        assert_eq!(t.apply(&up("", true)).0, "");
+        assert_eq!(typed(&mut t, "ciao", true), (0, "ciao".into()));
+        assert_eq!(typed(&mut t, "", true), (0, String::new()));
         assert_eq!(t.text(), "ciao");
     }
 

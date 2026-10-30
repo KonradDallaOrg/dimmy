@@ -84,7 +84,15 @@ fn main() {
         busy += took;
         worst_lag = worst_lag.max(took - 0.1);
         for u in ups {
-            let (delta, _) = transcript.apply(&u);
+            let typed = transcript.apply(&u);
+            let delta = &typed.delta;
+            if typed.backspace > 0 {
+                println!(
+                    "[{:6.1}s] <- {} chars",
+                    (i + 1) as f64 / 10.0,
+                    typed.backspace
+                );
+            }
             if !delta.is_empty() {
                 println!(
                     "[{:6.1}s] +{delta:?}{}",
