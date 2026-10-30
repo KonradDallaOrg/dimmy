@@ -39,6 +39,10 @@ static STREAMING: Mutex<Option<ActiveStreamer>> = Mutex::new(None);
 enum ActiveStreamer {
     Deepgram(crate::deepgram_stream::DeepgramStreamer),
     OpenAi(crate::openai_stream::OpenAiStreamer),
+    /// The one local engine that streams for real (no chunks). Lives in this
+    /// slot, not in CHUNKED, because it has the same contract as the cloud
+    /// streamers: its text is the dictation, and stop drains it.
+    Nemotron(crate::nemotron::Streamer),
 }
 
 impl ActiveStreamer {
@@ -46,6 +50,7 @@ impl ActiveStreamer {
         match self {
             Self::Deepgram(s) => s.stop(),
             Self::OpenAi(s) => s.stop(),
+            Self::Nemotron(s) => s.stop(),
         }
     }
 
@@ -54,6 +59,7 @@ impl ActiveStreamer {
         match self {
             Self::Deepgram(_) => "deepgram",
             Self::OpenAi(_) => "openai",
+            Self::Nemotron(_) => "nemotron",
         }
     }
 }
@@ -126,10 +132,13 @@ pub(crate) fn effective_local_backend(selected: &str) -> &'static str {
         .unwrap_or_default();
     let choice = crate::transcribe::resolve_local_backend(
         selected,
-        crate::parakeet::active_bundle_present(),
-        crate::qwen_asr::bundle_present(&qwen_asr_variant()),
-        crate::whistle::bundle_present(),
-        !whisper_model.is_empty() && crate::local_stt::model_exists(&whisper_model),
+        crate::transcribe::EnginesReady {
+            parakeet: crate::parakeet::active_bundle_present(),
+            qwen: crate::qwen_asr::bundle_present(&qwen_asr_variant()),
+            whistle: crate::whistle::bundle_present(),
+            nemotron: crate::nemotron::bundle_present(),
+            whisper: !whisper_model.is_empty() && crate::local_stt::model_exists(&whisper_model),
+        },
     );
     if choice.fell_back {
         log(&format!(
@@ -155,8 +164,9 @@ pub(crate) fn qwen_asr_variant() -> String {
         .unwrap_or_else(|_| crate::qwen_asr::DEFAULT_MODEL.to_string())
 }
 
-/// The custom dictionary, which Whistle takes as keywords to favour.
-fn whistle_keywords() -> Vec<String> {
+/// The custom dictionary, which Whistle takes as keywords and Nemotron as
+/// a word boost.
+pub(crate) fn dictionary_keywords() -> Vec<String> {
     state()
         .user_dict
         .lock()
@@ -1173,7 +1183,45 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
             "batch"
         };
     }
-    if local_typing || chunked_captions {
+    if (local_typing || chunked_captions) && local_backend == "nemotron" {
+        // Nemotron streams for real, so it takes the streaming slot instead
+        // of the chunked engine. Typing mode keeps the "local-stream" label
+        // the hosts already type at the cursor; caption mode uses the
+        // backend name, exactly like the chunked path below.
+        if let Ok(mut b) = st.audio_buffer.lock() {
+            b.clear();
+        }
+        let language = st.language.lock().map(|l| l.clone()).unwrap_or_default();
+        let engine = if local_typing {
+            "local-stream"
+        } else {
+            "nemotron"
+        };
+        let on_chunk: Arc<crate::nemotron::ChunkCallback> =
+            Arc::new(move |delta: &str, cumulative: &str, is_final: bool| {
+                let payload = serde_json::json!({
+                    "delta": delta,
+                    "cumulative": cumulative,
+                    "is_final": is_final,
+                    "engine": engine,
+                })
+                .to_string();
+                emit_event("stt_chunk", &payload);
+            });
+        log(&format!(
+            "[StartRec] nemotron live dictation spawned ({engine})"
+        ));
+        let streamer = crate::nemotron::Streamer::start(
+            st.audio_buffer.clone(),
+            crate::audio::MEETING_CANONICAL_RATE,
+            language,
+            dictionary_keywords(),
+            on_chunk,
+        );
+        if let Ok(mut slot) = STREAMING.lock() {
+            *slot = Some(ActiveStreamer::Nemotron(streamer));
+        }
+    } else if local_typing || chunked_captions {
         // Clear any zombie buffer from a previous run so the worker
         // doesn't transcribe stale audio. The audio thread refills it.
         if let Ok(mut b) = st.audio_buffer.lock() {
@@ -1190,7 +1238,7 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
             })
         } else if local_backend == "whistle" {
             let language = st.language.lock().map(|l| l.clone()).unwrap_or_default();
-            let keywords = whistle_keywords();
+            let keywords = dictionary_keywords();
             Arc::new(move |pcm: &[f32]| crate::whistle::transcribe(pcm, &language, &keywords))
         } else {
             let model_filename = st.local_model.lock().map(|m| m.clone()).unwrap_or_default();
@@ -1678,12 +1726,19 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
                 variant
             ));
             crate::transcribe::transcribe_audio_local_qwen(&processed, &variant, &language)
+        } else if local_stt_backend == "nemotron" {
+            log("[StopRec] Local STT mode — backend: nemotron");
+            crate::transcribe::transcribe_audio_local_nemotron(
+                &processed,
+                &language,
+                &dictionary_keywords(),
+            )
         } else if local_stt_backend == "whistle" {
             log("[StopRec] Local STT mode — backend: whistle");
             crate::transcribe::transcribe_audio_local_whistle(
                 &processed,
                 &language,
-                &whistle_keywords(),
+                &dictionary_keywords(),
             )
         } else {
             log(&format!(
@@ -2779,10 +2834,11 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
             // rather than fail every chunk with "requires the cargo feature".
             "qwen" if !crate::qwen_asr::engine_available() => "whisper",
             "whistle" if !crate::whistle::engine_available() => "whisper",
-            "whisper" | "parakeet" | "qwen" | "whistle" => s,
+            "nemotron" if !crate::nemotron::engine_available() => "whisper",
+            "whisper" | "parakeet" | "qwen" | "whistle" | "nemotron" => s,
             _ => {
                 log(&format!(
-                    "[Config] WARN local_stt_backend '{}' not in {{whisper,parakeet,qwen,whistle}} — coerced to 'whisper'",
+                    "[Config] WARN local_stt_backend '{}' not in {{whisper,parakeet,qwen,whistle,nemotron}} — coerced to 'whisper'",
                     s
                 ));
                 "whisper"
@@ -7877,6 +7933,57 @@ pub extern "C" fn dimmy_whistle_download() -> c_int {
     }
 }
 
+// -- Nemotron (fifth local STT backend, live streaming) -----------------
+
+/// 1 when the Nemotron model and an engine build are on disk, 0 when they
+/// are not, -1 when no engine exists for this platform (hosts hide it).
+#[no_mangle]
+pub extern "C" fn dimmy_nemotron_status() -> c_int {
+    if !crate::nemotron::engine_available() {
+        -1
+    } else {
+        crate::nemotron::bundle_present() as c_int
+    }
+}
+
+/// Size of the Nemotron download (model, diarizer, engine) in MB.
+#[no_mangle]
+pub extern "C" fn dimmy_nemotron_size_mb() -> c_int {
+    crate::nemotron::size_mb() as c_int
+}
+
+/// Download Nemotron. BLOCKING -- call from a background thread. Emits
+/// `nemotron_download_progress` as `{"downloaded":N,"total":N}`.
+/// Returns 0, or -1 on error.
+#[no_mangle]
+pub extern "C" fn dimmy_nemotron_download() -> c_int {
+    let slot = model_download_slot(crate::download_center::NEMOTRON_ID);
+    let _busy = slot.lock().unwrap_or_else(|e| e.into_inner());
+    if crate::nemotron::bundle_present() && crate::nemotron::diarizer_present() {
+        return 0;
+    }
+    let Ok(rt) = tokio::runtime::Runtime::new() else {
+        return -1;
+    };
+    let result = rt.block_on(crate::nemotron::download_bundle(|downloaded, total| {
+        let payload = format!(r#"{{"downloaded":{},"total":{}}}"#, downloaded, total);
+        emit_event("nemotron_download_progress", &payload);
+    }));
+    crate::telemetry::track(crate::telemetry::Event::ModelDownloadCompleted {
+        kind: "nemotron",
+        success: result.is_ok(),
+    });
+    match result {
+        Ok(()) => 0,
+        Err(e) => {
+            let msg: String = format!("{}", e).chars().take(200).collect();
+            log(&format!("[Nemotron download] {}", msg));
+            emit_event("error", &message_error_payload(&msg));
+            -1
+        }
+    }
+}
+
 // -- Download center (one queue for every on-device model) ------------
 
 /// Queue a download of the on-device model `id` (the On-device row id: a
@@ -9241,6 +9348,13 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
                 &user_dict_snapshot,
             )
             .map(|t| (t, None))
+        } else if backend == "nemotron" {
+            crate::transcribe::transcribe_audio_local_nemotron(
+                &chunk,
+                &language,
+                &user_dict_snapshot,
+            )
+            .map(|t| (t, None))
         } else {
             crate::transcribe::transcribe_audio_local(&chunk, &language, &model, &composed_prompt)
                 .map(|t| (t, None))
@@ -9580,11 +9694,31 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
                         &language,
                     )
                     .unwrap_or_default()
+                } else if backend == "nemotron" {
+                    match crate::transcribe::transcribe_audio_local_nemotron_words(
+                        &window,
+                        &language,
+                        &dictionary_keywords(),
+                    ) {
+                        Ok((t, words)) => {
+                            if diarize_on {
+                                band_words.extend(words.into_iter().map(|w| {
+                                    crate::diarize::Word {
+                                        start: w.start + offset_secs,
+                                        end: w.end + offset_secs,
+                                        text: w.text,
+                                    }
+                                }));
+                            }
+                            t
+                        }
+                        Err(_) => String::new(),
+                    }
                 } else if backend == "whistle" {
                     match crate::transcribe::transcribe_audio_local_whistle_words(
                         &window,
                         &language,
-                        &whistle_keywords(),
+                        &dictionary_keywords(),
                     ) {
                         Ok((t, words)) => {
                             if diarize_on {

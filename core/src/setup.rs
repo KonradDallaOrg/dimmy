@@ -251,6 +251,9 @@ pub fn available_backends() -> Vec<&'static str> {
     if crate::whistle::engine_available() {
         v.push("whistle");
     }
+    if crate::nemotron::engine_available() {
+        v.push("nemotron");
+    }
     v
 }
 
@@ -286,7 +289,7 @@ pub fn settings() -> Vec<Setting> {
         },
         Setting {
             key: "local_stt_backend",
-            kind: Kind::Enum(strs(&["whisper", "parakeet", "qwen", "whistle"])),
+            kind: Kind::Enum(strs(&["whisper", "parakeet", "qwen", "whistle", "nemotron"])),
             help: "Which on-device speech engine to use when the mode is local. Each needs its model downloaded once.",
         },
         Setting {
@@ -2289,7 +2292,7 @@ mod tests {
 
     #[test]
     fn unavailable_backend_is_rejected() {
-        for b in ["whisper", "parakeet", "qwen", "whistle"] {
+        for b in ["whisper", "parakeet", "qwen", "whistle", "nemotron"] {
             let r = validate_patch(&json!({ "local_stt_backend": b }));
             assert_eq!(r.is_ok(), available_backends().contains(&b), "{b}");
         }

@@ -25,6 +25,400 @@ use std::sync::{Arc, Mutex};
 
 pub const SAMPLE_RATE: usize = 16_000;
 
+// ---- What gets downloaded ------------------------------------------------
+
+/// One pinned download: a revision-pinned URL, its SHA-256 and size.
+struct Pinned {
+    file: &'static str,
+    url: &'static str,
+    sha256: &'static str,
+    bytes: u64,
+    magic: &'static [u8],
+}
+
+const GGUF_MAGIC: &[u8] = b"GGUF";
+const ZIP_MAGIC: &[u8] = b"PK\x03\x04";
+
+/// NVIDIA's own Q8_0 conversion, revision `ea30d66`.
+const MODEL: Pinned = Pinned {
+    file: "nemotron-3.5-asr-streaming-0.6b.q8_0.gguf",
+    url: "https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b/resolve/ea30d66debe3740a08b573244286791d423d6b3e/nemotron-3.5-asr-streaming-0.6b.q8_0.gguf",
+    sha256: "3fc991d3badad7277c11030a7519832cddaf2057aafed6d4b25147e953a070b1",
+    bytes: 742_090_464,
+    magic: GGUF_MAGIC,
+};
+
+/// Nemotron-3-Diarization (Sortformer, eight speakers), NVIDIA's Q8_0,
+/// revision `f667ed7`. The same model `diarize.rs` runs as ONNX after a
+/// meeting; here the engine runs it inside the stream, word by word.
+const DIARIZER: Pinned = Pinned {
+    file: "Nemotron-3-Diarization.q8_0.gguf",
+    url: "https://huggingface.co/nvidia/Nemotron-3-Diarization/resolve/f667ed73aee57d40cc39428eb768b4fd87a0a29e/Nemotron-3-Diarization.q8_0.gguf",
+    sha256: "08456d9e22cd9a323c0364d98375f3746d6e68507ebb705cd46438c534c7a3a1",
+    bytes: 107_012_128,
+    magic: GGUF_MAGIC,
+};
+
+/// Which build of the engine: the CPU one runs everywhere; a GPU one is used
+/// when the machine has the hardware and falls back to the CPU one when it
+/// will not load (an old NVIDIA driver, say).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Flavor {
+    Cpu,
+    Cuda,
+    Metal,
+}
+
+impl Flavor {
+    fn dir(self) -> &'static str {
+        match self {
+            Flavor::Cpu => "cpu",
+            Flavor::Cuda => "cuda",
+            Flavor::Metal => "metal",
+        }
+    }
+
+    fn is_gpu(self) -> bool {
+        self != Flavor::Cpu
+    }
+}
+
+const ENGINE_RELEASE: &str =
+    "https://github.com/KonradDallaOrg/dimmy/releases/download/engine-nemotron-66d50d9";
+
+struct EngineArchive {
+    flavor: Flavor,
+    archive: &'static str,
+    sha256: &'static str,
+    bytes: u64,
+}
+
+// The archives `engine-nemotron.yml` publishes. An empty `sha256` is a build
+// that has not been published and pinned yet: offered as nothing, never
+// downloaded unverified.
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+const ENGINES: &[EngineArchive] = &[
+    EngineArchive {
+        flavor: Flavor::Cpu,
+        archive: "nemotron-engine-66d50d9-windows-x86_64-cpu.zip",
+        sha256: "",
+        bytes: 0,
+    },
+    EngineArchive {
+        flavor: Flavor::Cuda,
+        archive: "nemotron-engine-66d50d9-windows-x86_64-cuda.zip",
+        sha256: "",
+        bytes: 0,
+    },
+];
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const ENGINES: &[EngineArchive] = &[
+    EngineArchive {
+        flavor: Flavor::Cpu,
+        archive: "nemotron-engine-66d50d9-linux-x86_64-cpu.zip",
+        sha256: "",
+        bytes: 0,
+    },
+    EngineArchive {
+        flavor: Flavor::Cuda,
+        archive: "nemotron-engine-66d50d9-linux-x86_64-cuda.zip",
+        sha256: "",
+        bytes: 0,
+    },
+];
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const ENGINES: &[EngineArchive] = &[EngineArchive {
+    flavor: Flavor::Metal,
+    archive: "nemotron-engine-66d50d9-macos-aarch64-metal.zip",
+    sha256: "",
+    bytes: 0,
+}];
+#[cfg(not(any(
+    all(target_os = "windows", target_arch = "x86_64"),
+    all(target_os = "linux", target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+)))]
+const ENGINES: &[EngineArchive] = &[];
+
+#[cfg(windows)]
+const LIBRARY_FILE: &str = "nemo_speech_asr_c.dll";
+#[cfg(target_os = "macos")]
+const LIBRARY_FILE: &str = "libnemo_speech_asr_c.dylib";
+#[cfg(all(unix, not(target_os = "macos")))]
+const LIBRARY_FILE: &str = "libnemo_speech_asr_c.so";
+
+fn engine_root() -> PathBuf {
+    crate::local_stt::model_path("nemotron-engine")
+}
+
+fn library_path(flavor: Flavor) -> PathBuf {
+    engine_root().join(flavor.dir()).join(LIBRARY_FILE)
+}
+
+pub fn model_path() -> PathBuf {
+    crate::local_stt::model_path(MODEL.file)
+}
+
+pub fn diarizer_path() -> PathBuf {
+    crate::local_stt::model_path(DIARIZER.file)
+}
+
+/// The engine builds this machine should have, best first. A GPU build is
+/// listed only when the hardware for it is there; the CPU build always is,
+/// as the fallback.
+fn wanted_flavors() -> Vec<Flavor> {
+    let gpu = ENGINES.iter().map(|e| e.flavor).find(|f| match f {
+        Flavor::Metal => true,
+        Flavor::Cuda => has_nvidia_gpu(),
+        Flavor::Cpu => false,
+    });
+    let mut v: Vec<Flavor> = gpu.into_iter().collect();
+    if ENGINES.iter().any(|e| e.flavor == Flavor::Cpu) {
+        v.push(Flavor::Cpu);
+    }
+    v
+}
+
+fn has_nvidia_gpu() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        // hardware::detect reads AMD/Intel sysfs only; the NVIDIA driver
+        // announces itself here whenever it is loaded.
+        std::path::Path::new("/proc/driver/nvidia/version").exists()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        crate::hardware::detect()
+            .name
+            .is_some_and(|n| n.to_ascii_uppercase().contains("NVIDIA"))
+    }
+}
+
+/// Whether this platform has any published engine build to fetch, or a
+/// build already on disk (a developer's own).
+pub fn engine_available() -> bool {
+    ENGINES.iter().any(|e| !e.sha256.is_empty()) || library_path(Flavor::Cpu).is_file()
+}
+
+/// True when the model and at least one engine build are on disk.
+pub fn bundle_present() -> bool {
+    model_path().is_file() && wanted_flavors().iter().any(|f| library_path(*f).is_file())
+}
+
+pub fn diarizer_present() -> bool {
+    diarizer_path().is_file()
+}
+
+/// Megabytes a download would fetch: model, diarizer and the engine builds
+/// this machine wants.
+pub fn size_mb() -> u32 {
+    let engines: u64 = wanted_flavors()
+        .iter()
+        .filter_map(|f| ENGINES.iter().find(|e| e.flavor == *f))
+        .map(|e| e.bytes)
+        .sum();
+    (MODEL.bytes + DIARIZER.bytes + engines).div_ceil(1024 * 1024) as u32
+}
+
+/// Every file and folder a finished download leaves, for the download
+/// center to delete. A loaded engine library stays locked until exit.
+pub fn bundle_files() -> Vec<PathBuf> {
+    vec![model_path(), diarizer_path(), engine_root()]
+}
+
+/// The spec the app runs with: the best engine build that is on disk, the
+/// model, and the diarizer when it is there (words then carry speakers; a
+/// stream that did not ask for speakers pays nothing for it).
+pub fn default_spec() -> Option<EngineSpec> {
+    let flavor = wanted_flavors()
+        .into_iter()
+        .find(|f| library_path(*f).is_file())?;
+    Some(spec_for(flavor))
+}
+
+fn spec_for(flavor: Flavor) -> EngineSpec {
+    EngineSpec {
+        library: library_path(flavor),
+        model: model_path(),
+        gpu: flavor.is_gpu().then_some(0),
+        diarizer: diarizer_present().then(diarizer_path),
+    }
+}
+
+/// The recognizer for this machine: the GPU build when it loads, the CPU
+/// build when the GPU one does not (driver too old, no device after all).
+pub fn app_recognizer() -> Result<Arc<Recognizer>, TranscribeError> {
+    let not_installed = || TranscribeError::LocalModel("Nemotron is not downloaded".into());
+    let spec = default_spec().ok_or_else(not_installed)?;
+    match recognizer(&spec) {
+        Ok(r) => Ok(r),
+        Err(e) if spec.gpu.is_some() && library_path(Flavor::Cpu).is_file() => {
+            crate::log(&format!(
+                "[Nemotron] GPU engine failed ({e}); using the CPU engine"
+            ));
+            recognizer(&spec_for(Flavor::Cpu))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Fetch the model, the diarizer and the engine builds this machine wants,
+/// resumable, each checked against the SHA-256 pinned above. Progress
+/// covers everything.
+pub async fn download_bundle<F>(on_progress: F) -> Result<(), TranscribeError>
+where
+    F: Fn(u64, u64) + Sync,
+{
+    let err = |e: String| TranscribeError::LocalModel(format!("Nemotron download: {e}"));
+    let engines: Vec<&EngineArchive> = wanted_flavors()
+        .iter()
+        .filter_map(|f| {
+            ENGINES
+                .iter()
+                .find(|e| e.flavor == *f && !e.sha256.is_empty())
+        })
+        .collect();
+    if engines.is_empty() && !library_path(Flavor::Cpu).is_file() {
+        return Err(err(
+            "no engine build is published for this platform yet".into()
+        ));
+    }
+    let dir = crate::local_stt::model_directory();
+    std::fs::create_dir_all(&dir).map_err(|e| err(format!("create {}: {e}", dir.display())))?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(600))
+        .build()
+        .map_err(|e| err(format!("HTTP client: {e}")))?;
+
+    let archive_url: Vec<String> = engines
+        .iter()
+        .map(|e| format!("{ENGINE_RELEASE}/{}", e.archive))
+        .collect();
+    let mut jobs = vec![
+        Job::new(MODEL.url, model_path(), &MODEL, !model_path().is_file()),
+        Job::new(
+            DIARIZER.url,
+            diarizer_path(),
+            &DIARIZER,
+            !diarizer_present(),
+        ),
+    ];
+    for (e, url) in engines.iter().zip(&archive_url) {
+        jobs.push(Job {
+            url,
+            dest: crate::local_stt::model_path(e.archive),
+            magic: ZIP_MAGIC,
+            sha256: e.sha256,
+            bytes: e.bytes,
+            wanted: !library_path(e.flavor).is_file(),
+        });
+    }
+    let total: u64 = jobs.iter().map(|j| j.bytes).sum();
+    let mut base = 0u64;
+    for Job {
+        url,
+        dest,
+        magic,
+        sha256,
+        bytes,
+        wanted,
+    } in jobs
+    {
+        if wanted {
+            crate::log(&format!("[Nemotron] Downloading {url} ..."));
+            crate::download::download_resumable(&client, url, &dest, &[magic], |done, _| {
+                on_progress(base + done, total)
+            })
+            .await
+            .map_err(err)?;
+            if let Err(e) = crate::download::verify_file(&dest, &[magic], Some(sha256)) {
+                let _ = std::fs::remove_file(&dest);
+                return Err(err(format!("failed its pinned check: {e}")));
+            }
+        }
+        base += bytes;
+        on_progress(base, total);
+    }
+    for e in &engines {
+        let zip = crate::local_stt::model_path(e.archive);
+        if !library_path(e.flavor).is_file() {
+            extract_engine(&zip, e.flavor).map_err(err)?;
+        }
+        let _ = std::fs::remove_file(&zip);
+    }
+    assert!(
+        bundle_present(),
+        "model and an engine build must exist after a successful download"
+    );
+    Ok(())
+}
+
+struct Job<'a> {
+    url: &'a str,
+    dest: PathBuf,
+    magic: &'static [u8],
+    sha256: &'static str,
+    bytes: u64,
+    wanted: bool,
+}
+
+impl<'a> Job<'a> {
+    fn new(url: &'a str, dest: PathBuf, p: &Pinned, wanted: bool) -> Self {
+        Self {
+            url,
+            dest,
+            magic: p.magic,
+            sha256: p.sha256,
+            bytes: p.bytes,
+            wanted,
+        }
+    }
+}
+
+/// Unpack an engine archive into `nemotron-engine/<flavor>/` through a
+/// staging folder renamed into place, so a crash mid-way never leaves half
+/// a library under the name the loader looks for. Only library files and
+/// licence texts are taken, flattened: nothing in an archive can land
+/// outside the engine folder.
+fn extract_engine(zip_path: &Path, flavor: Flavor) -> Result<(), String> {
+    let file = std::fs::File::open(zip_path).map_err(|e| format!("open archive: {e}"))?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("read archive: {e}"))?;
+    let dest = engine_root().join(flavor.dir());
+    let staging = engine_root().join(format!("{}.part", flavor.dir()));
+    let _ = std::fs::remove_dir_all(&staging);
+    std::fs::create_dir_all(&staging).map_err(|e| format!("create {}: {e}", staging.display()))?;
+    let mut libraries = 0;
+    for i in 0..zip.len() {
+        let mut member = zip
+            .by_index(i)
+            .map_err(|e| format!("archive entry {i}: {e}"))?;
+        let Some(name) = member
+            .enclosed_name()
+            .and_then(|p| p.file_name().map(|n| n.to_owned()))
+        else {
+            continue;
+        };
+        let n = name.to_string_lossy();
+        let is_lib = n.ends_with(".dll") || n.ends_with(".dylib") || n.contains(".so");
+        let is_notice = n == "LICENSE" || n == "NOTICE" || n == "THIRD_PARTY_NOTICES.md";
+        if member.is_dir() || !(is_lib || is_notice) {
+            continue;
+        }
+        let mut out =
+            std::fs::File::create(staging.join(&name)).map_err(|e| format!("create {n}: {e}"))?;
+        std::io::copy(&mut member, &mut out).map_err(|e| format!("extract {n}: {e}"))?;
+        libraries += usize::from(is_lib);
+    }
+    if !staging.join(LIBRARY_FILE).is_file() {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(format!(
+            "archive has no {LIBRARY_FILE} ({libraries} libraries)"
+        ));
+    }
+    let _ = std::fs::remove_dir_all(&dest);
+    std::fs::rename(&staging, &dest).map_err(|e| format!("install engine: {e}"))
+}
+
 // ---- C ABI (asr.h, NeMo-Speech.cpp v1) ----------------------------------
 
 #[repr(C)]
@@ -459,7 +853,7 @@ impl Recognizer {
             recognizer: Arc::clone(self),
             handle,
             _req: req,
-            pushed: 0,
+            pushed_secs: 0.0,
             finished: false,
         })
     }
@@ -534,7 +928,7 @@ pub struct Stream {
     recognizer: Arc<Recognizer>,
     handle: *mut StreamHandle,
     _req: Request,
-    pushed: usize,
+    pushed_secs: f64,
     finished: bool,
 }
 
@@ -545,26 +939,31 @@ unsafe impl Send for Stream {}
 impl Stream {
     /// Buffer 16 kHz mono audio. Decoding happens in `poll`.
     pub fn push(&mut self, pcm_16k: &[f32]) -> Result<(), TranscribeError> {
+        self.push_at(pcm_16k, SAMPLE_RATE as u32)
+    }
+
+    /// Buffer mono audio at `rate` (8-96 kHz). The engine resamples inside
+    /// the stream, continuously, which resampling each 100 ms piece on our
+    /// side would not be. The rate must not change within a stream.
+    pub fn push_at(&mut self, pcm: &[f32], rate: u32) -> Result<(), TranscribeError> {
         assert!(!self.finished, "push after finish");
-        if pcm_16k.is_empty() {
+        assert!(
+            (8_000..=96_000).contains(&rate),
+            "nemotron: rate {rate} out of 8-96 kHz"
+        );
+        if pcm.is_empty() {
             return Ok(());
         }
         assert!(
-            pcm_16k.iter().all(|s| s.is_finite()),
+            pcm.iter().all(|s| s.is_finite()),
             "nemotron: samples must be finite"
         );
         let api = &self.recognizer.api;
         // SAFETY: the slice outlives the call; the stream copies it.
-        let rc = unsafe {
-            (api.stream_push_f32)(
-                self.handle,
-                pcm_16k.as_ptr(),
-                pcm_16k.len(),
-                SAMPLE_RATE as i32,
-            )
-        };
+        let rc =
+            unsafe { (api.stream_push_f32)(self.handle, pcm.as_ptr(), pcm.len(), rate as i32) };
         api.check("push", rc)?;
-        self.pushed += pcm_16k.len();
+        self.pushed_secs += pcm.len() as f64 / rate as f64;
         Ok(())
     }
 
@@ -598,7 +997,7 @@ impl Stream {
 
     /// Seconds of audio pushed so far.
     pub fn pushed_secs(&self) -> f64 {
-        self.pushed as f64 / SAMPLE_RATE as f64
+        self.pushed_secs
     }
 }
 
@@ -642,6 +1041,297 @@ fn warm_up(r: &Arc<Recognizer>) -> Result<(), TranscribeError> {
         started.elapsed().as_secs_f64() * 1000.0
     ));
     Ok(())
+}
+
+// ---- Live dictation ------------------------------------------------------
+
+/// Callback shape shared with the cloud streamers and the chunked engine:
+/// `(delta, cumulative, is_final)`, fanned out as `stt_chunk`.
+pub type ChunkCallback = dyn Fn(&str, &str, bool) + Send + Sync + 'static;
+
+/// How often new capture is handed to the engine. The model consumes 320 ms
+/// chunks; 100 ms keeps the text within a chunk of the voice, the cadence
+/// every other live engine in the app uses.
+const PUSH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Live dictation: a thread that reads the capture buffer as it fills, the
+/// way the Deepgram and OpenAI streamers do, and pushes it into one stream
+/// for the whole dictation. One stream, never reset: a reset throws away
+/// the encoder's context and the detected language, and the first word of
+/// the next sentence went with them (measured on these recordings).
+pub struct Streamer {
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+    final_text: Arc<Mutex<String>>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Streamer {
+    /// Returns at once: the model loads on the streamer's thread while the
+    /// capture keeps filling `buffer`, so nothing said during the load is
+    /// lost, only shown a moment later.
+    pub fn start(
+        buffer: Arc<Mutex<Vec<f32>>>,
+        rate: u32,
+        language: String,
+        keywords: Vec<String>,
+        on_chunk: Arc<ChunkCallback>,
+    ) -> Self {
+        assert!(rate > 0, "capture rate must be positive");
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let final_text = Arc::new(Mutex::new(String::new()));
+        let (c, f) = (Arc::clone(&cancel), Arc::clone(&final_text));
+        let handle = std::thread::Builder::new()
+            .name("nemotron-stream".into())
+            .spawn(move || {
+                if let Err(e) = run_stream(
+                    &buffer,
+                    rate,
+                    &language,
+                    &keywords,
+                    &c,
+                    &f,
+                    on_chunk.as_ref(),
+                ) {
+                    crate::log(&format!("[Nemotron] live dictation stopped: {e}"));
+                }
+            })
+            .expect("spawn nemotron-stream");
+        Self {
+            cancel,
+            final_text,
+            handle: Some(handle),
+        }
+    }
+
+    /// Flush the tail and return the whole dictation.
+    pub fn stop(mut self) -> String {
+        self.cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+        self.final_text
+            .lock()
+            .map(|s| s.clone())
+            .unwrap_or_default()
+    }
+}
+
+fn run_stream(
+    buffer: &Arc<Mutex<Vec<f32>>>,
+    rate: u32,
+    language: &str,
+    keywords: &[String],
+    cancel: &std::sync::atomic::AtomicBool,
+    final_text: &Mutex<String>,
+    on_chunk: &ChunkCallback,
+) -> Result<(), TranscribeError> {
+    let recognizer = app_recognizer()?;
+    let mut stream = recognizer.stream(language, keywords, false)?;
+    let mut transcript = Transcript::default();
+    let mut cursor = 0usize;
+    let emit = |updates: Vec<Update>, transcript: &mut Transcript| {
+        for u in updates {
+            let (delta, cumulative) = transcript.apply(&u);
+            if !delta.is_empty() || u.is_final {
+                on_chunk(&delta, &cumulative, u.is_final);
+            }
+        }
+    };
+    loop {
+        let stopping = cancel.load(std::sync::atomic::Ordering::SeqCst);
+        let fresh = match buffer.lock() {
+            Ok(b) if b.len() > cursor => {
+                let s = b[cursor..].to_vec();
+                cursor = b.len();
+                s
+            }
+            // A buffer cleared under us (a new dictation) restarts the cursor.
+            Ok(b) => {
+                cursor = cursor.min(b.len());
+                Vec::new()
+            }
+            Err(_) => Vec::new(),
+        };
+        stream.push_at(&fresh, rate)?;
+        if stopping {
+            break;
+        }
+        emit(stream.poll()?, &mut transcript);
+        std::thread::sleep(PUSH_INTERVAL);
+    }
+    emit(stream.finish()?, &mut transcript);
+    let text = transcript.text();
+    if let Ok(mut f) = final_text.lock() {
+        *f = text;
+    }
+    Ok(())
+}
+
+// ---- Meetings -----------------------------------------------------------
+
+/// One line of a meeting transcript: who, from when, what.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Line {
+    /// Seconds from the start of the track (pauses excluded, like the files
+    /// on disk).
+    pub start: f64,
+    /// 1-based engine speaker, `None` on a track without diarization.
+    pub speaker: Option<u8>,
+    pub text: String,
+}
+
+/// A turn shorter than this many words is folded into its neighbour. On
+/// fast exchanges the diarizer flips single words between voices ("Che
+/// cazzo ci" / "fanno i federali qui" on the 2026-10-29 clip); a two-word
+/// "turn" is almost always that, not a real change of speaker.
+const MIN_TURN_WORDS: usize = 3;
+
+/// Split one final utterance into speaker turns. Untagged words (speaker 0)
+/// join the turn they sit in; short turns are folded into the previous
+/// one (or the next, at the start), so the transcript changes speaker only
+/// where somebody actually took the floor.
+pub fn turns(words: &[Word], fallback_text: &str, offset: f64) -> Vec<Line> {
+    if words.is_empty() {
+        let text = fallback_text.trim();
+        return if text.is_empty() {
+            Vec::new()
+        } else {
+            vec![Line {
+                start: offset,
+                speaker: None,
+                text: text.into(),
+            }]
+        };
+    }
+    let mut raw: Vec<(u8, f64, Vec<&str>)> = Vec::new();
+    for w in words {
+        let text = w.text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        match raw.last_mut() {
+            Some(t) if t.0 == w.speaker || w.speaker == 0 => t.2.push(text),
+            _ => raw.push((w.speaker, w.start, vec![text])),
+        }
+    }
+    let mut merged: Vec<(u8, f64, Vec<&str>)> = Vec::new();
+    for t in raw {
+        match merged.last_mut() {
+            Some(prev) if t.2.len() < MIN_TURN_WORDS || prev.0 == t.0 => prev.2.extend(t.2),
+            Some(prev) if prev.2.len() < MIN_TURN_WORDS => {
+                // A short opening turn belongs to whoever speaks next.
+                let mut words = std::mem::take(&mut prev.2);
+                words.extend(t.2);
+                *prev = (t.0, prev.1, words);
+            }
+            _ => merged.push(t),
+        }
+    }
+    merged
+        .into_iter()
+        .map(|(speaker, start, words)| Line {
+            start: offset + start,
+            speaker: (speaker > 0).then_some(speaker),
+            text: words.join(" "),
+        })
+        .collect()
+}
+
+/// One track of a meeting (mic or system), streamed as the recording goes.
+/// The meeting hands over overlapping windows; only the part past what was
+/// already pushed goes in, so the stream sees the track exactly once.
+pub struct MeetingTrack {
+    stream: Stream,
+    rate: u32,
+    /// Track sample (at `rate`) up to which audio has been pushed.
+    pushed_until: usize,
+    speakers: bool,
+    language: String,
+    keywords: Vec<String>,
+    /// Track second the current stream started at: a stream reopened
+    /// without speakers counts its times from there.
+    stream_origin: f64,
+}
+
+impl MeetingTrack {
+    pub fn open(
+        rate: u32,
+        language: &str,
+        keywords: &[String],
+        speakers: bool,
+    ) -> Result<Self, TranscribeError> {
+        let r = app_recognizer()?;
+        let speakers = speakers && r.spec().diarizer.is_some();
+        Ok(Self {
+            stream: r.stream(language, keywords, speakers)?,
+            rate,
+            pushed_until: 0,
+            speakers,
+            language: language.into(),
+            keywords: keywords.to_vec(),
+            stream_origin: 0.0,
+        })
+    }
+
+    pub fn has_speakers(&self) -> bool {
+        self.speakers
+    }
+
+    /// Push the new part of a window that starts at `track_start` and
+    /// return the lines it completed.
+    pub fn feed(
+        &mut self,
+        window: &[f32],
+        track_start: usize,
+    ) -> Result<Vec<Line>, TranscribeError> {
+        let skip = self
+            .pushed_until
+            .saturating_sub(track_start)
+            .min(window.len());
+        self.stream.push_at(&window[skip..], self.rate)?;
+        self.pushed_until = self.pushed_until.max(track_start + window.len());
+        let updates = self.stream.poll()?;
+        Ok(self.lines(updates))
+    }
+
+    /// Live speakers cost more than the CPU of a slow machine has: keep the
+    /// text live and leave who-said-what to the pass after the meeting.
+    /// Reopens the stream without the diarizer from this point on.
+    pub fn drop_speakers(&mut self) -> Result<Vec<Line>, TranscribeError> {
+        if !self.speakers {
+            return Ok(Vec::new());
+        }
+        let tail = self.stream.finish()?;
+        let lines = self.lines(tail);
+        let r = app_recognizer()?;
+        self.stream = r.stream(&self.language, &self.keywords, false)?;
+        self.stream_origin = self.pushed_until as f64 / self.rate as f64;
+        self.speakers = false;
+        Ok(lines)
+    }
+
+    pub fn finish(mut self) -> Result<Vec<Line>, TranscribeError> {
+        let tail = self.stream.finish()?;
+        Ok(self.lines(tail))
+    }
+
+    fn lines(&self, updates: Vec<Update>) -> Vec<Line> {
+        updates
+            .into_iter()
+            .filter(|u| u.is_final)
+            .flat_map(|u| {
+                let words: Vec<Word> = if self.speakers {
+                    u.words
+                } else {
+                    u.words
+                        .into_iter()
+                        .map(|w| Word { speaker: 0, ..w })
+                        .collect()
+                };
+                turns(&words, &u.text, self.stream_origin)
+            })
+            .collect()
+    }
 }
 
 // ---- Turning results into text the app can use --------------------------
@@ -705,6 +1395,83 @@ mod tests {
             is_final,
             words: Vec::new(),
         }
+    }
+
+    fn w(text: &str, start: f64, speaker: u8) -> Word {
+        Word {
+            text: text.into(),
+            start,
+            end: start + 0.2,
+            speaker,
+        }
+    }
+
+    #[test]
+    fn turns_follow_the_speaker_and_fold_flickers() {
+        let words = [
+            w("Mi", 28.2, 2),
+            w("sembra", 28.4, 2),
+            w("un", 28.6, 2),
+            w("buon", 28.8, 2),
+            w("momento", 29.0, 2),
+            w("Giustificato", 34.0, 3),
+            w("è", 34.3, 3),
+            w("giusto", 34.5, 3),
+            // A two-word flicker to speaker 1 inside speaker 3's turn.
+            w("non", 34.9, 1),
+            w("sempre", 35.1, 1),
+            w("coincidono", 35.4, 3),
+        ];
+        let lines = turns(&words, "", 0.0);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(lines[0].speaker, Some(2));
+        assert_eq!(lines[0].start, 28.2);
+        assert_eq!(lines[1].speaker, Some(3));
+        assert_eq!(lines[1].text, "Giustificato è giusto non sempre coincidono");
+    }
+
+    #[test]
+    fn a_short_opening_turn_goes_to_the_next_speaker() {
+        let words = [
+            w("Che", 116.0, 2),
+            w("cazzo", 116.2, 2),
+            w("fanno", 116.5, 3),
+            w("i", 116.7, 3),
+            w("federali", 116.9, 3),
+            w("qui", 117.2, 3),
+        ];
+        let lines = turns(&words, "", 0.0);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].speaker, Some(3));
+        assert_eq!(lines[0].start, 116.0);
+        assert_eq!(lines[0].text, "Che cazzo fanno i federali qui");
+    }
+
+    #[test]
+    fn untagged_words_and_wordless_results_still_make_lines() {
+        let lines = turns(
+            &[w("ciao", 1.0, 0), w("a", 1.2, 0), w("tutti", 1.4, 0)],
+            "",
+            10.0,
+        );
+        assert_eq!(
+            lines,
+            vec![Line {
+                start: 11.0,
+                speaker: None,
+                text: "ciao a tutti".into()
+            }]
+        );
+        let lines = turns(&[], " solo testo ", 5.0);
+        assert_eq!(
+            lines,
+            vec![Line {
+                start: 5.0,
+                speaker: None,
+                text: "solo testo".into()
+            }]
+        );
+        assert!(turns(&[], "  ", 0.0).is_empty());
     }
 
     #[test]
