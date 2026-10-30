@@ -134,12 +134,7 @@ public sealed partial class MeetingWindow : Window
         {
             var appWindow = WindowHelper.GetAppWindow(this);
             WindowHelper.ResizeLogical(this, 980, 720);
-            try
-            {
-                var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "dimmy.ico");
-                if (File.Exists(iconPath)) appWindow?.SetIcon(iconPath);
-            }
-            catch { }
+            WindowHelper.SetDimmyIcon(this);
             if (appWindow?.Presenter is OverlappedPresenter presenter)
             {
                 presenter.IsResizable = true;

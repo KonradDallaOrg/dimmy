@@ -44,15 +44,7 @@ public sealed partial class SettingsWindow : Window
         var appWindow = WindowHelper.GetAppWindow(this);
         WindowHelper.ResizeLogical(this, 920, 640);
 
-        // Set window icon
-        try
-        {
-            var iconPath = System.IO.Path.Combine(
-                System.AppContext.BaseDirectory, "Assets", "dimmy.ico");
-            if (System.IO.File.Exists(iconPath))
-                appWindow?.SetIcon(iconPath);
-        }
-        catch { }
+        WindowHelper.SetDimmyIcon(this);
 
         // Refresh License page when the running Dimmy redeems via dimmy:// URL.
         // The URL-scheme dispatch hits App.xaml.cs which calls LicenseService.RedeemAsync

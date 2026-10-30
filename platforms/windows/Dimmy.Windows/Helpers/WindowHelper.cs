@@ -112,13 +112,45 @@ public static class WindowHelper
         appWindow.Resize(new global::Windows.Graphics.SizeInt32(physW, physH));
     }
 
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private static extern IntPtr LoadImage(IntPtr instance, string name, uint type, int width, int height, uint flags);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr SendMessage(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern int GetSystemMetricsForDpi(int index, uint dpi);
+
+    private static readonly System.Collections.Generic.Dictionary<int, IntPtr> _dimmyIcons = new();
+
+    /// <summary>Asks for the exact small and big size. AppWindow.SetIcon hands
+    /// Windows one 40×40 image for both at 125%, and Task Manager and the title
+    /// bar shrink it to mud, though dimmy.ico has a sharp frame for the small
+    /// size. Handles are kept: every window of this size shares one.</summary>
     public static void SetDimmyIcon(Window window)
     {
+        const uint WM_SETICON = 0x0080, IMAGE_ICON = 1, LR_LOADFROMFILE = 0x10;
+        const int ICON_SMALL = 0, ICON_BIG = 1, SM_CXICON = 11, SM_CXSMICON = 49;
         try
         {
-            var iconPath = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "dimmy.ico");
-            if (System.IO.File.Exists(iconPath))
-                GetAppWindow(window)?.SetIcon(iconPath);
+            var path = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "dimmy.ico");
+            if (!System.IO.File.Exists(path)) return;
+            var hwnd = GetHwnd(window);
+            uint dpi = GetDpiForWindow(hwnd);
+            foreach (var (kind, metric) in new[] { (ICON_SMALL, SM_CXSMICON), (ICON_BIG, SM_CXICON) })
+            {
+                int size = GetSystemMetricsForDpi(metric, dpi);
+                lock (_dimmyIcons)
+                {
+                    if (!_dimmyIcons.TryGetValue(size, out var icon))
+                    {
+                        icon = LoadImage(IntPtr.Zero, path, IMAGE_ICON, size, size, LR_LOADFROMFILE);
+                        _dimmyIcons[size] = icon;
+                    }
+                    if (icon != IntPtr.Zero)
+                        SendMessage(hwnd, WM_SETICON, (IntPtr)kind, icon);
+                }
+            }
         }
         catch { }
     }
