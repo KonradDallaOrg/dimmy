@@ -108,6 +108,10 @@ name = "nemotron_meeting_bench"
 path = "src/bin/nemotron_meeting_bench.rs"
 
 [[bin]]
+name = "nemotron_meeting_replay"
+path = "src/bin/nemotron_meeting_replay.rs"
+
+[[bin]]
 name = "nemotron_smoke"
 path = "src/bin/nemotron_smoke.rs"
 

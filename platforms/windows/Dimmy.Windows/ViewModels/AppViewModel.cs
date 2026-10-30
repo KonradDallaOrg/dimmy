@@ -365,6 +365,11 @@ public partial class AppViewModel : ObservableObject
     /// elapsedMs, chunkCount).
     public event Action<string, string, string, long, int>? MeetingChunkReceived;
 
+    /// Raised while a streaming engine is still hearing a sentence. Args:
+    /// (dir, track, text); an empty text means the sentence closed and has
+    /// arrived, or is about to, as a `meeting_chunk` line.
+    public event Action<string, string, string>? MeetingPartialReceived;
+
     /// <summary>Raised once per meeting when the core starts dropping
     /// transcription windows because the machine cannot keep up with
     /// realtime. The RECORDING is unaffected — capture and transcription
@@ -746,6 +751,12 @@ public partial class AppViewModel : ObservableObject
                         var chunkCount = payload.GetProperty("chunk_count").GetInt32();
                         MeetingChunkReceived?.Invoke(dir, speaker, line, elapsedMs, chunkCount);
                     }
+                    break;
+                case "meeting_partial":
+                    MeetingPartialReceived?.Invoke(
+                        payload.GetProperty("dir").GetString() ?? "",
+                        payload.GetProperty("track").GetString() ?? "",
+                        payload.GetProperty("text").GetString() ?? "");
                     break;
                 case "meeting_finishing_transcription":
                     // The audio is already finalized; the core is draining

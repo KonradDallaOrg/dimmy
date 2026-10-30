@@ -141,6 +141,8 @@ dimmy_model_download_enqueue
 dimmy_model_download_snapshot_json
 dimmy_model_exists
 dimmy_nemotron_download
+dimmy_nemotron_full_size_mb
+dimmy_nemotron_full_status
 dimmy_nemotron_size_mb
 dimmy_nemotron_status
 dimmy_notion_has_token

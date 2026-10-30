@@ -40,9 +40,14 @@ const DEFAULT_CHUNK_SECS: f32 = 15.0;
 const DEFAULT_OVERLAP_MS: u32 = 500;
 /// Window for Nemotron, which streams: each window only carries the audio
 /// since the last one into a stream that is already open, so a short window
-/// is what makes the transcript live. The model consumes 320 ms chunks;
-/// 2 s keeps the queue to a few jobs a second with the text a breath behind.
-const NEMOTRON_WINDOW_SECS: f32 = 2.0;
+/// is what makes the transcript live. Half a second: the model consumes
+/// 320 ms chunks, so the text never trails the voice by more than this.
+const NEMOTRON_WINDOW_SECS: f32 = 0.5;
+/// Its queue, in windows: a minute of backlog before anything is dropped. The
+/// point of a stream is that a slow patch catches up; `STT_QUEUE_DEPTH` is
+/// sized for 15 s windows and would be two seconds here. Each job holds one
+/// second of audio per track, so this tops out around 90 MB.
+const NEMOTRON_QUEUE_DEPTH: usize = 120;
 const FSYNC_INTERVAL: Duration = Duration::from_secs(1);
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -917,41 +922,35 @@ impl NemoTracks {
         mic: &[f32],
         system: &[f32],
         track_start: usize,
-        mic_rate: u32,
     ) -> usize {
         let started = Instant::now();
+        let mic_label = sink.mic_label;
         let mut words = 0;
-        // The two tracks run side by side: each stream is single-threaded
-        // inside the engine, and one after the other they cost the sum of
-        // both on a machine with cores to spare.
-        let (mic_out, system_out) = std::thread::scope(|scope| {
-            let mic_job = self
-                .mic
-                .as_mut()
-                .map(|t| scope.spawn(move || t.feed(mic, track_start)));
-            let system_out = self.system.as_mut().map(|t| t.feed(system, track_start));
-            let mic_out = mic_job.map(|h| h.join().expect("nemotron mic feed panicked"));
-            (mic_out, system_out)
-        });
-        match mic_out {
-            Some(Ok(lines)) => words += sink.write(sink.mic_label, &lines),
-            Some(Err(e)) => crate::log(&format!("[Meeting] nemotron mic: {e}")),
-            None => {}
+        let mut fresh_secs = 0.0f64;
+        for (track, label, window) in [
+            (self.mic.as_mut(), mic_label, mic),
+            (self.system.as_mut(), "system", system),
+        ] {
+            let Some(t) = track else { continue };
+            match t.feed(window, track_start) {
+                Ok(fed) => {
+                    fresh_secs = fresh_secs.max(fed.fresh_secs);
+                    words += sink.write(label, &fed.lines);
+                    if let Some(text) = fed.partial {
+                        sink.partial(label, &text);
+                    }
+                }
+                Err(e) => crate::log(&format!("[Meeting] nemotron {label}: {e}")),
+            }
         }
-        match system_out {
-            Some(Ok(lines)) => words += sink.write("system", &lines),
-            Some(Err(e)) => crate::log(&format!("[Meeting] nemotron system: {e}")),
-            None => {}
+        if fresh_secs > 0.0 {
+            let ratio = started.elapsed().as_secs_f64() / fresh_secs;
+            // About ten seconds of memory at half-second windows, from zero:
+            // one heavy window, the first above all, is nothing; a sustained
+            // overload is what counts.
+            self.load = 0.95 * self.load + 0.05 * ratio;
         }
-        let window_secs = mic.len().max(1) as f64 / mic_rate as f64;
-        let ratio = started.elapsed().as_secs_f64() / window_secs;
-        self.load = if self.load == 0.0 {
-            ratio
-        } else {
-            0.8 * self.load + 0.2 * ratio
-        };
         if self.load > 0.9 {
-            let mic_label = sink.mic_label;
             for (track, label) in [
                 (self.mic.as_mut(), mic_label),
                 (self.system.as_mut(), "system"),
@@ -990,6 +989,7 @@ impl NemoTracks {
             match t.finish() {
                 Ok((lines, spoken)) => {
                     sink.write(label, &lines);
+                    sink.partial(label, "");
                     if spoken.covered {
                         labelled = true;
                         speakers.extend(crate::nemotron::speaker_list(label, &spoken.segments));
@@ -1032,6 +1032,18 @@ struct LineSink<'a> {
 }
 
 impl LineSink<'_> {
+    /// The sentence still being said on a track, for the live view. An empty
+    /// text clears it: the utterance closed and arrives as a line.
+    fn partial(&self, track_label: &str, text: &str) {
+        let payload = serde_json::json!({
+            "dir": self.dir,
+            "track": track_label,
+            "text": text,
+        })
+        .to_string();
+        crate::ffi::emit_event("meeting_partial", &payload);
+    }
+
     /// Append Nemotron lines to transcripts.txt and tell the hosts, in the
     /// format every other engine writes (`[HH:MM:SS] [speaker] text`). The
     /// time is the turn's first word, on the track's timeline. Returns the
@@ -1291,13 +1303,7 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
                 dir: &ctx.dir_str,
                 mic_label: ctx.mic_label,
             };
-            let words = n.feed(
-                &mut sink,
-                &mic_slice,
-                &system_slice,
-                track_start,
-                ctx.device_sample_rate,
-            );
+            let words = n.feed(&mut sink, &mic_slice, &system_slice, track_start);
             if words > 0 || stats_secs > 0.0 {
                 let _ = crate::ffi::dimmy_update_stats(words as std::os::raw::c_int, stats_secs);
             }
@@ -1675,7 +1681,12 @@ fn worker_loop(
     // why that separation is not negotiable.
     let chunk_count_shared = Arc::new(std::sync::atomic::AtomicU32::new(0));
     let windows_lost = Arc::new(AtomicBool::new(false));
-    let (stt_tx, stt_rx) = std::sync::mpsc::sync_channel::<SttJob>(STT_QUEUE_DEPTH);
+    let queue_depth = if stt.mode == "local" && stt.local_backend == "nemotron" {
+        NEMOTRON_QUEUE_DEPTH
+    } else {
+        STT_QUEUE_DEPTH
+    };
+    let (stt_tx, stt_rx) = std::sync::mpsc::sync_channel::<SttJob>(queue_depth);
     let stt_ctx = SttThreadCtx {
         stt: stt.clone(),
         resolved_local_model,

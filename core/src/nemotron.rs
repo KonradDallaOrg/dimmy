@@ -36,6 +36,9 @@ struct Pinned {
     magic: &'static [u8],
 }
 
+const F32_URL: &str = "https://huggingface.co/KonradDallaOrg/dimmy-nemotron-3.5-asr-gguf/resolve/main/nemotron-3.5-asr-streaming-0.6b.f32.gguf";
+const F32_SHA256: &str = "2223d6e5d3f9e89ff54928f91b524bd827b35cb28b8f5951bfef4c1fb30b44cd";
+const F32_BYTES: u64 = 2_576_356_832;
 const GGUF_MAGIC: &[u8] = b"GGUF";
 const ZIP_MAGIC: &[u8] = b"PK\x03\x04";
 
@@ -45,6 +48,18 @@ const MODEL: Pinned = Pinned {
     url: "https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b/resolve/ea30d66debe3740a08b573244286791d423d6b3e/nemotron-3.5-asr-streaming-0.6b.q8_0.gguf",
     sha256: "3fc991d3badad7277c11030a7519832cddaf2057aafed6d4b25147e953a070b1",
     bytes: 742_090_464,
+    magic: GGUF_MAGIC,
+};
+
+/// The same checkpoint at full precision, for whoever has the GPU for it:
+/// NVIDIA's `convert_model.py` at `--outtype f32` (its table lists F32 for
+/// other model families only; the weights are the checkpoint's own). NVIDIA
+/// publishes no such file, so it is mirrored on the project's organization.
+const MODEL_F32: Pinned = Pinned {
+    file: "nemotron-3.5-asr-streaming-0.6b.f32.gguf",
+    url: F32_URL,
+    sha256: F32_SHA256,
+    bytes: F32_BYTES,
     magic: GGUF_MAGIC,
 };
 
@@ -101,14 +116,14 @@ const ENGINES: &[EngineArchive] = &[
     EngineArchive {
         flavor: Flavor::Cpu,
         archive: "nemotron-engine-66d50d9-windows-x86_64-cpu.zip",
-        sha256: "",
-        bytes: 0,
+        sha256: "46e0543088161bd34eef8d2a2dd3c819485fa56ab4cc606dc8a517937554acc2",
+        bytes: 1618448,
     },
     EngineArchive {
         flavor: Flavor::Cuda,
         archive: "nemotron-engine-66d50d9-windows-x86_64-cuda.zip",
-        sha256: "",
-        bytes: 0,
+        sha256: "487118b7a93db4d24e89da369918a03e1de59c1dd20783d2fbc3c0aa0b90259a",
+        bytes: 97587904,
     },
 ];
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -116,22 +131,22 @@ const ENGINES: &[EngineArchive] = &[
     EngineArchive {
         flavor: Flavor::Cpu,
         archive: "nemotron-engine-66d50d9-linux-x86_64-cpu.zip",
-        sha256: "",
-        bytes: 0,
+        sha256: "be68bb7a9673d1f9e756d8da68a45323698b9a823eac5e42fd5ccdd82fcfdd8c",
+        bytes: 1836474,
     },
     EngineArchive {
         flavor: Flavor::Cuda,
         archive: "nemotron-engine-66d50d9-linux-x86_64-cuda.zip",
-        sha256: "",
-        bytes: 0,
+        sha256: "42e092c679e7e74d2078ccf96ecf9206437b63dbfe096b9c0a6af289956c852b",
+        bytes: 98731104,
     },
 ];
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 const ENGINES: &[EngineArchive] = &[EngineArchive {
     flavor: Flavor::Metal,
     archive: "nemotron-engine-66d50d9-macos-aarch64-metal.zip",
-    sha256: "",
-    bytes: 0,
+    sha256: "b4b048ac72beac4c5684310fe62c211bd64102060e75e45c66619c6e6f01ea55",
+    bytes: 1847040,
 }];
 #[cfg(not(any(
     all(target_os = "windows", target_arch = "x86_64"),
@@ -155,8 +170,63 @@ fn library_path(flavor: Flavor) -> PathBuf {
     engine_root().join(flavor.dir()).join(LIBRARY_FILE)
 }
 
+/// Free memory a model load must leave: the engine aborts the whole process
+/// when an allocation fails, and in a meeting that process is the recording.
+const LOAD_HEADROOM_BYTES: u64 = 256 * 1024 * 1024;
+/// Commit charge of the GPU runtime on top of the weights: 7.56 GB peak with
+/// 0.85 GB of Q8_0 and diarizer (CUDA, T600, 2026-10-30).
+const GPU_RUNTIME_BYTES: u64 = 7 * 1024 * 1024 * 1024;
+/// What F32 must find free before it is preferred over Q8_0.
+const F32_HEADROOM_BYTES: u64 = GPU_RUNTIME_BYTES + 1024 * 1024 * 1024;
+
+/// The file being on disk is the choice: someone downloaded it to use it. It
+/// needs a GPU, since a CPU could not keep up (0.6-1.3x realtime for one
+/// stream), and the memory to load it, or Q8_0 does the job.
+fn pick_model(wanted: bool, loaded: bool, available: Option<u64>) -> &'static Pinned {
+    let fits = available.is_none_or(|free| free >= MODEL_F32.bytes + F32_HEADROOM_BYTES);
+    if wanted && (loaded || fits) {
+        &MODEL_F32
+    } else {
+        &MODEL
+    }
+}
+
+fn running_model() -> &'static Pinned {
+    let wanted = full_precision_available()
+        && full_precision_present()
+        && std::env::var_os("DIMMY_NEMOTRON_Q8").is_none();
+    let f32_path = full_precision_path();
+    let loaded = RECOGNIZERS
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .iter()
+        .any(|r| r.spec().model == f32_path);
+    pick_model(wanted, loaded, crate::setup::available_memory_bytes())
+}
+
 pub fn model_path() -> PathBuf {
-    crate::local_stt::model_path(MODEL.file)
+    crate::local_stt::model_path(running_model().file)
+}
+
+fn full_precision_path() -> PathBuf {
+    crate::local_stt::model_path(MODEL_F32.file)
+}
+
+/// True when this machine runs a GPU build, the only place F32 is used.
+pub fn full_precision_available() -> bool {
+    wanted_flavors().first().is_some_and(|f| f.is_gpu())
+}
+
+pub fn full_precision_present() -> bool {
+    full_precision_path().is_file()
+}
+
+pub fn full_precision_size_mb() -> u32 {
+    MODEL_F32.bytes.div_ceil(1024 * 1024) as u32
+}
+
+pub fn full_precision_files() -> Vec<PathBuf> {
+    vec![full_precision_path()]
 }
 
 pub fn diarizer_path() -> PathBuf {
@@ -167,11 +237,16 @@ pub fn diarizer_path() -> PathBuf {
 /// listed only when the hardware for it is there; the CPU build always is,
 /// as the fallback.
 fn wanted_flavors() -> Vec<Flavor> {
-    let gpu = ENGINES.iter().map(|e| e.flavor).find(|f| match f {
-        Flavor::Metal => true,
-        Flavor::Cuda => has_nvidia_gpu(),
-        Flavor::Cpu => false,
-    });
+    let force_cpu = std::env::var_os("DIMMY_FORCE_CPU").is_some();
+    let gpu = ENGINES
+        .iter()
+        .map(|e| e.flavor)
+        .filter(|_| !force_cpu)
+        .find(|f| match f {
+            Flavor::Metal => true,
+            Flavor::Cuda => has_nvidia_gpu(),
+            Flavor::Cpu => false,
+        });
     let mut v: Vec<Flavor> = gpu.into_iter().collect();
     if ENGINES.iter().any(|e| e.flavor == Flavor::Cpu) {
         v.push(Flavor::Cpu);
@@ -202,7 +277,8 @@ pub fn engine_available() -> bool {
 
 /// True when the model and at least one engine build are on disk.
 pub fn bundle_present() -> bool {
-    model_path().is_file() && wanted_flavors().iter().any(|f| library_path(*f).is_file())
+    crate::local_stt::model_path(MODEL.file).is_file()
+        && wanted_flavors().iter().any(|f| library_path(*f).is_file())
 }
 
 pub fn diarizer_present() -> bool {
@@ -223,7 +299,12 @@ pub fn size_mb() -> u32 {
 /// Every file and folder a finished download leaves, for the download
 /// center to delete. A loaded engine library stays locked until exit.
 pub fn bundle_files() -> Vec<PathBuf> {
-    vec![model_path(), diarizer_path(), engine_root()]
+    vec![
+        crate::local_stt::model_path(MODEL.file),
+        full_precision_path(),
+        diarizer_path(),
+        engine_root(),
+    ]
 }
 
 /// The spec the app runs with: the best engine build on disk, the model,
@@ -243,7 +324,10 @@ fn spec_for(flavor: Flavor, speakers: bool) -> EngineSpec {
         library: library_path(flavor),
         model: model_path(),
         gpu: flavor.is_gpu().then_some(0),
-        diarizer: (speakers && diarizer_present()).then(diarizer_path),
+        // A GPU has the headroom and not the memory: one model serves every
+        // stream there (T600, two tracks: load 0.38 at Q8, 0.54 at F32), where
+        // two F32 recognizers do not fit and the second load aborts.
+        diarizer: ((speakers || flavor.is_gpu()) && diarizer_present()).then(diarizer_path),
     }
 }
 
@@ -298,7 +382,12 @@ where
         .map(|e| format!("{ENGINE_RELEASE}/{}", e.archive))
         .collect();
     let mut jobs = vec![
-        Job::new(MODEL.url, model_path(), &MODEL, !model_path().is_file()),
+        Job::new(
+            MODEL.url,
+            crate::local_stt::model_path(MODEL.file),
+            &MODEL,
+            !crate::local_stt::model_path(MODEL.file).is_file(),
+        ),
         Job::new(
             DIARIZER.url,
             diarizer_path(),
@@ -353,6 +442,31 @@ where
         bundle_present(),
         "model and an engine build must exist after a successful download"
     );
+    Ok(())
+}
+
+/// Fetch the full-precision model. It comes on top of the bundle, which
+/// stays the fallback when memory is short.
+pub async fn download_full_precision<F>(on_progress: F) -> Result<(), TranscribeError>
+where
+    F: Fn(u64, u64) + Sync,
+{
+    let err = |e: String| TranscribeError::LocalModel(format!("Nemotron F32 download: {e}"));
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(600))
+        .build()
+        .map_err(|e| err(format!("HTTP client: {e}")))?;
+    let dest = full_precision_path();
+    crate::download::download_resumable(&client, MODEL_F32.url, &dest, &[GGUF_MAGIC], |done, _| {
+        on_progress(done, MODEL_F32.bytes)
+    })
+    .await
+    .map_err(err)?;
+    if let Err(e) = crate::download::verify_file(&dest, &[GGUF_MAGIC], Some(MODEL_F32.sha256)) {
+        let _ = std::fs::remove_file(&dest);
+        return Err(err(format!("failed its pinned check: {e}")));
+    }
+    assert!(full_precision_present(), "verified file must be on disk");
     Ok(())
 }
 
@@ -465,6 +579,14 @@ struct DiarConfig {
 }
 
 #[repr(C)]
+struct EndpointingConfig {
+    size: usize,
+    enable: bool,
+    vad_based: bool,
+    stop_history_eou_ms: i32,
+}
+
+#[repr(C)]
 struct RecognizerConfig {
     size: usize,
     backend: *const BackendConfig,
@@ -472,7 +594,7 @@ struct RecognizerConfig {
     streaming: *const std::ffi::c_void,
     decoder: *const std::ffi::c_void,
     vad: *const std::ffi::c_void,
-    endpointing: *const std::ffi::c_void,
+    endpointing: *const EndpointingConfig,
     postproc: *const std::ffi::c_void,
     diar: *const DiarConfig,
     batching: *const std::ffi::c_void,
@@ -525,6 +647,7 @@ struct Api {
         *mut *mut StreamHandle,
     ) -> Status,
     stream_push_f32: unsafe extern "C" fn(*mut StreamHandle, *const f32, usize, i32) -> Status,
+    stream_force_endpoint: unsafe extern "C" fn(*mut StreamHandle) -> Status,
     stream_finish: unsafe extern "C" fn(*mut StreamHandle) -> Status,
     stream_next: unsafe extern "C" fn(*mut StreamHandle, *mut *mut ResultHandle) -> Status,
     stream_close: unsafe extern "C" fn(*mut StreamHandle),
@@ -585,6 +708,7 @@ impl Api {
             recognize_f32: sym!("nemo_speech_asr_recognize_f32"),
             streaming_recognize: sym!("nemo_speech_asr_streaming_recognize"),
             stream_push_f32: sym!("nemo_speech_asr_stream_push_f32"),
+            stream_force_endpoint: sym!("nemo_speech_asr_stream_force_endpoint"),
             stream_finish: sym!("nemo_speech_asr_stream_finish"),
             stream_next: sym!("nemo_speech_asr_stream_next"),
             stream_close: sym!("nemo_speech_asr_stream_close"),
@@ -704,6 +828,9 @@ pub struct EngineSpec {
     pub diarizer: Option<PathBuf>,
 }
 
+/// The engine's default, the length of a pause between two sentences.
+const PAUSE_CLOSES_UTTERANCE_MS: i32 = 800;
+
 pub struct Recognizer {
     api: Arc<Api>,
     handle: *mut RecognizerHandle,
@@ -745,6 +872,15 @@ impl Recognizer {
             spkcache_frames: 0,
             update_period_frames: 0,
         });
+        // Off by default in the engine, and then its only final comes when the
+        // stream closes: a whole meeting appeared at stop. On, a pause closes
+        // the utterance as it happens.
+        let endpointing = EndpointingConfig {
+            size: std::mem::size_of::<EndpointingConfig>(),
+            enable: true,
+            vad_based: false,
+            stop_history_eou_ms: PAUSE_CLOSES_UTTERANCE_MS,
+        };
         let cfg = RecognizerConfig {
             size: std::mem::size_of::<RecognizerConfig>(),
             backend: &backend,
@@ -752,7 +888,7 @@ impl Recognizer {
             streaming: std::ptr::null(),
             decoder: std::ptr::null(),
             vad: std::ptr::null(),
-            endpointing: std::ptr::null(),
+            endpointing: &endpointing,
             postproc: std::ptr::null(),
             diar: diar.as_ref().map_or(std::ptr::null(), |d| d as *const _),
             batching: std::ptr::null(),
@@ -970,6 +1106,14 @@ impl Stream {
         Ok(())
     }
 
+    /// Close the open utterance now; its final comes on the next `poll`.
+    pub fn force_endpoint(&mut self) -> Result<(), TranscribeError> {
+        let api = &self.recognizer.api;
+        // SAFETY: live stream handle.
+        let rc = unsafe { (api.stream_force_endpoint)(self.handle) };
+        api.check("force endpoint", rc)
+    }
+
     /// Every result that is ready now, oldest first.
     pub fn poll(&mut self) -> Result<Vec<Update>, TranscribeError> {
         let api = &self.recognizer.api;
@@ -1025,15 +1169,45 @@ pub fn recognizer(spec: &EngineSpec) -> Result<Arc<Recognizer>, TranscribeError>
     if let Some(r) = slot.iter().find(|r| r.spec() == spec) {
         return Ok(Arc::clone(r));
     }
+    if spec.gpu.is_some() {
+        slot.clear();
+    } else {
+        slot.retain(|old| old.spec().diarizer.is_some() != spec.diarizer.is_some());
+    }
+    let runtime = if spec.gpu.is_some() {
+        GPU_RUNTIME_BYTES
+    } else {
+        0
+    };
+    let needed = spec_bytes(spec) + runtime + LOAD_HEADROOM_BYTES;
+    if !enough_memory(crate::setup::available_memory_bytes(), needed) {
+        return Err(TranscribeError::LocalModel(format!(
+            "not enough free memory to load Nemotron ({} MB needed)",
+            needed / (1024 * 1024)
+        )));
+    }
     let r = Arc::new(Recognizer::create(spec.clone())?);
     warm_up(&r)?;
-    slot.retain(|old| old.spec().diarizer.is_some() != spec.diarizer.is_some());
     slot.push(Arc::clone(&r));
     assert!(
         slot.len() <= 2,
         "one recognizer with and one without the diarizer"
     );
     Ok(r)
+}
+
+fn spec_bytes(spec: &EngineSpec) -> u64 {
+    [Some(&spec.model), spec.diarizer.as_ref()]
+        .into_iter()
+        .flatten()
+        .filter_map(|p| std::fs::metadata(p).ok())
+        .map(|m| m.len())
+        .sum()
+}
+
+/// No reading (macOS, which grows its swap on demand) is not a refusal.
+fn enough_memory(available: Option<u64>, needed: u64) -> bool {
+    available.is_none_or(|free| free >= needed)
 }
 
 /// `create` returns before the weights are resident: the first push of the
@@ -1288,6 +1462,30 @@ pub fn speaker_list(band: &str, segments: &[(u8, f64, f64)]) -> Vec<crate::diari
         .collect()
 }
 
+/// What one window of a meeting track produced.
+#[derive(Debug, Default)]
+pub struct Fed {
+    /// Utterances the engine closed.
+    pub lines: Vec<Line>,
+    /// The open utterance as it stands, when it changed: the sentence still
+    /// being said, for the live view.
+    pub partial: Option<String>,
+    /// Seconds of new audio this window carried, past the overlap.
+    pub fresh_secs: f64,
+}
+
+/// A speaker who never pauses for 800 ms would keep one utterance open for
+/// minutes, and with it a line nobody can read yet and speakers nobody can
+/// see (they are tagged at the final). Past this many words the next
+/// sentence end closes it; past twice this many, whatever comes.
+const LONG_UTTERANCE_WORDS: usize = 30;
+
+fn should_close(partial: &str) -> bool {
+    let words = partial.split_whitespace().count();
+    words >= LONG_UTTERANCE_WORDS * 2
+        || (words >= LONG_UTTERANCE_WORDS && partial.trim_end().ends_with(['.', '?', '!']))
+}
+
 /// One track of a meeting (mic or system), streamed as the recording goes.
 /// The meeting hands over overlapping windows; only the part past what was
 /// already pushed goes in, so the stream sees the track exactly once.
@@ -1299,15 +1497,30 @@ pub struct MeetingTrack {
     speakers: bool,
     language: String,
     keywords: Vec<String>,
-    /// Track second the current stream started at: a stream reopened
-    /// without speakers counts its times from there.
-    stream_origin: f64,
+    /// Maps the stream's clock to the track's: `(stream second, track
+    /// second)` where each stretch began. More than one entry means a window
+    /// was dropped on the way here and the stream never saw that audio.
+    clock: Vec<(f64, f64)>,
+    /// Seconds of audio pushed into the current stream.
+    stream_secs: f64,
+    last_partial: String,
     /// Every tagged word as (speaker, start, end), track seconds: the lanes
     /// and talk time `speakers.json` carries.
     spoken: Vec<(u8, f64, f64)>,
     /// Set once the diarizer was dropped mid-meeting: the labels then cover
     /// only part of it.
     dropped: bool,
+}
+
+/// Map a stream second to a track second through the stream's clock.
+fn clock_to_track(clock: &[(f64, f64)], t: f64) -> f64 {
+    assert!(!clock.is_empty(), "a clock has at least its origin");
+    let &(s, k) = clock
+        .iter()
+        .rev()
+        .find(|(s, _)| *s <= t)
+        .unwrap_or(&clock[0]);
+    k + (t - s)
 }
 
 impl MeetingTrack {
@@ -1326,7 +1539,9 @@ impl MeetingTrack {
             speakers,
             language: language.into(),
             keywords: keywords.to_vec(),
-            stream_origin: 0.0,
+            clock: vec![(0.0, 0.0)],
+            stream_secs: 0.0,
+            last_partial: String::new(),
             spoken: Vec::new(),
             dropped: false,
         })
@@ -1336,21 +1551,42 @@ impl MeetingTrack {
         self.speakers
     }
 
-    /// Push the new part of a window that starts at `track_start` and
-    /// return the lines it completed.
-    pub fn feed(
-        &mut self,
-        window: &[f32],
-        track_start: usize,
-    ) -> Result<Vec<Line>, TranscribeError> {
+    /// Push the new part of a window that starts at `track_start`, and
+    /// return what it produced.
+    pub fn feed(&mut self, window: &[f32], track_start: usize) -> Result<Fed, TranscribeError> {
         let skip = self
             .pushed_until
             .saturating_sub(track_start)
             .min(window.len());
-        self.stream.push_at(&window[skip..], self.rate)?;
+        let fresh = &window[skip..];
+        let fresh_start = track_start + skip;
+        if fresh_start > self.pushed_until {
+            self.clock
+                .push((self.stream_secs, fresh_start as f64 / self.rate as f64));
+        }
+        let fresh_secs = fresh.len() as f64 / self.rate as f64;
+        self.stream.push_at(fresh, self.rate)?;
+        self.stream_secs += fresh_secs;
         self.pushed_until = self.pushed_until.max(track_start + window.len());
         let updates = self.stream.poll()?;
-        Ok(self.lines(updates))
+        let mut partial = None;
+        for u in &updates {
+            if u.is_final {
+                self.last_partial.clear();
+                partial = Some(String::new());
+            } else if u.text != self.last_partial {
+                self.last_partial = u.text.clone();
+                partial = Some(u.text.clone());
+            }
+        }
+        if should_close(&self.last_partial) {
+            self.stream.force_endpoint()?;
+        }
+        Ok(Fed {
+            lines: self.lines(updates),
+            partial,
+            fresh_secs,
+        })
     }
 
     /// Live speakers cost more than the CPU of a slow machine has: keep the
@@ -1364,7 +1600,9 @@ impl MeetingTrack {
         let lines = self.lines(tail);
         let r = app_recognizer(false)?;
         self.stream = r.stream(&self.language, &self.keywords, false)?;
-        self.stream_origin = self.pushed_until as f64 / self.rate as f64;
+        self.clock = vec![(0.0, self.pushed_until as f64 / self.rate as f64)];
+        self.stream_secs = 0.0;
+        self.last_partial.clear();
         self.speakers = false;
         self.dropped = true;
         Ok(lines)
@@ -1386,24 +1624,34 @@ impl MeetingTrack {
     }
 
     fn lines(&mut self, updates: Vec<Update>) -> Vec<Line> {
-        let origin = self.stream_origin;
         let mut out = Vec::new();
         for u in updates.into_iter().filter(|u| u.is_final) {
-            let words: Vec<Word> = if self.speakers {
+            let words: Vec<Word> = u
+                .words
+                .into_iter()
+                .map(|w| Word {
+                    start: clock_to_track(&self.clock, w.start),
+                    end: clock_to_track(&self.clock, w.end),
+                    speaker: if self.speakers { w.speaker } else { 0 },
+                    text: w.text,
+                })
+                .collect();
+            if self.speakers {
                 self.spoken.extend(
-                    u.words
+                    words
                         .iter()
                         .filter(|w| w.speaker > 0)
-                        .map(|w| (w.speaker, origin + w.start, origin + w.end)),
+                        .map(|w| (w.speaker, w.start, w.end)),
                 );
-                u.words
+            }
+            // Word times are already on the track's clock; a result without
+            // words is placed where the current stream began.
+            let offset = if words.is_empty() {
+                clock_to_track(&self.clock, 0.0)
             } else {
-                u.words
-                    .into_iter()
-                    .map(|w| Word { speaker: 0, ..w })
-                    .collect()
+                0.0
             };
-            out.extend(turns(&words, &u.text, origin));
+            out.extend(turns(&words, &u.text, offset));
         }
         out
     }
@@ -1615,6 +1863,52 @@ mod tests {
     }
 
     #[test]
+    fn full_precision_runs_only_when_wanted_and_it_fits() {
+        let plenty = Some(MODEL_F32.bytes + F32_HEADROOM_BYTES);
+        let short = Some(MODEL_F32.bytes);
+        assert_eq!(pick_model(false, false, plenty).file, MODEL.file);
+        assert_eq!(pick_model(true, false, plenty).file, MODEL_F32.file);
+        assert_eq!(pick_model(true, false, short).file, MODEL.file);
+        assert_eq!(pick_model(true, false, None).file, MODEL_F32.file);
+        assert_eq!(
+            pick_model(true, true, short).file,
+            MODEL_F32.file,
+            "already loaded: its own weights are why memory reads short"
+        );
+    }
+
+    #[test]
+    fn a_load_that_does_not_fit_is_refused_instead_of_aborting() {
+        assert!(enough_memory(Some(100), 100));
+        assert!(!enough_memory(Some(99), 100));
+        assert!(enough_memory(None, u64::MAX));
+    }
+
+    #[test]
+    fn a_dropped_window_keeps_word_times_on_the_track() {
+        // 10 s pushed, 25 s lost on the way here, then pushed from track 35.
+        let clock = [(0.0, 0.0), (10.0, 35.0)];
+        assert_eq!(clock_to_track(&clock, 4.0), 4.0);
+        assert_eq!(clock_to_track(&clock, 10.0), 35.0);
+        assert_eq!(clock_to_track(&clock, 12.5), 37.5);
+        assert_eq!(clock_to_track(&[(0.0, 100.0)], 3.0), 103.0);
+    }
+
+    #[test]
+    fn a_long_utterance_closes_at_a_sentence_end_or_past_twice_the_limit() {
+        let words = |n: usize| vec!["parola"; n].join(" ");
+        assert!(!should_close(&words(29)));
+        assert!(!should_close(&words(30)), "no sentence end yet");
+        assert!(should_close(&format!("{}.", words(30))));
+        assert!(should_close(&format!("{}?", words(30))));
+        assert!(
+            !should_close(&format!("{}.", words(10))),
+            "a short sentence waits for its pause"
+        );
+        assert!(should_close(&words(60)), "someone who never stops");
+    }
+
+    #[test]
     fn speaker_list_uses_the_transcript_names_and_joins_close_words() {
         let segs = [(2, 1.0, 1.2), (2, 1.3, 1.5), (3, 4.0, 4.4), (2, 9.0, 9.5)];
         let list = speaker_list("system", &segs);
@@ -1764,6 +2058,7 @@ mod tests {
         assert_eq!(std::mem::size_of::<ModelConfig>(), 24);
         assert_eq!(std::mem::size_of::<DiarConfig>(), 40);
         assert_eq!(std::mem::size_of::<RecognizerConfig>(), 88);
+        assert_eq!(std::mem::size_of::<EndpointingConfig>(), 16);
         assert_eq!(std::mem::size_of::<SpeechContext>(), 32);
         assert_eq!(std::mem::size_of::<RecognitionOptions>(), 72);
         // Offsets printed by MSVC from the pinned asr.h (2026-10-30).

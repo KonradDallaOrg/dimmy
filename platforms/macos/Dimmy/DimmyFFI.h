@@ -156,6 +156,8 @@ int32_t dimmy_nemotron_status(void);
 
 /// Size of the download in MB.
 int32_t dimmy_nemotron_size_mb(void);
+int32_t dimmy_nemotron_full_status(void);
+int32_t dimmy_nemotron_full_size_mb(void);
 
 /// Download the model. BLOCKING — call from a background thread.
 /// Emits "nemotron_download_progress" with {downloaded,total}.

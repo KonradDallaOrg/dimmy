@@ -26,10 +26,18 @@ Why it exists next to whisper / Parakeet / Qwen / Whistle:
 | ASR model, GGUF Q8_0 | 742 MB | `nvidia/nemotron-3.5-asr-streaming-0.6b` @ `ea30d66` |
 | Diarizer, GGUF Q8_0 | 107 MB | `nvidia/Nemotron-3-Diarization` @ `f667ed7` |
 | Engine library (per OS/backend) | see release | `engine-nemotron-66d50d9` assets |
+| ASR model, GGUF F32 (optional, GPU only) | 2.58 GB | converted by this project, `KonradDallaOrg/dimmy-nemotron-3.5-asr-gguf` |
 
 F16 gives the same text as Q8_0 at 3x the cost: not offered. INT8 ONNX was worse
-on technical terms: not used. Both models are OpenMDW-1.1 (credited in
+on technical terms: not used. All models are OpenMDW-1.1 (credited in
 `scripts/dev/third-party-manual.md`).
+
+**F32.** NVIDIA publishes no F32 GGUF and its converter refuses `--outtype f32`
+for ASR, so it is produced with a one-line local patch of `conversion/registry.py`
+and `conversion/asr.py` at the pinned commit, from the same checkpoint revision.
+The file on disk is the setting: download-center id `nemotron-f32`, delete it to
+go back. It runs only on a GPU build, and only with 10.4 GB of commit charge free
+(`pick_model`); otherwise Q8_0 does the job, which is why Q8_0 stays in the bundle.
 
 ## Architecture
 
@@ -52,13 +60,23 @@ The engine is therefore two libraries with names nothing else uses.
 - It is **not a cargo feature and not in the installer** (like Whistle): the
   library is downloaded with the models into `nemotron-engine/<flavor>/`.
 
-### Two recognizers
+### Recognizers, and why a GPU has only one
 
 A recognizer that carries the diarizer runs it on **every** stream, used or
-not (dictation 2.6x -> 1.4-1.6x realtime on CPU). So `default_spec(speakers)`
+not (dictation 2.6x -> 1.4-1.6x realtime on CPU). So on CPU `default_spec(speakers)`
 builds two specs, cached in `RECOGNIZERS`: without the diarizer (dictation, and
 the mic track on a call) and with it (tracks that need speakers).
-`app_recognizer(speakers)` picks one.
+
+On a GPU there is **one**, always with the diarizer. A GPU has the headroom and
+not the memory: the process commits 7.5 GB at Q8_0 and 8.7 GB at F32, mostly the
+CUDA runtime, and a second F32 recognizer aborted the process
+(`GGML_ASSERT(ctx->mem_buffer != NULL)`) or, when it fit, spilled out of the 4 GB
+of VRAM: load 1.08 with two against 0.41 with one.
+
+**The engine aborts when an allocation fails**, and in a meeting the process is
+the recording. So `recognizer()` checks `setup::available_memory_bytes` (Windows:
+the commit charge left, not free RAM) and returns an error instead, which falls
+back from GPU to CPU. Keep this check in front of any new load.
 
 ## Dictation
 
@@ -82,8 +100,19 @@ the mic track on a call) and with it (tracks that need speakers).
 `NemoTracks` runs on the **transcription thread** only; `worker_loop` is
 untouched (THE AUDIO RULE, `docs/dev/meeting-audio-durability.md`).
 
-- 2 s windows (`NEMOTRON_WINDOW_SECS`), one stream per track, fed the new part
-  of each window. The two tracks are fed in parallel (`thread::scope`).
+- 0.5 s windows (`NEMOTRON_WINDOW_SECS`), one stream per track, fed the new part
+  of each window, one track after the other. Parallel gained nothing (0.65 against
+  0.62): each stream already uses the engine's thread pool.
+- **Endpointing is on** (`RecognizerConfig.endpointing`, 800 ms). The engine
+  default is off, and then its only final comes when the stream closes: a whole
+  meeting appeared at stop. A speaker who never pauses is closed by
+  `force_endpoint` at the next sentence end past 30 words, or at 60 regardless.
+- The open sentence goes to the hosts as `meeting_partial {dir, track, text}`,
+  empty text when it closes. It is not written anywhere; the line is.
+- The queue holds 120 windows (`NEMOTRON_QUEUE_DEPTH`), a minute: a stream catches
+  up after a slow patch, so a backlog costs lag, not text. Past that a window is
+  dropped as for every engine, the word times stay right (`clock_to_track`), and
+  the speaker pass runs at stop since the labels have a hole.
 - `LineSink::write` appends `[HH:MM:SS] [label] text` to `transcripts.txt`
   and emits the chunk event, like every other engine. Time = the turn's first
   word.
@@ -96,11 +125,11 @@ untouched (THE AUDIO RULE, `docs/dev/meeting-audio-durability.md`).
 - The system track with the live diarizer writes `[HH:MM:SS] [Speaker N] text`
   per turn; flicker turns under 3 words (`MIN_TURN_WORDS`) are folded into the
   neighbour.
-- **Load guard.** Seconds of compute per second of window, smoothed
-  (0.8 old + 0.2 new). Above **0.9** the live speakers are dropped for the rest
-  of the meeting (`drop_speakers`, event `meeting_speakers_deferred`) and the
-  stop-time speaker pass labels the turns instead. Dropping labels is correct;
-  falling behind is not.
+- **Load guard.** Seconds of compute per second of window, averaged over about
+  ten seconds and starting from zero, so a heavy first window means nothing.
+  Above **0.9** the live speakers are dropped for the rest of the meeting
+  (`drop_speakers`, event `meeting_speakers_deferred`) and the stop-time speaker
+  pass labels the turns instead. Dropping labels is correct; falling behind is not.
 - **Skipping the second pass.** When live labels cover the whole meeting (and no
   window was lost), `speakers.json` is written from them
   (`diarize::save_speakers`) and the stop pass is skipped.
@@ -120,21 +149,43 @@ unpublished and offered as nothing.
 
 ## Measurements
 
-| Case | Result |
-|---|---|
-| Dictation, CPU | 2.6-4.4x realtime |
-| Dictation, CPU, recognizer carrying the diarizer | 1.4-1.6x (was 2.6x without it) |
-| GGUF Q8_0, CUDA (T600) | 6.1x realtime |
-| FP32 ONNX, CUDA | 3.4x |
-| 2-track meeting + live speakers, CPU, before the two-recognizer + parallel-tracks fix | load 1.56 (over the 0.9 guard) |
-| Same, after the fix | TODO(nemotron.md): re-measure with `nemotron_meeting_bench` and write the number here |
+A real 4-minute two-track Italian meeting, 0.5 s windows, i7-12700H + T600 (4 GB).
+"Behind" is how far the text trails the voice at the worst moment.
+
+| Engine, model, live speakers | Load | Behind (max) | Flush at stop |
+|---|---|---|---|
+| GPU Q8_0, system track | 0.24 | 0.2 s | 0.1 s |
+| GPU Q8_0, both tracks | 0.38 | 2.0 s | 0.2 s |
+| GPU F32, system track | 0.41 | 0.3 s | 0.2 s |
+| GPU F32, both tracks | 0.54 | 1.7 s | 0.3 s |
+| CPU Q8_0, none | 0.62 | 0.4 s | 0.2 s |
+| CPU Q8_0, none, tracks in parallel | 0.65 | 0.5 s | 0.2 s |
+| CPU Q8_0, system track | **1.17** | **50 s** (and growing) | 0.8 s |
+| CPU Q8_0, system track, load guard on | 0.65 | 1.2 s | 0.3 s |
+
+So: a GPU as small as the T600 holds everything live. A CPU of this class holds the
+text on both tracks but not the speakers, which the guard drops after 43 s.
+
+The same meeting through the real `MeetingSession` on a wall clock
+(`nemotron_meeting_replay`), with the mirror upload and other work running:
+
+| Engine, model | Recorded | Stop | Speakers ready at stop | Line after its first word (median / max) | Windows lost |
+|---|---|---|---|---|---|
+| GPU Q8_0 | 246.5 of 246 s | 0.4 s | yes | 3.5 / 14.0 s | 0 |
+| GPU F32 | 246.7 of 246 s | 0.6 s | yes | 3.5 / 17.8 s | 0 |
+| CPU Q8_0 | 246.6 of 246 s | 0.5 s | no, dropped by the guard | 5.5 / 20.7 s | 0 |
+
+Dictation: 2.6-4.4x realtime on CPU, 6.1x with Q8_0 on the T600.
 
 ## Known limits
 
 - **Vulkan is blocked** upstream: NVIDIA/NeMo-Speech.cpp issue #48
   (`GGML_ASSERT ne3 == ne13`). No Vulkan build is offered.
-- **Live speakers on CPU are tight.** Weaker CPUs trip the 0.9 guard and fall
-  back to stop-time labelling; the transcript is unaffected.
+- **Live speakers do not hold on a CPU of this class** (table above): the guard
+  drops them and the stop-time pass labels the turns; the transcript is unaffected.
+- A fresh sentence shows as a partial straight away, but a closed **line** arrives
+  at the pause that ends it: 3.5 s after its first word typically, 12 s for a long
+  one.
 - Technical English terms are weaker than whisper turbo.
 
 ## Rebuilding the engine
@@ -156,8 +207,12 @@ unpublished and offered as nothing.
 - `nemotron_smoke --lib <dll> --model <gguf> [--diar <gguf>] [--gpu N] [--lang it] [--keywords ...] [--oneshot] file.wav`:
   drives the engine in-process as the app would (100 ms pushes); prints deltas,
   final text, speaker turns and the realtime factor.
-- `nemotron_meeting_bench <meeting dir> [--no-speakers] [--lang it]`: replays
-  `audio_mic.ogg` / `audio_system.ogg` in live 2 s windows and prints the load
-  and lines. This is the tool for the TODO above.
-- `stt_race`: per-window transcription speed across local backends. (There is
-  no `stt_ab` bin in the tree.)
+- `nemotron_meeting_bench <meeting dir> [--no-speakers] [--mic-speakers] [--parallel] [--adaptive] [--window 0.5] [--seconds N] [--lang it]`:
+  replays `audio_mic.ogg` / `audio_system.ogg` in live windows on a simulated clock
+  and prints load, lag and lines. Fast, for comparing configurations.
+- `nemotron_meeting_replay <meeting dir> [--no-speakers] [--seconds N]`: the real
+  `MeetingSession`, capture and transcription threads, events and stop, on a wall
+  clock. Takes as long as the meeting. Removes the meeting it creates.
+- `stt_race`: per-window transcription speed across local backends.
+
+`DIMMY_FORCE_CPU=1` forces the CPU engine, `DIMMY_NEMOTRON_Q8=1` ignores F32.

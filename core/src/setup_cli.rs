@@ -831,6 +831,17 @@ fn model_rows() -> Vec<ModelRow> {
             prepared: None,
         });
     }
+    if crate::nemotron::full_precision_available() {
+        rows.push(ModelRow {
+            id: crate::download_center::NEMOTRON_F32_ID.into(),
+            kind: "nemotron",
+            name: "Nemotron 3.5 ASR, full precision (GPU)".into(),
+            size_mb: crate::nemotron::full_precision_size_mb() as u64,
+            present: crate::nemotron::full_precision_present(),
+            dir: Some(stt_dir.clone()),
+            prepared: None,
+        });
+    }
     if crate::whistle::engine_available() {
         rows.push(ModelRow {
             id: crate::download_center::WHISTLE_ID.into(),

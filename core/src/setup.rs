@@ -1270,6 +1270,14 @@ pub fn total_ram_bytes() -> Option<u64> {
     platform::total_ram_bytes().filter(|n| *n > 0)
 }
 
+/// Memory a large allocation can still get, or None where the OS does not
+/// say (macOS, which grows its swap on demand). On Windows this is the commit
+/// charge left, not free RAM: with the page file squeezed by a full disk,
+/// allocations fail while gigabytes of RAM read free.
+pub fn available_memory_bytes() -> Option<u64> {
+    platform::available_memory_bytes()
+}
+
 pub fn os_version() -> Option<String> {
     platform::os_version().filter(|s| !s.trim().is_empty())
 }
@@ -1347,6 +1355,22 @@ mod platform {
         (ok != 0).then_some(st.total_phys)
     }
 
+    pub fn available_memory_bytes() -> Option<u64> {
+        let mut st = MemoryStatusEx {
+            length: std::mem::size_of::<MemoryStatusEx>() as u32,
+            memory_load: 0,
+            total_phys: 0,
+            avail_phys: 0,
+            total_page_file: 0,
+            avail_page_file: 0,
+            total_virtual: 0,
+            avail_virtual: 0,
+            avail_extended_virtual: 0,
+        };
+        let ok = unsafe { GlobalMemoryStatusEx(&mut st) };
+        (ok != 0).then_some(st.avail_page_file)
+    }
+
     pub fn os_version() -> Option<String> {
         let mut info = OsVersionInfoW {
             size: std::mem::size_of::<OsVersionInfoW>() as u32,
@@ -1400,6 +1424,19 @@ mod platform {
     }
 
     #[cfg(target_os = "macos")]
+    pub fn available_memory_bytes() -> Option<u64> {
+        None
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn available_memory_bytes() -> Option<u64> {
+        let mut info: libc::sysinfo = unsafe { std::mem::zeroed() };
+        let rc = unsafe { libc::sysinfo(&mut info) };
+        (rc == 0)
+            .then(|| (info.freeram + info.bufferram + info.freeswap) * u64::from(info.mem_unit))
+    }
+
+    #[cfg(target_os = "macos")]
     pub fn os_version() -> Option<String> {
         let out = std::process::Command::new("/usr/bin/sw_vers")
             .arg("-productVersion")
@@ -1424,6 +1461,9 @@ mod platform {
         None
     }
     pub fn total_ram_bytes() -> Option<u64> {
+        None
+    }
+    pub fn available_memory_bytes() -> Option<u64> {
         None
     }
     pub fn os_version() -> Option<String> {

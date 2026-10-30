@@ -2,39 +2,54 @@
 //! way a live meeting runs it, and measure whether this machine keeps up.
 //!
 //! Reads `<meeting dir>/audio_mic.ogg` and `audio_system.ogg`, cuts both into
-//! the live window (2 s) and feeds them to two `MeetingTrack`s, the system one
-//! with live speakers, exactly as `meeting.rs` does. Prints the load (compute
-//! seconds per audio second, smoothed like the meeting does; above 0.9 the
-//! meeting drops live speakers) and the transcript lines.
+//! the live window and feeds them to two `MeetingTrack`s, exactly as
+//! `meeting.rs` does, simulating the clock: each window "arrives" when its
+//! audio would have been spoken and waits for the previous one to finish.
+//! The lag is how far the text trails the voice at each window.
 //!
 //! Usage:
-//!   nemotron_meeting_bench <meeting dir> [--no-speakers] [--lang it]
+//!   nemotron_meeting_bench <meeting dir> [--no-speakers] [--mic-speakers]
+//!       [--parallel] [--adaptive] [--window 0.5] [--lang it] [--seconds 120]
 //!
-//! Needs Nemotron downloaded in the app's model directory (the app's own
-//! engine choice applies: GPU build when present, else CPU).
+//! `--adaptive` drops the live speakers under sustained overload, as
+//! `meeting.rs` does.
+//!
+//! DIMMY_FORCE_CPU=1 forces the CPU engine. The F32 model runs when it is on
+//! disk; DIMMY_NEMOTRON_Q8=1 keeps Q8_0. Needs Nemotron downloaded in the
+//! app's model directory.
 
-use dimmy_lib::nemotron::{Line, MeetingTrack};
+use dimmy_lib::nemotron::{self, Fed, Line, MeetingTrack};
 use std::path::PathBuf;
 use std::time::Instant;
 
-const WINDOW_SECS: f64 = 2.0;
-
 fn main() {
     let mut args = std::env::args().skip(1);
-    let (mut dir, mut speakers, mut lang) = (None, true, String::new());
-    let mut serial = false;
+    let (mut dir, mut speakers, mut mic_speakers, mut parallel) = (None, true, false, false);
+    let (mut window, mut lang, mut limit) = (0.5f64, String::new(), f64::MAX);
+    let (mut adaptive, mut load) = (false, 0.0f64);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--no-speakers" => speakers = false,
-            "--serial" => serial = true,
+            "--mic-speakers" => mic_speakers = true,
+            "--parallel" => parallel = true,
+            "--adaptive" => adaptive = true,
+            "--window" => {
+                window = args
+                    .next()
+                    .and_then(|w| w.parse().ok())
+                    .expect("--window secs")
+            }
+            "--seconds" => {
+                limit = args
+                    .next()
+                    .and_then(|w| w.parse().ok())
+                    .expect("--seconds n")
+            }
             "--lang" => lang = args.next().unwrap_or_default(),
             _ => dir = Some(PathBuf::from(a)),
         }
     }
-    let Some(dir) = dir else {
-        eprintln!("usage: nemotron_meeting_bench <meeting dir> [--no-speakers] [--lang it]");
-        std::process::exit(2);
-    };
+    let dir = dir.expect("usage: nemotron_meeting_bench <meeting dir> [options]");
     let read = |name: &str| {
         let p = dir.join(name);
         dimmy_lib::ffi::decode_via_symphonia(p.to_str().expect("utf-8 path"))
@@ -47,74 +62,86 @@ fn main() {
         "the meeting writes both tracks at one rate"
     );
     let rate = mic_rate;
-    let secs = mic.len().max(system.len()) as f64 / rate as f64;
-    eprintln!(
-        "{}: {:.0} s, {} Hz, speakers={speakers}",
-        dir.display(),
-        secs,
-        rate
-    );
+    let end = mic
+        .len()
+        .max(system.len())
+        .min((limit * rate as f64) as usize);
+    let secs = end as f64 / rate as f64;
 
     let t = Instant::now();
-    let mut mic_t = MeetingTrack::open(rate, &lang, &[], false).expect("mic track");
+    let mut mic_t = MeetingTrack::open(rate, &lang, &[], mic_speakers).expect("mic track");
     let mut sys_t = MeetingTrack::open(rate, &lang, &[], speakers).expect("system track");
-    eprintln!("tracks open in {:.1} s", t.elapsed().as_secs_f64());
+    eprintln!(
+        "opened in {:.1} s, {secs:.0} s of audio",
+        t.elapsed().as_secs_f64()
+    );
 
-    let win = (WINDOW_SECS * rate as f64) as usize;
-    let (mut load, mut worst, mut busy, mut over) = (0.0f64, 0.0f64, 0.0f64, 0usize);
-    let mut all: Vec<(String, Line)> = Vec::new();
-    let mut start = 0usize;
-    while start < mic.len().max(system.len()) {
-        let m = &mic[start.min(mic.len())..(start + win).min(mic.len())];
-        let s = &system[start.min(system.len())..(start + win).min(system.len())];
+    let win = (window * rate as f64) as usize;
+    let (mut clock, mut busy, mut start) = (0.0f64, 0.0f64, 0usize);
+    let mut lags: Vec<f64> = Vec::new();
+    let mut line_lags: Vec<f64> = Vec::new();
+    let (mut partials, mut all): (usize, Vec<(&str, Line)>) = (0, Vec::new());
+    while start < end {
+        let stop = (start + win).min(end);
+        let m = &mic[start.min(mic.len())..stop.min(mic.len())];
+        let s = &system[start.min(system.len())..stop.min(system.len())];
         let t = Instant::now();
-        // Side by side, as meeting.rs runs them; --serial one after the other.
-        let (mic_lines, sys_lines) = if serial {
-            (mic_t.feed(m, start).expect("mic feed"), sys_t.feed(s, start).expect("system feed"))
-        } else {
+        let (mf, sf): (Fed, Fed) = if parallel {
             std::thread::scope(|scope| {
-                let mic_job = scope.spawn(|| mic_t.feed(m, start).expect("mic feed"));
-                let sys_lines = sys_t.feed(s, start).expect("system feed");
-                (mic_job.join().expect("mic thread"), sys_lines)
+                let job = scope.spawn(|| mic_t.feed(m, start).expect("mic"));
+                let sf = sys_t.feed(s, start).expect("system");
+                (job.join().expect("mic thread"), sf)
             })
+        } else {
+            (
+                mic_t.feed(m, start).expect("mic"),
+                sys_t.feed(s, start).expect("system"),
+            )
         };
-        all.extend(mic_lines.into_iter().map(|l| ("mic".into(), l)));
-        all.extend(sys_lines.into_iter().map(|l| ("system".into(), l)));
         let took = t.elapsed().as_secs_f64();
         busy += took;
-        let ratio = took / WINDOW_SECS;
-        load = if load == 0.0 {
-            ratio
-        } else {
-            0.8 * load + 0.2 * ratio
-        };
-        worst = worst.max(load);
-        over += usize::from(load > 0.9);
-        start += win;
+        load = 0.95 * load + 0.05 * took / window;
+        if adaptive && load > 0.9 && sys_t.has_speakers() {
+            let d = Instant::now();
+            all.extend(
+                sys_t
+                    .drop_speakers()
+                    .expect("drop")
+                    .into_iter()
+                    .map(|l| ("system", l)),
+            );
+            clock += d.elapsed().as_secs_f64();
+            eprintln!(
+                "speakers dropped at {:.1} s, took {:.1} s",
+                stop as f64 / rate as f64,
+                d.elapsed().as_secs_f64()
+            );
+        }
+        let arrival = stop as f64 / rate as f64;
+        clock = clock.max(arrival) + took;
+        lags.push(clock - arrival);
+        partials += usize::from(mf.partial.is_some()) + usize::from(sf.partial.is_some());
+        for l in &mf.lines {
+            line_lags.push(clock - l.start);
+        }
+        for l in &sf.lines {
+            line_lags.push(clock - l.start);
+        }
+        all.extend(mf.lines.into_iter().map(|l| ("mic", l)));
+        all.extend(sf.lines.into_iter().map(|l| ("system", l)));
+        start = stop;
     }
-    for (track, l) in mic_t
-        .finish()
-        .expect("mic")
-        .0
-        .into_iter()
-        .map(|l| ("mic".to_string(), l))
-    {
-        all.push((track, l));
-    }
-    for (track, l) in sys_t
-        .finish()
-        .expect("system")
-        .0
-        .into_iter()
-        .map(|l| ("system".to_string(), l))
-    {
-        all.push((track, l));
-    }
+    let t = Instant::now();
+    let (mic_tail, mic_spoken) = mic_t.finish().expect("mic");
+    let (sys_tail, sys_spoken) = sys_t.finish().expect("system");
+    let flush = t.elapsed().as_secs_f64();
+    all.extend(mic_tail.into_iter().map(|l| ("mic", l)));
+    all.extend(sys_tail.into_iter().map(|l| ("system", l)));
     all.sort_by(|a, b| a.1.start.total_cmp(&b.1.start));
     for (track, l) in &all {
         let who = l
             .speaker
-            .map_or_else(|| track.clone(), |n| format!("Speaker {n}"));
+            .map_or_else(|| track.to_string(), |n| format!("Speaker {n}"));
         let t = l.start as u64;
         println!(
             "[{:02}:{:02}:{:02}] [{who}] {}",
@@ -124,8 +151,27 @@ fn main() {
             l.text
         );
     }
+    let pct = |v: &mut Vec<f64>, p: f64| {
+        v.sort_by(f64::total_cmp);
+        v.get(((v.len() as f64 - 1.0) * p) as usize)
+            .copied()
+            .unwrap_or(0.0)
+    };
+    let longest = all
+        .iter()
+        .map(|(_, l)| l.text.split_whitespace().count())
+        .max()
+        .unwrap_or(0);
     println!(
-        "\n--- {secs:.0} s of meeting, {busy:.1} s compute ({:.2} load), worst smoothed load {worst:.2}, {over} window(s) over 0.9",
-        busy / secs
+        "\n=== load {:.2} | text behind voice: median {:.1} s, p95 {:.1} s, max {:.1} s | line from first word: median {:.1} s, p95 {:.1} s | {} lines (longest {longest} words), {partials} partial updates, {} speakers | flush at stop {flush:.1} s",
+        busy / secs,
+        pct(&mut lags, 0.5),
+        pct(&mut lags, 0.95),
+        pct(&mut lags, 1.0),
+        pct(&mut line_lags, 0.5),
+        pct(&mut line_lags, 0.95),
+        all.len(),
+        nemotron::speaker_list("x", &sys_spoken.segments).len()
+            + nemotron::speaker_list("x", &mic_spoken.segments).len(),
     );
 }

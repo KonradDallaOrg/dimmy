@@ -20,6 +20,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   keep up with live speakers, they are switched off and labelled when the
   meeting ends. When the live labels cover the whole meeting, the second
   speaker pass is skipped.
+- Meetings with Nemotron show the sentence as it is being said and close it at
+  the pause, instead of writing everything when the meeting stops. With a GPU
+  the transcript and the speakers are ready the moment you stop.
+- Optional full-precision Nemotron model for machines with a GPU.
 
 ## [0.7.14] - 2026-10-23
 

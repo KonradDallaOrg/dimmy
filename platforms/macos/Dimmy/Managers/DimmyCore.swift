@@ -1054,6 +1054,14 @@ final class DimmyCore {
         Int(dimmy_nemotron_size_mb())
     }
 
+    func nemotronFullStatus() -> Int {
+        Int(dimmy_nemotron_full_status())
+    }
+
+    func nemotronFullSizeMb() -> Int {
+        Int(dimmy_nemotron_full_size_mb())
+    }
+
     /// BLOCKING — call from a background thread. Progress arrives as
     /// "nemotron_download_progress" events on the global handler.
     @discardableResult
@@ -1692,6 +1700,16 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
         appState.meetingChunkCount = chunkCount
         appState.meetingLastChunkSpeaker = speaker
         appState.meetingChunkTick &+= 1
+
+    case "meeting_partial":
+        // An empty text means the sentence closed and arrives as a
+        // `meeting_chunk` line.
+        let dir = (payload["dir"] as? String) ?? ""
+        let track = (payload["track"] as? String) ?? ""
+        if !appState.meetingActiveDir.isEmpty && appState.meetingActiveDir != dir {
+            break
+        }
+        appState.meetingLivePartials[track] = (payload["text"] as? String) ?? ""
 
     case "call_detected":
         let app = payload["app"] as? String

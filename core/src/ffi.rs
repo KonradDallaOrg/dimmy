@@ -189,7 +189,7 @@ pub(crate) fn is_initialized() -> bool {
 /// database, no key migration (a migration is a write, and most setup
 /// commands only read). Idempotent, so a host that calls the CLI twice in
 /// one process gets the state of the first call.
-pub(crate) fn init_headless() {
+pub fn init_headless() {
     if GLOBAL_STATE.get().is_some() {
         return;
     }
@@ -7961,6 +7961,23 @@ pub extern "C" fn dimmy_nemotron_status() -> c_int {
 #[no_mangle]
 pub extern "C" fn dimmy_nemotron_size_mb() -> c_int {
     crate::nemotron::size_mb() as c_int
+}
+
+/// 1 when the full-precision Nemotron model is on disk (and so in use), 0 when
+/// it is not, -1 when this machine has no GPU build to run it (hosts hide it).
+#[no_mangle]
+pub extern "C" fn dimmy_nemotron_full_status() -> c_int {
+    if !crate::nemotron::full_precision_available() {
+        -1
+    } else {
+        crate::nemotron::full_precision_present() as c_int
+    }
+}
+
+/// Size of the full-precision Nemotron model in MB.
+#[no_mangle]
+pub extern "C" fn dimmy_nemotron_full_size_mb() -> c_int {
+    crate::nemotron::full_precision_size_mb() as c_int
 }
 
 /// Download Nemotron. BLOCKING -- call from a background thread. Emits

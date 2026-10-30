@@ -1026,6 +1026,9 @@ final class AppState: ObservableObject {
     /// receive. MeetingViewModel binds its live-transcript view to
     /// this property.
     @Published var meetingLiveTranscript: String = ""
+    /// The sentence still being said, per track ("mic" / "system"), while a
+    /// streaming engine is hearing it. Fed by `meeting_partial`.
+    @Published var meetingLivePartials: [String: String] = [:]
     /// Last `chunk_count` reported by the Rust meeting worker —
     /// drives the "N chunks" pill in the meeting recording UI.
     @Published var meetingChunkCount: Int = 0
