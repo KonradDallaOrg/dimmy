@@ -1,3 +1,4 @@
+using Dimmy.Windows.Helpers;
 using System;
 using Dimmy.Windows.ViewModels;
 using Xunit;
@@ -964,7 +965,7 @@ public class SettingsViewModelTests
 
         vm.RefreshDevices(["Microfono (Realtek)", "Jabra Evolve2 65"]);
 
-        Assert.Equal(["Microfono (Realtek)", "Jabra Evolve2 65"], vm.Devices);
+        Assert.Equal([InputDeviceChoice.SystemDefault, "Microfono (Realtek)", "Jabra Evolve2 65"], vm.Devices);
         Assert.Equal("Microfono (Realtek)", vm.SelectedDevice);
     }
 
@@ -993,7 +994,7 @@ public class SettingsViewModelTests
         // Every property change schedules an auto-save, so re-reading an
         // unchanged list must stay silent.
         var vm = new SettingsViewModel();
-        vm.Devices = ["Microfono (Realtek)"];
+        vm.Devices = [InputDeviceChoice.SystemDefault, "Microfono (Realtek)"];
         vm.SelectedDevice = "Microfono (Realtek)";
         var changes = 0;
         vm.PropertyChanged += (_, _) => changes++;
