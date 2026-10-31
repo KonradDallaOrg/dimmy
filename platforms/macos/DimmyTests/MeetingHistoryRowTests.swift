@@ -99,4 +99,27 @@ final class MeetingHistoryRowTests: XCTestCase {
         XCTAssertTrue(subtitle.contains("2026"), "Expected year in subtitle: \(subtitle)")
         XCTAssertFalse(subtitle.isEmpty)
     }
+
+    func testListSubtitleShowsTheTimeThisYearAndTheYearOtherwise() {
+        var components = DateComponents()
+        components.year = 2026
+        components.month = 5
+        components.day = 9
+        components.hour = 14
+        components.minute = 32
+        let date = Calendar.current.date(from: components)!
+
+        components.month = 10
+        let sameYear = Calendar.current.date(from: components)!
+        components.year = 2027
+        let nextYear = Calendar.current.date(from: components)!
+
+        let thisYear = MeetingHistoryRow.listSubtitleFor(date: date, now: sameYear)
+        XCTAssertFalse(thisYear.contains("2026"), thisYear)
+        XCTAssertTrue(thisYear.contains("32"), thisYear)
+
+        let older = MeetingHistoryRow.listSubtitleFor(date: date, now: nextYear)
+        XCTAssertTrue(older.contains("2026"), older)
+        XCTAssertFalse(older.contains("32"), older)
+    }
 }

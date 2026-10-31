@@ -13,8 +13,8 @@ struct MeetingSpeaker: Identifiable, Equatable {
     let band: String
     let talkSecs: Double
     let segments: [(start: Double, end: Double)]
-    /// Palette slot = position in the file, so the transcript label, the chip
-    /// and the waveform lane always agree.
+    /// Palette slot = position in the file, so the transcript label and the
+    /// waveform lane always agree.
     let colorIndex: Int
 
     static func == (a: MeetingSpeaker, b: MeetingSpeaker) -> Bool {

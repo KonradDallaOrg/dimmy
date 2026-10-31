@@ -38,7 +38,6 @@ final class MeetingViewModel: ObservableObject {
     @Published var generateRecap: Bool = AppState.shared.meetingGenerateRecapDefault
     @Published var statusLabel: String = "Ready"
     @Published var subStatusLabel: String = "Click Start to begin a meeting recording"
-    @Published var titlebarTitle: String = "New meeting"
 
     // ── Recording state ────────────────────────────────────────────
     @Published var transcript: String = ""
@@ -654,7 +653,6 @@ final class MeetingViewModel: ObservableObject {
                 AppState.shared.meetingGenerateRecap = self.generateRecap
                 self.statusLabel = "Recording"
                 self.subStatusLabel = "Session id \(String(id.prefix(8)))..."
-                self.titlebarTitle = "Recording..."
                 self.startRecordingPolling()
                 self.loadHistory()  // surfaces the new dir in the sidebar
                 self.beginCalendarLookup(meetingID: id)
@@ -811,7 +809,6 @@ final class MeetingViewModel: ObservableObject {
                 self.doneAudioSystemURL = self.systemAudioURL(for: result.dir)
                 self.doneNotes = Self.readNotes(dir: result.dir)
                 self.doneSelectedTab = .recap
-                self.titlebarTitle = self.doneTitle
 
                 if cleanTranscript.isEmpty {
                     dimmyHostLog("[Recap] skip (window stop): reason=empty transcript — no recap will run")
@@ -1043,7 +1040,7 @@ final class MeetingViewModel: ObservableObject {
                 recapPath: hasRecap ? recapPath : nil,
                 metaPath: fm.fileExists(atPath: metaPath) ? metaPath : nil
             )
-            let subtitle = MeetingHistoryRow.subtitleFor(date: date)
+            let subtitle = MeetingHistoryRow.listSubtitleFor(date: date)
             return MeetingHistoryRow(
                 dir: url.path,
                 title: title,
@@ -1108,7 +1105,6 @@ final class MeetingViewModel: ObservableObject {
         phase = .idle
         statusLabel = "Ready"
         subStatusLabel = "Click Start to begin a meeting recording"
-        titlebarTitle = "New meeting"
         doneSections = [:]
         doneRawTranscript = ""
         doneAudioURL = nil
@@ -1463,7 +1459,6 @@ final class MeetingViewModel: ObservableObject {
             try? data.write(to: URL(fileURLWithPath: metaPath), options: .atomic)
         }
         doneTitle = trimmed
-        titlebarTitle = trimmed
         if let idx = historyRows.firstIndex(where: { $0.dir == dir }) {
             let old = historyRows[idx]
             historyRows[idx] = MeetingHistoryRow(
@@ -1512,7 +1507,6 @@ final class MeetingViewModel: ObservableObject {
         // flight: call 2 recording while call 1's recap lands.
         if !browsingPastMeeting, phase != .recording {
             phase = .done
-            titlebarTitle = doneTitle
         }
     }
 
@@ -1713,6 +1707,16 @@ struct MeetingHistoryRow: Identifiable, Equatable {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
         formatter.timeStyle = .short
+        return formatter.string(from: date)
+    }
+
+    /// The sidebar's date: short enough that the duration badge after it
+    /// survives the list's width. The year shows only when it is not this one,
+    /// and then it takes the place of the time.
+    static func listSubtitleFor(date: Date, now: Date = Date()) -> String {
+        let sameYear = Calendar.current.isDate(date, equalTo: now, toGranularity: .year)
+        let formatter = DateFormatter()
+        formatter.setLocalizedDateFormatFromTemplate(sameYear ? "dMMMjmm" : "dMMMyyyy")
         return formatter.string(from: date)
     }
 

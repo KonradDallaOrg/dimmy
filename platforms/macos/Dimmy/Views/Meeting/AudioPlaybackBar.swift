@@ -17,7 +17,7 @@ import AVFoundation
 // in the canvas seeks proportionally — the same gesture covers both
 // "scrub" and "tap to jump" without a separate slider thumb.
 
-struct AudioPlaybackBar: View {
+struct AudioPlaybackBar<Controls: View, LaneLabel: View>: View {
     let url: URL
     let micURL: URL?
     let systemURL: URL?
@@ -29,6 +29,9 @@ struct AudioPlaybackBar: View {
     /// Speakers of a diarized meeting. Non-empty ⇒ one waveform lane per
     /// speaker instead of the mic / system tracks.
     let speakers: [MeetingSpeaker]
+    /// Waveform hidden: the player stays on one row, with a plain seek bar in
+    /// the waveform's place, because reading and listening go together.
+    let collapsed: Bool
     /// Playback position while playing, for the transcript to follow.
     let onPlaybackTime: ((TimeInterval) -> Void)?
     /// A position asked for from outside (the reader scrolled the
@@ -36,6 +39,10 @@ struct AudioPlaybackBar: View {
     /// the same second still moves the playhead.
     let seekTo: TimeInterval?
     let seekTick: Int
+    /// The buttons at the right of the player row.
+    @ViewBuilder let controls: () -> Controls
+    /// The name beside a speaker's lane.
+    @ViewBuilder let laneLabel: (MeetingSpeaker) -> LaneLabel
     @StateObject private var model = AudioPlaybackModel()
 
     // Decode a generous bucket count; the strips resample this down to the
@@ -47,18 +54,24 @@ struct AudioPlaybackBar: View {
          micURL: URL? = nil,
          systemURL: URL? = nil,
          speakers: [MeetingSpeaker] = [],
+         collapsed: Bool = false,
          seekTo: TimeInterval? = nil,
          seekTick: Int = 0,
          onSeek: ((TimeInterval) -> Void)? = nil,
-         onPlaybackTime: ((TimeInterval) -> Void)? = nil) {
+         onPlaybackTime: ((TimeInterval) -> Void)? = nil,
+         @ViewBuilder controls: @escaping () -> Controls,
+         @ViewBuilder laneLabel: @escaping (MeetingSpeaker) -> LaneLabel) {
         self.url = url
         self.micURL = micURL
         self.systemURL = systemURL
         self.speakers = speakers
+        self.collapsed = collapsed
         self.seekTo = seekTo
         self.seekTick = seekTick
         self.onSeek = onSeek
         self.onPlaybackTime = onPlaybackTime
+        self.controls = controls
+        self.laneLabel = laneLabel
     }
 
     private var dualBand: Bool {
@@ -76,58 +89,102 @@ struct AudioPlaybackBar: View {
         onSeek?(t)
     }
 
-    var body: some View {
-        HStack(spacing: 12) {
-            Button(action: model.togglePlay) {
-                Image(systemName: model.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 14, weight: .semibold))
-                    .frame(width: 28, height: 28)
-            }
-            .buttonStyle(.plain)
-            .keyboardShortcut(.space, modifiers: [])
-            .disabled(model.duration == 0)
-
-            Text(model.format(model.elapsed))
-                .font(.system(size: 11, design: .monospaced))
-                .monospacedDigit()
-                .foregroundStyle(Color.macTextSecondary)
-                .frame(width: 44, alignment: .leading)
-
-            Group {
-                if !speakers.isEmpty {
-                    SpeakerLanesStrip(
-                        peaksMic: model.peaksMic.isEmpty ? model.peaks : model.peaksMic,
-                        peaksSystem: model.peaksSystem.isEmpty ? model.peaks : model.peaksSystem,
-                        speakers: speakers,
-                        duration: model.duration,
-                        progress: progress,
-                        onSeekFraction: handleSeek
-                    )
-                } else if dualBand {
-                    DualBandWaveformStrip(
-                        peaksMic: model.peaksMic,
-                        peaksSystem: model.peaksSystem,
-                        progress: progress,
-                        onSeekFraction: handleSeek
-                    )
-                } else {
-                    WaveformStrip(
-                        peaks: model.peaks,
-                        progress: progress,
-                        onSeekFraction: handleSeek
-                    )
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: 44)
-
-            Text(model.format(model.duration))
-                .font(.system(size: 11, design: .monospaced))
-                .monospacedDigit()
-                .foregroundStyle(Color.macTextSecondary)
-                .frame(width: 44, alignment: .trailing)
+    private var playButton: some View {
+        Button(action: model.togglePlay) {
+            Image(systemName: model.isPlaying ? "pause.fill" : "play.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .frame(width: 28, height: 28)
         }
-        .padding(.horizontal, 8)
+        .buttonStyle(.plain)
+        .keyboardShortcut(.space, modifiers: [])
+        .disabled(model.duration == 0)
+    }
+
+    private func timeLabel(_ t: TimeInterval) -> some View {
+        Text(model.format(t))
+            .font(.system(size: 11, design: .monospaced))
+            .monospacedDigit()
+            .foregroundStyle(Color.macTextSecondary)
+    }
+
+    private var collapsedRow: some View {
+        HStack(spacing: 8) {
+            playButton
+            timeLabel(model.elapsed)
+            Slider(value: Binding(
+                get: { model.elapsed },
+                set: { handleSeek(CGFloat($0 / model.duration)) }
+            ), in: 0...max(model.duration, 1))
+            .controlSize(.small)
+            .disabled(model.duration == 0)
+            timeLabel(model.duration)
+            controls()
+        }
+    }
+
+    private var expandedCard: some View {
+        VStack(spacing: 2) {
+            HStack(spacing: 8) {
+                playButton
+                timeLabel(model.elapsed)
+                Text("/")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.macTextSecondary.opacity(0.6))
+                timeLabel(model.duration)
+                Spacer()
+                controls()
+            }
+            HStack(spacing: 8) {
+                if !speakers.isEmpty {
+                    // Same 3 pt gap as the lanes drawn in SpeakerLanesStrip.
+                    VStack(alignment: .leading, spacing: 3) {
+                        ForEach(speakers) { laneLabel($0) }
+                    }
+                    .fixedSize(horizontal: true, vertical: false)
+                }
+                waveform
+                    .frame(maxWidth: .infinity)
+            }
+            // A name needs about 19 pt of lane; a long list makes the band taller.
+            .frame(height: speakers.isEmpty ? 74 : max(74, CGFloat(speakers.count) * 22))
+        }
+    }
+
+    @ViewBuilder
+    private var waveform: some View {
+        if !speakers.isEmpty {
+            SpeakerLanesStrip(
+                peaksMic: model.peaksMic.isEmpty ? model.peaks : model.peaksMic,
+                peaksSystem: model.peaksSystem.isEmpty ? model.peaks : model.peaksSystem,
+                speakers: speakers,
+                duration: model.duration,
+                progress: progress,
+                onSeekFraction: handleSeek
+            )
+        } else if dualBand {
+            DualBandWaveformStrip(
+                peaksMic: model.peaksMic,
+                peaksSystem: model.peaksSystem,
+                progress: progress,
+                onSeekFraction: handleSeek
+            )
+        } else {
+            WaveformStrip(
+                peaks: model.peaks,
+                progress: progress,
+                onSeekFraction: handleSeek
+            )
+        }
+    }
+
+    var body: some View {
+        Group {
+            if collapsed {
+                collapsedRow
+            } else {
+                expandedCard
+            }
+        }
         .onAppear {
             model.load(
                 url: url,
