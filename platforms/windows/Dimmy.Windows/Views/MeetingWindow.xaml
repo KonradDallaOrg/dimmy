@@ -21,23 +21,22 @@
     </Grid.RowDefinitions>
 
     <!-- ── TITLE BAR ── -->
-    <Grid Grid.Row="0" Padding="20,12,20,12" ColumnSpacing="12">
+    <Grid Grid.Row="0" Padding="20,12,20,12" ColumnSpacing="{StaticResource DimmySpaceM}">
       <Grid.ColumnDefinitions>
         <ColumnDefinition Width="Auto"/>
         <ColumnDefinition Width="*"/>
         <ColumnDefinition Width="Auto"/>
       </Grid.ColumnDefinitions>
-      <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8"
+      <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}"
                   VerticalAlignment="Center">
-        <FontIcon Glyph="&#xE720;" FontSize="18"
+        <FontIcon Glyph="&#xE720;" FontSize="{StaticResource DimmyIconL}"
                   Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/>
-        <TextBlock Text="Dimmy Meeting" FontSize="15" FontWeight="SemiBold"
+        <TextBlock Text="Dimmy Meeting" Style="{StaticResource DimmyCardTitle}"
                    VerticalAlignment="Center"/>
       </StackPanel>
       <TextBlock x:Name="TitlebarTitle" Grid.Column="1"
-                 Text="New meeting" FontSize="13"
+                 Text="New meeting" Style="{StaticResource DimmySecondary}"
                  HorizontalAlignment="Center" VerticalAlignment="Center"
-                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                  TextTrimming="CharacterEllipsis"/>
       <!-- Always-visible escape hatch: lets the user return to Idle
            from Done state (i.e. after browsing a past meeting) without
@@ -45,9 +44,9 @@
       <Button Grid.Column="2" x:Name="TitlebarNewBtn" Click="NewMeeting_Click"
               ToolTipService.ToolTip="Start a new meeting"
               Padding="12,6">
-        <StackPanel Orientation="Horizontal" Spacing="6">
-          <FontIcon Glyph="&#xE710;" FontSize="13"/>
-          <TextBlock Text="New meeting" FontSize="13"/>
+        <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+          <FontIcon Glyph="&#xE710;" FontSize="{StaticResource DimmyIconM}"/>
+          <TextBlock Text="New meeting" Style="{StaticResource DimmyBody}"/>
         </StackPanel>
       </Button>
     </Grid>
@@ -64,7 +63,7 @@
               BorderThickness="0,1,1,0"
               BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
               Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}">
-        <Grid RowSpacing="10" Padding="14,12,14,12">
+        <Grid RowSpacing="{StaticResource DimmySpaceM}" Padding="14,12,14,12">
           <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>  <!-- header -->
             <RowDefinition Height="Auto"/>  <!-- new-meeting CTA -->
@@ -73,7 +72,7 @@
           </Grid.RowDefinitions>
 
           <TextBlock Grid.Row="0" Text="Meetings"
-                     FontSize="16" FontWeight="SemiBold"/>
+                     Style="{StaticResource DimmyCardTitle}"/>
 
           <Button Grid.Row="1" x:Name="NewMeetingHeaderBtn"
                   Click="NewMeeting_Click"
@@ -81,8 +80,8 @@
                   HorizontalAlignment="Stretch"
                   HorizontalContentAlignment="Center"
                   Padding="10,8">
-            <StackPanel Orientation="Horizontal" Spacing="6">
-              <FontIcon Glyph="&#xE710;" FontSize="13"/>
+            <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+              <FontIcon Glyph="&#xE710;" FontSize="{StaticResource DimmyIconM}"/>
               <TextBlock Text="New meeting" FontWeight="SemiBold"/>
             </StackPanel>
           </Button>
@@ -105,7 +104,7 @@
             </ListView.ItemContainerStyle>
             <ListView.ItemTemplate>
               <DataTemplate>
-                <Grid ColumnSpacing="8" Padding="6,6">
+                <Grid ColumnSpacing="{StaticResource DimmySpaceS}" Padding="6,6">
                   <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
@@ -126,26 +125,23 @@
                           Margin="-16,4,0,4"
                           Background="{ThemeResource AccentFillColorDefaultBrush}"
                           Visibility="{Binding IsActive, Converter={StaticResource BoolToVisibilityConverter}}"/>
-                  <StackPanel Grid.Column="0" Spacing="2">
-                    <TextBlock Text="{Binding Title}" FontSize="13"
-                               FontWeight="SemiBold"
+                  <StackPanel Grid.Column="0" Spacing="{StaticResource DimmySpaceXS}">
+                    <TextBlock Text="{Binding Title}" Style="{StaticResource DimmyCardTitle}"
                                TextTrimming="CharacterEllipsis"/>
-                    <TextBlock Text="{Binding Subtitle}" FontSize="11"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    <TextBlock Text="{Binding Subtitle}" Style="{StaticResource DimmyCaption}"
                                TextTrimming="CharacterEllipsis"/>
                   </StackPanel>
                   <TextBlock Grid.Column="1" Text="{Binding RightLabel}"
-                             FontSize="10" FontWeight="SemiBold"
+                             Style="{StaticResource DimmyCaption}" FontWeight="SemiBold"
                              Padding="6,2"
-                             VerticalAlignment="Center"
-                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                             VerticalAlignment="Center"/>
                   <Button Grid.Column="2"
                           Click="HistoryRowDelete_Click"
                           DataContext="{Binding}"
                           Background="Transparent" BorderThickness="0"
                           Padding="4" MinWidth="0" MinHeight="0"
                           ToolTipService.ToolTip="Delete meeting">
-                    <FontIcon Glyph="&#xE74D;" FontSize="11"
+                    <FontIcon Glyph="&#xE74D;" FontSize="{StaticResource DimmyIconS}"
                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
                   </Button>
                 </Grid>
@@ -156,7 +152,7 @@
       </Border>
 
       <!-- ── MAIN PANEL ── -->
-      <Grid Grid.Column="1" Padding="20" RowSpacing="14">
+      <Grid Grid.Column="1" Padding="20" RowSpacing="{StaticResource DimmySpaceL}">
         <Grid.RowDefinitions>
           <RowDefinition Height="Auto"/>  <!-- recording bar (only during Recording) -->
           <RowDefinition Height="*"/>     <!-- content (state-driven) -->
@@ -170,26 +166,26 @@
                 Visibility="Collapsed"
                 Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                 BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                BorderThickness="1" CornerRadius="8" Padding="14,10">
-          <Grid ColumnSpacing="14">
+                BorderThickness="1" CornerRadius="{StaticResource DimmyCardRadius}" Padding="14,10">
+          <Grid ColumnSpacing="{StaticResource DimmySpaceL}">
             <Grid.ColumnDefinitions>
               <ColumnDefinition Width="Auto"/>
               <ColumnDefinition Width="*"/>
               <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
-            <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="10"
+            <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}"
                         VerticalAlignment="Center">
               <Ellipse Width="10" Height="10" Fill="Crimson"/>
-              <TextBlock Text="Recording" FontSize="14" FontWeight="SemiBold"
+              <TextBlock Text="Recording" Style="{StaticResource DimmyCardTitle}"
                          VerticalAlignment="Center"/>
               <TextBlock x:Name="RecTimer" Text="00:00:00"
-                         FontFamily="Consolas" FontSize="14" FontWeight="SemiBold"
+                         FontFamily="Consolas" Style="{StaticResource DimmyCardTitle}"
                          Foreground="Crimson" VerticalAlignment="Center"/>
               <TextBlock x:Name="RecChunks" Text=""
-                         FontSize="11" VerticalAlignment="Center"
+                         Style="{StaticResource DimmyCaption}" VerticalAlignment="Center"
                          Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
             </StackPanel>
-            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6">
+            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
               <!-- Shown only when the user is browsing a past meeting
                    (state == Done) while recording is still in flight.
                    Tap to return to the live transcript view without
@@ -197,23 +193,23 @@
               <Button x:Name="BackToLiveBtn" Click="BackToLive_Click"
                       Visibility="Collapsed"
                       ToolTipService.ToolTip="Return to the live recording view">
-                <StackPanel Orientation="Horizontal" Spacing="6">
-                  <FontIcon Glyph="&#xE76B;" FontSize="13"/>
+                <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                  <FontIcon Glyph="&#xE76B;" FontSize="{StaticResource DimmyIconM}"/>
                   <TextBlock Text="Back to live"/>
                 </StackPanel>
               </Button>
               <Button x:Name="PauseBtn" Click="Pause_Click"
                       ToolTipService.ToolTip="Pause / resume the meeting recording">
-                <StackPanel Orientation="Horizontal" Spacing="6">
-                  <FontIcon x:Name="PauseBtnIcon" Glyph="&#xE769;" FontSize="13"/>
+                <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                  <FontIcon x:Name="PauseBtnIcon" Glyph="&#xE769;" FontSize="{StaticResource DimmyIconM}"/>
                   <TextBlock x:Name="PauseBtnLabel" Text="Pause"/>
                 </StackPanel>
               </Button>
               <Button x:Name="StopBtn" Click="Stop_Click"
                       Style="{ThemeResource AccentButtonStyle}"
                       Background="Crimson" Foreground="White">
-                <StackPanel Orientation="Horizontal" Spacing="6">
-                  <FontIcon Glyph="&#xE71A;" FontSize="13"/>
+                <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                  <FontIcon Glyph="&#xE71A;" FontSize="{StaticResource DimmyIconM}"/>
                   <TextBlock Text="Stop &amp; finish"/>
                 </StackPanel>
               </Button>
@@ -225,29 +221,28 @@
         <Grid Grid.Row="1">
 
           <!-- IDLE: hero + start CTA -->
-          <StackPanel x:Name="IdlePanel" Spacing="20"
+          <StackPanel x:Name="IdlePanel" Spacing="{StaticResource DimmySpaceXL}"
                       HorizontalAlignment="Center" VerticalAlignment="Center"
                       Visibility="Visible">
             <Border Width="96" Height="96" CornerRadius="48"
                     HorizontalAlignment="Center"
                     Background="{ThemeResource AccentFillColorTertiaryBrush}">
-              <FontIcon Glyph="&#xE720;" FontSize="44"
+              <FontIcon Glyph="&#xE720;" FontSize="{StaticResource DimmyIconHero}"
                         Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/>
             </Border>
-            <StackPanel Spacing="6" HorizontalAlignment="Center">
-              <TextBlock Text="Ready to capture" FontSize="22" FontWeight="SemiBold"
+            <StackPanel Spacing="{StaticResource DimmySpaceS}" HorizontalAlignment="Center">
+              <TextBlock Text="Ready to capture" Style="{StaticResource DimmyHeadline}"
                          HorizontalAlignment="Center"/>
               <TextBlock TextWrapping="Wrap" MaxWidth="440" TextAlignment="Center"
-                         FontSize="13"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                         Style="{StaticResource DimmySecondary}"
                          Text="Long-form recording with structured recap. Pick an old meeting from the sidebar to review, or start a new one."/>
             </StackPanel>
             <Button x:Name="StartBtn" Click="Start_Click"
                     Style="{ThemeResource AccentButtonStyle}"
                     HorizontalAlignment="Center" Padding="20,10">
-              <StackPanel Orientation="Horizontal" Spacing="8">
-                <FontIcon Glyph="&#xE7C8;" FontSize="14"/>
-                <TextBlock Text="Start meeting" FontSize="14" FontWeight="SemiBold"/>
+              <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                <FontIcon Glyph="&#xE7C8;" FontSize="{StaticResource DimmyIconM}"/>
+                <TextBlock Text="Start meeting" Style="{StaticResource DimmyCardTitle}"/>
               </StackPanel>
             </Button>
             <CheckBox x:Name="GenerateRecapCheck"
@@ -256,7 +251,7 @@
           </StackPanel>
 
           <!-- RECORDING: app-context + waveform card + live transcript -->
-          <Grid x:Name="RecordingPanel" Visibility="Collapsed" RowSpacing="12">
+          <Grid x:Name="RecordingPanel" Visibility="Collapsed" RowSpacing="{StaticResource DimmySpaceM}">
             <Grid.RowDefinitions>
               <RowDefinition Height="Auto"/>
               <RowDefinition Height="Auto"/>
@@ -267,21 +262,21 @@
             <Border Grid.Row="0"
                     Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                    BorderThickness="1" CornerRadius="8" Padding="14,10">
-              <Grid ColumnSpacing="14">
+                    BorderThickness="1" CornerRadius="{StaticResource DimmyCardRadius}" Padding="14,10">
+              <Grid ColumnSpacing="{StaticResource DimmySpaceL}">
                 <Grid.ColumnDefinitions>
                   <ColumnDefinition Width="Auto"/>
                   <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
-                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="10"
+                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}"
                             VerticalAlignment="Center">
                   <Image x:Name="AppContextIcon" Width="22" Height="22"
                          Visibility="Collapsed"/>
-                  <FontIcon x:Name="AppContextFallback" Glyph="&#xE720;" FontSize="18"
+                  <FontIcon x:Name="AppContextFallback" Glyph="&#xE720;" FontSize="{StaticResource DimmyIconL}"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             Visibility="Visible"/>
                   <TextBlock x:Name="AppContextName" Text="Microphone"
-                             FontSize="13" VerticalAlignment="Center"/>
+                             Style="{StaticResource DimmyBody}" VerticalAlignment="Center"/>
                 </StackPanel>
                 <Canvas x:Name="LiveWaveformCanvas" Grid.Column="1"
                         Background="Transparent" Height="44"
@@ -298,24 +293,23 @@
             <Border x:Name="CalendarBar" Grid.Row="1" Visibility="Collapsed"
                     Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                    BorderThickness="1" CornerRadius="8" Padding="14,10">
-              <Grid ColumnSpacing="12">
+                    BorderThickness="1" CornerRadius="{StaticResource DimmyCardRadius}" Padding="14,10">
+              <Grid ColumnSpacing="{StaticResource DimmySpaceM}">
                 <Grid.ColumnDefinitions>
                   <ColumnDefinition Width="Auto"/>
                   <ColumnDefinition Width="*"/>
                   <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <FontIcon Grid.Column="0" Glyph="&#xE787;" FontSize="16"
+                <FontIcon Grid.Column="0" Glyph="&#xE787;" FontSize="{StaticResource DimmyIconL}"
                           VerticalAlignment="Center"
                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                 <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                  <TextBlock x:Name="CalendarHeadline" FontSize="13"
+                  <TextBlock x:Name="CalendarHeadline" Style="{StaticResource DimmyBody}"
                              TextTrimming="CharacterEllipsis"/>
-                  <TextBlock x:Name="CalendarSubline" FontSize="11"
-                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                  <TextBlock x:Name="CalendarSubline" Style="{StaticResource DimmyCaption}"
                              TextTrimming="CharacterEllipsis"/>
                 </StackPanel>
-                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8"
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}"
                             VerticalAlignment="Center">
                   <Button x:Name="CalendarConfirmBtn" Content="Confirm"
                           Style="{ThemeResource AccentButtonStyle}"
@@ -335,7 +329,7 @@
             <Border Grid.Row="2"
                     Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                    BorderThickness="1" CornerRadius="8" Padding="0">
+                    BorderThickness="1" CornerRadius="{StaticResource DimmyCardRadius}" Padding="0">
               <Grid>
                 <Grid.RowDefinitions>
                   <RowDefinition Height="Auto"/>
@@ -353,24 +347,24 @@
                       <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
                     <StackPanel x:Name="RecTranscriptTabHeader" Grid.Column="0"
-                                Tag="transcript" Spacing="4"
+                                Tag="transcript" Spacing="{StaticResource DimmySpaceXS}"
                                 PointerPressed="RecTab_PointerPressed">
                       <TextBlock x:Name="RecTranscriptTabLabel" Text="Live transcript"
-                                 FontSize="14" FontWeight="SemiBold"/>
+                                 Style="{StaticResource DimmyCardTitle}"/>
                       <Rectangle x:Name="RecTranscriptTabUnderline" Height="2"
                                  Fill="{ThemeResource AccentFillColorDefaultBrush}"/>
                     </StackPanel>
                     <StackPanel x:Name="RecNotesTabHeader" Grid.Column="1"
-                                Tag="notes" Spacing="4"
+                                Tag="notes" Spacing="{StaticResource DimmySpaceXS}"
                                 PointerPressed="RecTab_PointerPressed">
                       <TextBlock x:Name="RecNotesTabLabel" Text="Notes"
-                                 FontSize="14" FontWeight="SemiBold" Opacity="0.6"/>
+                                 Style="{StaticResource DimmyCardTitle}" Opacity="0.6"/>
                       <Rectangle x:Name="RecNotesTabUnderline" Height="2"
                                  Fill="{ThemeResource AccentFillColorDefaultBrush}"
                                  Visibility="Collapsed"/>
                     </StackPanel>
                     <TextBlock x:Name="TranscriptMeta" Grid.Column="2"
-                               Text="" FontSize="11" HorizontalAlignment="Right"
+                               Text="" Style="{StaticResource DimmyCaption}" HorizontalAlignment="Right"
                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                                VerticalAlignment="Center"/>
                   </Grid>
@@ -381,16 +375,15 @@
                   <ScrollViewer x:Name="TranscriptScroll"
                                 VerticalScrollBarVisibility="Auto"
                                 HorizontalScrollBarVisibility="Disabled">
-                    <StackPanel Padding="14" Spacing="10">
+                    <StackPanel Padding="{StaticResource DimmyCardPaddingCompact}" Spacing="{StaticResource DimmySpaceM}">
                       <TextBlock x:Name="TranscriptText"
                                  Text="🎙️ Listening…"
-                                 TextWrapping="Wrap" FontSize="14"
+                                 TextWrapping="Wrap" Style="{StaticResource DimmyBody}"
                                  IsTextSelectionEnabled="True"
                                  Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
                       <TextBlock x:Name="TranscriptPartial"
                                  Visibility="Collapsed"
-                                 TextWrapping="Wrap" FontSize="14"
-                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                                 TextWrapping="Wrap" Style="{StaticResource DimmySecondary}"/>
                     </StackPanel>
                   </ScrollViewer>
 
@@ -398,7 +391,7 @@
                        "Add note" stamps the current [mm:ss] and appends the
                        block to notes.md. Same store as the Done Notes tab. -->
                   <Grid x:Name="RecNotesPanel" Visibility="Collapsed"
-                        Padding="14" RowSpacing="8">
+                        Padding="{StaticResource DimmyCardPaddingCompact}" RowSpacing="{StaticResource DimmySpaceS}">
                     <Grid.RowDefinitions>
                       <RowDefinition Height="*"/>
                       <RowDefinition Height="Auto"/>
@@ -417,12 +410,12 @@
                       </Grid.ColumnDefinitions>
                       <TextBlock Grid.Column="0" VerticalAlignment="Center"
                                  Text="Ctrl+Enter to add · stamped with the meeting time"
-                                 FontSize="11"
+                                 Style="{StaticResource DimmyCaption}"
                                  Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
                       <Button x:Name="AddNoteBtn" Grid.Column="1"
                               Click="AddNote_Click">
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                          <FontIcon Glyph="&#xE70F;" FontSize="14"/>
+                        <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                          <FontIcon Glyph="&#xE70F;" FontSize="{StaticResource DimmyIconM}"/>
                           <TextBlock Text="Add note"/>
                         </StackPanel>
                       </Button>
@@ -434,26 +427,26 @@
           </Grid>
 
           <!-- PROCESSING: spinner + steps -->
-          <StackPanel x:Name="ProcessingPanel" Spacing="20"
+          <StackPanel x:Name="ProcessingPanel" Spacing="{StaticResource DimmySpaceXL}"
                       HorizontalAlignment="Center" VerticalAlignment="Center"
                       Visibility="Collapsed">
             <ProgressRing x:Name="ProcSpinner" IsActive="True"
                           Width="56" Height="56" HorizontalAlignment="Center"/>
-            <TextBlock Text="Wrapping up…" FontSize="20" FontWeight="SemiBold"
+            <TextBlock Text="Wrapping up…" Style="{StaticResource DimmyHeadline}"
                        HorizontalAlignment="Center"/>
-            <StackPanel Spacing="6" HorizontalAlignment="Center" MinWidth="320">
-              <StackPanel Orientation="Horizontal" Spacing="10">
-                <FontIcon x:Name="ProcStep1Icon" Glyph="&#xE73E;" FontSize="14"
+            <StackPanel Spacing="{StaticResource DimmySpaceS}" HorizontalAlignment="Center" MinWidth="320">
+              <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}">
+                <FontIcon x:Name="ProcStep1Icon" Glyph="&#xE73E;" FontSize="{StaticResource DimmyIconM}"
                           Foreground="ForestGreen"/>
                 <TextBlock x:Name="ProcStep1Text" Text="Saved audio + transcripts"/>
               </StackPanel>
-              <StackPanel Orientation="Horizontal" Spacing="10">
-                <FontIcon x:Name="ProcStep2Icon" Glyph="&#xE76C;" FontSize="14"
+              <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}">
+                <FontIcon x:Name="ProcStep2Icon" Glyph="&#xE76C;" FontSize="{StaticResource DimmyIconM}"
                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                 <TextBlock x:Name="ProcStep2Text" Text="Generating recap with LLM…"/>
               </StackPanel>
-              <StackPanel Orientation="Horizontal" Spacing="10">
-                <FontIcon x:Name="ProcStep3Icon" Glyph="&#xE76C;" FontSize="14"
+              <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}">
+                <FontIcon x:Name="ProcStep3Icon" Glyph="&#xE76C;" FontSize="{StaticResource DimmyIconM}"
                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                 <TextBlock x:Name="ProcStep3Text" Text="Extracting action items"/>
               </StackPanel>
@@ -462,12 +455,11 @@
             <!-- Speaker labels re-transcribe the whole meeting after a stop:
                  minutes on a long one. The core reports one percent for the
                  whole job and the stage it is in. -->
-            <StackPanel x:Name="ProcProgressPanel" Spacing="6" Width="320"
+            <StackPanel x:Name="ProcProgressPanel" Spacing="{StaticResource DimmySpaceS}" Width="320"
                         HorizontalAlignment="Center" Visibility="Collapsed">
               <ProgressBar x:Name="ProcProgressBar" Minimum="0" Maximum="100"/>
-              <TextBlock x:Name="ProcProgressText" FontSize="12" TextWrapping="Wrap"
-                         HorizontalAlignment="Center" TextAlignment="Center"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+              <TextBlock x:Name="ProcProgressText" Style="{StaticResource DimmyCaption}" TextWrapping="Wrap"
+                         HorizontalAlignment="Center" TextAlignment="Center"/>
             </StackPanel>
 
             <!-- The model's reasoning, then its text, as they arrive. This
@@ -481,11 +473,10 @@
                     MaxWidth="560" MaxHeight="180"
                     Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                    BorderThickness="1" CornerRadius="8" Padding="14">
+                    BorderThickness="1" CornerRadius="{StaticResource DimmyCardRadius}" Padding="{StaticResource DimmyCardPaddingCompact}">
               <ScrollViewer x:Name="ProcLiveScroll" VerticalScrollBarVisibility="Auto">
-                <TextBlock x:Name="ProcLiveText" TextWrapping="Wrap" FontSize="12"
-                           IsTextSelectionEnabled="True"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                <TextBlock x:Name="ProcLiveText" TextWrapping="Wrap" Style="{StaticResource DimmyCaption}"
+                           IsTextSelectionEnabled="True"/>
               </ScrollViewer>
             </Border>
           </StackPanel>
@@ -507,40 +498,38 @@
                  transcript. Right padding 14 keeps card borders off the
                  scrollbar; without it the rightmost borders hug it full-screen
                  and look snagged on the window edge. -->
-            <StackPanel Grid.Row="0" Spacing="14" Padding="0,0,14,0">
+            <StackPanel Grid.Row="0" Spacing="{StaticResource DimmySpaceL}" Padding="0,0,14,0">
 
               <!-- Title + meta line, no card, sits on the page surface.
                    Title is click-to-edit: tapping it swaps the TextBlock
                    for the TextBox; Enter or focus-loss commits the new
                    title to meta.json via FFI. -->
-              <StackPanel Spacing="6" Padding="0,4,0,2">
+              <StackPanel Spacing="{StaticResource DimmySpaceS}" Padding="0,4,0,2">
                 <Grid>
                   <TextBlock x:Name="DoneTitle" Text="Meeting"
-                             FontSize="22" FontWeight="SemiBold"
+                             Style="{StaticResource DimmyHeadline}"
                              Tapped="DoneTitle_Tapped"
                              ToolTipService.ToolTip="Click to rename"/>
                   <TextBox x:Name="DoneTitleEdit"
-                           FontSize="22" FontWeight="SemiBold"
+                           FontSize="{StaticResource DimmyFontHeadline}" FontWeight="SemiBold"
                            Visibility="Collapsed"
                            KeyDown="DoneTitleEdit_KeyDown"
                            LostFocus="DoneTitleEdit_LostFocus"/>
                 </Grid>
-                <TextBlock x:Name="DoneMeta" FontSize="12"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                <TextBlock x:Name="DoneMeta" Style="{StaticResource DimmyCaption}"
                            Text=""/>
                 <!-- The linked calendar invite. Without this the event we
                      went and fetched only ever reached the recap prompt,
                      so a meeting with no recap kept the information on
                      disk and showed it to nobody. -->
                 <StackPanel x:Name="DoneCalendarRow" Orientation="Horizontal"
-                            Spacing="6" Visibility="Collapsed" Margin="0,2,0,0">
-                  <FontIcon Glyph="&#xE787;" FontSize="12"
+                            Spacing="{StaticResource DimmySpaceS}" Visibility="Collapsed" Margin="0,2,0,0">
+                  <FontIcon Glyph="&#xE787;" FontSize="{StaticResource DimmyIconS}"
                             VerticalAlignment="Center"
                             Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
-                  <TextBlock x:Name="DoneCalendarText" FontSize="12"
+                  <TextBlock x:Name="DoneCalendarText" Style="{StaticResource DimmyCaption}"
                              VerticalAlignment="Center"
-                             TextTrimming="CharacterEllipsis"
-                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                             TextTrimming="CharacterEllipsis"/>
                 </StackPanel>
 
                 <!-- Meeting-type chip: the auto-detected (or chosen) meeting
@@ -551,8 +540,7 @@
                         BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
                         BorderThickness="1" CornerRadius="10"
                         Padding="9,2,9,2" Margin="0,2,0,0">
-                  <TextBlock x:Name="DoneTypeChipText" FontSize="11" FontWeight="SemiBold"
-                             Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text=""/>
+                  <TextBlock x:Name="DoneTypeChipText" Style="{StaticResource DimmyCaption}" FontWeight="SemiBold" Text=""/>
                 </Border>
               </StackPanel>
 
@@ -570,7 +558,7 @@
                       BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
                       BorderThickness="1" CornerRadius="12" Padding="18,14,18,12"
                       Visibility="Collapsed">
-                <Grid RowSpacing="10">
+                <Grid RowSpacing="{StaticResource DimmySpaceM}">
                   <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
@@ -582,25 +570,25 @@
                        Speakers switch for the waveform below. Collapsed when
                        the meeting has no speakers.json, so an undiarized
                        meeting looks exactly as before. -->
-                  <Grid x:Name="SpeakerBar" Grid.Row="0" ColumnSpacing="12" Visibility="Collapsed">
+                  <Grid x:Name="SpeakerBar" Grid.Row="0" ColumnSpacing="{StaticResource DimmySpaceM}" Visibility="Collapsed">
                     <Grid.ColumnDefinitions>
                       <ColumnDefinition Width="*"/>
                       <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
                     <ScrollViewer HorizontalScrollBarVisibility="Auto" HorizontalScrollMode="Enabled"
                                   VerticalScrollBarVisibility="Disabled" VerticalScrollMode="Disabled">
-                      <StackPanel x:Name="SpeakerChips" Orientation="Horizontal" Spacing="6"/>
+                      <StackPanel x:Name="SpeakerChips" Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}"/>
                     </ScrollViewer>
-                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
-                      <StackPanel Tag="tracks" Spacing="3" PointerPressed="WaveMode_PointerPressed"
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}" VerticalAlignment="Center">
+                      <StackPanel Tag="tracks" Spacing="{StaticResource DimmySpaceXS}" PointerPressed="WaveMode_PointerPressed"
                                   ToolTipService.ToolTip="Waveform by track: you (mic) above, the call (system) below">
-                        <TextBlock x:Name="WaveModeTracksText" Text="Tracks" FontSize="12"/>
+                        <TextBlock x:Name="WaveModeTracksText" Text="Tracks" Style="{StaticResource DimmyLabel}"/>
                         <Rectangle x:Name="WaveModeTracksLine" Height="2" RadiusX="1" RadiusY="1"
                                    Fill="{ThemeResource AccentFillColorDefaultBrush}"/>
                       </StackPanel>
-                      <StackPanel Tag="speakers" Spacing="3" PointerPressed="WaveMode_PointerPressed"
+                      <StackPanel Tag="speakers" Spacing="{StaticResource DimmySpaceXS}" PointerPressed="WaveMode_PointerPressed"
                                   ToolTipService.ToolTip="Waveform by speaker: one lane per person">
-                        <TextBlock x:Name="WaveModeSpeakersText" Text="Speakers" FontSize="12"/>
+                        <TextBlock x:Name="WaveModeSpeakersText" Text="Speakers" Style="{StaticResource DimmyLabel}"/>
                         <Rectangle x:Name="WaveModeSpeakersLine" Height="2" RadiusX="1" RadiusY="1"
                                    Fill="{ThemeResource AccentFillColorDefaultBrush}"/>
                       </StackPanel>
@@ -625,11 +613,10 @@
                        shuffle sideways as the seconds tick. -->
                   <Grid Grid.Row="2" Margin="0,-4,0,0">
                     <TextBlock x:Name="DonePosText" Text="00:00"
-                               FontSize="12" FontFamily="Consolas"
-                               HorizontalAlignment="Left"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                               Style="{StaticResource DimmyCaption}" FontFamily="Consolas"
+                               HorizontalAlignment="Left"/>
                     <TextBlock x:Name="DoneDurText" Text=""
-                               FontSize="12" FontFamily="Consolas"
+                               Style="{StaticResource DimmyCaption}" FontFamily="Consolas"
                                HorizontalAlignment="Right"
                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
                   </Grid>
@@ -670,28 +657,28 @@
                 </Grid.ColumnDefinitions>
 
                 <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="22">
-                  <StackPanel x:Name="RecapTabHeader" Orientation="Vertical" Spacing="6"
+                  <StackPanel x:Name="RecapTabHeader" Orientation="Vertical" Spacing="{StaticResource DimmySpaceS}"
                               Tag="recap" PointerPressed="DoneTab_PointerPressed">
                     <TextBlock x:Name="RecapTabLabel" Text="Recap"
-                               FontSize="14" FontWeight="SemiBold"
+                               Style="{StaticResource DimmyCardTitle}"
                                Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
                     <Rectangle x:Name="RecapTabUnderline" Height="2"
                                Fill="{ThemeResource AccentFillColorDefaultBrush}"/>
                   </StackPanel>
-                  <StackPanel x:Name="TranscriptTabHeader" Orientation="Vertical" Spacing="6"
+                  <StackPanel x:Name="TranscriptTabHeader" Orientation="Vertical" Spacing="{StaticResource DimmySpaceS}"
                               Tag="transcript" PointerPressed="DoneTab_PointerPressed">
                     <TextBlock x:Name="TranscriptTabLabel" Text="Transcript"
-                               FontSize="14"
+                               Style="{StaticResource DimmyBody}"
                                Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                                Opacity="0.6"/>
                     <Rectangle x:Name="TranscriptTabUnderline" Height="2"
                                Fill="{ThemeResource AccentFillColorDefaultBrush}"
                                Visibility="Collapsed"/>
                   </StackPanel>
-                  <StackPanel x:Name="NotesTabHeader" Orientation="Vertical" Spacing="6"
+                  <StackPanel x:Name="NotesTabHeader" Orientation="Vertical" Spacing="{StaticResource DimmySpaceS}"
                               Tag="notes" PointerPressed="DoneTab_PointerPressed">
                     <TextBlock x:Name="NotesTabLabel" Text="Notes"
-                               FontSize="14"
+                               Style="{StaticResource DimmyBody}"
                                Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                                Opacity="0.6"/>
                     <Rectangle x:Name="NotesTabUnderline" Height="2"
@@ -700,7 +687,7 @@
                   </StackPanel>
                 </StackPanel>
 
-                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4"
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="{StaticResource DimmySpaceXS}"
                             VerticalAlignment="Center">
                   <!-- Done-view toolbar buttons (regen / copy / Notion / Claude /
                        open folder) are flat-icon by default. Override the WinUI
@@ -729,17 +716,17 @@
                   <Button x:Name="RegenTranscriptBtn" Click="RegenerateTranscript_Click"
                           ToolTipService.ToolTip="(Re)generate transcript from audio"
                           Background="Transparent" BorderThickness="0" Padding="8">
-                    <FontIcon Glyph="&#xE720;" FontSize="14"/>
+                    <FontIcon Glyph="&#xE720;" FontSize="{StaticResource DimmyIconM}"/>
                   </Button>
                   <Button x:Name="RegenRecapBtn" Click="RegenerateRecap_Click"
                           ToolTipService.ToolTip="(Re)generate recap from transcript"
                           Background="Transparent" BorderThickness="0" Padding="8">
-                    <FontIcon Glyph="&#xE8D4;" FontSize="14"/>
+                    <FontIcon Glyph="&#xE8D4;" FontSize="{StaticResource DimmyIconM}"/>
                   </Button>
                   <Button x:Name="CopyRecapBtn" Click="CopyRecap_Click"
                           ToolTipService.ToolTip="Copy recap to clipboard"
                           Background="Transparent" BorderThickness="0" Padding="8">
-                    <FontIcon Glyph="&#xE8C8;" FontSize="14"/>
+                    <FontIcon Glyph="&#xE8C8;" FontSize="{StaticResource DimmyIconM}"/>
                   </Button>
                   <Button x:Name="SendToNotionBtn" Click="SendToNotion_Click"
                           ToolTipService.ToolTip="Send recap to Notion"
@@ -771,7 +758,7 @@
                   <Button x:Name="OpenFolderBtn" Click="OpenFolder_Click"
                           ToolTipService.ToolTip="Open meeting folder"
                           Background="Transparent" BorderThickness="0" Padding="8">
-                    <FontIcon Glyph="&#xE838;" FontSize="14"/>
+                    <FontIcon Glyph="&#xE838;" FontSize="{StaticResource DimmyIconM}"/>
                   </Button>
                 </StackPanel>
               </Grid>
@@ -782,7 +769,7 @@
                           HorizontalScrollBarVisibility="Disabled"
                           ViewChanged="DoneBodyScroll_ViewChanged"
                           Margin="0,14,0,0">
-              <StackPanel Spacing="14" Padding="0,0,14,20">
+              <StackPanel Spacing="{StaticResource DimmySpaceL}" Padding="0,0,14,20">
 
               <!-- Regenerate progress. Determinate bar for transcript
                    (driven by the file_transcribe_progress event the core
@@ -791,19 +778,18 @@
                    visible for the whole operation — replaces the old silent
                    disabled-button + 3 s toast that left the user guessing. -->
               <StackPanel x:Name="RegenProgressPanel" Visibility="Collapsed"
-                          Orientation="Horizontal" Spacing="10" Margin="0,2,0,0"
+                          Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}" Margin="0,2,0,0"
                           VerticalAlignment="Center">
                 <ProgressBar x:Name="RegenProgressBar" Width="180" Height="4"
                              VerticalAlignment="Center"/>
-                <TextBlock x:Name="RegenProgressText" FontSize="12"
-                           VerticalAlignment="Center"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                <TextBlock x:Name="RegenProgressText" Style="{StaticResource DimmyCaption}"
+                           VerticalAlignment="Center"/>
               </StackPanel>
 
               <!-- Tab content: only one panel is visible at a time.
                    Code-behind DoneTab_PointerPressed swaps Visibility. -->
 
-              <StackPanel x:Name="RecapTabPanel" Spacing="14">
+              <StackPanel x:Name="RecapTabPanel" Spacing="{StaticResource DimmySpaceL}">
 
               <!-- Setting / context — the LLM's read on the meeting's
                    shape (kickoff? status sync? brainstorm?). Skipped
@@ -826,31 +812,29 @@
               <Border x:Name="LiveRecapCard" Visibility="Collapsed"
                       Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                       BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="8" Padding="14">
-                <StackPanel Spacing="6">
-                  <StackPanel Orientation="Horizontal" Spacing="8">
+                      BorderThickness="1" CornerRadius="{StaticResource DimmyCardRadius}" Padding="{StaticResource DimmyCardPaddingCompact}">
+                <StackPanel Spacing="{StaticResource DimmySpaceS}">
+                  <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
                     <ProgressRing IsActive="True" Width="14" Height="14"/>
                     <TextBlock x:Name="LiveRecapLabel" Text="Writing the recap..."
-                               FontSize="14" FontWeight="SemiBold"/>
+                               Style="{StaticResource DimmyCardTitle}"/>
                   </StackPanel>
-                  <TextBlock x:Name="LiveRecapText" TextWrapping="Wrap" FontSize="13"
-                             IsTextSelectionEnabled="True"
-                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                  <TextBlock x:Name="LiveRecapText" TextWrapping="Wrap" Style="{StaticResource DimmySecondary}"
+                             IsTextSelectionEnabled="True"/>
                 </StackPanel>
               </Border>
 
               <Border x:Name="AiNoticeCard" Visibility="Collapsed"
                       Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                       BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="8" Padding="12,10">
-                <StackPanel Orientation="Horizontal" Spacing="10">
-                  <FontIcon Glyph="&#xE9CE;" FontSize="14" VerticalAlignment="Top"
+                      BorderThickness="1" CornerRadius="{StaticResource DimmyCardRadius}" Padding="12,10">
+                <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}">
+                  <FontIcon Glyph="&#xE9CE;" FontSize="{StaticResource DimmyIconM}" VerticalAlignment="Top"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                   <StackPanel Spacing="1">
-                    <TextBlock x:Name="AiNoticeTitle" FontSize="13" FontWeight="SemiBold"
+                    <TextBlock x:Name="AiNoticeTitle" Style="{StaticResource DimmyCardTitle}"
                                Text="AI-generated summary"/>
-                    <TextBlock x:Name="AiNoticeHint" FontSize="12" TextWrapping="Wrap"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    <TextBlock x:Name="AiNoticeHint" Style="{StaticResource DimmyCaption}" TextWrapping="Wrap"
                                Text="Review it before sharing."/>
                   </StackPanel>
                 </StackPanel>
@@ -859,13 +843,13 @@
               <Border x:Name="ContextCard" Visibility="Collapsed"
                       Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                       BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="8" Padding="14">
-                <StackPanel Spacing="6">
-                  <StackPanel Orientation="Horizontal" Spacing="8">
-                    <FontIcon Glyph="&#xE946;" FontSize="14"/>
-                    <TextBlock Text="Context" FontSize="14" FontWeight="SemiBold"/>
+                      BorderThickness="1" CornerRadius="{StaticResource DimmyCardRadius}" Padding="{StaticResource DimmyCardPaddingCompact}">
+                <StackPanel Spacing="{StaticResource DimmySpaceS}">
+                  <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                    <FontIcon Glyph="&#xE946;" FontSize="{StaticResource DimmyIconM}"/>
+                    <TextBlock Text="Context" Style="{StaticResource DimmyCardTitle}"/>
                   </StackPanel>
-                  <RichTextBlock x:Name="ContextText" TextWrapping="Wrap" FontSize="13"
+                  <RichTextBlock x:Name="ContextText" TextWrapping="Wrap" Style="{StaticResource DimmyRichBody}"
                                  IsTextSelectionEnabled="True"/>
                 </StackPanel>
               </Border>
@@ -873,12 +857,12 @@
               <Border x:Name="TldrCard" Visibility="Collapsed"
                       Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                       BorderBrush="{ThemeResource AccentFillColorDefaultBrush}"
-                      BorderThickness="2" CornerRadius="8" Padding="14">
-                <StackPanel Spacing="6">
-                  <TextBlock Text="TL;DR" FontSize="11" FontWeight="SemiBold"
+                      BorderThickness="2" CornerRadius="{StaticResource DimmyCardRadius}" Padding="{StaticResource DimmyCardPaddingCompact}">
+                <StackPanel Spacing="{StaticResource DimmySpaceS}">
+                  <TextBlock Text="TL;DR" Style="{StaticResource DimmyCaption}" FontWeight="SemiBold"
                              CharacterSpacing="80"
                              Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/>
-                  <RichTextBlock x:Name="TldrText" TextWrapping="Wrap" FontSize="14"
+                  <RichTextBlock x:Name="TldrText" TextWrapping="Wrap" Style="{StaticResource DimmyRichBody}"
                                  IsTextSelectionEnabled="True"/>
                   <Button x:Name="OpenRecapSettingsButton"
                           Visibility="Collapsed"
@@ -896,7 +880,7 @@
                           Margin="0,6,0,0"
                           Style="{ThemeResource AccentButtonStyle}"
                           Click="RecapWithClaudeDesktop_Click">
-                    <StackPanel Orientation="Horizontal" Spacing="8">
+                    <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
                       <Image x:Name="RecapWithClaudeFallbackIcon" Width="16" Height="16"/>
                       <TextBlock Text="Generate recap with Claude Desktop"/>
                     </StackPanel>
@@ -910,13 +894,13 @@
               <Border x:Name="HighlightsCard" Visibility="Collapsed"
                       Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                       BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="8" Padding="14">
-                <StackPanel Spacing="8">
-                  <StackPanel Orientation="Horizontal" Spacing="8">
-                    <FontIcon Glyph="&#xE735;" FontSize="14"/>
-                    <TextBlock Text="Highlights" FontSize="14" FontWeight="SemiBold"/>
+                      BorderThickness="1" CornerRadius="{StaticResource DimmyCardRadius}" Padding="{StaticResource DimmyCardPaddingCompact}">
+                <StackPanel Spacing="{StaticResource DimmySpaceS}">
+                  <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                    <FontIcon Glyph="&#xE735;" FontSize="{StaticResource DimmyIconM}"/>
+                    <TextBlock Text="Highlights" Style="{StaticResource DimmyCardTitle}"/>
                   </StackPanel>
-                  <RichTextBlock x:Name="HighlightsText" TextWrapping="Wrap" FontSize="13"
+                  <RichTextBlock x:Name="HighlightsText" TextWrapping="Wrap" Style="{StaticResource DimmyRichBody}"
                                  IsTextSelectionEnabled="True"/>
                 </StackPanel>
               </Border>
@@ -928,13 +912,13 @@
               <Border x:Name="NarrativeCard" Visibility="Collapsed"
                       Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                       BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="8" Padding="14">
-                <StackPanel Spacing="8">
-                  <StackPanel Orientation="Horizontal" Spacing="8">
-                    <FontIcon Glyph="&#xE8A5;" FontSize="14"/>
-                    <TextBlock Text="Narrative" FontSize="14" FontWeight="SemiBold"/>
+                      BorderThickness="1" CornerRadius="{StaticResource DimmyCardRadius}" Padding="{StaticResource DimmyCardPaddingCompact}">
+                <StackPanel Spacing="{StaticResource DimmySpaceS}">
+                  <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                    <FontIcon Glyph="&#xE8A5;" FontSize="{StaticResource DimmyIconM}"/>
+                    <TextBlock Text="Narrative" Style="{StaticResource DimmyCardTitle}"/>
                   </StackPanel>
-                  <RichTextBlock x:Name="NarrativeText" TextWrapping="Wrap" FontSize="13"
+                  <RichTextBlock x:Name="NarrativeText" TextWrapping="Wrap" Style="{StaticResource DimmyRichBody}"
                                  IsTextSelectionEnabled="True"/>
                 </StackPanel>
               </Border>
@@ -942,13 +926,13 @@
               <Border x:Name="DecisionsCard" Visibility="Collapsed"
                       Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                       BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="8" Padding="14">
-                <StackPanel Spacing="8">
-                  <StackPanel Orientation="Horizontal" Spacing="8">
-                    <FontIcon Glyph="&#xE73E;" FontSize="14" Foreground="ForestGreen"/>
-                    <TextBlock Text="Key decisions" FontSize="14" FontWeight="SemiBold"/>
+                      BorderThickness="1" CornerRadius="{StaticResource DimmyCardRadius}" Padding="{StaticResource DimmyCardPaddingCompact}">
+                <StackPanel Spacing="{StaticResource DimmySpaceS}">
+                  <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                    <FontIcon Glyph="&#xE73E;" FontSize="{StaticResource DimmyIconM}" Foreground="ForestGreen"/>
+                    <TextBlock Text="Key decisions" Style="{StaticResource DimmyCardTitle}"/>
                   </StackPanel>
-                  <RichTextBlock x:Name="DecisionsText" TextWrapping="Wrap" FontSize="13"
+                  <RichTextBlock x:Name="DecisionsText" TextWrapping="Wrap" Style="{StaticResource DimmyRichBody}"
                                  IsTextSelectionEnabled="True"/>
                 </StackPanel>
               </Border>
@@ -956,13 +940,13 @@
               <Border x:Name="TopicsCard" Visibility="Collapsed"
                       Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                       BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="8" Padding="14">
-                <StackPanel Spacing="8">
-                  <StackPanel Orientation="Horizontal" Spacing="8">
-                    <FontIcon Glyph="&#xE8FD;" FontSize="14"/>
-                    <TextBlock Text="Topics discussed" FontSize="14" FontWeight="SemiBold"/>
+                      BorderThickness="1" CornerRadius="{StaticResource DimmyCardRadius}" Padding="{StaticResource DimmyCardPaddingCompact}">
+                <StackPanel Spacing="{StaticResource DimmySpaceS}">
+                  <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                    <FontIcon Glyph="&#xE8FD;" FontSize="{StaticResource DimmyIconM}"/>
+                    <TextBlock Text="Topics discussed" Style="{StaticResource DimmyCardTitle}"/>
                   </StackPanel>
-                  <RichTextBlock x:Name="TopicsText" TextWrapping="Wrap" FontSize="13"
+                  <RichTextBlock x:Name="TopicsText" TextWrapping="Wrap" Style="{StaticResource DimmyRichBody}"
                                  IsTextSelectionEnabled="True"/>
                 </StackPanel>
               </Border>
@@ -970,13 +954,13 @@
               <Border x:Name="ActionsCard" Visibility="Collapsed"
                       Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                       BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="8" Padding="14">
-                <StackPanel Spacing="8">
-                  <StackPanel Orientation="Horizontal" Spacing="8">
-                    <FontIcon Glyph="&#xE762;" FontSize="14" Foreground="DarkOrange"/>
-                    <TextBlock Text="Action items" FontSize="14" FontWeight="SemiBold"/>
+                      BorderThickness="1" CornerRadius="{StaticResource DimmyCardRadius}" Padding="{StaticResource DimmyCardPaddingCompact}">
+                <StackPanel Spacing="{StaticResource DimmySpaceS}">
+                  <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                    <FontIcon Glyph="&#xE762;" FontSize="{StaticResource DimmyIconM}" Foreground="DarkOrange"/>
+                    <TextBlock Text="Action items" Style="{StaticResource DimmyCardTitle}"/>
                   </StackPanel>
-                  <RichTextBlock x:Name="ActionsText" TextWrapping="Wrap" FontSize="13"
+                  <RichTextBlock x:Name="ActionsText" TextWrapping="Wrap" Style="{StaticResource DimmyRichBody}"
                                  IsTextSelectionEnabled="True"/>
                 </StackPanel>
               </Border>
@@ -984,13 +968,13 @@
               <Border x:Name="OpenQuestionsCard" Visibility="Collapsed"
                       Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                       BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="8" Padding="14">
-                <StackPanel Spacing="8">
-                  <StackPanel Orientation="Horizontal" Spacing="8">
-                    <FontIcon Glyph="&#xE9CE;" FontSize="14"/>
-                    <TextBlock Text="Open questions" FontSize="14" FontWeight="SemiBold"/>
+                      BorderThickness="1" CornerRadius="{StaticResource DimmyCardRadius}" Padding="{StaticResource DimmyCardPaddingCompact}">
+                <StackPanel Spacing="{StaticResource DimmySpaceS}">
+                  <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                    <FontIcon Glyph="&#xE9CE;" FontSize="{StaticResource DimmyIconM}"/>
+                    <TextBlock Text="Open questions" Style="{StaticResource DimmyCardTitle}"/>
                   </StackPanel>
-                  <RichTextBlock x:Name="OpenQuestionsText" TextWrapping="Wrap" FontSize="13"
+                  <RichTextBlock x:Name="OpenQuestionsText" TextWrapping="Wrap" Style="{StaticResource DimmyRichBody}"
                                  IsTextSelectionEnabled="True"/>
                 </StackPanel>
               </Border>
@@ -998,14 +982,14 @@
               <Border x:Name="RisksCard" Visibility="Collapsed"
                       Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                       BorderBrush="{ThemeResource SystemFillColorCautionBrush}"
-                      BorderThickness="1" CornerRadius="8" Padding="14">
-                <StackPanel Spacing="8">
-                  <StackPanel Orientation="Horizontal" Spacing="8">
-                    <FontIcon Glyph="&#xE7BA;" FontSize="14"
+                      BorderThickness="1" CornerRadius="{StaticResource DimmyCardRadius}" Padding="{StaticResource DimmyCardPaddingCompact}">
+                <StackPanel Spacing="{StaticResource DimmySpaceS}">
+                  <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                    <FontIcon Glyph="&#xE7BA;" FontSize="{StaticResource DimmyIconM}"
                               Foreground="{ThemeResource SystemFillColorCautionBrush}"/>
-                    <TextBlock Text="Risks &amp; blockers" FontSize="14" FontWeight="SemiBold"/>
+                    <TextBlock Text="Risks &amp; blockers" Style="{StaticResource DimmyCardTitle}"/>
                   </StackPanel>
-                  <RichTextBlock x:Name="RisksText" TextWrapping="Wrap" FontSize="13"
+                  <RichTextBlock x:Name="RisksText" TextWrapping="Wrap" Style="{StaticResource DimmyRichBody}"
                                  IsTextSelectionEnabled="True"/>
                 </StackPanel>
               </Border>
@@ -1013,13 +997,13 @@
               <Border x:Name="NextStepsCard" Visibility="Collapsed"
                       Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                       BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="8" Padding="14">
-                <StackPanel Spacing="8">
-                  <StackPanel Orientation="Horizontal" Spacing="8">
-                    <FontIcon Glyph="&#xE893;" FontSize="14"/>
-                    <TextBlock Text="Next steps" FontSize="14" FontWeight="SemiBold"/>
+                      BorderThickness="1" CornerRadius="{StaticResource DimmyCardRadius}" Padding="{StaticResource DimmyCardPaddingCompact}">
+                <StackPanel Spacing="{StaticResource DimmySpaceS}">
+                  <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                    <FontIcon Glyph="&#xE893;" FontSize="{StaticResource DimmyIconM}"/>
+                    <TextBlock Text="Next steps" Style="{StaticResource DimmyCardTitle}"/>
                   </StackPanel>
-                  <RichTextBlock x:Name="NextStepsText" TextWrapping="Wrap" FontSize="13"
+                  <RichTextBlock x:Name="NextStepsText" TextWrapping="Wrap" Style="{StaticResource DimmyRichBody}"
                                  IsTextSelectionEnabled="True"/>
                 </StackPanel>
               </Border>
@@ -1029,13 +1013,13 @@
               <Border x:Name="FollowupsCard" Visibility="Collapsed"
                       Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                       BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="8" Padding="14">
-                <StackPanel Spacing="8">
-                  <StackPanel Orientation="Horizontal" Spacing="8">
-                    <FontIcon Glyph="&#xE715;" FontSize="14"/>
-                    <TextBlock Text="Follow-ups" FontSize="14" FontWeight="SemiBold"/>
+                      BorderThickness="1" CornerRadius="{StaticResource DimmyCardRadius}" Padding="{StaticResource DimmyCardPaddingCompact}">
+                <StackPanel Spacing="{StaticResource DimmySpaceS}">
+                  <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                    <FontIcon Glyph="&#xE715;" FontSize="{StaticResource DimmyIconM}"/>
+                    <TextBlock Text="Follow-ups" Style="{StaticResource DimmyCardTitle}"/>
                   </StackPanel>
-                  <RichTextBlock x:Name="FollowupsText" TextWrapping="Wrap" FontSize="13"
+                  <RichTextBlock x:Name="FollowupsText" TextWrapping="Wrap" Style="{StaticResource DimmyRichBody}"
                                  IsTextSelectionEnabled="True"/>
                 </StackPanel>
               </Border>
@@ -1048,26 +1032,25 @@
               <Border x:Name="TranscriptTabPanel" Visibility="Collapsed"
                       Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                       BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="8" Padding="14">
+                      BorderThickness="1" CornerRadius="{StaticResource DimmyCardRadius}" Padding="{StaticResource DimmyCardPaddingCompact}">
                 <RichTextBlock x:Name="RawTranscriptText" TextWrapping="Wrap"
-                               FontSize="13" LineHeight="22"
+                               Style="{StaticResource DimmyRichBody}" LineHeight="22"
                                IsTextSelectionEnabled="True"/>
               </Border>
 
               <!-- Notes tab — user-typed notes.md, editable after the
                    meeting. The recap reads them as the user's own emphasis
                    (MeetingRecapHelpers "Listener's notes"). -->
-              <StackPanel x:Name="NotesTabPanel" Visibility="Collapsed" Spacing="8">
+              <StackPanel x:Name="NotesTabPanel" Visibility="Collapsed" Spacing="{StaticResource DimmySpaceS}">
                 <TextBlock Text="Your notes for this meeting"
-                           FontSize="12" FontWeight="SemiBold"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                           Style="{StaticResource DimmyCaption}" FontWeight="SemiBold"/>
                 <TextBox x:Name="NotesBox"
                          AcceptsReturn="True" TextWrapping="Wrap"
                          MinHeight="180"
                          PlaceholderText="Add context, attendees, decisions you want surfaced in the recap. The recap gives your notes the most weight."
                          LostFocus="NotesBox_LostFocus"/>
                 <TextBlock x:Name="NotesHint"
-                           FontSize="11"
+                           Style="{StaticResource DimmyCaption}"
                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                            Text="Saved in notes.md when you leave the box. Regenerate the recap to use changes."/>
               </StackPanel>
@@ -1084,7 +1067,7 @@
             Margin="0,0,0,20"
             Background="#E8000000"
             CornerRadius="6" Padding="14,8">
-      <TextBlock x:Name="ToastText" Foreground="White" FontSize="13"
+      <TextBlock x:Name="ToastText" Foreground="White" Style="{StaticResource DimmyBody}"
                  Text=""/>
     </Border>
   </Grid>

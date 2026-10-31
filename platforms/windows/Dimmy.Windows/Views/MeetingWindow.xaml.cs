@@ -1680,12 +1680,12 @@ public sealed partial class MeetingWindow : Window
             });
             content.Children.Add(new TextBlock
             {
-                Text = s.Name, FontSize = 12, VerticalAlignment = VerticalAlignment.Center,
+                Text = s.Name, FontSize = (double)Application.Current.Resources["DimmyFontCaption"], VerticalAlignment = VerticalAlignment.Center,
             });
             content.Children.Add(new TextBlock
             {
                 Text = Helpers.MeetingSpeakers.FormatTalkTime(s.TalkSecs),
-                FontSize = 11, Opacity = 0.6, FontFamily = new FontFamily("Consolas"),
+                FontSize = (double)Application.Current.Resources["DimmyFontCaption"], Opacity = 0.6, FontFamily = new FontFamily("Consolas"),
                 VerticalAlignment = VerticalAlignment.Center,
             });
             var chip = new Button
@@ -1713,7 +1713,7 @@ public sealed partial class MeetingWindow : Window
         };
         var err = new TextBlock
         {
-            FontSize = 12, TextWrapping = TextWrapping.Wrap, MaxWidth = 240,
+            FontSize = (double)Application.Current.Resources["DimmyFontCaption"], TextWrapping = TextWrapping.Wrap, MaxWidth = 240,
             Foreground = (Brush)Application.Current.Resources["SystemFillColorCriticalBrush"],
             Visibility = Visibility.Collapsed,
         };

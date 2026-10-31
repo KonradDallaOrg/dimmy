@@ -178,6 +178,9 @@
                         <TextBlock Style="{StaticResource DimmyCaption}" Text="Microphone" />
                         <TextBlock x:Name="HomeMicValue" Style="{StaticResource DimmyCardTitle}"
                                    TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+                        <TextBlock x:Name="HomeMicNote" Style="{StaticResource DimmyCaption}" Visibility="Collapsed"
+                                   Foreground="{ThemeResource SystemFillColorCautionBrush}"
+                                   Text="Saved microphone not found" />
                       </StackPanel>
                     </Button>
                   </Grid>
@@ -195,7 +198,7 @@
                   <StackPanel Spacing="{StaticResource DimmySpaceXS}">
                     <FontIcon Glyph="&#xE8D2;" FontSize="16" HorizontalAlignment="Left"
                               Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
-                    <TextBlock Style="{StaticResource DimmyStat}" Text="{Binding StatsTotalWords, Mode=OneWay}" />
+                    <TextBlock Style="{StaticResource DimmyStat}" Text="{Binding StatsTotalWordsDisplay, Mode=OneWay}" />
                     <TextBlock Style="{StaticResource DimmyCaption}" Text="words transcribed" />
                   </StackPanel>
                 </Border>

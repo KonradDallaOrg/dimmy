@@ -508,8 +508,11 @@ public partial class SettingsViewModel : ObservableObject
         }
     }
 
+    public string StatsTotalWordsDisplay => StatsTotalWords.ToString("N0");
+
     partial void OnStatsTotalWordsChanged(long value)
     {
+        OnPropertyChanged(nameof(StatsTotalWordsDisplay));
         OnPropertyChanged(nameof(TimeSavedEstimate));
         OnPropertyChanged(nameof(TimeSavedDisplay));
     }

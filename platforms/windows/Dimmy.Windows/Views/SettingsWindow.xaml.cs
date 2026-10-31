@@ -5714,7 +5714,12 @@ public sealed partial class SettingsWindow : Window
         HomeEngineValue.Text = ViewModel.SttMode == "local"
             ? $"Local · {ViewModel.LocalSttBackend}"
             : $"Cloud · {ViewModel.ApiModel}";
-        HomeMicValue.Text = string.IsNullOrEmpty(ViewModel.SelectedDevice) ? "System default" : ViewModel.SelectedDevice;
+        // A saved device that is gone falls back to the system default at capture time.
+        var savedMic = ViewModel.SelectedDevice;
+        var micGone = !string.IsNullOrEmpty(savedMic) && ViewModel.Devices.Count > 0 && !ViewModel.Devices.Contains(savedMic);
+        HomeMicValue.Text = string.IsNullOrEmpty(savedMic) || micGone ? "System default" : savedMic;
+        ToolTipService.SetToolTip(HomeMicValue, micGone ? savedMic : HomeMicValue.Text);
+        HomeMicNote.Visibility = micGone ? Visibility.Visible : Visibility.Collapsed;
 
         HomeSetupMeeting.Visibility = string.IsNullOrEmpty(ViewModel.MeetingHotkey) ? Visibility.Visible : Visibility.Collapsed;
         HomeSetupCommand.Visibility = string.IsNullOrEmpty(ViewModel.CommandHotkey) ? Visibility.Visible : Visibility.Collapsed;
