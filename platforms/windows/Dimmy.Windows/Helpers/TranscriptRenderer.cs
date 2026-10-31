@@ -272,8 +272,11 @@ public static class TranscriptRenderer
     /// </summary>
     private static Paragraph BuildSpeakerSeparator(RichTextBlock target)
     {
-        // A RichTextBlock can be only as wide as its text so far; the parent knows the column.
+        // A RichTextBlock can be only as wide as its text so far, and on a tab not
+        // shown yet its parents report 0: the first ancestor laid out knows the column.
         var ruleWidth = Math.Max(target.ActualWidth, ((target.Parent as FrameworkElement)?.ActualWidth ?? 0) - 32);
+        for (DependencyObject? up = target; ruleWidth <= 0 && up != null; up = VisualTreeHelper.GetParent(up))
+            if (up is FrameworkElement { ActualWidth: > 80 } laidOut) ruleWidth = laidOut.ActualWidth - 80;
         var p = new Paragraph
         {
             Margin = new Thickness(0, 12, 0, 6),

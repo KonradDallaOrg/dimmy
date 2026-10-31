@@ -4,9 +4,9 @@ import AppKit
 // MARK: - MeetingView
 //
 // Top-level meeting window content. Mirror of Win MeetingWindow.xaml:
-//   - Title bar with "Dimmy Meeting" + center title + "New meeting"
+//   - Title bar with the sidebar toggle, "Dimmy Meeting" + "New meeting"
 //     button (always-visible escape from Done back to Idle).
-//   - Body: 280pt sidebar | * main panel.
+//   - Body: 240pt sidebar (hideable) | * main panel.
 //   - Main panel hosts a state machine: idleView / recordingView /
 //     processingView / doneView. The persistent recording bar inside
 //     `MeetingRecordingView` keeps Stop/Pause reachable across
@@ -18,6 +18,7 @@ import AppKit
 
 struct MeetingView: View {
     @StateObject private var vm: MeetingViewModel
+    @AppStorage("meetingSidebarCollapsed") private var sidebarCollapsed = false
 
     init(vm: MeetingViewModel) {
         _vm = StateObject(wrappedValue: vm)
@@ -34,10 +35,14 @@ struct MeetingView: View {
                 systemAudioPermissionBanner
             }
             HStack(spacing: 0) {
-                MeetingSidebar(vm: vm)
+                if !sidebarCollapsed {
+                    MeetingSidebar(vm: vm)
+                }
                 mainPanel
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(20)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 12)
+                    .padding(.bottom, 16)
             }
         }
         .overlay(alignment: .bottom) {
@@ -67,18 +72,20 @@ struct MeetingView: View {
     private var titlebar: some View {
         HStack(spacing: 12) {
             HStack(spacing: 8) {
+                Button(action: { sidebarCollapsed.toggle() }) {
+                    Image(systemName: "sidebar.left")
+                        .font(.system(size: 14))
+                        .padding(4)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Show or hide the meetings list")
                 Image(systemName: "mic.fill")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Color.accentColor)
                 Text("Dimmy Meeting")
                     .font(.system(size: 15, weight: .semibold))
             }
-            Spacer()
-            Text(vm.titlebarTitle)
-                .font(.system(size: 13))
-                .foregroundStyle(Color.macTextSecondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
             Spacer()
             Button(action: { vm.newMeeting() }) {
                 HStack(spacing: 6) {
@@ -93,7 +100,7 @@ struct MeetingView: View {
             .help("Start a new meeting")
         }
         .padding(.horizontal, 20)
-        .padding(.vertical, 12)
+        .padding(.vertical, 8)
     }
 
     // MARK: Main panel

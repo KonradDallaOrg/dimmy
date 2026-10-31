@@ -66,7 +66,7 @@ struct MeetingSidebar: View {
                 .padding(.vertical, 6)
             }
         }
-        .frame(width: 280)
+        .frame(width: 240)
         .background(VisualEffectBackground())
         .overlay(alignment: .trailing) {
             Rectangle()

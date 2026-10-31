@@ -473,7 +473,7 @@ pub fn rename_speaker(
 
 /// Swap the speaker label of lines shaped `[ts] [old] text`; any other line â€”
 /// including one whose TEXT mentions `[old]` â€” is left untouched.
-fn relabel_lines(text: &str, old: &str, new: &str) -> String {
+pub(crate) fn relabel_lines(text: &str, old: &str, new: &str) -> String {
     let needle = format!("] [{old}] ");
     let mut out = String::with_capacity(text.len());
     for line in text.split_inclusive('\n') {

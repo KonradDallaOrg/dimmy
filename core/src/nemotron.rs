@@ -896,14 +896,24 @@ pub struct Update {
     pub words: Vec<Word>,
 }
 
+/// The model's token for what it could not spell. It means nothing to a reader
+/// and landed in meeting transcripts and at the cursor as literal `<unk>`.
+fn strip_unknown(text: &str) -> String {
+    if !text.contains("<unk>") {
+        return text.to_string();
+    }
+    text.replace("<unk>", " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn read_result(api: &Api, r: *mut ResultHandle) -> Update {
     assert!(!r.is_null());
     // SAFETY: `r` is a live result handle; every accessor reads memory the
     // result owns, copied out before `result_destroy`.
     unsafe {
-        let text = cstr_or_empty((api.result_transcript)(r, 0))
-            .trim()
-            .to_string();
+        let text = strip_unknown(cstr_or_empty((api.result_transcript)(r, 0)).trim());
         let n = (api.result_word_count)(r, 0);
         let mut words = Vec::with_capacity(n);
         for i in 0..n {
@@ -911,7 +921,7 @@ fn read_result(api: &Api, r: *mut ResultHandle) -> Update {
             let end = (api.result_word_end)(r, 0, i) as f64 / 1000.0;
             let speaker = (api.result_word_speaker)(r, 0, i).clamp(0, u8::MAX as i32) as u8;
             words.push(Word {
-                text: cstr_or_empty((api.result_word_text)(r, 0, i)),
+                text: strip_unknown(&cstr_or_empty((api.result_word_text)(r, 0, i))),
                 start: start.max(0.0),
                 end: end.max(start.max(0.0)),
                 speaker,
@@ -1663,6 +1673,15 @@ pub struct Spoken {
 /// already uses ("Speaker N", N the engine's number), so renaming one
 /// rewrites the same labels. Words closer than 0.3 s join into one span.
 pub fn speaker_list(band: &str, segments: &[(u8, f64, f64)]) -> Vec<crate::diarize::SpeakerInfo> {
+    numbered_speakers(band, segments, "S", crate::diarize::default_name)
+}
+
+fn numbered_speakers(
+    band: &str,
+    segments: &[(u8, f64, f64)],
+    id_prefix: &str,
+    name: impl Fn(usize) -> String,
+) -> Vec<crate::diarize::SpeakerInfo> {
     let mut ids: Vec<u8> = segments.iter().map(|s| s.0).collect();
     ids.sort_unstable();
     ids.dedup();
@@ -1675,8 +1694,8 @@ pub fn speaker_list(band: &str, segments: &[(u8, f64, f64)]) -> Vec<crate::diari
                     .map(|&(_, a, e)| (a, e)),
             );
             crate::diarize::SpeakerInfo {
-                id: format!("S{n}"),
-                name: crate::diarize::default_name(n as usize),
+                id: format!("{id_prefix}{n}"),
+                name: name(n as usize),
                 band: band.to_string(),
                 talk_secs: spans.iter().map(|(a, e)| e - a).sum(),
                 segments: spans,
@@ -1699,6 +1718,80 @@ pub fn track_lane(band: &str, voiced: &[(f64, f64)]) -> Option<crate::diarize::S
         talk_secs: spans.iter().map(|(a, e)| e - a).sum(),
         segments: spans,
     })
+}
+
+/// The label of a voice on the mic during a call. The numbers restart per
+/// track, so "Speaker 1" there would read as the same person as "Speaker 1" of
+/// the call.
+fn mic_speaker_name(n: usize) -> String {
+    format!("Mic speaker {n}")
+}
+
+/// A voice shorter than this is the diarizer flickering, not a second person.
+/// Same bar as the speaker pass (`diarize::label_bands`).
+const MIC_VOICE_MIN_SECS: f64 = 1.0;
+
+/// Labels the live lines of a diarized mic during a call. Most of the time one
+/// person is on the mic, so it reads `mic` until a second voice shows up.
+#[derive(Debug, Default)]
+pub struct MicLabels {
+    seen: Vec<u8>,
+}
+
+impl MicLabels {
+    pub fn label(&mut self, n: u8) -> String {
+        assert!(n > 0, "engine speakers are 1-based");
+        if !self.seen.contains(&n) {
+            self.seen.push(n);
+        }
+        if self.seen.len() >= 2 {
+            mic_speaker_name(n as usize)
+        } else {
+            "mic".to_string()
+        }
+    }
+}
+
+/// What the stop does to the mic of a call: the labels to rewrite in the
+/// transcript, and its entries in `speakers.json`.
+#[derive(Debug)]
+pub struct MicPlan {
+    pub relabel: Vec<(String, String)>,
+    pub speakers: Vec<crate::diarize::SpeakerInfo>,
+}
+
+/// Several voices number every line, the first ones written as the track label
+/// included. One voice, or a diarizer dropped halfway, goes back to the track
+/// label with one lane: the system track stays complete either way, so the mic
+/// never costs the meeting its speakers.
+pub fn mic_call_plan(labels: &MicLabels, band: &str, spoken: &Spoken) -> MicPlan {
+    let list = numbered_speakers(band, &spoken.segments, "M", mic_speaker_name);
+    let voices = list
+        .iter()
+        .filter(|s| s.talk_secs >= MIC_VOICE_MIN_SECS)
+        .count();
+    if spoken.covered && voices >= 2 && labels.seen.len() >= 2 {
+        return MicPlan {
+            relabel: vec![(band.to_string(), mic_speaker_name(labels.seen[0] as usize))],
+            speakers: list,
+        };
+    }
+    let relabel = if labels.seen.len() >= 2 {
+        labels
+            .seen
+            .iter()
+            .map(|&n| (mic_speaker_name(n as usize), band.to_string()))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let mut words: Vec<(f64, f64)> = spoken.segments.iter().map(|s| (s.1, s.2)).collect();
+    words.extend_from_slice(&spoken.voiced);
+    words.sort_by(|a, b| a.0.total_cmp(&b.0));
+    MicPlan {
+        relabel,
+        speakers: track_lane(band, &words).into_iter().collect(),
+    }
 }
 
 /// Words closer than 0.3 s join into one span, rounded to centiseconds.
@@ -2334,6 +2427,92 @@ mod tests {
             "a short sentence waits for its pause"
         );
         assert!(should_close(&words(60)), "someone who never stops");
+    }
+
+    #[test]
+    fn the_mic_says_mic_until_a_second_voice_appears() {
+        let mut labels = MicLabels::default();
+        assert_eq!(labels.label(2), "mic");
+        assert_eq!(labels.label(2), "mic");
+        assert_eq!(labels.label(1), "Mic speaker 1");
+        assert_eq!(labels.label(2), "Mic speaker 2");
+    }
+
+    fn talk(n: u8, secs: f64, at: f64) -> (u8, f64, f64) {
+        (n, at, at + secs)
+    }
+
+    #[test]
+    fn two_real_voices_on_the_mic_are_numbered() {
+        let mut labels = MicLabels::default();
+        labels.label(2);
+        labels.label(1);
+        let spoken = Spoken {
+            segments: vec![talk(2, 3.0, 0.0), talk(1, 2.0, 10.0)],
+            voiced: Vec::new(),
+            covered: true,
+        };
+        let plan = mic_call_plan(&labels, "mic", &spoken);
+        assert_eq!(
+            plan.relabel,
+            vec![("mic".to_string(), "Mic speaker 2".to_string())]
+        );
+        let ids: Vec<&str> = plan.speakers.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["M1", "M2"]);
+        assert_eq!(plan.speakers[0].name, "Mic speaker 1");
+        assert!(plan.speakers.iter().all(|s| s.band == "mic"));
+    }
+
+    #[test]
+    fn one_real_voice_goes_back_to_the_mic_label() {
+        let mut labels = MicLabels::default();
+        labels.label(1);
+        labels.label(2);
+        let spoken = Spoken {
+            segments: vec![talk(1, 20.0, 0.0), talk(2, 0.4, 25.0)],
+            voiced: Vec::new(),
+            covered: true,
+        };
+        let plan = mic_call_plan(&labels, "mic", &spoken);
+        assert_eq!(
+            plan.relabel,
+            vec![
+                ("Mic speaker 1".to_string(), "mic".to_string()),
+                ("Mic speaker 2".to_string(), "mic".to_string()),
+            ]
+        );
+        assert_eq!(plan.speakers.len(), 1);
+        assert_eq!(plan.speakers[0].id, "mic");
+        assert_eq!(plan.speakers[0].segments.len(), 2);
+    }
+
+    #[test]
+    fn a_mic_that_lost_its_diarizer_keeps_one_lane_with_all_its_words() {
+        let mut labels = MicLabels::default();
+        labels.label(1);
+        labels.label(2);
+        let spoken = Spoken {
+            segments: vec![talk(1, 5.0, 0.0), talk(2, 5.0, 6.0)],
+            voiced: vec![(20.0, 22.0)],
+            covered: false,
+        };
+        let plan = mic_call_plan(&labels, "mic", &spoken);
+        assert_eq!(plan.speakers.len(), 1);
+        assert_eq!(plan.speakers[0].id, "mic");
+        assert_eq!(plan.speakers[0].segments.last(), Some(&(20.0, 22.0)));
+        assert!(plan.relabel.iter().all(|(_, new)| new == "mic"));
+    }
+
+    #[test]
+    fn the_unknown_token_never_reaches_the_text() {
+        assert_eq!(
+            strip_unknown("per favore<unk> vieni qua"),
+            "per favore vieni qua"
+        );
+        assert_eq!(strip_unknown("<unk> ciao"), "ciao");
+        assert_eq!(strip_unknown("a <unk> b"), "a b");
+        assert_eq!(strip_unknown("<unk>"), "");
+        assert_eq!(strip_unknown("niente da togliere"), "niente da togliere");
     }
 
     #[test]

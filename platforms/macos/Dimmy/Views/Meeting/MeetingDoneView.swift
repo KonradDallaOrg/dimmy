@@ -53,6 +53,10 @@ struct MeetingDoneView: View {
     @State private var speakerColors: [String: Int] = [:]
     /// Waveform by speaker (one lane each) or by track (mic / system).
     @State private var waveBySpeaker: Bool = true
+    /// Waveform hidden on the transcript and notes tabs, so the text gets the room.
+    @AppStorage("meetingWaveCollapsed") private var waveCollapsedOnText = false
+    /// The waveform starts hidden on the recap tab, and this keeps it open.
+    @AppStorage("meetingWaveOpenOnRecap") private var waveOpenOnRecap = false
     /// Speaker whose rename popover is open.
     @State private var renamingSpeakerId: String?
     @State private var renameDraft: String = ""
@@ -68,6 +72,12 @@ struct MeetingDoneView: View {
     @State private var scrollSeekTask: Task<Void, Never>?
     /// A seek the transcript asks the player for.
     @State private var audioSeek: SeekRequest?
+
+    /// A recap needs the waveform less than a transcript, so each keeps its
+    /// own choice, with the recap starting collapsed.
+    private var waveCollapsed: Bool {
+        vm.doneSelectedTab == .recap ? !waveOpenOnRecap : waveCollapsedOnText
+    }
 
     struct TranscriptTurn: Identifiable {
         let id: Int
@@ -139,7 +149,7 @@ struct MeetingDoneView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 10) {
             header
             if let url = vm.doneAudioURL {
                 audioCard(url: url)
@@ -147,7 +157,6 @@ struct MeetingDoneView: View {
             tabStripWithToolbar
             tabContent
         }
-        .padding(.vertical, 8)
         .padding(.horizontal, 4)
         // Keep the turn list in step with whatever transcript is loaded:
         // opening another meeting, or regenerating this one, replaces it.
@@ -175,8 +184,9 @@ struct MeetingDoneView: View {
 
     // MARK: Header (title + meta only, toolbar moved next to tab strip)
 
+    /// One line and no card: every point here comes out of the text below.
     private var header: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        HStack(spacing: 12) {
             // Click-to-edit title, mirror of Win's
             // DoneTitle_Tapped + DoneTitleEdit (Enter commits, Esc
             // cancels, focus-out commits). Persisted to meta.json
@@ -191,6 +201,7 @@ struct MeetingDoneView: View {
                         if !focused { commitTitleEdit() }
                     }
                     .onExitCommand { editingTitle = false }
+                    .frame(maxWidth: 480)
             } else {
                 Text(vm.doneTitle)
                     .font(.system(size: 18, weight: .semibold))
@@ -206,6 +217,18 @@ struct MeetingDoneView: View {
             Text(vm.doneMeta)
                 .font(.system(size: 11))
                 .foregroundStyle(Color.macTextSecondary)
+                .fixedSize()
+            // Meeting-type chip (Notion-style): the auto-detected (or
+            // chosen) type. Hidden when unresolved (auto/unknown).
+            if let typeLabel = MeetingPostProcessService.friendlyTypeLabel(vm.doneSections["__TYPE__"]) {
+                Text(typeLabel)
+                    .font(.system(size: 10, weight: .semibold))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Color.macTextSecondary.opacity(0.12)))
+                    .foregroundStyle(Color.macTextSecondary)
+                    .fixedSize()
+            }
             // The linked calendar invite. Without this the event we went
             // and fetched only ever reached the recap prompt, so a meeting
             // with no recap kept the information on disk and showed it to
@@ -221,20 +244,9 @@ struct MeetingDoneView: View {
                 }
                 .foregroundStyle(Color.macTextSecondary)
             }
-            // Meeting-type chip (Notion-style): the auto-detected (or
-            // chosen) type. Hidden when unresolved (auto/unknown).
-            if let typeLabel = MeetingPostProcessService.friendlyTypeLabel(vm.doneSections["__TYPE__"]) {
-                Text(typeLabel)
-                    .font(.system(size: 10, weight: .semibold))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 2)
-                    .background(Capsule().fill(Color.macTextSecondary.opacity(0.12)))
-                    .foregroundStyle(Color.macTextSecondary)
-            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(cardBackground)
+        .padding(.horizontal, 4)
     }
 
     private func commitTitleEdit() {
@@ -251,8 +263,8 @@ struct MeetingDoneView: View {
     //
     // Mirror of Win MeetingWindow.xaml:409-475, tab labels on the
     // left with a 2pt accent underline on the selected entry, action
-    // icons on the right always visible regardless of which tab is
-    // active. Selected tab = SemiBold + full opacity + accent
+    // icons on the right. What a tool acts on decides the tab it lives
+    // on; only the meeting folder stays on all three. Selected tab = SemiBold + full opacity + accent
     // underline; the others go to opacity 0.6 + Regular weight.
 
     private var tabStripWithToolbar: some View {
@@ -264,53 +276,14 @@ struct MeetingDoneView: View {
             }
             Spacer()
             HStack(spacing: 6) {
-                // Meeting-type override: default "Auto-detect"; pick a type to
-                // bias the recap's emphasis, then hit the regenerate-recap
-                // button. The detected / chosen type shows as the chip above.
-                Picker("", selection: $vm.selectedMeetingType) {
-                    ForEach(MeetingPostProcessService.meetingTypes, id: \.key) { t in
-                        Text(t.label).tag(t.key)
+                if vm.doneSelectedTab == .transcript {
+                    toolbarButton(systemImage: "waveform.badge.magnifyingglass",
+                                  help: "(Re)generate transcript from audio") {
+                        vm.regenerateTranscript()
                     }
                 }
-                .labelsHidden()
-                .frame(maxWidth: 170)
-                .help("Meeting type — pick one, then regenerate the recap")
-                toolbarButton(systemImage: "waveform.badge.magnifyingglass",
-                              help: "(Re)generate transcript from audio") {
-                    vm.regenerateTranscript()
-                }
-                toolbarButton(systemImage: "arrow.triangle.2.circlepath",
-                              help: "(Re)generate recap from transcript") {
-                    vm.regenerateRecap()
-                }
-                toolbarButton(systemImage: copiedFlash ? "checkmark" : "doc.on.doc",
-                              help: "Copy recap to clipboard") {
-                    copyRecap()
-                }
-                // Notion brand mark is rendered as black-on-transparent;
-                // invert in dark mode so it stays legible on the dark
-                // toolbar instead of disappearing into the background.
-                ToolbarIconButton(help: "Send recap to Notion") {
-                    Task { await sendToNotion() }
-                } label: {
-                    notionToolbarIcon
-                }
-                // Confluence sits next to Notion because it is the same
-                // action with a different destination. The real Atlassian
-                // mark, shipped as a TEMPLATE asset so it takes the
-                // foreground colour and needs no dark-mode inversion the
-                // way the older notion one does.
-                ToolbarIconButton(help: "Send recap to Confluence") {
-                    Task { await sendToConfluence() }
-                } label: {
-                    Image("confluence")
-                        .renderingMode(.template)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 16, height: 16)
-                }
-                if claudeMcpInstalled {
-                    recapWithClaudeButton
+                if vm.doneSelectedTab == .recap {
+                    recapTools
                 }
                 toolbarButton(systemImage: "folder", help: "Open meeting folder") {
                     let dir = vm.selectedDir ?? activeDirFromAudio
@@ -323,6 +296,54 @@ struct MeetingDoneView: View {
             }
         }
         .padding(.horizontal, 4)
+    }
+
+    @ViewBuilder
+    private var recapTools: some View {
+        // Meeting-type override: default "Auto-detect"; pick a type to
+        // bias the recap's emphasis, then hit the regenerate-recap
+        // button. The detected / chosen type shows as the chip above.
+        Picker("", selection: $vm.selectedMeetingType) {
+            ForEach(MeetingPostProcessService.meetingTypes, id: \.key) { t in
+                Text(t.label).tag(t.key)
+            }
+        }
+        .labelsHidden()
+        .frame(maxWidth: 170)
+        .help("Meeting type — pick one, then regenerate the recap")
+        toolbarButton(systemImage: "arrow.triangle.2.circlepath",
+                      help: "(Re)generate recap from transcript") {
+            vm.regenerateRecap()
+        }
+        toolbarButton(systemImage: copiedFlash ? "checkmark" : "doc.on.doc",
+                      help: "Copy recap to clipboard") {
+            copyRecap()
+        }
+        // Notion brand mark is rendered as black-on-transparent;
+        // invert in dark mode so it stays legible on the dark
+        // toolbar instead of disappearing into the background.
+        ToolbarIconButton(help: "Send recap to Notion") {
+            Task { await sendToNotion() }
+        } label: {
+            notionToolbarIcon
+        }
+        // Confluence sits next to Notion because it is the same
+        // action with a different destination. The real Atlassian
+        // mark, shipped as a TEMPLATE asset so it takes the
+        // foreground colour and needs no dark-mode inversion the
+        // way the older notion one does.
+        ToolbarIconButton(help: "Send recap to Confluence") {
+            Task { await sendToConfluence() }
+        } label: {
+            Image("confluence")
+                .renderingMode(.template)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 16, height: 16)
+        }
+        if claudeMcpInstalled {
+            recapWithClaudeButton
+        }
     }
 
     private func tabLabel(_ tab: MeetingViewModel.DoneTab) -> some View {
@@ -343,6 +364,9 @@ struct MeetingDoneView: View {
                     .frame(height: 2)
             }
             .frame(minWidth: 56)
+            // The underline takes all the width it is offered, and the toolbar
+            // beside it changes with the tab: without this the tabs moved.
+            .fixedSize()
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -553,8 +577,7 @@ struct MeetingDoneView: View {
                     } else {
                         // One view per turn, so a seek has something to scroll
                         // TO. The cost is that a drag-selection now covers one
-                        // turn rather than the whole transcript; the toolbar
-                        // Copy button still takes the lot.
+                        // turn rather than the whole transcript.
                         ForEach(Array(transcriptTurns.enumerated()), id: \.element.id) { i, turn in
                             transcriptRow(
                                 turn,
@@ -968,29 +991,51 @@ struct MeetingDoneView: View {
     /// See `~/Library/Application Support/dimmy/dimmy.log` for the
     /// SIGABRT we hit on first repro.
     private func audioCard(url: URL) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if !vm.doneSpeakers.isEmpty {
-                speakerBar
+        AudioPlaybackBar(
+            url: url,
+            micURL: vm.doneAudioMicURL,
+            systemURL: vm.doneAudioSystemURL,
+            speakers: waveBySpeaker ? vm.doneSpeakers : [],
+            collapsed: waveCollapsed,
+            seekTo: audioSeek?.time,
+            seekTick: audioSeek?.tick ?? 0,
+            onSeek: { t in
+                followedTurnId = nil
+                seekTick += 1
+                seekRequest = SeekRequest(tick: seekTick, time: t)
+            },
+            onPlaybackTime: followPlayback,
+            controls: { waveControls },
+            laneLabel: { speakerLaneLabel($0) }
+        )
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(cardBackground)
+    }
+
+    /// The Tracks / Speakers switch (only for a diarized meeting with the
+    /// waveform open) and the collapse button.
+    private var waveControls: some View {
+        HStack(spacing: 8) {
+            if !vm.doneSpeakers.isEmpty && !waveCollapsed {
+                waveModeTab("Tracks", selected: !waveBySpeaker,
+                            help: "Waveform by track: you (mic) above, the call (system) below") {
+                    waveBySpeaker = false
+                }
+                waveModeTab("Speakers", selected: waveBySpeaker,
+                            help: "Waveform by speaker: one lane per person") {
+                    waveBySpeaker = true
+                }
             }
-            AudioPlaybackBar(
-                url: url,
-                micURL: vm.doneAudioMicURL,
-                systemURL: vm.doneAudioSystemURL,
-                speakers: waveBySpeaker ? vm.doneSpeakers : [],
-                seekTo: audioSeek?.time,
-                seekTick: audioSeek?.tick ?? 0,
-                onSeek: { t in
-                    followedTurnId = nil
-                    seekTick += 1
-                    seekRequest = SeekRequest(tick: seekTick, time: t)
-                },
-                onPlaybackTime: followPlayback
-            )
-                .frame(height: 64)
+            toolbarButton(systemImage: waveCollapsed ? "chevron.down" : "chevron.up",
+                          help: waveCollapsed ? "Show the waveform" : "Hide the waveform for more text") {
+                if vm.doneSelectedTab == .recap {
+                    waveOpenOnRecap.toggle()
+                } else {
+                    waveCollapsedOnText.toggle()
+                }
+            }
         }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
-            .background(cardBackground)
     }
 
     /// While audio plays, keep the line being spoken at the top of the
@@ -1008,34 +1053,9 @@ struct MeetingDoneView: View {
 
     // MARK: Speakers
     //
-    // One chip per speaker of a diarized meeting (colour, name, talk time;
-    // click to rename) and a Tracks / Speakers switch for the waveform.
-    // Mirror of Win MeetingWindow SpeakerBar.
-
-    private var speakerBar: some View {
-        HStack(alignment: .top, spacing: 10) {
-            // Wrap rather than scroll: a horizontal ScrollView on the Mac only
-            // moves with a trackpad or Shift+wheel, so with a mouse the chips
-            // past the edge were unreachable. At most eight speakers, so two
-            // lines at worst.
-            ChipFlowLayout(spacing: 6) {
-                ForEach(vm.doneSpeakers) { speaker in
-                    speakerChip(speaker)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            HStack(spacing: 8) {
-                waveModeTab("Tracks", selected: !waveBySpeaker,
-                            help: "Waveform by track: you (mic) above, the call (system) below") {
-                    waveBySpeaker = false
-                }
-                waveModeTab("Speakers", selected: waveBySpeaker,
-                            help: "Waveform by speaker: one lane per person") {
-                    waveBySpeaker = true
-                }
-            }
-        }
-    }
+    // One name per lane of a diarized meeting, on the lane it labels (click to
+    // rename; the tooltip has the talk time). Mirror of Win MeetingWindow
+    // RebuildSpeakerLanes.
 
     private func waveModeTab(_ title: String, selected: Bool, help: String,
                              action: @escaping () -> Void) -> some View {
@@ -1050,7 +1070,7 @@ struct MeetingDoneView: View {
             }
             // The underline is a bare Rectangle, which takes all the width it
             // is offered: without this each tab grew to half the bar and
-            // squeezed the speaker chips.
+            // squeezed everything beside it.
             .fixedSize()
             .contentShape(Rectangle())
         }
@@ -1058,7 +1078,7 @@ struct MeetingDoneView: View {
         .help(help)
     }
 
-    private func speakerChip(_ speaker: MeetingSpeaker) -> some View {
+    private func speakerLaneLabel(_ speaker: MeetingSpeaker) -> some View {
         Button {
             // The mic lane is the track label, which the core will not rename.
             guard speaker.id != "mic" else { return }
@@ -1071,19 +1091,18 @@ struct MeetingDoneView: View {
                     .fill(MeetingSpeakers.color(speaker.colorIndex, dark: colorScheme == .dark))
                     .frame(width: 8, height: 8)
                 Text(speaker.name)
-                    .font(.system(size: 12))
-                Text(MeetingSpeakers.formatTalkTime(speaker.talkSecs))
-                    .font(.system(size: 11, design: .monospaced))
-                    .opacity(0.6)
+                    .font(.system(size: 11))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: 100, alignment: .leading)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 3)
-            .background(Capsule().fill(Color.primary.opacity(0.06)))
-            .overlay(Capsule().stroke(Color.primary.opacity(0.10), lineWidth: 1))
-            .contentShape(Capsule())
+            .frame(maxHeight: .infinity)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(speaker.id == "mic" ? speaker.name : "Rename \(speaker.name)")
+        .help(speaker.id == "mic"
+              ? "\(speaker.name), \(MeetingSpeakers.formatTalkTime(speaker.talkSecs))"
+              : "\(speaker.name), \(MeetingSpeakers.formatTalkTime(speaker.talkSecs)). Click to rename.")
         .popover(isPresented: Binding(
             get: { renamingSpeakerId == speaker.id },
             set: { if !$0 { renamingSpeakerId = nil } }
@@ -1397,52 +1416,6 @@ enum MarkdownBlockParser {
 // giving the click affordance without the heavy default Bordered pill.
 // Used for the Done view header toolbar (regen, copy, send-to-notion,
 // open-folder).
-/// Lays its children out left to right, wrapping onto a new line when the
-/// next one does not fit.
-private struct ChipFlowLayout: Layout {
-    var spacing: CGFloat
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let rows = arrange(width: proposal.width ?? .infinity, subviews: subviews)
-        let width = rows.map(\.width).max() ?? 0
-        let height = rows.map(\.height).reduce(0, +) + spacing * CGFloat(max(0, rows.count - 1))
-        return CGSize(width: proposal.width ?? width, height: height)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        var y = bounds.minY
-        for row in arrange(width: bounds.width, subviews: subviews) {
-            var x = bounds.minX
-            for i in row.indices {
-                let size = subviews[i].sizeThatFits(.unspecified)
-                subviews[i].place(at: CGPoint(x: x, y: y + (row.height - size.height) / 2),
-                                  proposal: ProposedViewSize(size))
-                x += size.width + spacing
-            }
-            y += row.height + spacing
-        }
-    }
-
-    private struct Row { var indices: [Int] = []; var width: CGFloat = 0; var height: CGFloat = 0 }
-
-    private func arrange(width: CGFloat, subviews: Subviews) -> [Row] {
-        var rows: [Row] = [Row()]
-        for i in subviews.indices {
-            let size = subviews[i].sizeThatFits(.unspecified)
-            let needed = rows[rows.count - 1].indices.isEmpty ? size.width : rows[rows.count - 1].width + spacing + size.width
-            if needed > width && !rows[rows.count - 1].indices.isEmpty {
-                rows.append(Row())
-            }
-            var row = rows[rows.count - 1]
-            row.width = row.indices.isEmpty ? size.width : row.width + spacing + size.width
-            row.height = max(row.height, size.height)
-            row.indices.append(i)
-            rows[rows.count - 1] = row
-        }
-        return rows
-    }
-}
-
 private struct ToolbarIconButton<Label: View>: View {
     let help: String
     let action: () -> Void
