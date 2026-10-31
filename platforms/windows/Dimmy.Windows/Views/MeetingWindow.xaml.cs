@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
@@ -117,6 +117,9 @@ public sealed partial class MeetingWindow : Window
         try
         {
             var prefs = Services.UiPreferences.Load();
+            _waveCollapsedOnText = prefs.MeetingWaveCollapsed;
+            _waveOpenOnRecap = prefs.MeetingWaveOpenOnRecap;
+            ApplySidebar(prefs.MeetingSidebarCollapsed);
             if (Content is FrameworkElement root)
             {
                 root.RequestedTheme = prefs.Theme switch
@@ -341,14 +344,6 @@ public sealed partial class MeetingWindow : Window
             && s != MeetingState.Processing)
             ? Visibility.Visible : Visibility.Collapsed;
         NewMeetingHeaderBtn.IsEnabled = !_recordingActive && s != MeetingState.Processing;
-        TitlebarTitle.Text = s switch
-        {
-            MeetingState.Idle => HistoryList.SelectedItem is HistoryRow r ? r.Title : "New meeting",
-            MeetingState.Recording => "Recording in progress",
-            MeetingState.Processing => "Wrapping up…",
-            MeetingState.Done => DoneTitle.Text,
-            _ => "Meeting",
-        };
     }
 
     // ── Lifecycle ─────────────────────────────────────────────────
@@ -810,7 +805,6 @@ public sealed partial class MeetingWindow : Window
         StartBtn.IsEnabled = true;
         ClearDoneCards();
         ShowLivePlaceholder("🎙️ Listening… first transcript appears in ~15 s.");
-        TitlebarTitle.Text = "New meeting";
     }
 
     /// Stop and release the MediaPlayerElement's playback so audio
@@ -1690,6 +1684,10 @@ public sealed partial class MeetingWindow : Window
     // diarized, the speaker bar stays collapsed and nothing else changes.
     private List<Helpers.MeetingSpeaker> _doneSpeakers = new();
     private bool _waveBySpeaker = true;
+    private bool _waveCollapsedOnText;
+    private bool _waveOpenOnRecap;
+    private string _doneTab = "recap";
+    private bool WaveCollapsed => _doneTab == "recap" ? !_waveOpenOnRecap : _waveCollapsedOnText;
 
     private IReadOnlyDictionary<string, int>? SpeakerColorMap() =>
         _doneSpeakers.Count > 0 ? Helpers.MeetingSpeakers.ColorsByName(_doneSpeakers) : null;
@@ -1697,14 +1695,60 @@ public sealed partial class MeetingWindow : Window
     private void LoadDoneSpeakers(string dir)
     {
         _doneSpeakers = Helpers.MeetingSpeakers.Load(dir);
-        SpeakerBar.Visibility = _doneSpeakers.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-        RebuildSpeakerChips(dir);
+        ApplyWaveCollapsed();
+        RebuildSpeakerLanes(dir);
         ApplyWaveModeTabs();
     }
 
-    private void RebuildSpeakerChips(string dir)
+    /// The player stays when the waveform is collapsed: reading the text and
+    /// listening go together. A recap needs the waveform less than a transcript,
+    /// so each keeps its own choice, with the recap starting collapsed.
+    private void ApplyWaveCollapsed()
     {
-        SpeakerChips.Children.Clear();
+        bool collapsed = WaveCollapsed;
+        var shown = collapsed ? Visibility.Collapsed : Visibility.Visible;
+        // Collapsed rows still take their spacing.
+        DoneWaveGrid.RowSpacing = collapsed ? 0 : (double)Application.Current.Resources["DimmySpaceS"];
+        Grid.SetRow(DoneWaveToggle, collapsed ? 2 : 0);
+        DoneWaveToggle.VerticalAlignment = collapsed ? VerticalAlignment.Center : VerticalAlignment.Top;
+        Grid.SetColumnSpan(DoneAudioPlayer, collapsed ? 1 : 2);
+        DoneWaveBand.Visibility = shown;
+        SpeakerBar.Visibility = shown;
+        WaveModeSwitch.Visibility = _doneSpeakers.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        DoneWaveToggleIcon.Glyph = collapsed ? "\uE70D" : "\uE70E";
+        ToolTipService.SetToolTip(DoneWaveToggle, collapsed ? "Show the waveform" : "Hide the waveform for more text");
+    }
+
+    private void DoneWaveToggle_Click(object sender, RoutedEventArgs e)
+    {
+        var prefs = Services.UiPreferences.Load();
+        if (_doneTab == "recap")
+            prefs.MeetingWaveOpenOnRecap = _waveOpenOnRecap = !_waveOpenOnRecap;
+        else
+            prefs.MeetingWaveCollapsed = _waveCollapsedOnText = !_waveCollapsedOnText;
+        prefs.Save();
+        ApplyWaveCollapsed();
+        if (!WaveCollapsed) DrawDoneWaveform();
+    }
+
+    private void ApplySidebar(bool collapsed)
+    {
+        SidebarPane.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
+        SidebarColumn.Width = new GridLength(collapsed ? 0 : 240);
+    }
+
+    private void SidebarToggle_Click(object sender, RoutedEventArgs e)
+    {
+        var prefs = Services.UiPreferences.Load();
+        prefs.MeetingSidebarCollapsed = SidebarPane.Visibility == Visibility.Visible;
+        prefs.Save();
+        ApplySidebar(prefs.MeetingSidebarCollapsed);
+    }
+
+    private void RebuildSpeakerLanes(string dir)
+    {
+        SpeakerLanes.Children.Clear();
+        SpeakerLanes.RowDefinitions.Clear();
         bool dark = Helpers.ThemeHelper.ResolvedIsDark();
         foreach (var s in _doneSpeakers)
         {
@@ -1717,29 +1761,39 @@ public sealed partial class MeetingWindow : Window
             });
             content.Children.Add(new TextBlock
             {
-                Text = s.Name, FontSize = (double)Application.Current.Resources["DimmyFontCaption"], VerticalAlignment = VerticalAlignment.Center,
-            });
-            content.Children.Add(new TextBlock
-            {
-                Text = Helpers.MeetingSpeakers.FormatTalkTime(s.TalkSecs),
-                FontSize = (double)Application.Current.Resources["DimmyFontCaption"], Opacity = 0.6, FontFamily = new FontFamily("Consolas"),
+                Text = s.Name,
+                FontSize = (double)Application.Current.Resources["DimmyFontCaption"],
                 VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                MaxWidth = 100,
             });
-            var chip = new Button
+            var label = new Button
             {
                 Content = content,
-                Padding = new Thickness(10, 3, 10, 3),
+                Padding = new Thickness(4, 0, 4, 0),
                 MinHeight = 0,
-                CornerRadius = new CornerRadius(12),
+                Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
+                BorderThickness = new Thickness(0),
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                HorizontalContentAlignment = HorizontalAlignment.Left,
+                VerticalAlignment = VerticalAlignment.Stretch,
             };
+            var talk = Helpers.MeetingSpeakers.FormatTalkTime(s.TalkSecs);
             // The mic lane is the track label, which the core will not rename.
-            if (s.Id != "mic")
-            {
-                chip.Flyout = BuildRenameFlyout(dir, s);
-                ToolTipService.SetToolTip(chip, $"Rename {s.Name}");
-            }
-            SpeakerChips.Children.Add(chip);
+            if (s.Id != "mic") label.Flyout = BuildRenameFlyout(dir, s);
+            ToolTipService.SetToolTip(label, s.Id != "mic" ? $"{s.Name}, {talk}. Click to rename." : $"{s.Name}, {talk}");
+            SpeakerLanes.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            Grid.SetRow(label, SpeakerLanes.Children.Count);
+            SpeakerLanes.Children.Add(label);
         }
+    }
+
+    /// A name needs about 19 px of lane; a long list makes the band taller.
+    private void ApplyLaneLayout()
+    {
+        bool bySpeaker = _waveBySpeaker && _doneSpeakers.Count > 0;
+        SpeakerLanes.Visibility = bySpeaker ? Visibility.Visible : Visibility.Collapsed;
+        DoneWaveBand.Height = bySpeaker ? Math.Max(74, _doneSpeakers.Count * 22) : 74;
     }
 
     private Flyout BuildRenameFlyout(string dir, Helpers.MeetingSpeaker s)
@@ -1821,6 +1875,7 @@ public sealed partial class MeetingWindow : Window
 
     private void ApplyWaveModeTabs()
     {
+        ApplyLaneLayout();
         WaveModeTracksText.Opacity = _waveBySpeaker ? 0.6 : 1.0;
         WaveModeSpeakersText.Opacity = _waveBySpeaker ? 1.0 : 0.6;
         WaveModeTracksLine.Opacity = _waveBySpeaker ? 0 : 1;
@@ -2519,6 +2574,11 @@ public sealed partial class MeetingWindow : Window
         bool recap = tab == "recap";
         bool transcript = tab == "transcript";
         bool notes = tab == "notes";
+        _doneTab = tab;
+        ApplyWaveCollapsed();
+        if (!WaveCollapsed) DrawDoneWaveform();
+        RecapTools.Visibility = recap ? Visibility.Visible : Visibility.Collapsed;
+        RegenTranscriptBtn.Visibility = transcript ? Visibility.Visible : Visibility.Collapsed;
         RecapTabPanel.Visibility = recap ? Visibility.Visible : Visibility.Collapsed;
         TranscriptTabPanel.Visibility = transcript ? Visibility.Visible : Visibility.Collapsed;
         NotesTabPanel.Visibility = notes ? Visibility.Visible : Visibility.Collapsed;
@@ -3072,7 +3132,9 @@ public sealed partial class MeetingWindow : Window
                     }
                     catch { }
                 }
-                string subtitle = (startDt ?? d.CreationTime).ToString("yyyy-MM-dd HH:mm");
+                var started = startDt ?? d.CreationTime;
+                // Short enough that the duration after it survives the list's width.
+                string subtitle = started.ToString(started.Year == DateTime.Now.Year ? "d MMM HH:mm" : "d MMM yyyy");
                 if (File.Exists(meta))
                 {
                     try

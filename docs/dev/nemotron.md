@@ -169,10 +169,15 @@ untouched (THE AUDIO RULE, `docs/dev/meeting-audio-durability.md`).
 - `LineSink::write` appends `[HH:MM:SS] [label] text` to `transcripts.txt`
   and emits the chunk event, like every other engine. Time = the turn's first
   word.
-- Tracks: the system track carries the live diarizer. The mic keeps its own
-  label on a call and gets one lane in `speakers.json` from its word times
-  (`track_lane`); in a **one-room meeting** (no system track) the mic is
-  diarized instead.
+- Tracks: the system track carries the live diarizer. On a call the mic carries
+  one too **on a GPU only** (`MicLabels`, `mic_call_plan`): it reads `mic` until
+  a second voice appears, then `Mic speaker N` (ids `M1`...). At stop, under two
+  voices of at least 1 s it goes back to `mic` with one lane. Under load the
+  mic's diarizer is dropped first, and the system's speakers stay complete. On a
+  CPU the mic keeps `mic` with one lane from its word times (`track_lane`). In a
+  **one-room meeting** (no system track) the mic is diarized as `Speaker N`.
+  The pass after the meeting and "Regenerate transcript" still give the mic of a
+  call one `mic` label (`diarize::label_bands`).
 
 ### Speakers
 
