@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Window
     x:Class="Dimmy.Windows.Views.MeetingWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -21,7 +21,7 @@
     </Grid.RowDefinitions>
 
     <!-- ── TITLE BAR ── -->
-    <Grid Grid.Row="0" Padding="20,12,20,12" ColumnSpacing="{StaticResource DimmySpaceM}">
+    <Grid Grid.Row="0" Padding="20,8,20,8" ColumnSpacing="{StaticResource DimmySpaceM}">
       <Grid.ColumnDefinitions>
         <ColumnDefinition Width="Auto"/>
         <ColumnDefinition Width="*"/>
@@ -29,26 +29,28 @@
       </Grid.ColumnDefinitions>
       <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}"
                   VerticalAlignment="Center">
+        <Button x:Name="SidebarToggle" Click="SidebarToggle_Click"
+                AutomationProperties.AutomationId="MeetingSidebarToggle"
+                ToolTipService.ToolTip="Show or hide the meetings list"
+                Background="Transparent" BorderThickness="0" Padding="6">
+          <FontIcon Glyph="&#xE700;" FontSize="{StaticResource DimmyIconM}"/>
+        </Button>
         <FontIcon Glyph="&#xE720;" FontSize="{StaticResource DimmyIconL}"
                   Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/>
         <TextBlock Text="Dimmy Meeting" Style="{StaticResource DimmyCardTitle}"
                    VerticalAlignment="Center"/>
       </StackPanel>
-      <TextBlock x:Name="TitlebarTitle" Grid.Column="1"
-                 Text="New meeting" Style="{StaticResource DimmySecondary}"
-                 HorizontalAlignment="Center" VerticalAlignment="Center"
-                 TextTrimming="CharacterEllipsis"/>
     </Grid>
 
     <!-- ── BODY: split pane ── -->
     <Grid Grid.Row="1" ColumnSpacing="0">
       <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="280"/>  <!-- sidebar -->
+        <ColumnDefinition x:Name="SidebarColumn" Width="240"/>  <!-- sidebar -->
         <ColumnDefinition Width="*"/>    <!-- main -->
       </Grid.ColumnDefinitions>
 
       <!-- ── SIDEBAR ── -->
-      <Border Grid.Column="0"
+      <Border x:Name="SidebarPane" Grid.Column="0"
               BorderThickness="0,1,1,0"
               BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
               Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}">
@@ -141,7 +143,7 @@
       </Border>
 
       <!-- ── MAIN PANEL ── -->
-      <Grid Grid.Column="1" Padding="20" RowSpacing="{StaticResource DimmySpaceL}">
+      <Grid Grid.Column="1" Padding="20,12,20,16">
         <Grid.RowDefinitions>
           <RowDefinition Height="Auto"/>  <!-- recording bar (only during Recording) -->
           <RowDefinition Height="*"/>     <!-- content (state-driven) -->
@@ -151,7 +153,7 @@
              Recording. Stays in the same spot regardless of which
              panel is shown below, so the user can't lose access to
              the Stop button by clicking around. -->
-        <Border x:Name="RecordingBar" Grid.Row="0"
+        <Border x:Name="RecordingBar" Margin="0,0,0,16" Grid.Row="0"
                 Visibility="Collapsed"
                 Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                 BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
@@ -485,51 +487,56 @@
                  transcript. Right padding 14 keeps card borders off the
                  scrollbar; without it the rightmost borders hug it full-screen
                  and look snagged on the window edge. -->
-            <StackPanel Grid.Row="0" Spacing="{StaticResource DimmySpaceL}" Padding="0,0,14,0">
+            <StackPanel Grid.Row="0" Spacing="{StaticResource DimmySpaceM}" Padding="0,0,14,0">
 
-              <!-- Title + meta line, no card, sits on the page surface.
-                   Title is click-to-edit: tapping it swaps the TextBlock
-                   for the TextBox; Enter or focus-loss commits the new
-                   title to meta.json via FFI. -->
-              <StackPanel Spacing="{StaticResource DimmySpaceS}" Padding="0,4,0,2">
-                <Grid>
-                  <TextBlock x:Name="DoneTitle" Text="Meeting"
-                             Style="{StaticResource DimmyHeadline}"
-                             Tapped="DoneTitle_Tapped"
-                             ToolTipService.ToolTip="Click to rename"/>
-                  <TextBox x:Name="DoneTitleEdit"
-                           FontSize="{StaticResource DimmyFontHeadline}" FontWeight="SemiBold"
-                           Visibility="Collapsed"
-                           KeyDown="DoneTitleEdit_KeyDown"
-                           LostFocus="DoneTitleEdit_LostFocus"/>
-                </Grid>
-                <TextBlock x:Name="DoneMeta" Style="{StaticResource DimmyCaption}"
-                           Text=""/>
-                <!-- The linked calendar invite. Without this the event we
-                     went and fetched only ever reached the recap prompt,
-                     so a meeting with no recap kept the information on
-                     disk and showed it to nobody. -->
-                <StackPanel x:Name="DoneCalendarRow" Orientation="Horizontal"
-                            Spacing="{StaticResource DimmySpaceS}" Visibility="Collapsed" Margin="0,2,0,0">
-                  <FontIcon Glyph="&#xE787;" FontSize="{StaticResource DimmyIconS}"
-                            VerticalAlignment="Center"
-                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
-                  <TextBlock x:Name="DoneCalendarText" Style="{StaticResource DimmyCaption}"
-                             VerticalAlignment="Center"
-                             TextTrimming="CharacterEllipsis"/>
+              <!-- Title + meta on one line: every pixel here comes out of the
+                   text below. Title is click-to-edit: tapping it swaps the
+                   TextBlock for the TextBox; Enter or focus-loss commits the
+                   new title to meta.json via FFI. -->
+              <Grid ColumnSpacing="{StaticResource DimmySpaceM}">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="Auto" MaxWidth="480"/>
+                  <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="DoneTitle" Text="Meeting"
+                           Style="{StaticResource DimmyHeadline}"
+                           VerticalAlignment="Center"
+                           Tapped="DoneTitle_Tapped"
+                           ToolTipService.ToolTip="Click to rename"/>
+                <TextBox x:Name="DoneTitleEdit"
+                         FontSize="{StaticResource DimmyFontHeadline}" FontWeight="SemiBold"
+                         Visibility="Collapsed"
+                         KeyDown="DoneTitleEdit_KeyDown"
+                         LostFocus="DoneTitleEdit_LostFocus"/>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}"
+                            VerticalAlignment="Center">
+                  <TextBlock x:Name="DoneMeta" Style="{StaticResource DimmyCaption}"
+                             VerticalAlignment="Center" Text=""/>
+                  <!-- Meeting-type chip: the auto-detected (or chosen) meeting
+                       type, Notion-style. Hidden when the type is unresolved. -->
+                  <Border x:Name="DoneTypeChip" Visibility="Collapsed"
+                          VerticalAlignment="Center"
+                          Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+                          BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                          BorderThickness="1" CornerRadius="10"
+                          Padding="9,2,9,2">
+                    <TextBlock x:Name="DoneTypeChipText" Style="{StaticResource DimmyCaption}" FontWeight="SemiBold" Text=""/>
+                  </Border>
+                  <!-- The linked calendar invite. Without this the event we
+                       went and fetched only ever reached the recap prompt,
+                       so a meeting with no recap kept the information on
+                       disk and showed it to nobody. -->
+                  <StackPanel x:Name="DoneCalendarRow" Orientation="Horizontal"
+                              Spacing="{StaticResource DimmySpaceS}" Visibility="Collapsed">
+                    <FontIcon Glyph="&#xE787;" FontSize="{StaticResource DimmyIconS}"
+                              VerticalAlignment="Center"
+                              Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                    <TextBlock x:Name="DoneCalendarText" Style="{StaticResource DimmyCaption}"
+                               VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis"/>
+                  </StackPanel>
                 </StackPanel>
-
-                <!-- Meeting-type chip: the auto-detected (or chosen) meeting
-                     type, Notion-style. Hidden when the type is unresolved. -->
-                <Border x:Name="DoneTypeChip" Visibility="Collapsed"
-                        HorizontalAlignment="Left"
-                        Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
-                        BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                        BorderThickness="1" CornerRadius="10"
-                        Padding="9,2,9,2" Margin="0,2,0,0">
-                  <TextBlock x:Name="DoneTypeChipText" Style="{StaticResource DimmyCaption}" FontWeight="SemiBold" Text=""/>
-                </Border>
-              </StackPanel>
+              </Grid>
 
               <!-- Card containing the mirrored-stereo waveform + the
                    transport controls. Mic (blue) anchors UP from the
@@ -541,30 +548,47 @@
                    The Canvas is intentionally lower-profile than v1 so
                    the recap content below stays the page's focus. -->
               <Border x:Name="DoneWaveCard"
-                      Style="{StaticResource DimmyCard}" Padding="18,14,18,12"
+                      Style="{StaticResource DimmyCard}" Padding="16,10,16,6"
                       Visibility="Collapsed">
-                <Grid RowSpacing="{StaticResource DimmySpaceM}">
+                <Grid x:Name="DoneWaveGrid" RowSpacing="{StaticResource DimmySpaceS}" ColumnSpacing="{StaticResource DimmySpaceXS}">
                   <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
                   </Grid.RowDefinitions>
-                  <!-- Speakers of a diarized meeting: one chip each (colour,
-                       name, talk time; click to rename) and a Tracks /
-                       Speakers switch for the waveform below. Collapsed when
-                       the meeting has no speakers.json, so an undiarized
-                       meeting looks exactly as before. -->
-                  <Grid x:Name="SpeakerBar" Grid.Row="0" RowSpacing="{StaticResource DimmySpaceS}" Visibility="Collapsed">
-                    <Grid.RowDefinitions>
-                      <RowDefinition Height="Auto"/>
-                      <RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
-                    <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto" HorizontalScrollMode="Enabled"
-                                  VerticalScrollBarVisibility="Disabled" VerticalScrollMode="Disabled">
-                      <StackPanel x:Name="SpeakerChips" Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}"/>
-                    </ScrollViewer>
-                    <StackPanel HorizontalAlignment="Right" Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}" VerticalAlignment="Center">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                  </Grid.ColumnDefinitions>
+                  <!-- Top right of the card. Collapsed, it moves beside the
+                       player (ApplyWaveCollapsed): the card has no other row. -->
+                  <Button x:Name="DoneWaveToggle" Grid.Column="1" Grid.Row="0"
+                          Click="DoneWaveToggle_Click"
+                          AutomationProperties.AutomationId="MeetingWaveToggle"
+                          VerticalAlignment="Top"
+                          Background="Transparent" BorderThickness="0" Padding="6">
+                    <FontIcon x:Name="DoneWaveToggleIcon" Glyph="&#xE70E;" FontSize="{StaticResource DimmyIconM}"/>
+                  </Button>
+                  <!-- Position / duration, and the Tracks / Speakers switch (hidden
+                       when the meeting has no speakers.json). Clicking the
+                       waveform seeks: the time says where. Tabular figures so
+                       the digits do not shuffle as the seconds tick. -->
+                  <Grid x:Name="SpeakerBar" Grid.Row="0" ColumnSpacing="{StaticResource DimmySpaceM}">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="*"/>
+                      <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceXS}" VerticalAlignment="Center">
+                      <TextBlock x:Name="DonePosText" Text="00:00"
+                                 Style="{StaticResource DimmyCaption}" FontFamily="Consolas"/>
+                      <TextBlock Text="/" Style="{StaticResource DimmyCaption}"
+                                 Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                      <TextBlock x:Name="DoneDurText" Text=""
+                                 Style="{StaticResource DimmyCaption}" FontFamily="Consolas"
+                                 Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                    </StackPanel>
+                    <StackPanel x:Name="WaveModeSwitch" Grid.Column="1" Orientation="Horizontal"
+                                Spacing="{StaticResource DimmySpaceM}" VerticalAlignment="Center">
                       <StackPanel Tag="tracks" Spacing="{StaticResource DimmySpaceXS}" PointerPressed="WaveMode_PointerPressed"
                                   ToolTipService.ToolTip="Waveform by track: you (mic) above, the call (system) below">
                         <TextBlock x:Name="WaveModeTracksText" Text="Tracks" Style="{StaticResource DimmyLabel}"/>
@@ -579,8 +603,16 @@
                       </StackPanel>
                     </StackPanel>
                   </Grid>
-                  <Border Grid.Row="1" Height="74">
-                    <Canvas x:Name="DoneWaveformCanvas"
+                  <!-- One name per lane, on the lane it labels (click to rename).
+                       Same 3 px gap as the lanes drawn in DrawDoneWaveform. -->
+                  <Grid x:Name="DoneWaveBand" Grid.Row="1" Grid.ColumnSpan="2" Height="74"
+                        ColumnSpacing="{StaticResource DimmySpaceS}">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="Auto"/>
+                      <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid x:Name="SpeakerLanes" RowSpacing="3" MaxWidth="130" Visibility="Collapsed"/>
+                    <Canvas x:Name="DoneWaveformCanvas" Grid.Column="1"
                             Background="Transparent"
                             IsTabStop="True" UseSystemFocusVisuals="True"
                             AutomationProperties.Name="Playback position"
@@ -591,19 +623,6 @@
                             PointerMoved="DoneWaveform_PointerMoved"
                             PointerReleased="DoneWaveform_PointerReleased"
                             PointerCaptureLost="DoneWaveform_PointerReleased"/>
-                  </Border>
-                  <!-- Position / duration, the way a player shows it. Clicking
-                       the waveform seeks, and until now nothing said WHERE it
-                       had seeked to. Tabular figures so the digits do not
-                       shuffle sideways as the seconds tick. -->
-                  <Grid Grid.Row="2" Margin="0,-4,0,0">
-                    <TextBlock x:Name="DonePosText" Text="00:00"
-                               Style="{StaticResource DimmyCaption}" FontFamily="Consolas"
-                               HorizontalAlignment="Left"/>
-                    <TextBlock x:Name="DoneDurText" Text=""
-                               Style="{StaticResource DimmyCaption}" FontFamily="Consolas"
-                               HorizontalAlignment="Right"
-                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
                   </Grid>
                   <!-- Transport controls. The default MediaTransportControls
                        chrome is ~64-72px tall; capping at 56 cropped the
@@ -611,10 +630,10 @@
                        card / window so icons stay readable on Dark mode
                        (no hard Light theme — the card itself follows
                        the system now). -->
-                  <MediaPlayerElement x:Name="DoneAudioPlayer" Grid.Row="3"
+                  <MediaPlayerElement x:Name="DoneAudioPlayer" Grid.Row="2" Grid.ColumnSpan="2"
                                       AreTransportControlsEnabled="True"
                                       AutoPlay="False"
-                                      MinHeight="64">
+                                      Height="76">
                     <MediaPlayerElement.TransportControls>
                       <!-- The seek bar stays. It IS a second control for the
                            same position as the waveform above, which is why
@@ -688,6 +707,14 @@
                     <SolidColorBrush x:Key="ButtonBorderBrushPointerOver" Color="Transparent"/>
                     <SolidColorBrush x:Key="ButtonBorderBrushPressed" Color="Transparent"/>
                   </StackPanel.Resources>
+                  <!-- What a tool acts on decides the tab it lives on. -->
+                  <Button x:Name="RegenTranscriptBtn" Click="RegenerateTranscript_Click"
+                          ToolTipService.ToolTip="(Re)generate transcript from audio"
+                          Background="Transparent" BorderThickness="0" Padding="8">
+                    <FontIcon Glyph="&#xE720;" FontSize="{StaticResource DimmyIconM}"/>
+                  </Button>
+                  <StackPanel x:Name="RecapTools" Orientation="Horizontal" Spacing="{StaticResource DimmySpaceXS}"
+                              VerticalAlignment="Center">
                   <!-- Meeting-type override: default "Auto-detect"; pick a
                        specific type to bias the recap's emphasis, then hit
                        the regenerate-recap button next to it. The detected /
@@ -698,11 +725,6 @@
                             VerticalAlignment="Center" Margin="0,0,6,0"
                             DisplayMemberPath="Label" SelectedValuePath="Key"
                             ToolTipService.ToolTip="Meeting type — pick one, then regenerate the recap"/>
-                  <Button x:Name="RegenTranscriptBtn" Click="RegenerateTranscript_Click"
-                          ToolTipService.ToolTip="(Re)generate transcript from audio"
-                          Background="Transparent" BorderThickness="0" Padding="8">
-                    <FontIcon Glyph="&#xE720;" FontSize="{StaticResource DimmyIconM}"/>
-                  </Button>
                   <Button x:Name="RegenRecapBtn" Click="RegenerateRecap_Click"
                           ToolTipService.ToolTip="(Re)generate recap from transcript"
                           Background="Transparent" BorderThickness="0" Padding="8">
@@ -740,6 +762,7 @@
                           Background="Transparent" BorderThickness="0" Padding="8">
                     <Image x:Name="RecapWithClaudeIcon" Width="16" Height="16"/>
                   </Button>
+                  </StackPanel>
                   <Button x:Name="OpenFolderBtn" Click="OpenFolder_Click"
                           ToolTipService.ToolTip="Open meeting folder"
                           Background="Transparent" BorderThickness="0" Padding="8">

@@ -57,6 +57,17 @@ public sealed class UiPreferences
     /// "set Light → reverts to Auto on reopen" bug.</summary>
     public string Theme { get; set; } = "Default";
 
+    /// <summary>Meeting window, transcript and notes tabs: waveform hidden so
+    /// the text below gets the room.</summary>
+    public bool MeetingWaveCollapsed { get; set; }
+
+    /// <summary>Meeting window, recap tab: the waveform starts hidden there and
+    /// this keeps it open.</summary>
+    public bool MeetingWaveOpenOnRecap { get; set; }
+
+    /// <summary>Meeting window: meetings list hidden.</summary>
+    public bool MeetingSidebarCollapsed { get; set; }
+
     /// <summary>Auto-update channel: "stable" (default — Latest GitHub
     /// release only) or "prerelease" (stable + rc builds from
     /// release.yml). Both are PROD-flavor only; staging-native builds
