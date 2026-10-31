@@ -871,13 +871,16 @@ struct SttThreadCtx {
 /// speaker turn the moment the engine closes it. Runs on the transcription
 /// thread like every other engine; nothing here touches capture.
 ///
-/// The system track carries the diarizer (who is speaking among the others);
-/// the mic is the person recording, so it keeps its own label. If the
-/// diarizer cannot keep up on this machine, it is dropped for the rest of the
-/// meeting and the stop's speaker pass labels the turns instead.
+/// The system track carries the diarizer (who is speaking among the others).
+/// On a GPU the mic carries one too, for several people in the room: it reads
+/// `mic` until a second voice appears, then `Mic speaker N`. If the load is too
+/// much the mic's diarizer goes first; if the system's has to go too, the stop's
+/// speaker pass labels the turns instead.
 struct NemoTracks {
     mic: Option<crate::nemotron::MeetingTrack>,
     system: Option<crate::nemotron::MeetingTrack>,
+    /// Set when the mic of a call carries a diarizer.
+    mic_labels: Option<crate::nemotron::MicLabels>,
     load: SpeakerLoad,
     gpu_watch: Option<GpuWatch>,
 }
@@ -947,6 +950,11 @@ impl SpeakerLoad {
     fn overloaded(&self) -> bool {
         self.value > self.limit
     }
+
+    /// One diarizer just went: what is left starts from a clean reading.
+    fn reset(&mut self) {
+        self.value = 0.0;
+    }
 }
 
 /// Past this the pass after a Nemotron meeting does not start by itself: it
@@ -977,22 +985,34 @@ impl NemoTracks {
                     .ok()
             })
         };
-        // People in one room have only the mic: it carries the speakers
-        // then. On a call it is the person recording, and keeps its label.
-        let mic = open(
-            ctx.device_sample_rate,
-            ctx.stt.speaker_labels && !ctx.mix_active,
-        );
+        // People in one room have only the mic: it carries the speakers then.
+        // On a call a GPU also numbers the voices at the mic. A CPU recognizer
+        // pays for the diarizer on every stream and has no headroom for two.
+        let mic_speakers = ctx.stt.speaker_labels
+            && (!ctx.mix_active
+                || crate::nemotron::default_spec(false).is_some_and(|s| s.gpu.is_some()));
+        let mut mic = open(ctx.device_sample_rate, mic_speakers);
+        if ctx.mix_active {
+            // The GPU check can still refuse the model and fall back to the CPU.
+            if let Some(t) = mic.as_mut().filter(|t| t.has_speakers() && !t.on_gpu()) {
+                if let Err(e) = t.drop_speakers() {
+                    crate::log(&format!("[Meeting] nemotron mic: {e}"));
+                }
+            }
+        }
+        let mic_labels = (ctx.mix_active && mic.as_ref().is_some_and(|t| t.has_speakers()))
+            .then(crate::nemotron::MicLabels::default);
         let system = if ctx.mix_active {
             open(ctx.system_sample_rate, ctx.stt.speaker_labels)
         } else {
             None
         };
         crate::log(&format!(
-            "[Meeting] nemotron live: mic={} system={} speakers={}",
+            "[Meeting] nemotron live: mic={} system={} speakers={} mic_speakers={}",
             mic.is_some(),
             system.is_some(),
-            system.as_ref().is_some_and(|s| s.has_speakers())
+            system.as_ref().is_some_and(|s| s.has_speakers()),
+            mic.as_ref().is_some_and(|t| t.has_speakers())
         ));
         // No track means no live text at all: say so while the meeting can
         // still change engine, instead of an empty transcript at stop.
@@ -1019,6 +1039,7 @@ impl NemoTracks {
         Self {
             mic,
             system,
+            mic_labels,
             load: SpeakerLoad::for_engine(gpu),
             gpu_watch: gpu.then(|| GpuWatch {
                 last_check: Instant::now(),
@@ -1048,7 +1069,8 @@ impl NemoTracks {
             match t.feed(window, track_start) {
                 Ok(fed) => {
                     fresh_secs = fresh_secs.max(fed.fresh_secs);
-                    words += sink.write(label, &fed.lines);
+                    let labels = self.mic_labels.as_mut().filter(|_| label != "system");
+                    words += sink.write(label, &fed.lines, labels);
                     if let Some(text) = fed.partial {
                         sink.partial(label, &text);
                     }
@@ -1069,6 +1091,7 @@ impl NemoTracks {
             }
         }
         if self.load.overloaded() {
+            // The mic first: the call's speakers are worth more.
             for (track, label) in [
                 (self.mic.as_mut(), mic_label),
                 (self.system.as_mut(), "system"),
@@ -1077,17 +1100,24 @@ impl NemoTracks {
                     continue;
                 };
                 crate::log(&format!(
-                    "[Meeting] live speakers cannot keep up (load {:.2}); dropped for the rest of the meeting",
+                    "[Meeting] live speakers on {label} cannot keep up (load {:.2}); dropped for the rest of the meeting",
                     self.load.value
                 ));
+                let labels = self.mic_labels.as_mut().filter(|_| label != "system");
+                let on_call_mic = labels.is_some();
                 match t.drop_speakers() {
-                    Ok(lines) => words += sink.write(label, &lines),
+                    Ok(lines) => words += sink.write(label, &lines, labels),
                     Err(e) => crate::log(&format!("[Meeting] nemotron {label}: {e}")),
                 }
-                crate::ffi::emit_event(
-                    "meeting_speakers_deferred",
-                    &serde_json::json!({ "dir": sink.dir }).to_string(),
-                );
+                // The call mic has no pass to wait for: it goes back to `mic`.
+                if !on_call_mic {
+                    crate::ffi::emit_event(
+                        "meeting_speakers_deferred",
+                        &serde_json::json!({ "dir": sink.dir }).to_string(),
+                    );
+                }
+                self.load.reset();
+                break;
             }
         }
         words
@@ -1098,6 +1128,11 @@ impl NemoTracks {
     /// then skips the speaker pass, as it does for diarize.rs's live labels.
     fn finish(self, sink: &mut LineSink<'_>, wanted: bool, windows_lost: bool) -> bool {
         let mic_label = sink.mic_label;
+        crate::log(&format!(
+            "[Meeting] nemotron load at stop {:.2}",
+            self.load.value
+        ));
+        let mut mic_labels = self.mic_labels;
         let mut speakers = Vec::new();
         let mut labelled = false;
         let mut complete = true;
@@ -1106,9 +1141,16 @@ impl NemoTracks {
             let had_speakers = t.has_speakers() || label == "system";
             match t.finish() {
                 Ok((lines, spoken)) => {
-                    sink.write(label, &lines);
+                    let labels = mic_labels.as_mut().filter(|_| label != "system");
+                    let on_call_mic = labels.is_some();
+                    sink.write(label, &lines, labels);
                     sink.partial(label, "");
-                    if spoken.covered {
+                    if on_call_mic {
+                        let labels = mic_labels.as_ref().expect("the call mic has labels");
+                        let plan = crate::nemotron::mic_call_plan(labels, label, &spoken);
+                        sink.relabel(&plan.relabel);
+                        speakers.extend(plan.speakers);
+                    } else if spoken.covered {
                         labelled = true;
                         speakers.extend(crate::nemotron::speaker_list(label, &spoken.segments));
                     } else if had_speakers {
@@ -1172,7 +1214,12 @@ impl LineSink<'_> {
     /// format every other engine writes (`[HH:MM:SS] [speaker] text`). The
     /// time is the turn's first word, on the track's timeline. Returns the
     /// words written.
-    fn write(&mut self, track_label: &str, lines: &[crate::nemotron::Line]) -> usize {
+    fn write(
+        &mut self,
+        track_label: &str,
+        lines: &[crate::nemotron::Line],
+        mut mic_labels: Option<&mut crate::nemotron::MicLabels>,
+    ) -> usize {
         use std::io::Write as _;
         let mut words = 0;
         for l in lines {
@@ -1180,9 +1227,10 @@ impl LineSink<'_> {
             if text.is_empty() {
                 continue;
             }
-            let speaker = match l.speaker {
-                Some(n) => format!("Speaker {n}"),
-                None => track_label.to_string(),
+            let speaker = match (l.speaker, mic_labels.as_deref_mut()) {
+                (Some(n), Some(labels)) => labels.label(n),
+                (Some(n), None) => format!("Speaker {n}"),
+                (None, _) => track_label.to_string(),
             };
             let elapsed_ms = (l.start.max(0.0) * 1000.0) as u128;
             let line = format!("[{}] [{}] {}\n", format_elapsed(elapsed_ms), speaker, text);
@@ -1204,6 +1252,24 @@ impl LineSink<'_> {
             words += text.split_whitespace().count();
         }
         words
+    }
+
+    /// Rewrite speaker labels in transcripts.txt. On failure the labels stay as
+    /// they are: readable, and the audio is untouched.
+    fn relabel(&mut self, pairs: &[(String, String)]) {
+        if pairs.is_empty() {
+            return;
+        }
+        let path = std::path::Path::new(self.dir).join("transcripts.txt");
+        let done = std::fs::read_to_string(&path).and_then(|mut text| {
+            for (old, new) in pairs {
+                text = crate::diarize::relabel_lines(&text, old, new);
+            }
+            replace_transcript(self.file, &path, &text)
+        });
+        if let Err(e) = done {
+            crate::log(&format!("[Meeting] mic labels not rewritten: {e}"));
+        }
     }
 }
 
