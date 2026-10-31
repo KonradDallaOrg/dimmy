@@ -726,6 +726,7 @@ public sealed partial class MeetingWindow : Window
         bool notes = tab == "notes";
         if (TranscriptScroll != null)
             TranscriptScroll.Visibility = notes ? Visibility.Collapsed : Visibility.Visible;
+        if (notes) LoadLiveNotes();
         if (RecNotesPanel != null)
             RecNotesPanel.Visibility = notes ? Visibility.Visible : Visibility.Collapsed;
         if (RecTranscriptTabUnderline != null)
@@ -757,6 +758,28 @@ public sealed partial class MeetingWindow : Window
 
     private void AddNote_Click(object sender, RoutedEventArgs e) => SubmitNote();
 
+    private bool _loadingLiveNotes;
+
+    private void LoadLiveNotes()
+    {
+        var dir = _activeMeetingDir ?? _recordingNotesDir;
+        if (string.IsNullOrEmpty(dir)) return;
+        var path = System.IO.Path.Combine(dir, "notes.md");
+        _loadingLiveNotes = true;
+        LiveNotesBox.Text = System.IO.File.Exists(path) ? ReadWhileWritten(path) : "";
+        _loadingLiveNotes = false;
+    }
+
+    /// Written on every change, so an edit is already on disk when a stop from
+    /// the pill or a hotkey starts the recap, with nothing here to flush first.
+    private void LiveNotesBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_loadingLiveNotes) return;
+        var dir = _activeMeetingDir ?? _recordingNotesDir;
+        if (string.IsNullOrEmpty(dir)) return;
+        WriteNotesFile(dir, LiveNotesBox.Text ?? "");
+    }
+
     private void SubmitNote()
     {
         if (!_recordingActive)
@@ -783,6 +806,7 @@ public sealed partial class MeetingWindow : Window
             var block = $"**[{ts}]** {text}\n\n";
             System.IO.File.AppendAllText(System.IO.Path.Combine(dir, "notes.md"), block);
             NoteInput.Text = string.Empty;
+            LoadLiveNotes();
             ShowToast($"Note added at {ts}.");
         }
         catch (Exception ex)
@@ -2609,11 +2633,16 @@ public sealed partial class MeetingWindow : Window
     private void SaveNotesNow()
     {
         var dir = _viewingMeetingDir ?? _activeMeetingDir;
-        if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir) || NotesBox == null) return;
+        if (string.IsNullOrEmpty(dir) || NotesBox == null) return;
+        WriteNotesFile(dir, NotesBox.Text ?? "");
+    }
+
+    private static void WriteNotesFile(string dir, string text)
+    {
+        if (!Directory.Exists(dir)) return;
         try
         {
             var path = Path.Combine(dir, "notes.md");
-            var text = NotesBox.Text ?? "";
             if (string.IsNullOrWhiteSpace(text))
             {
                 if (File.Exists(path)) File.Delete(path);
@@ -2625,7 +2654,7 @@ public sealed partial class MeetingWindow : Window
         }
         catch (Exception ex)
         {
-            App.Log($"NotesBox_LostFocus exc: {ex.Message}", "Meeting");
+            App.Log($"WriteNotesFile exc: {ex.Message}", "Meeting");
         }
     }
 

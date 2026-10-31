@@ -989,6 +989,22 @@ public class SettingsViewModelTests
     }
 
     [Fact]
+    public void RefreshDevices_tells_the_picker_the_selection_again()
+    {
+        // The list can arrive after the selection. The ComboBox then has no item
+        // to select and shows nothing, and restoring an unchanged value raises no
+        // event, so without this the saved choice looks empty.
+        var vm = new SettingsViewModel();
+        vm.SelectedDevice = InputDeviceChoice.SystemDefault;
+        string? last = null;
+        vm.PropertyChanged += (_, e) => last = e.PropertyName;
+
+        vm.RefreshDevices(["Microfono (Realtek)"]);
+
+        Assert.Equal(nameof(SettingsViewModel.SelectedDevice), last);
+    }
+
+    [Fact]
     public void RefreshDevices_with_the_same_list_changes_nothing()
     {
         // Every property change schedules an auto-save, so re-reading an
