@@ -4,7 +4,10 @@
 //! would put it. What `nemotron_meeting_bench` measures with a simulated clock,
 //! this measures on a wall clock.
 //!
-//! Usage: nemotron_meeting_replay [--download] <meeting dir> [--no-speakers] [--seconds 120]
+//! Usage: nemotron_meeting_replay [--download] <meeting dir> [--no-speakers] [--seconds 120] [--retranscribe]
+//!
+//! `--retranscribe` runs the pass the host runs after a meeting, in the same
+//! process, as the app does.
 //!
 //! `--download` first fetches the bundle and, on a GPU machine, the F32 model,
 //! through the functions the download center calls.
@@ -71,9 +74,11 @@ fn download_models() {
 fn main() {
     let mut args = std::env::args().skip(1);
     let (mut dir, mut speakers, mut limit) = (None, true, f64::MAX);
+    let mut retranscribe = false;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--no-speakers" => speakers = false,
+            "--retranscribe" => retranscribe = true,
             "--download" => download_models(),
             "--seconds" => {
                 limit = args
@@ -100,6 +105,10 @@ fn main() {
     assert!(end > 0, "nothing to replay");
 
     dimmy_lib::ffi::init_headless();
+    let config_dir = dimmy_lib::config_dir_path().expect("config folder");
+    if let Some(previous) = dimmy_lib::telemetry::abort_report::install(&config_dir) {
+        println!("previous run: {previous}");
+    }
     dimmy_lib::ffi::dimmy_set_event_callback(on_event);
     let mic_buf = Arc::new(Mutex::new(Vec::<f32>::new()));
     let sys_buf = Arc::new(Mutex::new(Vec::<f32>::new()));
@@ -174,6 +183,23 @@ fn main() {
     for f in files {
         let size = std::fs::metadata(result.dir.join(f)).map_or(0, |m| m.len());
         println!("{f}: {size} bytes");
+    }
+    if retranscribe {
+        let started = Instant::now();
+        let dir = std::ffi::CString::new(result.dir.to_str().expect("utf-8 path")).expect("path");
+        let mut out = vec![0 as c_char; 1024 * 1024];
+        // SAFETY: both pointers live for the call and the length is the buffer's.
+        let rc = unsafe {
+            dimmy_lib::ffi::dimmy_meeting_retranscribe(
+                dir.as_ptr(),
+                out.as_mut_ptr(),
+                out.len() as i32,
+            )
+        };
+        println!(
+            "=== retranscribe rc {rc} in {:.1} s",
+            started.elapsed().as_secs_f64()
+        );
     }
     assert!(
         result.dir.parent().is_some_and(|p| p.ends_with("meetings")),

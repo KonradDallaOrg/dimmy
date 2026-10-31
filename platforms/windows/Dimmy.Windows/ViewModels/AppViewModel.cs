@@ -380,6 +380,9 @@ public partial class AppViewModel : ObservableObject
     /// <summary>Raised once per launch when Nemotron cannot load on the GPU.</summary>
     public event Action? NemotronCpuFallback;
 
+    /// <summary>Raised once per meeting when a power limit holds the GPU back.</summary>
+    public event Action? NemotronGpuLimited;
+
     /// <summary>Raised at stop while the core drains the transcriber's
     /// backlog, before the recap is dispatched. Arg: how many windows were
     /// dropped during the meeting (0 when the transcriber kept up).</summary>
@@ -786,6 +789,10 @@ public partial class AppViewModel : ObservableObject
                         Log?.Invoke($"transcription behind (engine={engine}) — audio recording unaffected", "Meeting");
                         MeetingTranscriptionBehind?.Invoke(engine);
                     }
+                    break;
+                case "nemotron_gpu_limited":
+                    Log?.Invoke("the GPU is held back by a power limit", "Meeting");
+                    NemotronGpuLimited?.Invoke();
                     break;
                 case "nemotron_cpu_fallback":
                     Log?.Invoke("Nemotron fell back to the CPU engine", "Meeting");

@@ -139,6 +139,68 @@ fn human_mb(mb: u64) -> String {
 /// Best-effort hardware probe. Cheap enough to call from onboarding and
 /// from the diagnostics page; not cached, because a user who plugs in an
 /// eGPU or updates a driver should see the new answer without a restart.
+/// What the NVIDIA driver says about the GPU right now. A laptop can hold it at
+/// a fraction of its speed from outside Dimmy (300 MHz of 2100, limit 20 W of
+/// 35, after a power change), and nothing but these numbers shows it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NvidiaReading {
+    pub use_pct: f64,
+    pub clock_mhz: f64,
+    pub max_clock_mhz: f64,
+    pub limit_w: Option<f64>,
+    pub default_limit_w: Option<f64>,
+    pub power_capped: bool,
+}
+
+impl NvidiaReading {
+    /// Relative to the card's own default, since each card has its own numbers.
+    /// A healthy T600 stayed at 100-114% of it; locked, 57%.
+    pub fn limit_is_low(&self) -> bool {
+        matches!((self.limit_w, self.default_limit_w), (Some(l), Some(d)) if l < d * 0.7)
+    }
+
+    /// All three, because each is normal alone: the cap is on half the time in
+    /// a healthy meeting, and a low clock is normal for a card with little to do.
+    pub fn slowed(&self) -> bool {
+        self.use_pct >= 90.0 && self.power_capped && self.clock_mhz < self.max_clock_mhz * 0.5
+    }
+}
+
+fn parse_nvidia_reading(line: &str) -> Option<NvidiaReading> {
+    let f: Vec<&str> = line.split(',').map(str::trim).collect();
+    if f.len() != 6 {
+        return None;
+    }
+    Some(NvidiaReading {
+        use_pct: f[0].parse().ok()?,
+        clock_mhz: f[1].parse().ok()?,
+        max_clock_mhz: f[2].parse().ok()?,
+        limit_w: f[3].parse().ok(),
+        default_limit_w: f[4].parse().ok(),
+        power_capped: f[5] == "Active",
+    })
+}
+
+/// None where there is no NVIDIA driver to ask. Spawns a process and can take a
+/// few hundred ms: never call it from the capture path.
+pub fn read_nvidia() -> Option<NvidiaReading> {
+    let mut cmd = std::process::Command::new("nvidia-smi");
+    cmd.args([
+        "--query-gpu=utilization.gpu,clocks.gr,clocks.max.gr,enforced.power.limit,power.default_limit,clocks_throttle_reasons.sw_power_cap",
+        "--format=csv,noheader,nounits",
+    ]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let out = cmd.output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_nvidia_reading(String::from_utf8_lossy(&out.stdout).lines().next()?)
+}
+
 pub fn detect() -> GpuInfo {
     #[cfg(target_os = "windows")]
     {
@@ -433,6 +495,27 @@ mod tests {
             apple_silicon: false,
         };
         assert_eq!(summary_line(&info).as_deref(), Some("Some GPU"));
+    }
+
+    #[test]
+    fn a_gpu_stuck_at_300_mhz_reads_as_slowed() {
+        // Measured on a T600, 2026-10-30: locked, then a healthy 51-minute meeting.
+        let locked = parse_nvidia_reading("99, 300, 2100, 20.00, 35.00, Active").unwrap();
+        assert!(locked.slowed());
+        assert!(locked.limit_is_low());
+        let healthy = parse_nvidia_reading("44, 1430, 2100, 37.00, 35.00, Active").unwrap();
+        assert!(!healthy.slowed(), "a power cap alone is normal on a laptop");
+        assert!(!healthy.limit_is_low());
+        let busy_and_fast = parse_nvidia_reading("100, 1500, 2100, 40.00, 35.00, Active").unwrap();
+        assert!(!busy_and_fast.slowed());
+    }
+
+    #[test]
+    fn a_driver_without_power_data_never_warns_about_the_limit() {
+        let r = parse_nvidia_reading("50, 900, 2100, [N/A], [N/A], Not Active").unwrap();
+        assert!(!r.limit_is_low());
+        assert!(!r.slowed());
+        assert_eq!(parse_nvidia_reading("not csv"), None);
     }
 
     #[test]

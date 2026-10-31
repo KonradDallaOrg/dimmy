@@ -460,6 +460,8 @@ If you're already on a branch that's diverged from staging, the recovery is the 
 
 ## Executing actions with care (AI-specific)
 
+**Think before code (user-explicit, 2026-10-30).** Autonomy is fine; haste is not. Investigating, measuring and reading logs need no approval. Before you write code, check three things: is this the real problem, is there a simpler way or another problem first, and does the data support the idea. A new mechanism or a design choice goes to the user first, with the evidence, unless the user said to go ahead and decide alone. Do not close the app while the user may be using it.
+
 Before running destructive or shared-state actions, check with the user:
 - Force-pushing any branch (especially `main`)
 - `git reset --hard`, overwriting uncommitted changes

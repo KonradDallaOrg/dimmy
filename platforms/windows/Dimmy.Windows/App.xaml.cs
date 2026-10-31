@@ -185,6 +185,15 @@ public partial class App : Application
         catch (Exception ex) { PttLog($"OnMeetingTranscriptionBehind exc: {ex.Message}"); }
     }
 
+    private void OnNemotronGpuLimited()
+    {
+        try
+        {
+            RunOnUI(() => Services.DictNotificationService.ShowGpuLimited());
+        }
+        catch (Exception ex) { PttLog($"OnNemotronGpuLimited exc: {ex.Message}"); }
+    }
+
     private void OnNemotronCpuFallback()
     {
         try
@@ -632,6 +641,7 @@ public partial class App : Application
             // warning the user can still act on.
             _appViewModel.MeetingTranscriptionBehind += OnMeetingTranscriptionBehind;
             _appViewModel.NemotronCpuFallback += OnNemotronCpuFallback;
+            _appViewModel.NemotronGpuLimited += OnNemotronGpuLimited;
 
             // 3. Load config into ViewModel
             LoadConfigIntoViewModel();

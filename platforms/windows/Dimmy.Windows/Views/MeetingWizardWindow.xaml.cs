@@ -32,6 +32,7 @@ public sealed partial class MeetingWizardWindow : Window
     public MeetingWizardWindow()
     {
         InitializeComponent();
+        Dimmy.Windows.Helpers.WindowHelper.SetDimmyIcon(this);
         WindowHelper.ResizeLogical(this, 680, 600);
 
         // Follow the theme the user picked. Without this a wizard renders in

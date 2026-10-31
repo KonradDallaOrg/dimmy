@@ -28,7 +28,6 @@ public sealed partial class MeetingWindow : Window
     private enum MeetingState { Idle, Recording, Processing, Done }
 
     private DispatcherQueueTimer? _pollTimer;
-    private DispatcherQueueTimer? _ampTimer;
     private DispatcherQueueTimer? _toastTimer;
     private DispatcherQueueTimer? _announceTimer;
     private DateTime _startedAt;
@@ -134,12 +133,7 @@ public sealed partial class MeetingWindow : Window
         {
             var appWindow = WindowHelper.GetAppWindow(this);
             WindowHelper.ResizeLogical(this, 980, 720);
-            try
-            {
-                var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "dimmy.ico");
-                if (File.Exists(iconPath)) appWindow?.SetIcon(iconPath);
-            }
-            catch { }
+            WindowHelper.SetDimmyIcon(this);
             if (appWindow?.Presenter is OverlappedPresenter presenter)
             {
                 presenter.IsResizable = true;
@@ -609,9 +603,10 @@ public sealed partial class MeetingWindow : Window
             DoneMeta.Text = $"{FormatDuration(dur)} · {chunks} chunks · {DateTime.Now:yyyy-MM-dd HH:mm}"
                 + (string.IsNullOrWhiteSpace(stopError) ? "" : " · ⚠ audio incomplete");
             RefreshDoneCalendarRow(dir);
-            // Labelled while recording: nothing left to do here.
-            bool labeled = root.TryGetProperty("speakers_labeled", out var slEl)
-                && slEl.ValueKind == JsonValueKind.True;
+            // Labelled while recording, or too long to redo by itself: the
+            // core decides, and "Regenerate transcript" still runs the pass.
+            bool labeled = !(root.TryGetProperty("speaker_pass", out var slEl)
+                && slEl.ValueKind == JsonValueKind.True);
             if (!labeled && Services.DiarizationService.Enabled())
             {
                 ProcStep2Text.Text = "Identifying speakers…";
@@ -1177,20 +1172,16 @@ public sealed partial class MeetingWindow : Window
 
     private void StartAmplitudePoll()
     {
-        var dq = DispatcherQueue.GetForCurrentThread();
-        _ampTimer = dq.CreateTimer();
-        _ampTimer.Interval = TimeSpan.FromMilliseconds(AMP_SAMPLE_MS);
-        _ampTimer.IsRepeating = true;
-        _ampTimer.Tick += OnAmpTick;
-        _ampTimer.Start();
         _ampClock.Restart();
         _ampSamplesLaid = 0;
         HookAmpRendering(true);
     }
 
-    /// <summary>Per-frame scroll. CompositionTarget.Rendering fires once per
-    /// composed frame, so the offset lands on the same clock the screen does;
-    /// a DispatcherTimer would coalesce and beat against it.</summary>
+    /// <summary>Per-frame scroll and new bars. CompositionTarget.Rendering fires
+    /// once per composed frame, so the offset lands on the same clock the screen
+    /// does. The bars are laid here too: from a timer they could arrive between
+    /// this handler and the frame, and that frame showed the new bars at the old
+    /// offset, one bar out of place.</summary>
     private void HookAmpRendering(bool on)
     {
         if (on == _ampRenderHooked) return;
@@ -1201,6 +1192,7 @@ public sealed partial class MeetingWindow : Window
 
     private void OnAmpRendering(object? sender, object e)
     {
+        LayDueAmpSamples();
         if (_ampScrollTransform == null) return;
         // How far the clock is past the last sample laid. The newest bars wait
         // PAST the right edge and the layer glides left on the clock, so a bar
@@ -1216,18 +1208,14 @@ public sealed partial class MeetingWindow : Window
         // the auto-stop that killed those one-second meetings. A pending
         // announcement dies with the recording it was going to describe.
         CancelAutoAnnounce();
-        if (_ampTimer == null) return;
-        _ampTimer.Stop();
-        _ampTimer.Tick -= OnAmpTick;
-        _ampTimer = null;
         HookAmpRendering(false);
     }
 
-    private void OnAmpTick(DispatcherQueueTimer sender, object args)
+    private void LayDueAmpSamples()
     {
         try
         {
-            // Every sample the clock has passed gets a bar, so a late tick
+            // Every sample the clock has passed gets a bar, so a late frame
             // fills its gap with the level it reads now and the strip keeps
             // the speed of real time.
             long due = (long)(_ampClock.Elapsed.TotalMilliseconds / AMP_SAMPLE_MS);

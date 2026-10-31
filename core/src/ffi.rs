@@ -4618,6 +4618,11 @@ pub unsafe extern "C" fn dimmy_meeting_stop(out_buf: *mut c_char, buf_len: c_int
     } else {
         log("[Meeting] stop finished after the NEXT meeting started — leaving the shared audio state to it");
     }
+    let backend = state()
+        .local_stt_backend
+        .lock()
+        .map(|b| b.clone())
+        .unwrap_or_default();
     let json = serde_json::json!({
         "id": result.id,
         "dir": result.dir.to_string_lossy(),
@@ -4626,6 +4631,11 @@ pub unsafe extern "C" fn dimmy_meeting_stop(out_buf: *mut c_char, buf_len: c_int
         "chunk_count": result.chunk_count,
         "error": result.error,
         "speakers_labeled": result.speakers_labeled,
+        "speaker_pass": crate::meeting::speaker_pass_after_stop(
+            result.speakers_labeled,
+            effective_local_backend(&backend),
+            result.duration_secs,
+        ),
     })
     .to_string();
     write_to_buf(&json, out_buf, buf_len)
@@ -9635,7 +9645,8 @@ use crate::diarize::lines_by_dominant_speaker;
 /// files exist. Uses `process_buffer_for_file_load` (highpass only — AGC NaNs
 /// long files, CLAUDE.md AUDIO-001). rc: bytes written, -1 bad args, -2 no
 /// audio, -3 write failed, -5 empty result, -6 cloud config incomplete,
-/// -7 a meeting is recording (the pass steps aside; nothing is written).
+/// -7 a meeting is recording (the pass steps aside; nothing is written),
+/// -8 not enough free memory for the Nemotron pass (nothing is written).
 ///
 /// # Safety
 /// `dir_ptr` must be a valid NUL-terminated C string. `out_buf` must be a
@@ -9699,6 +9710,10 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
         .map(|b| b.clone())
         .unwrap_or_else(|_| "whisper".to_string());
     let backend = effective_local_backend(&backend).to_string();
+    if is_local && backend == "nemotron" && !crate::nemotron::pass_fits() {
+        log("[Retranscribe] not enough free memory for the Nemotron pass; the live transcript stays");
+        return -8;
+    }
     // Empty language = auto-detect; do not force "en" (see dimmy_transcribe_file).
     // Meeting bands are long enough that per-chunk whisper auto-detect is reliable.
     let language = st.language.lock().map(|l| l.clone()).unwrap_or_default();

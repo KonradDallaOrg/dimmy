@@ -108,6 +108,14 @@ name = "nemotron_meeting_bench"
 path = "src/bin/nemotron_meeting_bench.rs"
 
 [[bin]]
+name = "nemotron_release_probe"
+path = "src/bin/nemotron_release_probe.rs"
+
+[[bin]]
+name = "commit_hog"
+path = "src/bin/commit_hog.rs"
+
+[[bin]]
 name = "nemotron_meeting_replay"
 path = "src/bin/nemotron_meeting_replay.rs"
 

@@ -716,7 +716,9 @@ struct MeetingResult {
         self.transcript = dict["transcript"] as? String ?? ""
         self.durationSecs = dict["duration_secs"] as? Double ?? 0.0
         self.chunkCount = dict["chunk_count"] as? Int ?? 0
-        self.speakersLabeled = dict["speakers_labeled"] as? Bool ?? false
+        // Labelled while recording, or too long to redo by itself: the core
+        // decides, and "Regenerate transcript" still runs the pass.
+        self.speakersLabeled = !(dict["speaker_pass"] as? Bool ?? false)
         // `error` is null when the meeting completed cleanly.
         if let err = dict["error"] as? String, !err.isEmpty {
             self.error = err

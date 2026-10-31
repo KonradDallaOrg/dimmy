@@ -173,6 +173,7 @@ public static class ConsentFlow
     {
         var tcs = new TaskCompletionSource<bool>();
         var win = new Window { Title = title, SystemBackdrop = new MicaBackdrop() };
+        Dimmy.Windows.Helpers.WindowHelper.SetDimmyIcon(win);
 
         var stack = new StackPanel { Spacing = 12, Padding = new Thickness(24, 22, 24, 18) };
         stack.Children.Add(new TextBlock
