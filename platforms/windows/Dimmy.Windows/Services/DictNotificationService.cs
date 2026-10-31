@@ -193,6 +193,13 @@ public static class DictNotificationService
              $"Your recording is safe and continues normally. {hint} You can also regenerate the transcript from the audio after the meeting.");
     }
 
+    /// <summary>A power limit set outside Dimmy holds the GPU back.</summary>
+    public static void ShowGpuLimited()
+    {
+        Show("The GPU is held back by a power limit",
+             "The live transcript may fall behind. Your recording is safe. Check that the charger is connected. If it stays slow, restart the PC.");
+    }
+
     /// <summary>Nemotron could not load on the GPU. Without this the only
     /// symptom is a slow transcript.</summary>
     public static void ShowNemotronOnCpu()

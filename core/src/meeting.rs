@@ -879,6 +879,37 @@ struct NemoTracks {
     mic: Option<crate::nemotron::MeetingTrack>,
     system: Option<crate::nemotron::MeetingTrack>,
     load: SpeakerLoad,
+    gpu_watch: Option<GpuWatch>,
+}
+
+/// Tells the host once per meeting when the GPU is held back. Two readings in a
+/// row, because one can catch a passing moment.
+struct GpuWatch {
+    last_check: Instant,
+    slowed_readings: u32,
+    told: bool,
+}
+
+impl GpuWatch {
+    const EVERY: Duration = Duration::from_secs(30);
+
+    fn observe(&mut self, reading: &crate::hardware::NvidiaReading) -> bool {
+        if self.told {
+            return false;
+        }
+        self.slowed_readings = if reading.slowed() {
+            self.slowed_readings + 1
+        } else {
+            0
+        };
+        self.told = self.slowed_readings >= 2;
+        self.told
+    }
+}
+
+fn emit_gpu_limited() {
+    crate::log("[Meeting] the GPU is held back by a power limit");
+    crate::ffi::emit_event("nemotron_gpu_limited", "{}");
 }
 
 /// Seconds of compute per second of window, smoothed. Dropping the live
@@ -972,10 +1003,28 @@ impl NemoTracks {
             );
         }
         let gpu = [&mic, &system].into_iter().flatten().any(|t| t.on_gpu());
+        // Before the meeting has anything to lose: the limit reads low even
+        // with the GPU idle, where the clock and the use say nothing yet.
+        let limit_low = gpu
+            && crate::hardware::read_nvidia().is_some_and(|r| {
+                crate::log(&format!(
+                    "[Meeting] GPU limit {:?} W of {:?} W default",
+                    r.limit_w, r.default_limit_w
+                ));
+                r.limit_is_low()
+            });
+        if limit_low {
+            emit_gpu_limited();
+        }
         Self {
             mic,
             system,
             load: SpeakerLoad::for_engine(gpu),
+            gpu_watch: gpu.then(|| GpuWatch {
+                last_check: Instant::now(),
+                slowed_readings: 0,
+                told: limit_low,
+            }),
         }
     }
 
@@ -1010,6 +1059,14 @@ impl NemoTracks {
         if fresh_secs > 0.0 {
             self.load
                 .observe(started.elapsed().as_secs_f64() / fresh_secs);
+        }
+        if let Some(watch) = self.gpu_watch.as_mut() {
+            if !watch.told && watch.last_check.elapsed() >= GpuWatch::EVERY {
+                watch.last_check = Instant::now();
+                if crate::hardware::read_nvidia().is_some_and(|r| watch.observe(&r)) {
+                    emit_gpu_limited();
+                }
+            }
         }
         if self.load.overloaded() {
             for (track, label) in [
@@ -3089,7 +3146,36 @@ mod encoding_is_not_the_bottleneck {
 
 #[cfg(test)]
 mod nemotron_track_fallback {
-    use super::{speaker_pass_after_stop, with_or_without_speakers, SpeakerLoad};
+    use super::{speaker_pass_after_stop, with_or_without_speakers, GpuWatch, SpeakerLoad};
+    use crate::hardware::NvidiaReading;
+
+    fn reading(clock_mhz: f64) -> NvidiaReading {
+        NvidiaReading {
+            use_pct: 99.0,
+            clock_mhz,
+            max_clock_mhz: 2100.0,
+            limit_w: Some(20.0),
+            default_limit_w: Some(35.0),
+            power_capped: true,
+        }
+    }
+
+    #[test]
+    fn a_slowed_gpu_is_reported_once_after_two_readings_in_a_row() {
+        let mut watch = GpuWatch {
+            last_check: std::time::Instant::now(),
+            slowed_readings: 0,
+            told: false,
+        };
+        assert!(!watch.observe(&reading(300.0)));
+        assert!(
+            !watch.observe(&reading(1800.0)),
+            "a good reading starts over"
+        );
+        assert!(!watch.observe(&reading(300.0)));
+        assert!(watch.observe(&reading(300.0)));
+        assert!(!watch.observe(&reading(300.0)), "once per meeting");
+    }
 
     #[test]
     fn a_passing_peak_leaves_the_speakers_on_a_gpu() {
