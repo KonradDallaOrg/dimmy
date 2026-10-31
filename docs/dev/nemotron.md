@@ -170,7 +170,8 @@ untouched (THE AUDIO RULE, `docs/dev/meeting-audio-durability.md`).
   and emits the chunk event, like every other engine. Time = the turn's first
   word.
 - Tracks: the system track carries the live diarizer. The mic keeps its own
-  label on a call; in a **one-room meeting** (no system track) the mic is
+  label on a call and gets one lane in `speakers.json` from its word times
+  (`track_lane`); in a **one-room meeting** (no system track) the mic is
   diarized instead.
 
 ### Speakers
