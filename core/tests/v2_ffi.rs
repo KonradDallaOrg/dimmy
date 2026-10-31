@@ -1214,7 +1214,7 @@ fn push_loopback_audio_feeds_secondary_buffer() {
 /// otherwise hold hundreds of MB of discarded-at-resume samples in RAM.
 /// Drives the real worker path (PushLoopback command → secondary buffer)
 /// with `MEETING_CAPTURE_GATED` flipped by hand, observing via the
-/// loopback amplitude (peak of the LAST 800 samples): a blocked append
+/// loopback amplitude (peak of the last 50 ms): a blocked append
 /// leaves the previous amplitude in place.
 #[test]
 #[serial]
@@ -1223,7 +1223,8 @@ fn meeting_pause_gate_blocks_capture_append() {
     use std::sync::atomic::Ordering;
 
     fn push(amp: f32) {
-        let s: Vec<f32> = vec![amp; 1600];
+        // 100 ms, so the 50 ms the meter reads holds nothing from before.
+        let s: Vec<f32> = vec![amp; 4800];
         let rc = unsafe { dimmy_push_loopback_audio(s.as_ptr(), s.len() as i32, 48_000) };
         assert_eq!(rc, 0);
     }
