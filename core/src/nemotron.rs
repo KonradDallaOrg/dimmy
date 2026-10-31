@@ -896,14 +896,24 @@ pub struct Update {
     pub words: Vec<Word>,
 }
 
+/// The model's token for what it could not spell. It means nothing to a reader
+/// and landed in meeting transcripts and at the cursor as literal `<unk>`.
+fn strip_unknown(text: &str) -> String {
+    if !text.contains("<unk>") {
+        return text.to_string();
+    }
+    text.replace("<unk>", " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn read_result(api: &Api, r: *mut ResultHandle) -> Update {
     assert!(!r.is_null());
     // SAFETY: `r` is a live result handle; every accessor reads memory the
     // result owns, copied out before `result_destroy`.
     unsafe {
-        let text = cstr_or_empty((api.result_transcript)(r, 0))
-            .trim()
-            .to_string();
+        let text = strip_unknown(cstr_or_empty((api.result_transcript)(r, 0)).trim());
         let n = (api.result_word_count)(r, 0);
         let mut words = Vec::with_capacity(n);
         for i in 0..n {
@@ -911,7 +921,7 @@ fn read_result(api: &Api, r: *mut ResultHandle) -> Update {
             let end = (api.result_word_end)(r, 0, i) as f64 / 1000.0;
             let speaker = (api.result_word_speaker)(r, 0, i).clamp(0, u8::MAX as i32) as u8;
             words.push(Word {
-                text: cstr_or_empty((api.result_word_text)(r, 0, i)),
+                text: strip_unknown(&cstr_or_empty((api.result_word_text)(r, 0, i))),
                 start: start.max(0.0),
                 end: end.max(start.max(0.0)),
                 speaker,
@@ -2491,6 +2501,18 @@ mod tests {
         assert_eq!(plan.speakers[0].id, "mic");
         assert_eq!(plan.speakers[0].segments.last(), Some(&(20.0, 22.0)));
         assert!(plan.relabel.iter().all(|(_, new)| new == "mic"));
+    }
+
+    #[test]
+    fn the_unknown_token_never_reaches_the_text() {
+        assert_eq!(
+            strip_unknown("per favore<unk> vieni qua"),
+            "per favore vieni qua"
+        );
+        assert_eq!(strip_unknown("<unk> ciao"), "ciao");
+        assert_eq!(strip_unknown("a <unk> b"), "a b");
+        assert_eq!(strip_unknown("<unk>"), "");
+        assert_eq!(strip_unknown("niente da togliere"), "niente da togliere");
     }
 
     #[test]

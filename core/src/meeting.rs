@@ -1167,6 +1167,9 @@ impl NemoTracks {
                 }
             }
         }
+        // Each track writes a line when it closes the sentence, so the tracks
+        // interleave by when the engine finished, not by when it was said.
+        sink.rewrite(|text| in_time_order(&text));
         if !(wanted && labelled && complete && !windows_lost) {
             return false;
         }
@@ -1186,6 +1189,32 @@ impl NemoTracks {
             }
         }
     }
+}
+
+/// Sort transcript lines by their leading `[HH:MM:SS]`. Stable, and a line
+/// without a time stays with the one before it.
+fn in_time_order(text: &str) -> String {
+    fn seconds(line: &str) -> Option<u64> {
+        let (h, rest) = line.strip_prefix('[')?.split_once(':')?;
+        let (m, rest) = rest.split_once(':')?;
+        let (s, _) = rest.split_once(']')?;
+        Some(h.parse::<u64>().ok()? * 3600 + m.parse::<u64>().ok()? * 60 + s.parse::<u64>().ok()?)
+    }
+    let mut last = 0;
+    let mut lines: Vec<(u64, &str)> = text
+        .lines()
+        .map(|line| {
+            last = seconds(line).unwrap_or(last);
+            (last, line)
+        })
+        .collect();
+    lines.sort_by_key(|l| l.0);
+    let mut out = String::with_capacity(text.len() + 1);
+    for (_, line) in lines {
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
 }
 
 /// The parts of the transcription context a line writer touches, borrowed
@@ -1254,22 +1283,27 @@ impl LineSink<'_> {
         words
     }
 
-    /// Rewrite speaker labels in transcripts.txt. On failure the labels stay as
-    /// they are: readable, and the audio is untouched.
+    /// Rewrite transcripts.txt at stop. On failure it stays as it is: readable,
+    /// and the audio is untouched.
+    fn rewrite(&mut self, change: impl FnOnce(String) -> String) {
+        let path = std::path::Path::new(self.dir).join("transcripts.txt");
+        let done = std::fs::read_to_string(&path)
+            .and_then(|text| replace_transcript(self.file, &path, &change(text)));
+        if let Err(e) = done {
+            crate::log(&format!("[Meeting] transcript not rewritten: {e}"));
+        }
+    }
+
     fn relabel(&mut self, pairs: &[(String, String)]) {
         if pairs.is_empty() {
             return;
         }
-        let path = std::path::Path::new(self.dir).join("transcripts.txt");
-        let done = std::fs::read_to_string(&path).and_then(|mut text| {
+        self.rewrite(|mut text| {
             for (old, new) in pairs {
                 text = crate::diarize::relabel_lines(&text, old, new);
             }
-            replace_transcript(self.file, &path, &text)
+            text
         });
-        if let Err(e) = done {
-            crate::log(&format!("[Meeting] mic labels not rewritten: {e}"));
-        }
     }
 }
 
@@ -4068,5 +4102,42 @@ Riassunto
         let out = recap_for_sharing(only_tags, "en");
         assert!(out.contains("AI-generated summary"));
         assert!(!out.contains("dimmy-ai-generated"));
+    }
+}
+
+#[cfg(test)]
+mod transcript_time_order {
+    use super::in_time_order;
+
+    #[test]
+    fn two_tracks_end_up_in_the_order_they_were_spoken() {
+        let text = "[00:00:05] [mic] due\n[00:00:01] [Speaker 1] uno\n[00:00:08] [mic] tre\n";
+        assert_eq!(
+            in_time_order(text),
+            "[00:00:01] [Speaker 1] uno\n[00:00:05] [mic] due\n[00:00:08] [mic] tre\n"
+        );
+    }
+
+    #[test]
+    fn lines_with_the_same_time_keep_their_order() {
+        let text = "[00:00:01] [mic] a\n[00:00:01] [system] b\n";
+        assert_eq!(in_time_order(text), text);
+    }
+
+    #[test]
+    fn a_line_without_a_time_stays_with_the_one_before_it() {
+        let text = "[00:00:05] [mic] due\nnota\n[00:00:01] [mic] uno\n";
+        assert_eq!(
+            in_time_order(text),
+            "[00:00:01] [mic] uno\n[00:00:05] [mic] due\nnota\n"
+        );
+    }
+
+    #[test]
+    fn the_last_line_keeps_its_end_of_line() {
+        assert_eq!(
+            in_time_order("[00:00:02] [mic] b\n[00:00:01] [mic] a"),
+            "[00:00:01] [mic] a\n[00:00:02] [mic] b\n"
+        );
     }
 }
