@@ -35,14 +35,14 @@
     <x:Double x:Key="ContentDialogMinWidth">560</x:Double>
   </ContentDialog.Resources>
 
-  <Grid RowSpacing="14" MinHeight="300">
+  <Grid RowSpacing="{StaticResource DimmySpaceL}" MinHeight="300">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto"/>
       <RowDefinition Height="*"/>
     </Grid.RowDefinitions>
 
     <!-- Progress dots -->
-    <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="8"
+    <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}"
                 HorizontalAlignment="Center" Margin="0,0,0,4">
       <Ellipse x:Name="Dot1" Width="10" Height="10"
                Fill="{ThemeResource AccentFillColorDefaultBrush}"/>
@@ -55,17 +55,17 @@
     <Grid Grid.Row="1">
 
       <!-- Page 1 - Install -->
-      <StackPanel x:Name="Page1Panel" Spacing="12" Visibility="Visible">
-        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-          <TextBlock Text="1 - Install Codex" FontSize="18" FontWeight="SemiBold"/>
+      <StackPanel x:Name="Page1Panel" Spacing="{StaticResource DimmySpaceM}" Visibility="Visible">
+        <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" VerticalAlignment="Center">
+          <TextBlock Text="1 - Install Codex" Style="{StaticResource DimmyHeadline}"/>
           <Button Background="Transparent" BorderThickness="0" Padding="2"
                   VerticalAlignment="Center"
                   ToolTipService.ToolTip="About installing Codex">
-            <FontIcon Glyph="&#xE946;" FontSize="14"
+            <FontIcon Glyph="&#xE946;" FontSize="{StaticResource DimmyIconM}"
                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
             <Button.Flyout>
               <Flyout>
-                <TextBlock Width="300" TextWrapping="Wrap" FontSize="13"
+                <TextBlock Width="300" TextWrapping="Wrap" Style="{StaticResource DimmyBody}"
                            Text="Codex is a small standalone CLI from OpenAI. No Node.js required. winget is built into Windows and runs in any terminal (including cmd). The PowerShell installer needs PowerShell 7; npm is the legacy path."/>
               </Flyout>
             </Button.Flyout>
@@ -73,7 +73,7 @@
         </StackPanel>
 
         <!-- Command source tabs -->
-        <StackPanel Orientation="Horizontal" Spacing="6">
+        <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
           <RadioButton x:Name="TabWinget" Content="winget" GroupName="CmdTab"
                        Checked="CmdTab_Checked" IsChecked="True"/>
           <RadioButton x:Name="TabPwsh" Content="PowerShell" GroupName="CmdTab"
@@ -84,7 +84,7 @@
 
         <Border Background="{ThemeResource ControlAltFillColorTertiaryBrush}"
                 CornerRadius="4" Padding="12,6,6,6">
-          <Grid ColumnSpacing="8">
+          <Grid ColumnSpacing="{StaticResource DimmySpaceS}">
             <Grid.ColumnDefinitions>
               <ColumnDefinition Width="*"/>
               <ColumnDefinition Width="Auto"/>
@@ -92,7 +92,7 @@
             <TextBlock x:Name="CommandText"
                        Text="winget install OpenAI.Codex"
                        FontFamily="Consolas, Menlo, monospace"
-                       FontSize="13" TextWrapping="Wrap"
+                       Style="{StaticResource DimmyBody}" TextWrapping="Wrap"
                        VerticalAlignment="Center"
                        IsTextSelectionEnabled="True"/>
             <Button x:Name="CopyCmdBtn" Grid.Column="1"
@@ -101,7 +101,7 @@
                     Click="CopyCmd_Click"
                     AutomationProperties.Name="Copy command"
                     ToolTipService.ToolTip="Copy command">
-              <FontIcon x:Name="CopyCmdGlyph" Glyph="&#xE8C8;" FontSize="14"
+              <FontIcon x:Name="CopyCmdGlyph" Glyph="&#xE8C8;" FontSize="{StaticResource DimmyIconM}"
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
             </Button>
           </Grid>
@@ -109,29 +109,28 @@
 
         <HyperlinkButton Content="See OpenAI's official install page"
                          NavigateUri="https://github.com/openai/codex"
-                         FontSize="12" Padding="0"/>
+                         FontSize="{StaticResource DimmyFontCaption}" Padding="0"/>
       </StackPanel>
 
       <!-- Page 2 - Run -->
-      <StackPanel x:Name="Page2Panel" Spacing="12" Visibility="Collapsed">
-        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-          <TextBlock Text="2 - Run it" FontSize="18" FontWeight="SemiBold"/>
+      <StackPanel x:Name="Page2Panel" Spacing="{StaticResource DimmySpaceM}" Visibility="Collapsed">
+        <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" VerticalAlignment="Center">
+          <TextBlock Text="2 - Run it" Style="{StaticResource DimmyHeadline}"/>
           <Button Background="Transparent" BorderThickness="0" Padding="2"
                   VerticalAlignment="Center"
                   ToolTipService.ToolTip="What to do in the terminal">
-            <FontIcon Glyph="&#xE946;" FontSize="14"
+            <FontIcon Glyph="&#xE946;" FontSize="{StaticResource DimmyIconM}"
                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
             <Button.Flyout>
               <Flyout>
-                <TextBlock Width="300" TextWrapping="Wrap" FontSize="13"
+                <TextBlock Width="300" TextWrapping="Wrap" Style="{StaticResource DimmyBody}"
                            Text="A terminal opens and runs the install automatically. Wait until it finishes, then come back to this window. (The command is also on your clipboard as a fallback.)"/>
               </Flyout>
             </Button.Flyout>
           </Button>
         </StackPanel>
 
-        <TextBlock TextWrapping="Wrap" FontSize="13"
-                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+        <TextBlock TextWrapping="Wrap" Style="{StaticResource DimmySecondary}"
                    Text="A terminal opens and runs the install for you. Wait for it to finish, then come back."/>
 
         <Button x:Name="OpenTerminalBtn" Content="Install now"
@@ -141,46 +140,44 @@
       </StackPanel>
 
       <!-- Page 3 - Finish -->
-      <StackPanel x:Name="Page3Panel" Spacing="12" Visibility="Collapsed">
-        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-          <TextBlock Text="3 - Finish" FontSize="18" FontWeight="SemiBold"/>
+      <StackPanel x:Name="Page3Panel" Spacing="{StaticResource DimmySpaceM}" Visibility="Collapsed">
+        <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" VerticalAlignment="Center">
+          <TextBlock Text="3 - Finish" Style="{StaticResource DimmyHeadline}"/>
           <Button Background="Transparent" BorderThickness="0" Padding="2"
                   VerticalAlignment="Center"
                   ToolTipService.ToolTip="About this step">
-            <FontIcon Glyph="&#xE946;" FontSize="14"
+            <FontIcon Glyph="&#xE946;" FontSize="{StaticResource DimmyIconM}"
                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
             <Button.Flyout>
               <Flyout>
-                <TextBlock Width="300" TextWrapping="Wrap" FontSize="13"
+                <TextBlock Width="300" TextWrapping="Wrap" Style="{StaticResource DimmyBody}"
                            Text="Dimmy launches the Codex CLI as a local subprocess and uses its stored login. Requires a paid ChatGPT plan (Plus, Pro, Team, Business, or Enterprise). Dimmy never sees your token. Subject to OpenAI's terms."/>
               </Flyout>
             </Button.Flyout>
           </Button>
         </StackPanel>
 
-        <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                BorderThickness="1" CornerRadius="6" Padding="14">
-          <StackPanel Spacing="10">
-            <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
-              <FontIcon x:Name="InstallGlyph" FontSize="20"
+        <Border Style="{StaticResource DimmyCard}" Padding="{StaticResource DimmyCardPaddingCompact}">
+          <StackPanel Spacing="{StaticResource DimmySpaceM}">
+            <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}" VerticalAlignment="Center">
+              <FontIcon x:Name="InstallGlyph" FontSize="{StaticResource DimmyIconXL}"
                         FontFamily="Segoe Fluent Icons"
                         Glyph="&#xE9F5;"
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
               <TextBlock x:Name="InstallText" VerticalAlignment="Center"
-                         FontSize="13" TextWrapping="Wrap"
+                         Style="{StaticResource DimmyBody}" TextWrapping="Wrap"
                          Text="Looking for the Codex CLI..."/>
               <ProgressRing x:Name="InstallRing" Width="16" Height="16"
                             IsActive="True"/>
             </StackPanel>
-            <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center"
+            <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}" VerticalAlignment="Center"
                         x:Name="SignInRow" Visibility="Collapsed">
-              <FontIcon x:Name="SignInGlyph" FontSize="20"
+              <FontIcon x:Name="SignInGlyph" FontSize="{StaticResource DimmyIconXL}"
                         FontFamily="Segoe Fluent Icons"
                         Glyph="&#xE9F5;"
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
               <TextBlock x:Name="SignInText" VerticalAlignment="Center"
-                         FontSize="13" TextWrapping="Wrap"
+                         Style="{StaticResource DimmyBody}" TextWrapping="Wrap"
                          Text="Sign in to ChatGPT"/>
               <ProgressRing x:Name="SignInRing" Width="16" Height="16"
                             IsActive="False" Visibility="Collapsed"/>
@@ -188,7 +185,7 @@
           </StackPanel>
         </Border>
 
-        <StackPanel Orientation="Horizontal" Spacing="10">
+        <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}">
           <Button x:Name="SignInBtn" Content="Sign in with ChatGPT"
                   Click="SignIn_Click"
                   Style="{ThemeResource AccentButtonStyle}"

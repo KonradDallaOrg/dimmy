@@ -6,7 +6,7 @@
 
     <Grid Height="18" Width="40" VerticalAlignment="Center" HorizontalAlignment="Center">
         <!-- Bars mode (7 vertical bars) -->
-        <StackPanel x:Name="BarsPanel" Orientation="Horizontal" Spacing="3"
+        <StackPanel x:Name="BarsPanel" Orientation="Horizontal" Spacing="{StaticResource DimmySpaceXS}"
                     VerticalAlignment="Center" HorizontalAlignment="Center">
             <Border x:Name="Bar0" Width="3" CornerRadius="1.5" Background="#E6FFFFFF" Height="3" VerticalAlignment="Bottom" />
             <Border x:Name="Bar1" Width="3" CornerRadius="1.5" Background="#E6FFFFFF" Height="5" VerticalAlignment="Bottom" />
@@ -21,7 +21,7 @@
         <Canvas x:Name="LineCanvas" Visibility="Collapsed" />
 
         <!-- Dots mode (5 pulsing circles) -->
-        <StackPanel x:Name="DotsPanel" Orientation="Horizontal" Spacing="4"
+        <StackPanel x:Name="DotsPanel" Orientation="Horizontal" Spacing="{StaticResource DimmySpaceXS}"
                     VerticalAlignment="Center" HorizontalAlignment="Center" Visibility="Collapsed">
             <Ellipse x:Name="Dot0" Width="4" Height="4" Fill="#E6FFFFFF" />
             <Ellipse x:Name="Dot1" Width="5" Height="5" Fill="#E6FFFFFF" />

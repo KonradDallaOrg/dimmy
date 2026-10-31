@@ -15,26 +15,26 @@
         </Grid.RowDefinitions>
 
         <!-- Header: same on every page, so the user always knows where they are -->
-        <StackPanel Grid.Row="0" Spacing="4">
-            <TextBlock x:Name="StepLabel" Opacity="0.6" FontSize="12" />
-            <TextBlock x:Name="TitleLabel" FontSize="24" FontWeight="SemiBold" />
+        <StackPanel Grid.Row="0" Spacing="{StaticResource DimmySpaceXS}">
+            <TextBlock x:Name="StepLabel" Opacity="0.6" Style="{StaticResource DimmyLabel}" />
+            <TextBlock x:Name="TitleLabel" Style="{StaticResource DimmyPageTitle}" />
             <TextBlock x:Name="SubtitleLabel" Opacity="0.75" TextWrapping="Wrap" />
         </StackPanel>
 
         <!-- ── Step 0: the shortcut ─────────────────────────────────── -->
-        <StackPanel x:Name="Step0" Grid.Row="1" Spacing="14" Visibility="Visible">
+        <StackPanel x:Name="Step0" Grid.Row="1" Spacing="{StaticResource DimmySpaceL}" Visibility="Visible">
             <controls:ShortcutRecorder x:Name="Recorder" RequireKey="True"
                                        HorizontalAlignment="Left" />
             <InfoBar x:Name="ShortcutWarn" IsOpen="False" IsClosable="False"
                      Severity="Warning" />
-            <TextBlock Opacity="0.6" TextWrapping="Wrap" FontSize="12"
+            <TextBlock Opacity="0.6" TextWrapping="Wrap" Style="{StaticResource DimmyLabel}"
                        Text="Command mode needs a real key with its modifiers (for example Ctrl+Alt+C). Combinations of modifiers alone are reserved for dictation." />
         </StackPanel>
 
         <!-- ── Step 1: the model ────────────────────────────────────── -->
-        <StackPanel x:Name="Step1" Grid.Row="1" Spacing="14" Visibility="Collapsed">
+        <StackPanel x:Name="Step1" Grid.Row="1" Spacing="{StaticResource DimmySpaceL}" Visibility="Collapsed">
             <TextBlock x:Name="ModelSummary" TextWrapping="Wrap" />
-            <StackPanel Orientation="Horizontal" Spacing="10">
+            <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}">
                 <Button x:Name="TestModelBtn" Content="Test the model"
                         Click="TestModel_Click" Style="{StaticResource AccentButtonStyle}" />
                 <ProgressRing x:Name="TestRing" IsActive="False" Width="20" Height="20" />
@@ -45,7 +45,7 @@
         </StackPanel>
 
         <!-- ── Step 2: try it for real ──────────────────────────────── -->
-        <StackPanel x:Name="Step2" Grid.Row="1" Spacing="12" Visibility="Collapsed">
+        <StackPanel x:Name="Step2" Grid.Row="1" Spacing="{StaticResource DimmySpaceM}" Visibility="Collapsed">
             <TextBlock x:Name="TryHint" Opacity="0.75" TextWrapping="Wrap" />
             <!-- A real TextBox with a real selection: the command path reads the
                  focused element's selection through UIA, so this exercises the
@@ -59,12 +59,11 @@
             <Border Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1" CornerRadius="6" Padding="12,10">
-                <StackPanel Orientation="Horizontal" Spacing="10">
-                    <FontIcon Glyph="&#xE720;" FontSize="16" VerticalAlignment="Top" />
-                    <StackPanel Spacing="2">
-                        <TextBlock Text="Say it out loud. Don't type it here."
-                                   FontWeight="SemiBold" FontSize="13" TextWrapping="Wrap" />
-                        <TextBlock x:Name="SuggestionLabel" Opacity="0.7" FontSize="12"
+                <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}">
+                    <FontIcon Glyph="&#xE720;" FontSize="{StaticResource DimmyIconL}" VerticalAlignment="Top" />
+                    <StackPanel Spacing="{StaticResource DimmySpaceXS}">
+                        <TextBlock Text="Say it out loud. Don't type it here." Style="{StaticResource DimmyCardTitle}" TextWrapping="Wrap" />
+                        <TextBlock x:Name="SuggestionLabel" Opacity="0.7" Style="{StaticResource DimmyLabel}"
                                    TextWrapping="Wrap" />
                     </StackPanel>
                 </StackPanel>
@@ -80,7 +79,7 @@
         <Grid Grid.Row="2">
             <Button x:Name="BackBtn" Content="Back" Click="Back_Click"
                     HorizontalAlignment="Left" Visibility="Collapsed" />
-            <StackPanel Orientation="Horizontal" Spacing="10" HorizontalAlignment="Right">
+            <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}" HorizontalAlignment="Right">
                 <Button x:Name="SkipBtn" Content="Skip" Click="Skip_Click" Visibility="Collapsed" />
                 <Button x:Name="NextBtn" Content="Continue" Click="Next_Click"
                         Style="{StaticResource AccentButtonStyle}" />

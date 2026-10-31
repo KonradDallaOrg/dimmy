@@ -38,17 +38,6 @@
                  Text="New meeting" Style="{StaticResource DimmySecondary}"
                  HorizontalAlignment="Center" VerticalAlignment="Center"
                  TextTrimming="CharacterEllipsis"/>
-      <!-- Always-visible escape hatch: lets the user return to Idle
-           from Done state (i.e. after browsing a past meeting) without
-           having to find the small + button in the sidebar header. -->
-      <Button Grid.Column="2" x:Name="TitlebarNewBtn" Click="NewMeeting_Click"
-              ToolTipService.ToolTip="Start a new meeting"
-              Padding="12,6">
-        <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
-          <FontIcon Glyph="&#xE710;" FontSize="{StaticResource DimmyIconM}"/>
-          <TextBlock Text="New meeting" Style="{StaticResource DimmyBody}"/>
-        </StackPanel>
-      </Button>
     </Grid>
 
     <!-- ── BODY: split pane ── -->
@@ -376,11 +365,9 @@
                                 VerticalScrollBarVisibility="Auto"
                                 HorizontalScrollBarVisibility="Disabled">
                     <StackPanel Padding="{StaticResource DimmyCardPaddingCompact}" Spacing="{StaticResource DimmySpaceM}">
-                      <TextBlock x:Name="TranscriptText"
-                                 Text="🎙️ Listening…"
-                                 TextWrapping="Wrap" Style="{StaticResource DimmyBody}"
-                                 IsTextSelectionEnabled="True"
-                                 Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
+                      <RichTextBlock x:Name="TranscriptText" Style="{StaticResource DimmyRichBody}" TextWrapping="Wrap"
+                                     IsTextSelectionEnabled="True"
+                                     Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
                       <TextBlock x:Name="TranscriptPartial"
                                  Visibility="Collapsed"
                                  TextWrapping="Wrap" Style="{StaticResource DimmySecondary}"/>
@@ -554,9 +541,7 @@
                    The Canvas is intentionally lower-profile than v1 so
                    the recap content below stays the page's focus. -->
               <Border x:Name="DoneWaveCard"
-                      Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="12" Padding="18,14,18,12"
+                      Style="{StaticResource DimmyCard}" Padding="18,14,18,12"
                       Visibility="Collapsed">
                 <Grid RowSpacing="{StaticResource DimmySpaceM}">
                   <Grid.RowDefinitions>
@@ -570,16 +555,16 @@
                        Speakers switch for the waveform below. Collapsed when
                        the meeting has no speakers.json, so an undiarized
                        meeting looks exactly as before. -->
-                  <Grid x:Name="SpeakerBar" Grid.Row="0" ColumnSpacing="{StaticResource DimmySpaceM}" Visibility="Collapsed">
-                    <Grid.ColumnDefinitions>
-                      <ColumnDefinition Width="*"/>
-                      <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-                    <ScrollViewer HorizontalScrollBarVisibility="Auto" HorizontalScrollMode="Enabled"
+                  <Grid x:Name="SpeakerBar" Grid.Row="0" RowSpacing="{StaticResource DimmySpaceS}" Visibility="Collapsed">
+                    <Grid.RowDefinitions>
+                      <RowDefinition Height="Auto"/>
+                      <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto" HorizontalScrollMode="Enabled"
                                   VerticalScrollBarVisibility="Disabled" VerticalScrollMode="Disabled">
                       <StackPanel x:Name="SpeakerChips" Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}"/>
                     </ScrollViewer>
-                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}" VerticalAlignment="Center">
+                    <StackPanel HorizontalAlignment="Right" Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}" VerticalAlignment="Center">
                       <StackPanel Tag="tracks" Spacing="{StaticResource DimmySpaceXS}" PointerPressed="WaveMode_PointerPressed"
                                   ToolTipService.ToolTip="Waveform by track: you (mic) above, the call (system) below">
                         <TextBlock x:Name="WaveModeTracksText" Text="Tracks" Style="{StaticResource DimmyLabel}"/>
