@@ -95,13 +95,12 @@
                   Padding="14,10" BorderThickness="0,1,0,1"
                   BorderBrush="#A86E00"
                   Background="#3DFFB300">
-            <StackPanel Spacing="2">
+            <StackPanel Spacing="{StaticResource DimmySpaceXS}">
               <TextBlock Text="⚠ STAGING BUILD"
-                         FontWeight="SemiBold" FontSize="12"
+                         FontWeight="SemiBold" Style="{StaticResource DimmyCaption}"
                          Foreground="#A86E00" />
               <TextBlock Text="Test environment · Stripe TEST · payments simulated"
-                         FontSize="11" TextWrapping="Wrap"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                         Style="{StaticResource DimmyCaption}" TextWrapping="Wrap" />
             </StackPanel>
           </Border>
 
@@ -143,7 +142,7 @@
                     </Grid.ColumnDefinitions>
                     <Image Source="ms-appx:///Assets/dimmy-logo.png" Width="48" Height="48"
                            VerticalAlignment="Center" />
-                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="{StaticResource DimmySpaceXS}">
                       <TextBlock x:Name="HomeHeadline" Style="{StaticResource DimmyHeadline}" TextWrapping="Wrap" />
                       <TextBlock Style="{StaticResource DimmySecondary}" TextWrapping="Wrap"
                                  Text="Your words appear wherever you're typing." />
@@ -156,9 +155,9 @@
                       <ColumnDefinition Width="*" />
                       <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
-                    <Button Grid.Column="0" Style="{StaticResource DimmyStatusButton}"
+                    <Button Grid.Column="0" Style="{StaticResource DimmyStatusButton}" AutomationProperties.AutomationId="HomeShortcutButton"
                             Tag="shortcut" Click="HomeNavigate_Click">
-                      <StackPanel Spacing="2">
+                      <StackPanel Spacing="{StaticResource DimmySpaceXS}">
                         <TextBlock Style="{StaticResource DimmyCaption}" Text="Shortcut" />
                         <TextBlock x:Name="HomeShortcutValue" Style="{StaticResource DimmyCardTitle}"
                                    TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
@@ -166,7 +165,7 @@
                     </Button>
                     <Button Grid.Column="1" Style="{StaticResource DimmyStatusButton}"
                             Tag="voice" Click="HomeNavigate_Click">
-                      <StackPanel Spacing="2">
+                      <StackPanel Spacing="{StaticResource DimmySpaceXS}">
                         <TextBlock Style="{StaticResource DimmyCaption}" Text="Transcription" />
                         <TextBlock x:Name="HomeEngineValue" Style="{StaticResource DimmyCardTitle}"
                                    TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
@@ -174,13 +173,10 @@
                     </Button>
                     <Button Grid.Column="2" Style="{StaticResource DimmyStatusButton}"
                             Tag="voice" Click="HomeNavigate_Click">
-                      <StackPanel Spacing="2">
+                      <StackPanel Spacing="{StaticResource DimmySpaceXS}">
                         <TextBlock Style="{StaticResource DimmyCaption}" Text="Microphone" />
                         <TextBlock x:Name="HomeMicValue" Style="{StaticResource DimmyCardTitle}"
                                    TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
-                        <TextBlock x:Name="HomeMicNote" Style="{StaticResource DimmyCaption}" Visibility="Collapsed"
-                                   Foreground="{ThemeResource SystemFillColorCautionBrush}"
-                                   Text="Saved microphone not found" />
                       </StackPanel>
                     </Button>
                   </Grid>
@@ -196,7 +192,7 @@
                 </Grid.ColumnDefinitions>
                 <Border Grid.Column="0" Style="{StaticResource DimmyCard}">
                   <StackPanel Spacing="{StaticResource DimmySpaceXS}">
-                    <FontIcon Glyph="&#xE8D2;" FontSize="16" HorizontalAlignment="Left"
+                    <FontIcon Glyph="&#xE8D2;" FontSize="{StaticResource DimmyIconL}" HorizontalAlignment="Left"
                               Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
                     <TextBlock Style="{StaticResource DimmyStat}" Text="{Binding StatsTotalWordsDisplay, Mode=OneWay}" />
                     <TextBlock Style="{StaticResource DimmyCaption}" Text="words transcribed" />
@@ -204,7 +200,7 @@
                 </Border>
                 <Border Grid.Column="1" Style="{StaticResource DimmyCard}">
                   <StackPanel Spacing="{StaticResource DimmySpaceXS}">
-                    <FontIcon Glyph="&#xE720;" FontSize="16" HorizontalAlignment="Left"
+                    <FontIcon Glyph="&#xE720;" FontSize="{StaticResource DimmyIconL}" HorizontalAlignment="Left"
                               Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
                     <TextBlock Style="{StaticResource DimmyStat}" Text="{Binding SpeakingTimeDisplay, Mode=OneWay}" />
                     <TextBlock Style="{StaticResource DimmyCaption}" Text="time speaking" />
@@ -212,7 +208,7 @@
                 </Border>
                 <Border Grid.Column="2" Style="{StaticResource DimmyCard}">
                   <StackPanel Spacing="{StaticResource DimmySpaceXS}">
-                    <FontIcon Glyph="&#xE823;" FontSize="16" HorizontalAlignment="Left"
+                    <FontIcon Glyph="&#xE823;" FontSize="{StaticResource DimmyIconL}" HorizontalAlignment="Left"
                               Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
                     <TextBlock Style="{StaticResource DimmyStat}" Text="{Binding TimeSavedDisplay, Mode=OneWay}" />
                     <TextBlock Style="{StaticResource DimmyCaption}" Text="time saved vs typing" />
@@ -222,7 +218,7 @@
 
               <Grid>
                 <TextBlock Text="Recent" Style="{StaticResource DimmySection}" />
-                <HyperlinkButton Content="See all" Tag="history" Click="HomeNavigate_Click"
+                <HyperlinkButton AutomationProperties.AutomationId="HomeSeeAllButton" Content="See all" Tag="history" Click="HomeNavigate_Click"
                                  HorizontalAlignment="Right" VerticalAlignment="Bottom"
                                  Margin="0,0,0,4" />
               </Grid>
@@ -247,7 +243,7 @@
               </StackPanel>
 
               <!-- Meeting + Transcribe side by side to keep the cards compact. -->
-              <Grid ColumnSpacing="16">
+              <Grid ColumnSpacing="{StaticResource DimmySpaceL}">
                 <Grid.ColumnDefinitions>
                   <ColumnDefinition Width="*" />
                   <ColumnDefinition Width="*" />
@@ -257,19 +253,19 @@
                    streaming-to-disk + post-process recap + actions. -->
               <TextBlock Text="Meeting mode" Style="{StaticResource DimmySection}" />
               <Border Style="{StaticResource DimmyCard}">
-                <StackPanel Spacing="8">
-                  <StackPanel Orientation="Horizontal" Spacing="6">
+                <StackPanel Spacing="{StaticResource DimmySpaceS}">
+                  <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
                     <TextBlock Text="Record a meeting" Style="{StaticResource DimmyCardTitle}" VerticalAlignment="Center" />
                     <Button Background="Transparent" BorderThickness="0" Padding="0"
                             Width="18" Height="18" MinWidth="0" MinHeight="0"
                             VerticalAlignment="Center" VerticalContentAlignment="Center"
                             HorizontalContentAlignment="Center"
                             ToolTipService.ToolTip="Long-form recording streamed to disk. On stop, the LLM writes a recap with action items when an LLM key is set.">
-                      <FontIcon Glyph="&#xE946;" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                      <FontIcon Glyph="&#xE946;" FontSize="{StaticResource DimmyIconS}" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                       <Button.Flyout>
                         <Flyout>
-                          <StackPanel MaxWidth="300" Spacing="10">
-                            <TextBlock TextWrapping="Wrap" FontSize="13" Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                          <StackPanel MaxWidth="300" Spacing="{StaticResource DimmySpaceM}">
+                            <TextBlock TextWrapping="Wrap" Style="{StaticResource DimmyBody}" Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                                        Text="Long-form recording streamed to disk. On stop, the LLM writes a recap with action items when an LLM key is set." />
                             <HyperlinkButton Content="Open full guide →" Padding="0" NavigateUri="https://dimmy.app/help/use-meeting-recaps" />
                           </StackPanel>
@@ -277,11 +273,11 @@
                       </Button.Flyout>
                     </Button>
                   </StackPanel>
-                  <Button x:Name="OpenMeetingBtn" Click="OpenMeeting_Click"
+                  <Button x:Name="OpenMeetingBtn" AutomationProperties.AutomationId="HomeOpenMeetingButton" Click="OpenMeeting_Click"
                           Style="{ThemeResource AccentButtonStyle}"
                           Margin="0,4,0,0">
-                    <StackPanel Orientation="Horizontal" Spacing="6">
-                      <FontIcon Glyph="&#xE7C8;" FontSize="14"/>
+                    <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                      <FontIcon Glyph="&#xE7C8;" FontSize="{StaticResource DimmyIconM}"/>
                       <TextBlock Text="Open meeting window" />
                     </StackPanel>
                   </Button>
@@ -301,19 +297,19 @@
               <Border x:Name="FileLoadDropTarget"
                       Style="{StaticResource DimmyCard}"
                       AllowDrop="True">
-                <StackPanel Spacing="8">
-                  <StackPanel Orientation="Horizontal" Spacing="6">
+                <StackPanel Spacing="{StaticResource DimmySpaceS}">
+                  <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
                     <TextBlock Text="Transcribe an audio file" Style="{StaticResource DimmyCardTitle}" VerticalAlignment="Center" />
                     <Button Background="Transparent" BorderThickness="0" Padding="0"
                             Width="18" Height="18" MinWidth="0" MinHeight="0"
                             VerticalAlignment="Center" VerticalContentAlignment="Center"
                             HorizontalContentAlignment="Center"
                             ToolTipService.ToolTip="Drag a file here or click Pick file. Works offline with your local model. Supports wav, mp3, m4a, aac, flac, opus, and ogg. The transcript lands in Recordings.">
-                      <FontIcon Glyph="&#xE946;" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                      <FontIcon Glyph="&#xE946;" FontSize="{StaticResource DimmyIconS}" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                       <Button.Flyout>
                         <Flyout>
-                          <StackPanel MaxWidth="300" Spacing="10">
-                            <TextBlock TextWrapping="Wrap" FontSize="13" Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                          <StackPanel MaxWidth="300" Spacing="{StaticResource DimmySpaceM}">
+                            <TextBlock TextWrapping="Wrap" Style="{StaticResource DimmyBody}" Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                                        Text="Drag a file here or click Pick file. Works offline with your local model. Supports wav, mp3, m4a, aac, flac, opus, and ogg. The transcript lands in Recordings." />
                             <HyperlinkButton Content="Open full guide →" Padding="0" NavigateUri="https://dimmy.app/help/first-dictation" />
                           </StackPanel>
@@ -321,10 +317,10 @@
                       </Button.Flyout>
                     </Button>
                   </StackPanel>
-                  <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,4,0,0">
+                  <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" Margin="0,4,0,0">
                     <Button x:Name="FileLoadPickBtn" Click="FileLoadPick_Click">
-                      <StackPanel Orientation="Horizontal" Spacing="6">
-                        <FontIcon Glyph="&#xE8E5;" FontSize="14"/>
+                      <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                        <FontIcon Glyph="&#xE8E5;" FontSize="{StaticResource DimmyIconM}"/>
                         <TextBlock Text="Pick file..."/>
                       </StackPanel>
                     </Button>
@@ -355,10 +351,10 @@
                        meetings. Result lands in Meeting → History. -->
                   <StackPanel x:Name="FileLoadRecapPanel"
                               Visibility="Collapsed"
-                              Orientation="Horizontal" Spacing="8" Margin="0,4,0,0">
+                              Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" Margin="0,4,0,0">
                     <Button x:Name="FileLoadRunRecapBtn" Click="FileLoadRunRecap_Click">
-                      <StackPanel Orientation="Horizontal" Spacing="6">
-                        <FontIcon Glyph="&#xE8FD;" FontSize="14"/>
+                      <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                        <FontIcon Glyph="&#xE8FD;" FontSize="{StaticResource DimmyIconM}"/>
                         <TextBlock Text="Run recap as meeting"/>
                       </StackPanel>
                     </Button>
@@ -377,13 +373,13 @@
               </Grid>
 
               <!-- System group: theme + launch-at-login — Advanced-gated. -->
-              <StackPanel Spacing="4"
+              <StackPanel Spacing="{StaticResource DimmySpaceXS}"
                           Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
                 <TextBlock Text="System" Style="{StaticResource DimmySection}" />
                 <controls:SettingCard Glyph="&#xE790;"
                                       Label="Theme"
                                       InfoTip="Sets the look of the Settings window. Auto follows your Windows theme.">
-                  <StackPanel x:Name="ThemeRadioPanel" Orientation="Horizontal" Spacing="12">
+                  <StackPanel x:Name="ThemeRadioPanel" Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}">
                     <RadioButton Content="Auto" GroupName="Theme" Tag="Default" Checked="Theme_Checked" Style="{StaticResource ChoiceRadioButton}" />
                     <RadioButton Content="Light" GroupName="Theme" Tag="Light" Checked="Theme_Checked" Style="{StaticResource ChoiceRadioButton}" />
                     <RadioButton Content="Dark" GroupName="Theme" Tag="Dark" Checked="Theme_Checked" Style="{StaticResource ChoiceRadioButton}" />
@@ -402,34 +398,29 @@
                  advanced per-task override are built in code-behind
                  (BuildProviderCards) so there is no DataTemplate/XAML-compiler
                  surface; this panel is just the host + title. ═══ -->
-            <StackPanel x:Name="ProvidersPanel" Spacing="4" Visibility="Collapsed">
-              <StackPanel Spacing="2" Margin="0,0,0,16">
-                <TextBlock Text="Providers &amp; keys" FontSize="28" FontWeight="SemiBold" />
+            <StackPanel x:Name="ProvidersPanel" Spacing="{StaticResource DimmySpaceXS}" Visibility="Collapsed">
+              <StackPanel Spacing="{StaticResource DimmySpaceXS}" Margin="0,0,0,16">
+                <TextBlock Text="Providers &amp; keys" Style="{StaticResource DimmyPageTitle}" />
                 <TextBlock Text="Add an API key to switch a provider on. Models and settings are handled for you. On-device works with no key at all."
-                           FontSize="13" TextWrapping="Wrap"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                           Style="{StaticResource DimmySecondary}" TextWrapping="Wrap" />
               </StackPanel>
-              <StackPanel x:Name="ProviderCardsHost" Spacing="10" />
+              <StackPanel x:Name="ProviderCardsHost" Spacing="{StaticResource DimmySpaceM}" />
               <TextBlock x:Name="ProviderKeysFootnote"
                          Text="&#x1F512; Keys are stored encrypted on this device, tied to this computer and user account, and only ever sent to the provider you choose."
-                         FontSize="12" TextWrapping="Wrap" Margin="2,16,0,0"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                         Style="{StaticResource DimmyCaption}" TextWrapping="Wrap" Margin="2,16,0,0" />
             </StackPanel>
 
             <!-- ═══ Voice input (was General) — STT settings ═══ -->
-            <StackPanel x:Name="GeneralPanel" Spacing="4" Visibility="Collapsed">
-              <StackPanel Spacing="2" Margin="0,0,0,16">
-                <TextBlock Text="Voice input" FontSize="28" FontWeight="SemiBold" />
+            <StackPanel x:Name="GeneralPanel" Spacing="{StaticResource DimmySpaceXS}" Visibility="Collapsed">
+              <StackPanel Spacing="{StaticResource DimmySpaceXS}" Margin="0,0,0,16">
+                <TextBlock Text="Voice input" Style="{StaticResource DimmyPageTitle}" />
                 <TextBlock Text="How Dimmy hears and transcribes your voice."
-                           FontSize="13"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                           Style="{StaticResource DimmySecondary}" />
               </StackPanel>
 
               <!-- Group: Language -->
-              <TextBlock Text="LANGUAGE"
-                         FontSize="12" FontWeight="SemiBold"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         CharacterSpacing="40" Margin="2,16,0,8" />
+              <TextBlock Text="Language"
+                         Style="{StaticResource DimmySection}" />
               <controls:SettingCard Glyph="&#xF2B7;"
                                     Label="Native language (you speak)"
                                     InfoTip="Tells the speech engine what to expect. Auto-detect works with cloud and local models; picking the language you speak is still a little faster and more reliable on short clips. To translate into another language, use the pill's scroll wheel instead."
@@ -441,15 +432,13 @@
               </controls:SettingCard>
 
               <!-- Group: Speech-to-text -->
-              <TextBlock Text="SPEECH-TO-TEXT"
-                         FontSize="12" FontWeight="SemiBold"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         CharacterSpacing="40" Margin="2,20,0,8" />
+              <TextBlock Text="Speech-to-text"
+                         Style="{StaticResource DimmySection}" />
               <controls:SettingCard Glyph="&#xE753;"
                                     Label="Mode"
                                     InfoTip="Local is fully private and works offline. Cloud sends your audio to the provider you pick and is often more accurate."
                                     HelpUrl="https://dimmy.app/help/local-mode">
-                <StackPanel Orientation="Horizontal" Spacing="12">
+                <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}">
                   <RadioButton x:Name="SttModeLocal" Content="Local" GroupName="SttMode"
                                Style="{StaticResource ChoiceRadioButton}"
                                Checked="SttMode_Checked" Tag="local" />
@@ -463,7 +452,7 @@
                    need one. -->
 
               <!-- Local STT (when Local selected) -->
-              <StackPanel x:Name="LocalSttPanel" Spacing="4">
+              <StackPanel x:Name="LocalSttPanel" Spacing="{StaticResource DimmySpaceXS}">
                 <controls:SettingCard Glyph="&#xE968;"
                                       Label="Local model"
                                       InfoTip="Whisper sizes run fully offline. Parakeet TDT v3 is faster and strong on European languages, but it downloads once at about 2.5 GB. Whistle is a 17 MB model that needs no GPU and covers English, Italian, German, French, Spanish, Dutch and Polish. Nemotron 3.5 is NVIDIA's streaming model: text appears as you speak, 40 languages auto-detected, speakers in meetings. About 850 MB; uses the NVIDIA GPU when there is one, the CPU otherwise."
@@ -484,10 +473,10 @@
                   <!-- Vertical so a long "Downloading file… X / Y (Z%)" status
                        wraps and the progress bar drops to its own line instead
                        of pushing the row too wide. -->
-                  <StackPanel Orientation="Vertical" Spacing="6" HorizontalAlignment="Right" MaxWidth="320">
-                    <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                  <StackPanel Orientation="Vertical" Spacing="{StaticResource DimmySpaceS}" HorizontalAlignment="Right" MaxWidth="320">
+                    <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" HorizontalAlignment="Right">
                       <TextBlock x:Name="LocalModelStatus" Text="Checking..."
-                                 FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                 Style="{StaticResource DimmyCaption}" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                                  TextWrapping="Wrap" TextAlignment="Right"
                                  VerticalAlignment="Center" />
                       <Button x:Name="DownloadModelBtn" Content="Download"
@@ -516,7 +505,7 @@
                    The "Prompt / vocabulary" card sits in its own
                    section below — it's not strictly STT auth, it's
                    recognition biasing. -->
-              <StackPanel x:Name="CloudSttPanel" Spacing="4" Visibility="Collapsed">
+              <StackPanel x:Name="CloudSttPanel" Spacing="{StaticResource DimmySpaceXS}" Visibility="Collapsed">
                 <controls:SettingCard Glyph="&#xE968;"
                                       Label="Provider"
                                       InfoTip="The model you pick sets where your audio is sent. Free options are marked."
@@ -539,8 +528,8 @@
                                       InfoTip="The key for your custom speech endpoint. Stored encrypted on this device, tied to this computer. Catalog providers are keyed from the Providers and keys page instead."
                                       HelpUrl="https://dimmy.app/help/api-keys"
                                       Visibility="Collapsed">
-                  <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
-                    <FontIcon Glyph="&#xE73E;" FontSize="16" Foreground="#4ade80"
+                  <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" HorizontalAlignment="Right">
+                    <FontIcon Glyph="&#xE73E;" FontSize="{StaticResource DimmyIconL}" Foreground="#4ade80"
                               VerticalAlignment="Center"
                               Visibility="{Binding HasApiKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
                     <PasswordBox x:Name="CloudApiKeyBox" Width="{StaticResource SettingFieldWidth}"
@@ -578,11 +567,9 @@
                    its cloud-only visibility (set in code-behind). Shows only when
                    Advanced AND cloud STT. -->
               <StackPanel Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
-                <StackPanel x:Name="CloudVocabularyPanel" Spacing="4" Visibility="Collapsed">
-                  <TextBlock Text="VOCABULARY"
-                             FontSize="12" FontWeight="SemiBold"
-                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                             CharacterSpacing="40" Margin="2,20,0,8" />
+                <StackPanel x:Name="CloudVocabularyPanel" Spacing="{StaticResource DimmySpaceXS}" Visibility="Collapsed">
+                  <TextBlock Text="Vocabulary"
+                             Style="{StaticResource DimmySection}" />
                   <controls:SettingCard Glyph="&#xE82D;"
                                         Label="Recognition prompt"
                                         InfoTip="Optional. Add names, jargon, or brand spellings so they're transcribed the way you mean."
@@ -597,11 +584,9 @@
               <!-- Speakers: diarization of meeting transcripts. Not an STT
                    provider — it runs after whichever engine transcribed, so it
                    sits beside the engine choice, not inside it. -->
-              <StackPanel Spacing="4">
-                <TextBlock Text="SPEAKERS"
-                           FontSize="12" FontWeight="SemiBold"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                           CharacterSpacing="40" Margin="2,20,0,8" />
+              <StackPanel Spacing="{StaticResource DimmySpaceXS}">
+                <TextBlock Text="Speakers"
+                           Style="{StaticResource DimmySection}" />
                 <controls:SettingCard Glyph="&#xE716;"
                                       Label="Identify speakers in meetings"
                                       InfoTip="Labels each line of a meeting transcript with who said it, and lets you name them. Runs on this computer: automatically after each meeting with local transcription, and whenever you regenerate a transcript (the only way with cloud transcription, so the audio is not uploaded twice). Downloads a 104 MB model the first time.">
@@ -612,10 +597,10 @@
                                       Glyph="&#xE946;"
                                       Label="Speaker model"
                                       Visibility="{Binding DiarizationEnabled, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
-                  <StackPanel Orientation="Vertical" Spacing="6" HorizontalAlignment="Right" MaxWidth="320">
-                    <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                  <StackPanel Orientation="Vertical" Spacing="{StaticResource DimmySpaceS}" HorizontalAlignment="Right" MaxWidth="320">
+                    <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" HorizontalAlignment="Right">
                       <TextBlock x:Name="DiarizationStatus" Text="Checking..."
-                                 FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                 Style="{StaticResource DimmyCaption}" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                                  TextWrapping="Wrap" TextAlignment="Right"
                                  VerticalAlignment="Center" />
                       <Button x:Name="DiarizationDownloadBtn" Content="Download (104 MB)"
@@ -631,11 +616,9 @@
                    capture audio from the wrong mic) so it lives in Simple. The
                    tuning knobs (gain / preprocessing / chunk / captions) stay
                    behind Advanced. -->
-              <StackPanel Spacing="4">
-                <TextBlock Text="MICROPHONE"
-                           FontSize="12" FontWeight="SemiBold"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                           CharacterSpacing="40" Margin="2,20,0,8" />
+              <StackPanel Spacing="{StaticResource DimmySpaceXS}">
+                <TextBlock Text="Microphone"
+                           Style="{StaticResource DimmySection}" />
                 <!-- Audio source picker removed 2026-05-08: always-mix capture
                      (commit 3eddac3). Pill = mic-only, meeting = both, AEC3
                      degrades when loopback is silent. -->
@@ -650,7 +633,7 @@
                 </controls:SettingCard>
 
                 <!-- Advanced mic tuning -->
-                <StackPanel Spacing="4"
+                <StackPanel Spacing="{StaticResource DimmySpaceXS}"
                             Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
                   <controls:SettingCard Glyph="&#xE992;"
                                         Label="Microphone volume"
@@ -687,21 +670,16 @@
 
               <!-- ═══ Custom dictionary ═══ — Advanced-gated per the settings map. -->
               <StackPanel Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
-              <TextBlock Text="CUSTOM DICTIONARY"
-                         FontSize="12" FontWeight="SemiBold"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         CharacterSpacing="40" Margin="2,20,0,8" />
+              <TextBlock Text="Custom dictionary"
+                         Style="{StaticResource DimmySection}" />
               <TextBlock Text="Teach Dimmy your names, jargon, and acronyms."
-                         FontSize="12"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                         Style="{StaticResource DimmyCaption}"
                          TextWrapping="Wrap" Margin="2,0,0,8" />
 
-              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="6"
-                      Padding="14" Margin="0,8,0,0">
-                <StackPanel Spacing="10">
-                  <StackPanel Orientation="Horizontal" Spacing="8">
+              <Border Style="{StaticResource DimmyCard}"
+                      Padding="{StaticResource DimmyCardPaddingCompact}" Margin="0,8,0,0">
+                <StackPanel Spacing="{StaticResource DimmySpaceM}">
+                  <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
                     <TextBox x:Name="DictAddTextBox"
                              PlaceholderText="word or short phrase"
                              MinWidth="240"
@@ -711,8 +689,7 @@
                             Style="{ThemeResource AccentButtonStyle}"/>
                     <TextBlock x:Name="DictStatusText"
                                VerticalAlignment="Center"
-                               FontSize="12"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                               Style="{StaticResource DimmyCaption}"/>
                   </StackPanel>
                   <ListView x:Name="DictListView"
                             ItemsSource="{Binding UserDict}"
@@ -726,18 +703,18 @@
                     </ListView.ItemContainerStyle>
                     <ListView.ItemTemplate>
                       <DataTemplate>
-                        <Grid Padding="8,4" ColumnSpacing="8">
+                        <Grid Padding="8,4" ColumnSpacing="{StaticResource DimmySpaceS}">
                           <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                           </Grid.ColumnDefinitions>
                           <TextBlock Grid.Column="0" Text="{Binding}"
-                                     VerticalAlignment="Center" FontSize="13"/>
+                                     VerticalAlignment="Center" Style="{StaticResource DimmyBody}"/>
                           <Button Grid.Column="1" Tag="{Binding}"
                                   Click="DictRemove_Click"
                                   ToolTipService.ToolTip="Remove from dictionary"
                                   Padding="6,4">
-                            <FontIcon Glyph="&#xE74D;" FontSize="12"/>
+                            <FontIcon Glyph="&#xE74D;" FontSize="{StaticResource DimmyIconS}"/>
                           </Button>
                         </Grid>
                       </DataTemplate>
@@ -745,8 +722,7 @@
                   </ListView>
                   <TextBlock x:Name="DictEmptyHint"
                              Text="No words yet. Add one above or press the shortcut after selecting text anywhere."
-                             FontSize="12"
-                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                             Style="{StaticResource DimmyCaption}"
                              TextWrapping="Wrap"
                              Visibility="Collapsed"/>
                 </StackPanel>
@@ -755,18 +731,15 @@
             </StackPanel>
 
             <!-- ═══ Shortcut ═══ -->
-            <StackPanel x:Name="ShortcutPanel" Spacing="4" Visibility="Collapsed">
-              <StackPanel Spacing="2" Margin="0,0,0,16">
-                <TextBlock Text="Shortcut" FontSize="28" FontWeight="SemiBold" />
+            <StackPanel x:Name="ShortcutPanel" Spacing="{StaticResource DimmySpaceXS}" Visibility="Collapsed">
+              <StackPanel Spacing="{StaticResource DimmySpaceXS}" Margin="0,0,0,16">
+                <TextBlock Text="Shortcut" Style="{StaticResource DimmyPageTitle}" />
                 <TextBlock Text="The hotkey that starts and stops recording."
-                           FontSize="13"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                           Style="{StaticResource DimmySecondary}" />
               </StackPanel>
 
-              <TextBlock Text="HOTKEY"
-                         FontSize="12" FontWeight="SemiBold"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         CharacterSpacing="40" Margin="2,16,0,8" />
+              <TextBlock Text="Hotkey"
+                         Style="{StaticResource DimmySection}" />
               <controls:SettingCard Glyph="&#xE765;"
                                     Label="Recording shortcut"
                                     InfoTip="Press the keys you want, then release to confirm. This is the shortcut you press to dictate."
@@ -777,7 +750,7 @@
                                     Label="Mode"
                                     InfoTip="Push-to-Talk records only while you hold the keys. Toggle starts on one press and stops on the next."
                                     HelpUrl="https://dimmy.app/help/hotkey-modes">
-                <StackPanel Orientation="Horizontal" Spacing="12">
+                <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}">
                   <RadioButton Content="Push-to-Talk" GroupName="ShortcutMode"
                                Style="{StaticResource ChoiceRadioButton}"
                                IsChecked="{Binding ShortcutMode, Mode=TwoWay, Converter={StaticResource StringToBoolConverter}, ConverterParameter=hold}" />
@@ -790,7 +763,7 @@
                                     Label="Command mode shortcut"
                                     InfoTip="Optional. A dedicated shortcut that runs ONE command (transform the selected text, or generate and insert when nothing is selected) and then goes back to normal dictation. It follows the same Push-to-Talk or Toggle mode as your dictation shortcut. Leave it unset to use command mode only from the pill menu, where it stays on until you turn it off."
                                     HelpUrl="https://dimmy.app/help/hotkey-change">
-                <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" HorizontalAlignment="Right">
                   <Button Content="Clear" Click="CommandHotkeyClear_Click"
                           VerticalAlignment="Center" />
                   <controls:ShortcutRecorder Shortcut="{Binding CommandHotkey, Mode=TwoWay}" />
@@ -800,17 +773,15 @@
                                     Label="Meeting recording shortcut"
                                     InfoTip="Optional. A dedicated shortcut that starts or stops a meeting recording (toggle). It runs the same recording-consent prompt as the Start button, then records in the background — it does NOT open the meeting window. Leave it unset to start meetings only from the menu. Tip: avoid Ctrl+Shift+M — that's Microsoft Teams' mute toggle."
                                     HelpUrl="https://dimmy.app/help/hotkey-change">
-                <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" HorizontalAlignment="Right">
                   <Button Content="Clear" Click="MeetingHotkeyClear_Click"
                           VerticalAlignment="Center" />
                   <controls:ShortcutRecorder Shortcut="{Binding MeetingHotkey, Mode=TwoWay}" />
                 </StackPanel>
               </controls:SettingCard>
 
-              <TextBlock Text="DICTIONARY"
-                         FontSize="12" FontWeight="SemiBold"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         CharacterSpacing="40" Margin="2,20,0,8" />
+              <TextBlock Text="Dictionary"
+                         Style="{StaticResource DimmySection}" />
               <controls:SettingCard Glyph="&#xE82D;"
                                     Label="Add-to-dictionary shortcut"
                                     InfoTip="Select text in any app and press these keys to add it to your custom dictionary. Press the keys here, then release to confirm."
@@ -820,18 +791,15 @@
             </StackPanel>
 
             <!-- ═══ Output ═══ -->
-            <StackPanel x:Name="OutputPanel" Spacing="4" Visibility="Collapsed">
-              <StackPanel Spacing="2" Margin="0,0,0,16">
-                <TextBlock Text="Output" FontSize="28" FontWeight="SemiBold" />
+            <StackPanel x:Name="OutputPanel" Spacing="{StaticResource DimmySpaceXS}" Visibility="Collapsed">
+              <StackPanel Spacing="{StaticResource DimmySpaceXS}" Margin="0,0,0,16">
+                <TextBlock Text="Output" Style="{StaticResource DimmyPageTitle}" />
                 <TextBlock Text="How Dimmy rewrites and delivers your dictation."
-                           FontSize="13"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                           Style="{StaticResource DimmySecondary}" />
               </StackPanel>
 
-              <TextBlock Text="LLM ENHANCEMENT"
-                         FontSize="12" FontWeight="SemiBold"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         CharacterSpacing="40" Margin="2,16,0,8" />
+              <TextBlock Text="Llm enhancement"
+                         Style="{StaticResource DimmySection}" />
               <controls:SettingCard Glyph="&#xE945;"
                                     Label="Style"
                                     InfoTip="An LLM cleans up or reshapes your transcript. Off leaves it exactly as spoken."
@@ -841,7 +809,7 @@
                           ItemsSource="{Binding LlmStyleItems}">
                   <ComboBox.ItemTemplate>
                     <DataTemplate>
-                      <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                      <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}" VerticalAlignment="Center">
                         <Ellipse Width="10" Height="10" VerticalAlignment="Center"
                                  Fill="{Binding Converter={StaticResource StyleToColorBrush}}" />
                         <TextBlock Text="{Binding}" VerticalAlignment="Center" />
@@ -851,15 +819,13 @@
                 </ComboBox>
               </controls:SettingCard>
 
-              <TextBlock Text="LLM MODE"
-                         FontSize="12" FontWeight="SemiBold"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         CharacterSpacing="40" Margin="2,20,0,8" />
+              <TextBlock Text="Llm mode"
+                         Style="{StaticResource DimmySection}" />
               <controls:SettingCard Glyph="&#xE753;"
                                     Label="Mode"
                                     InfoTip="Local runs the LLM on your device and stays private. Cloud sends your transcript to the provider you pick."
                                     HelpUrl="https://dimmy.app/help/local-llm">
-                <StackPanel Orientation="Horizontal" Spacing="12">
+                <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}">
                   <RadioButton x:Name="LlmModeLocal" Content="Local" GroupName="LlmMode"
                                Style="{StaticResource ChoiceRadioButton}"
                                Checked="LlmMode_Checked" Tag="local" />
@@ -870,7 +836,7 @@
               </controls:SettingCard>
 
               <!-- Local LLM cards -->
-              <StackPanel x:Name="LocalLlmPanel" Spacing="4" Visibility="Collapsed">
+              <StackPanel x:Name="LocalLlmPanel" Spacing="{StaticResource DimmySpaceXS}" Visibility="Collapsed">
                 <controls:SettingCard Glyph="&#xE968;"
                                       Label="Local LLM model"
                                       InfoTip="Runs fully offline. Larger models read better but need more memory and time."
@@ -888,10 +854,10 @@
                                       Label="Local LLM status">
                   <!-- Vertical: long download status wraps, progress bar on its
                        own line below (keeps the row from getting too wide). -->
-                  <StackPanel Orientation="Vertical" Spacing="6" HorizontalAlignment="Right" MaxWidth="320">
-                    <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                  <StackPanel Orientation="Vertical" Spacing="{StaticResource DimmySpaceS}" HorizontalAlignment="Right" MaxWidth="320">
+                    <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" HorizontalAlignment="Right">
                       <TextBlock x:Name="LocalLlmModelStatus" Text="Checking..."
-                                 FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                 Style="{StaticResource DimmyCaption}" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                                  TextWrapping="Wrap" TextAlignment="Right"
                                  VerticalAlignment="Center" />
                       <Button x:Name="DownloadLlmModelBtn" Content="Download"
@@ -904,7 +870,7 @@
               </StackPanel>
 
               <!-- Cloud LLM cards -->
-              <StackPanel x:Name="CloudLlmPanel" Spacing="4">
+              <StackPanel x:Name="CloudLlmPanel" Spacing="{StaticResource DimmySpaceXS}">
                 <controls:SettingCard Glyph="&#xE968;"
                                       Label="Cloud LLM provider"
                                       InfoTip="The model you pick sets where your transcript is sent. Free options are marked."
@@ -980,8 +946,8 @@
                                       InfoTip="Stored encrypted on this device. Used when the rewrite provider differs from your speech provider."
                                       HelpUrl="https://dimmy.app/help/api-keys"
                                       Visibility="Collapsed">
-                  <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
-                    <FontIcon Glyph="&#xE73E;" FontSize="16" Foreground="#4ade80"
+                  <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" HorizontalAlignment="Right">
+                    <FontIcon Glyph="&#xE73E;" FontSize="{StaticResource DimmyIconL}" Foreground="#4ade80"
                               VerticalAlignment="Center"
                               Visibility="{Binding HasLlmKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
                     <PasswordBox x:Name="LlmApiKeyBox" Width="{StaticResource SettingFieldWidth}"
@@ -998,15 +964,12 @@
               <!-- Auto-detect meetings + Meetings folder — Advanced-gated per the settings map. -->
               <StackPanel Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
               <!-- ═══ Auto-detect meetings ═══ -->
-              <TextBlock Text="AUTO-DETECT MEETINGS"
-                         FontSize="12" FontWeight="SemiBold"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         CharacterSpacing="40" Margin="2,20,0,8" />
+              <TextBlock Text="Auto-detect meetings"
+                         Style="{StaticResource DimmySection}" />
               <TextBlock Text="Offer to record when a call starts."
-                         FontSize="12"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                         Style="{StaticResource DimmyCaption}"
                          TextWrapping="Wrap" Margin="2,0,0,8" />
-              <StackPanel Spacing="4">
+              <StackPanel Spacing="{StaticResource DimmySpaceXS}">
                 <controls:SettingCard Glyph="&#xE717;"
                                       Label="Detect calls and offer to record"
                                       InfoTip="Suggests recording a few seconds into a call. 'Not now' snoozes that app for half an hour. 'Don't ask' skips it for good."
@@ -1032,7 +995,7 @@
                   <ItemsControl ItemsSource="{Binding CallDetectExcludedApps}" Margin="0,0,0,0">
                     <ItemsControl.ItemsPanel>
                       <ItemsPanelTemplate>
-                        <StackPanel Orientation="Horizontal" Spacing="6" />
+                        <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" />
                       </ItemsPanelTemplate>
                     </ItemsControl.ItemsPanel>
                     <ItemsControl.ItemTemplate>
@@ -1042,15 +1005,15 @@
                                 BorderThickness="1"
                                 CornerRadius="10"
                                 Padding="10,3,4,3">
-                          <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                            <TextBlock Text="{Binding}" VerticalAlignment="Center" FontSize="12" />
+                          <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" VerticalAlignment="Center">
+                            <TextBlock Text="{Binding}" VerticalAlignment="Center" Style="{StaticResource DimmyLabel}" />
                             <Button Click="RemoveExcludedApp_Click"
                                     Tag="{Binding}"
                                     Padding="4,0,4,0"
                                     Background="Transparent"
                                     BorderBrush="Transparent"
                                     ToolTipService.ToolTip="Remove">
-                              <FontIcon FontFamily="Segoe Fluent Icons" Glyph="&#xE894;" FontSize="10" />
+                              <FontIcon FontFamily="Segoe Fluent Icons" Glyph="&#xE894;" FontSize="{StaticResource DimmyIconS}" />
                             </Button>
                           </StackPanel>
                         </Border>
@@ -1061,43 +1024,37 @@
               </StackPanel>
 
               <!-- ═══ Meetings storage section ═══ -->
-              <TextBlock Text="MEETINGS"
-                         FontSize="12" FontWeight="SemiBold"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         CharacterSpacing="40" Margin="2,20,0,8" />
+              <TextBlock Text="Meetings"
+                         Style="{StaticResource DimmySection}" />
               <!-- Expanded card: a long path doesn't fit the inline
                    SettingCard control column, so use a vertical layout —
                    header + full-width path box + buttons bottom-right. -->
-              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="4" Padding="16,12">
-                <StackPanel Spacing="12">
-                  <Grid ColumnSpacing="16">
+              <Border Style="{StaticResource DimmyCard}" Padding="16,12">
+                <StackPanel Spacing="{StaticResource DimmySpaceM}">
+                  <Grid ColumnSpacing="{StaticResource DimmySpaceL}">
                     <Grid.ColumnDefinitions>
                       <ColumnDefinition Width="Auto" />
                       <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
                     <FontIcon Grid.Column="0" FontFamily="Segoe Fluent Icons"
-                              Glyph="&#xE8B7;" FontSize="16" Width="24" Height="24"
+                              Glyph="&#xE8B7;" FontSize="{StaticResource DimmyIconL}" Width="24" Height="24"
                               VerticalAlignment="Top"
                               Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
-                    <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
-                      <TextBlock Text="Meetings folder" FontSize="14"
+                    <StackPanel Grid.Column="1" Spacing="{StaticResource DimmySpaceXS}" VerticalAlignment="Center">
+                      <TextBlock Text="Meetings folder" Style="{StaticResource DimmyBody}"
                                  Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
-                      <TextBlock FontSize="12" TextWrapping="Wrap"
-                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                      <TextBlock Style="{StaticResource DimmyCaption}" TextWrapping="Wrap"
                                  Text="Where new meeting recordings are saved. Existing meetings stay in their current location." />
                     </StackPanel>
                   </Grid>
                   <Border Background="{ThemeResource ControlFillColorDefaultBrush}"
                           BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
                           BorderThickness="1" CornerRadius="4" Padding="10,7">
-                    <TextBlock x:Name="MeetingFolderPathText" FontSize="12"
+                    <TextBlock x:Name="MeetingFolderPathText" Style="{StaticResource DimmyCaption}"
                                TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
-                               IsTextSelectionEnabled="True"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                               IsTextSelectionEnabled="True" />
                   </Border>
-                  <StackPanel Orientation="Horizontal" Spacing="8"
+                  <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}"
                               HorizontalAlignment="Right">
                     <Button x:Name="MeetingFolderResetBtn" Content="Reset to default"
                             Click="MeetingFolderReset_Click" />
@@ -1112,37 +1069,33 @@
                    the user's choosing as a markdown file. Point it at an
                    Obsidian vault or a Google Drive / Dropbox / OneDrive sync
                    folder to get notes + cloud sync for free (no sign-in). -->
-              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="4" Padding="16,12"
+              <Border Style="{StaticResource DimmyCard}" Padding="16,12"
                       Margin="0,12,0,0">
-                <StackPanel Spacing="12">
-                  <Grid ColumnSpacing="16">
+                <StackPanel Spacing="{StaticResource DimmySpaceM}">
+                  <Grid ColumnSpacing="{StaticResource DimmySpaceL}">
                     <Grid.ColumnDefinitions>
                       <ColumnDefinition Width="Auto" />
                       <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
                     <FontIcon Grid.Column="0" FontFamily="Segoe Fluent Icons"
-                              Glyph="&#xEDE1;" FontSize="16" Width="24" Height="24"
+                              Glyph="&#xEDE1;" FontSize="{StaticResource DimmyIconL}" Width="24" Height="24"
                               VerticalAlignment="Top"
                               Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
-                    <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
-                      <TextBlock Text="Export recaps to a folder" FontSize="14"
+                    <StackPanel Grid.Column="1" Spacing="{StaticResource DimmySpaceXS}" VerticalAlignment="Center">
+                      <TextBlock Text="Export recaps to a folder" Style="{StaticResource DimmyBody}"
                                  Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
-                      <TextBlock FontSize="12" TextWrapping="Wrap"
-                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                      <TextBlock Style="{StaticResource DimmyCaption}" TextWrapping="Wrap"
                                  Text="Save a copy of each recap as a markdown file here. Point it at an Obsidian vault or a Google Drive, Dropbox or OneDrive folder to sync your recaps for free." />
                     </StackPanel>
                   </Grid>
                   <Border Background="{ThemeResource ControlFillColorDefaultBrush}"
                           BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
                           BorderThickness="1" CornerRadius="4" Padding="10,7">
-                    <TextBlock x:Name="RecapExportFolderPathText" FontSize="12"
+                    <TextBlock x:Name="RecapExportFolderPathText" Style="{StaticResource DimmyCaption}"
                                TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
-                               IsTextSelectionEnabled="True"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                               IsTextSelectionEnabled="True" />
                   </Border>
-                  <StackPanel Orientation="Horizontal" Spacing="8"
+                  <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}"
                               HorizontalAlignment="Right">
                     <Button x:Name="RecapExportClearBtn" Content="Turn off"
                             Click="RecapExportClear_Click" />
@@ -1164,11 +1117,9 @@
                         (independent of LLM provider)
                      2. Else the configured llm_api_url + llm_api_key
                         (cloud only; local LLM recap not yet wired) -->
-              <TextBlock Text="MEETING RECAP"
-                         FontSize="12" FontWeight="SemiBold"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         CharacterSpacing="40" Margin="2,20,0,8" />
-              <StackPanel x:Name="RecapPanel" Spacing="4">
+              <TextBlock Text="Meeting recap"
+                         Style="{StaticResource DimmySection}" />
+              <StackPanel x:Name="RecapPanel" Spacing="{StaticResource DimmySpaceXS}">
                 <!-- The default for the tick in the meeting window. That tick
                      stays: this decides what it starts as, instead of being
                      hardcoded on and forgotten at every launch. -->
@@ -1242,8 +1193,8 @@
                                       InfoTip="Saved separately for the recap provider, so your dictation key stays untouched. Stored encrypted on this device."
                                       HelpUrl="https://dimmy.app/help/api-keys"
                                       Visibility="Collapsed">
-                  <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
-                    <FontIcon Glyph="&#xE73E;" FontSize="16" Foreground="#4ade80"
+                  <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" HorizontalAlignment="Right">
+                    <FontIcon Glyph="&#xE73E;" FontSize="{StaticResource DimmyIconL}" Foreground="#4ade80"
                               VerticalAlignment="Center"
                               Visibility="{Binding HasRecapKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
                               ToolTipService.ToolTip="A key is already saved for this provider"/>
@@ -1259,12 +1210,10 @@
               </StackPanel>
 
               <!-- Clipboard — Advanced-gated per the settings map. -->
-              <StackPanel Spacing="4"
+              <StackPanel Spacing="{StaticResource DimmySpaceXS}"
                           Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
-                <TextBlock Text="CLIPBOARD"
-                           FontSize="12" FontWeight="SemiBold"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                           CharacterSpacing="40" Margin="2,20,0,8" />
+                <TextBlock Text="Clipboard"
+                           Style="{StaticResource DimmySection}" />
                 <controls:SettingCard Glyph="&#xE16F;"
                                       Label="Keep in clipboard history"
                                       InfoTip="After Dimmy pastes for you, the transcript stays on the clipboard so you can paste it again."
@@ -1275,12 +1224,10 @@
               </StackPanel>
 
               <!-- Advanced LLM cards -->
-              <StackPanel Spacing="4"
+              <StackPanel Spacing="{StaticResource DimmySpaceXS}"
                           Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
-                <TextBlock Text="ADVANCED LLM"
-                           FontSize="12" FontWeight="SemiBold"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                           CharacterSpacing="40" Margin="2,20,0,8" />
+                <TextBlock Text="Advanced llm"
+                           Style="{StaticResource DimmySection}" />
                 <controls:SettingCard Glyph="&#xE76C;"
                                       Label="Tone"
                                       InfoTip="Nudges the rewrite warmer or more businesslike, on top of the style you chose."
@@ -1311,18 +1258,15 @@
             </StackPanel>
 
             <!-- ═══ Pill overlay (was Overlay) ═══ -->
-            <StackPanel x:Name="OverlayPanel" Spacing="4" Visibility="Collapsed">
-              <StackPanel Spacing="2" Margin="0,0,0,16">
-                <TextBlock Text="Pill overlay" FontSize="28" FontWeight="SemiBold" />
+            <StackPanel x:Name="OverlayPanel" Spacing="{StaticResource DimmySpaceXS}" Visibility="Collapsed">
+              <StackPanel Spacing="{StaticResource DimmySpaceXS}" Margin="0,0,0,16">
+                <TextBlock Text="Pill overlay" Style="{StaticResource DimmyPageTitle}" />
                 <TextBlock Text="The floating pill. Where it lives and how it looks."
-                           FontSize="13"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                           Style="{StaticResource DimmySecondary}" />
               </StackPanel>
 
-              <TextBlock Text="VISIBILITY"
-                         FontSize="12" FontWeight="SemiBold"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         CharacterSpacing="40" Margin="2,20,0,8" />
+              <TextBlock Text="Visibility"
+                         Style="{StaticResource DimmySection}" />
               <controls:SettingCard Glyph="&#xE7E8;"
                                     Label="Show pill on app start"
                                     InfoTip="Off starts Dimmy in taskbar-only mode. The pill stays hidden and recording status shows on the taskbar icon."
@@ -1356,10 +1300,8 @@
                               Style="{StaticResource CompactToggleSwitch}" />
               </controls:SettingCard>
 
-              <TextBlock Text="POSITION"
-                         FontSize="12" FontWeight="SemiBold"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         CharacterSpacing="40" Margin="2,20,0,8" />
+              <TextBlock Text="Position"
+                         Style="{StaticResource DimmySection}" />
               <controls:SettingCard Glyph="&#xE759;"
                                     Label="Default position"
                                     InfoTip="Sets the corner the pill starts in. You can always drag it somewhere else."
@@ -1368,7 +1310,7 @@
                      SettingCard — matches the design's wallpaper-position
                      picker. Top-Center is intentionally empty. -->
                 <Grid Width="78" Height="50"
-                      ColumnSpacing="3" RowSpacing="3">
+                      ColumnSpacing="{StaticResource DimmySpaceXS}" RowSpacing="{StaticResource DimmySpaceXS}">
                   <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="*" />
@@ -1429,10 +1371,8 @@
                 <Button Content="Reset" Click="ResetPosition_Click" />
               </controls:SettingCard>
 
-              <TextBlock Text="APPEARANCE"
-                         FontSize="12" FontWeight="SemiBold"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         CharacterSpacing="40" Margin="2,20,0,8" />
+              <TextBlock Text="Appearance"
+                         Style="{StaticResource DimmySection}" />
               <controls:SettingCard Glyph="&#xE790;"
                                     Label="Border style"
                                     InfoTip="Pick the rainbow glow or a solid color. None hides the outline."
@@ -1465,32 +1405,30 @@
             </StackPanel>
 
             <!-- ═══ App rules ═══ -->
-            <StackPanel x:Name="RulesPanel" Spacing="12" Visibility="Collapsed">
-              <StackPanel Spacing="2" Margin="0,0,0,4">
-                <TextBlock Text="App rules" FontSize="28" FontWeight="SemiBold" />
+            <StackPanel x:Name="RulesPanel" Spacing="{StaticResource DimmySpaceM}" Visibility="Collapsed">
+              <StackPanel Spacing="{StaticResource DimmySpaceXS}" Margin="0,0,0,4">
+                <TextBlock Text="App rules" Style="{StaticResource DimmyPageTitle}" />
                 <TextBlock TextWrapping="Wrap"
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                            Text="Auto-switch style and translation per app." />
               </StackPanel>
 
-              <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,4,0,0">
+              <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" Margin="0,4,0,0">
                 <Button x:Name="AppRuleAddBtn" Click="AppRuleAdd_Click">
-                  <StackPanel Orientation="Horizontal" Spacing="6">
-                    <FontIcon Glyph="&#xE710;" FontSize="14"/>
+                  <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                    <FontIcon Glyph="&#xE710;" FontSize="{StaticResource DimmyIconM}"/>
                     <TextBlock Text="Add rule" />
                   </StackPanel>
                 </Button>
                 <Button x:Name="AppRuleLoadDefaultsBtn" Click="AppRuleLoadDefaults_Click">
-                  <StackPanel Orientation="Horizontal" Spacing="6">
-                    <FontIcon Glyph="&#xE74C;" FontSize="14"/>
+                  <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                    <FontIcon Glyph="&#xE74C;" FontSize="{StaticResource DimmyIconM}"/>
                     <TextBlock Text="Load defaults (v1)" />
                   </StackPanel>
                 </Button>
               </StackPanel>
 
-              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="8" Padding="0">
+              <Border Style="{StaticResource DimmyCard}" Padding="0">
                 <!-- WinUI 3 v3.1.7 ListView built-in CanReorderItems
                      hard-crashes the renderer mid-drag with E_UNEXPECTED
                      in Microsoft.UI.Xaml.dll +0x39ce55 → combase.dll
@@ -1523,7 +1461,7 @@
                            shrinks from ~56 px to ~36 px. TextBox /
                            ComboBox MinHeight=28 keeps Fluent default
                            hit area without padding the row. -->
-                      <Grid ColumnSpacing="8" Padding="8,4" >
+                      <Grid ColumnSpacing="{StaticResource DimmySpaceS}" Padding="8,4" >
                         <!-- Order: icon, pattern (compact), match type,
                              style, translate, ENABLE TOGGLE, delete.
                              Toggle near delete so the row reads
@@ -1561,7 +1499,7 @@
                                 PointerReleased="AppRuleHandle_PointerReleased"
                                 PointerCaptureLost="AppRuleHandle_PointerCaptureLost">
                           <FontIcon Glyph="&#xE76F;"
-                                    FontSize="14"
+                                    FontSize="{StaticResource DimmyIconM}"
                                     Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                                     VerticalAlignment="Center"
                                     HorizontalAlignment="Center"/>
@@ -1572,7 +1510,7 @@
                                  Source="{Binding IconAssetUri, Mode=OneWay}"
                                  Visibility="{Binding IconAssetUri, Mode=OneWay, Converter={StaticResource NotNullToVisibilityConverter}}"/>
                           <FontIcon Glyph="{Binding IconGlyph, Mode=OneWay}"
-                                    FontSize="14"
+                                    FontSize="{StaticResource DimmyIconM}"
                                     Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
                                     Visibility="{Binding IconAssetUri, Mode=OneWay, Converter={StaticResource NotNullToVisibilityConverter}, ConverterParameter=Invert}"/>
                         </Grid>
@@ -1618,7 +1556,7 @@
                                 ToolTipService.ToolTip="Remove rule"
                                 Background="Transparent"
                                 BorderThickness="0">
-                          <FontIcon Glyph="&#xE74D;" FontSize="14"/>
+                          <FontIcon Glyph="&#xE74D;" FontSize="{StaticResource DimmyIconM}"/>
                         </Button>
                       </Grid>
                     </DataTemplate>
@@ -1641,53 +1579,49 @@
 
               <TextBlock x:Name="AppRulesEmptyHint"
                          Text="No rules yet. Click Load defaults (v1) to populate from the curated list, or Add rule to start from scratch."
-                         FontSize="12"
+                         Style="{StaticResource DimmyCaption}"
                          Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                          TextWrapping="Wrap"
                          Visibility="Collapsed"/>
             </StackPanel>
 
             <!-- ═══ About ═══ -->
-            <StackPanel x:Name="AboutPanel" Spacing="4" Visibility="Collapsed">
-              <StackPanel Spacing="2" Margin="0,0,0,16">
-                <TextBlock Text="About" FontSize="28" FontWeight="SemiBold" />
+            <StackPanel x:Name="AboutPanel" Spacing="{StaticResource DimmySpaceXS}" Visibility="Collapsed">
+              <StackPanel Spacing="{StaticResource DimmySpaceXS}" Margin="0,0,0,16">
+                <TextBlock Text="About" Style="{StaticResource DimmyPageTitle}" />
                 <TextBlock Text="Version, updates, and resources."
-                           FontSize="13"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                           Style="{StaticResource DimmySecondary}" />
               </StackPanel>
 
               <!-- Hero — text on the left, big logo on the right -->
-              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="6" Padding="28,24">
-                <Grid ColumnSpacing="20">
+              <Border Style="{StaticResource DimmyCard}" Padding="28,24">
+                <Grid ColumnSpacing="{StaticResource DimmySpaceXL}">
                   <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                   </Grid.ColumnDefinitions>
 
-                  <StackPanel Grid.Column="0" VerticalAlignment="Center" Spacing="6">
+                  <StackPanel Grid.Column="0" VerticalAlignment="Center" Spacing="{StaticResource DimmySpaceS}">
                     <TextBlock Text="Voice dictation that stays out of your way."
-                               FontSize="12"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                               Style="{StaticResource DimmyCaption}" />
                     <TextBlock x:Name="HeroTitleText" Text="Dimmy"
-                               FontSize="28" FontWeight="SemiBold" />
+                               Style="{StaticResource DimmyPageTitle}" />
                     <TextBlock x:Name="HeroSubText"
-                               FontSize="11"
+                               Style="{StaticResource DimmyCaption}"
                                Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
-                    <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,10,0,0">
+                    <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}" Margin="0,10,0,0">
                       <Button x:Name="CheckUpdatesBtn"
                               Style="{ThemeResource AccentButtonStyle}"
                               Click="CheckUpdates_Click">
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                          <FontIcon Glyph="&#xE777;" FontSize="14" />
+                        <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                          <FontIcon Glyph="&#xE777;" FontSize="{StaticResource DimmyIconM}" />
                           <TextBlock Text="Check for updates" />
                         </StackPanel>
                       </Button>
                       <Button x:Name="ReleaseNotesBtn"
                               Click="ReleaseNotes_Click">
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                          <FontIcon Glyph="&#xE82D;" FontSize="14" />
+                        <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                          <FontIcon Glyph="&#xE82D;" FontSize="{StaticResource DimmyIconM}" />
                           <TextBlock Text="View release notes" />
                         </StackPanel>
                       </Button>
@@ -1697,7 +1631,7 @@
                          whenever the answer was "already current" — the
                          check ran, logged, and changed nothing visible. -->
                     <StackPanel x:Name="UpdateCheckStatus"
-                                Orientation="Horizontal" Spacing="6"
+                                Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}"
                                 Visibility="Collapsed"
                                 Margin="0,8,0,0">
                       <ProgressRing x:Name="UpdateCheckSpinner"
@@ -1706,14 +1640,13 @@
                                     Visibility="Collapsed"
                                     VerticalAlignment="Center" />
                       <FontIcon x:Name="UpdateCheckGlyph"
-                                Glyph="&#xE73E;" FontSize="13"
+                                Glyph="&#xE73E;" FontSize="{StaticResource DimmyIconM}"
                                 Visibility="Collapsed"
                                 VerticalAlignment="Center" />
                       <TextBlock x:Name="UpdateCheckText"
-                                 FontSize="12"
+                                 Style="{StaticResource DimmyCaption}"
                                  TextWrapping="Wrap"
-                                 VerticalAlignment="Center"
-                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                 VerticalAlignment="Center" />
                     </StackPanel>
                   </StackPanel>
 
@@ -1742,7 +1675,7 @@
                                     HelpUrl="https://dimmy.app/help/about-and-updates"
                                     Visibility="Collapsed"
                                     Margin="0,16,0,0">
-                <StackPanel Orientation="Horizontal" Spacing="8">
+                <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
                   <Button x:Name="UpdateInstallBtn"
                           Content="Install &amp; restart"
                           Style="{ThemeResource AccentButtonStyle}"
@@ -1776,16 +1709,14 @@
                 </ComboBox>
               </controls:SettingCard>
 
-              <TextBlock Text="GUIDED SETUP"
-                         FontSize="12" FontWeight="SemiBold"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         CharacterSpacing="40" Margin="2,20,0,8" />
+              <TextBlock Text="Guided setup"
+                         Style="{StaticResource DimmySection}" />
               <!-- Three guided setups, above Resources: these are the "I want to
                    use this feature" doors, and a door belongs before a link to
                    the source. A row of cards rather than three more rows because
                    they read as doors. The Mac About page uses tiles for the same
                    job, in the same position. -->
-              <StackPanel Orientation="Horizontal" Spacing="10">
+              <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}">
                 <controls:WizardCard Glyph="&#xE8AB;" Title="First run"
                                      Description="Model, key and dictation shortcut"
                                      Click="RestartOnboarding_Click" />
@@ -1797,10 +1728,8 @@
                                      Click="OpenCommandWizard_Click" />
               </StackPanel>
 
-              <TextBlock Text="RESOURCES"
-                         FontSize="12" FontWeight="SemiBold"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         CharacterSpacing="40" Margin="2,20,0,8" />
+              <TextBlock Text="Resources"
+                         Style="{StaticResource DimmySection}" />
               <!-- No "Website" link card here on purpose: the homepage offers
                    the app download + Pro purchase, and Microsoft Store policy
                    10.1.5 forbids a Store-distributed build from promoting
@@ -1818,13 +1747,10 @@
                                  NavigateUri="https://github.com/KonradDallaOrg/dimmy" />
               </controls:SettingCard>
 
-              <TextBlock Text="LEGAL"
-                         FontSize="12" FontWeight="SemiBold"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         CharacterSpacing="40" Margin="2,20,0,8" />
+              <TextBlock Text="Legal"
+                         Style="{StaticResource DimmySection}" />
               <TextBlock x:Name="LegalLineText"
-                         FontSize="12" TextWrapping="Wrap" Margin="2,0,0,8"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                         Style="{StaticResource DimmyCaption}" TextWrapping="Wrap" Margin="2,0,0,8" />
               <controls:SettingCard Glyph="&#xE8A5;"
                                     Label="Licence (AGPL-3.0)"
                                     InfoTip="The full GNU Affero General Public License v3 text.">
@@ -1839,15 +1765,15 @@
             </StackPanel>
 
             <!-- ═══ History ═══ -->
-            <StackPanel x:Name="HistoryPanel" Spacing="12" Visibility="Collapsed">
-              <StackPanel Spacing="2" Margin="0,0,0,4">
-                <TextBlock Text="Recordings" FontSize="28" FontWeight="SemiBold" />
+            <StackPanel x:Name="HistoryPanel" Spacing="{StaticResource DimmySpaceM}" Visibility="Collapsed">
+              <StackPanel Spacing="{StaticResource DimmySpaceXS}" Margin="0,0,0,4">
+                <TextBlock Text="Recordings" Style="{StaticResource DimmyPageTitle}" />
                 <TextBlock TextWrapping="Wrap"
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                            Text="Search past dictations, file loads, and meetings." />
               </StackPanel>
 
-              <Grid ColumnSpacing="8" Margin="0,4,0,0">
+              <Grid ColumnSpacing="{StaticResource DimmySpaceS}" Margin="0,4,0,0">
                 <Grid.ColumnDefinitions>
                   <ColumnDefinition Width="*"/>
                   <ColumnDefinition Width="Auto"/>
@@ -1859,46 +1785,22 @@
                          Text="{Binding HistorySearchQuery, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                          KeyDown="HistorySearchBox_KeyDown"/>
                 <Button Grid.Column="1" x:Name="HistorySearchBtn" Click="HistorySearch_Click">
-                  <StackPanel Orientation="Horizontal" Spacing="6">
-                    <FontIcon Glyph="&#xE721;" FontSize="14"/>
+                  <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                    <FontIcon Glyph="&#xE721;" FontSize="{StaticResource DimmyIconM}"/>
                     <TextBlock Text="Search"/>
                   </StackPanel>
                 </Button>
                 <Button Grid.Column="2" x:Name="HistoryRefreshBtn" Click="HistoryRefresh_Click">
-                  <FontIcon Glyph="&#xE72C;" FontSize="14" />
+                  <FontIcon Glyph="&#xE72C;" FontSize="{StaticResource DimmyIconM}" />
                 </Button>
               </Grid>
 
-              <controls:SettingCard Glyph="&#xE7B8;"
-                                    Label="Save audio with history"
-                                    InfoTip="Off by default for privacy. When on, the audio is saved next to each transcription. Use the limits below to cap disk use."
-                                    HelpUrl="https://dimmy.app/help/history-search">
-                <ToggleSwitch IsOn="{Binding SaveAudioInHistory, Mode=TwoWay}"
-                              Style="{StaticResource CompactToggleSwitch}" />
-              </controls:SettingCard>
-              <controls:SettingCard Glyph="&#xE823;"
-                                    Label="Audio retention (days)"
-                                    InfoTip="Old audio is removed at startup once it passes this age. Set 0 to never delete by age."
-                                    HelpUrl="https://dimmy.app/help/history-search">
-                <NumberBox MinWidth="120" Minimum="0" Maximum="3650"
-                           Value="{Binding HistoryAudioKeepDays, Mode=TwoWay}" />
-              </controls:SettingCard>
-              <controls:SettingCard Glyph="&#xEDA2;"
-                                    Label="Audio quota (MB)"
-                                    InfoTip="When saved audio passes this size, the oldest files are removed first. Set 0 to never delete by size."
-                                    HelpUrl="https://dimmy.app/help/history-search">
-                <NumberBox MinWidth="120" Minimum="0" Maximum="100000"
-                           Value="{Binding HistoryAudioMaxMb, Mode=TwoWay}" />
-              </controls:SettingCard>
-
-              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="8" Padding="0">
+              <Border Style="{StaticResource DimmyCard}" Padding="0">
                 <ListView x:Name="HistoryListView"
                           ItemsSource="{Binding HistoryItems}"
                           SelectedItem="{Binding SelectedHistoryItem, Mode=TwoWay}"
                           SelectionMode="Single"
-                          MaxHeight="320">
+                          MaxHeight="480">
                   <ListView.ItemContainerStyle>
                     <Style TargetType="ListViewItem">
                       <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
@@ -1906,35 +1808,28 @@
                   </ListView.ItemContainerStyle>
                   <ListView.ItemTemplate>
                     <DataTemplate>
-                      <Grid ColumnSpacing="12" Padding="6,4">
+                      <Grid ColumnSpacing="{StaticResource DimmySpaceM}" Padding="4,10,4,10"
+                            BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" BorderThickness="0,0,0,1">
                         <Grid.ColumnDefinitions>
-                          <ColumnDefinition Width="Auto"/>
-                          <ColumnDefinition Width="Auto"/>
+                          <ColumnDefinition Width="92"/>
                           <ColumnDefinition Width="*"/>
                           <ColumnDefinition Width="Auto"/>
                           <ColumnDefinition Width="Auto"/>
+                          <ColumnDefinition Width="44"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="{Binding TimestampDisplay}"
-                                   FontFamily="Consolas" FontSize="11"
-                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        <TextBlock Text="{Binding RowTimeDisplay}" Style="{StaticResource DimmyTimestamp}"
                                    VerticalAlignment="Center" />
-                        <TextBlock Grid.Column="1" Text="{Binding AppDisplay}"
-                                   FontSize="11"
-                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                                   VerticalAlignment="Center"
-                                   MaxWidth="100" TextTrimming="CharacterEllipsis" />
-                        <TextBlock Grid.Column="2" Text="{Binding Preview}"
-                                   FontSize="13" TextTrimming="CharacterEllipsis"
-                                   VerticalAlignment="Center" />
-                        <FontIcon Grid.Column="3" Glyph="&#xE7B8;" FontSize="12"
+                        <TextBlock Grid.Column="1" Text="{Binding Preview}" Style="{StaticResource DimmyBody}"
+                                   TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="2" Text="{Binding AppDisplay}" Style="{StaticResource DimmyCaption}"
+                                   VerticalAlignment="Center" MaxWidth="100" TextTrimming="CharacterEllipsis" />
+                        <FontIcon Grid.Column="3" Glyph="&#xE7B8;" FontSize="{StaticResource DimmyIconS}"
                                   Visibility="{Binding HasAudio, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
                                   Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
                                   VerticalAlignment="Center"
                                   ToolTipService.ToolTip="Audio saved" />
-                        <TextBlock Grid.Column="4" Text="{Binding DurationDisplay}"
-                                   FontSize="11"
-                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                   VerticalAlignment="Center" Margin="6,0,0,0"/>
+                        <TextBlock Grid.Column="4" Text="{Binding DurationDisplay}" Style="{StaticResource DimmyCaption}"
+                                   HorizontalAlignment="Right" VerticalAlignment="Center" />
                       </Grid>
                     </DataTemplate>
                   </ListView.ItemTemplate>
@@ -1942,33 +1837,29 @@
               </Border>
 
               <!-- Detail panel: shown when a row is selected -->
-              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="8" Padding="14"
+              <Border Style="{StaticResource DimmyCard}" Padding="{StaticResource DimmyCardPaddingCompact}"
                       Visibility="{Binding SelectedHistoryItem, Mode=OneWay, Converter={StaticResource NotNullToVisibilityConverter}}">
-                <StackPanel Spacing="8">
-                  <TextBlock Text="Raw transcript" FontSize="12" FontWeight="SemiBold"
-                             Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <StackPanel Spacing="{StaticResource DimmySpaceS}">
+                  <TextBlock Text="Raw transcript" Style="{StaticResource DimmyCaption}" FontWeight="SemiBold" />
                   <RichTextBlock x:Name="HistoryRawTextRich"
-                                 TextWrapping="Wrap" FontSize="13" LineHeight="22"
+                                 TextWrapping="Wrap" Style="{StaticResource DimmyRichBody}" LineHeight="22"
                                  IsTextSelectionEnabled="True" />
                   <TextBlock x:Name="HistoryEnhancedHeader"
-                             Text="LLM-enhanced" FontSize="12" FontWeight="SemiBold" Margin="0,8,0,0"
-                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                             Text="LLM-enhanced" Style="{StaticResource DimmyCaption}" FontWeight="SemiBold" Margin="0,8,0,0"
                              Visibility="{Binding SelectedHistoryItem.EnhancedText, Mode=OneWay, Converter={StaticResource NotNullToVisibilityConverter}}" />
                   <RichTextBlock x:Name="HistoryEnhancedTextRich"
-                                 TextWrapping="Wrap" FontSize="13" LineHeight="22"
+                                 TextWrapping="Wrap" Style="{StaticResource DimmyRichBody}" LineHeight="22"
                                  IsTextSelectionEnabled="True"
                                  Visibility="{Binding SelectedHistoryItem.EnhancedText, Mode=OneWay, Converter={StaticResource NotNullToVisibilityConverter}}" />
-                  <StackPanel Orientation="Horizontal" Spacing="14" Margin="0,8,0,0">
+                  <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceL}" Margin="0,8,0,0">
                     <TextBlock Text="{Binding SelectedHistoryItem.AppDisplay, Mode=OneWay, FallbackValue=''}"
-                               FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                               Style="{StaticResource DimmyCaption}" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                     <TextBlock Text="{Binding SelectedHistoryItem.Language, Mode=OneWay}"
-                               FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                               Style="{StaticResource DimmyCaption}" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                     <TextBlock Text="{Binding SelectedHistoryItem.LlmStyle, Mode=OneWay, FallbackValue=''}"
-                               FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                               Style="{StaticResource DimmyCaption}" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                     <TextBlock Text="{Binding SelectedHistoryItem.DurationDisplay, Mode=OneWay}"
-                               FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                               Style="{StaticResource DimmyCaption}" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                   </StackPanel>
                   <!-- Waveform + audio playback. Canvas peaks are drawn
                        in code-behind whenever SelectedHistoryItem
@@ -1999,51 +1890,67 @@
                                         Margin="0,4,0,0"
                                         MaxHeight="110" />
                   </Grid>
-                  <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,8,0,0">
+                  <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" Margin="0,8,0,0">
                     <Button x:Name="HistoryCopyRawBtn" Click="HistoryCopyRaw_Click" Content="Copy raw" />
                     <Button x:Name="HistoryCopyEnhancedBtn" Click="HistoryCopyEnhanced_Click" Content="Copy enhanced" />
                     <Button x:Name="HistoryDeleteBtn" Click="HistoryDelete_Click" Content="Delete" />
                   </StackPanel>
                 </StackPanel>
               </Border>
+              <TextBlock Text="Saved audio" Style="{StaticResource DimmySection}" />
+              <controls:SettingCard Glyph="&#xE7B8;"
+                                    Label="Save audio with history"
+                                    InfoTip="Off by default for privacy. When on, the audio is saved next to each transcription. Use the limits below to cap disk use."
+                                    HelpUrl="https://dimmy.app/help/history-search">
+                <ToggleSwitch IsOn="{Binding SaveAudioInHistory, Mode=TwoWay}"
+                              Style="{StaticResource CompactToggleSwitch}" />
+              </controls:SettingCard>
+              <controls:SettingCard Glyph="&#xE823;"
+                                    Label="Audio retention (days)"
+                                    InfoTip="Old audio is removed at startup once it passes this age. Set 0 to never delete by age."
+                                    HelpUrl="https://dimmy.app/help/history-search">
+                <NumberBox MinWidth="120" Minimum="0" Maximum="3650"
+                           Value="{Binding HistoryAudioKeepDays, Mode=TwoWay}" />
+              </controls:SettingCard>
+              <controls:SettingCard Glyph="&#xEDA2;"
+                                    Label="Audio quota (MB)"
+                                    InfoTip="When saved audio passes this size, the oldest files are removed first. Set 0 to never delete by size."
+                                    HelpUrl="https://dimmy.app/help/history-search">
+                <NumberBox MinWidth="120" Minimum="0" Maximum="100000"
+                           Value="{Binding HistoryAudioMaxMb, Mode=TwoWay}" />
+              </controls:SettingCard>
             </StackPanel>
 
             <!-- ═══ Integrations — Notion (more to come) ═══ -->
-            <StackPanel x:Name="IntegrationsPanel" Spacing="4" Visibility="Collapsed">
-              <StackPanel Spacing="2" Margin="0,0,0,16">
-                <TextBlock Text="Integrations" FontSize="28" FontWeight="SemiBold" />
+            <StackPanel x:Name="IntegrationsPanel" Spacing="{StaticResource DimmySpaceXS}" Visibility="Collapsed">
+              <StackPanel Spacing="{StaticResource DimmySpaceXS}" Margin="0,0,0,16">
+                <TextBlock Text="Integrations" Style="{StaticResource DimmyPageTitle}" />
                 <TextBlock Text="Push your meeting recaps into the tools you already use."
-                           FontSize="13"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                           Style="{StaticResource DimmySecondary}" />
               </StackPanel>
 
               <!-- Group: CALENDAR -->
-              <StackPanel Orientation="Horizontal" Spacing="6" Margin="2,16,0,8">
-                <TextBlock Text="CALENDAR"
-                           FontSize="12" FontWeight="SemiBold"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                           CharacterSpacing="40" VerticalAlignment="Center" />
+              <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" Margin="2,16,0,8">
+                <TextBlock Text="Calendar"
+                           Style="{StaticResource DimmySection}" VerticalAlignment="Center" />
               </StackPanel>
 
-              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="8" Padding="16">
-                <StackPanel Spacing="12">
-                  <Grid ColumnSpacing="14">
+              <Border Style="{StaticResource DimmyCard}" Padding="16">
+                <StackPanel Spacing="{StaticResource DimmySpaceM}">
+                  <Grid ColumnSpacing="{StaticResource DimmySpaceL}">
                     <Grid.ColumnDefinitions>
                       <ColumnDefinition Width="Auto"/>
                       <ColumnDefinition Width="*"/>
                       <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <FontIcon Grid.Column="0" Glyph="&#xE787;" FontSize="22"
+                    <FontIcon Grid.Column="0" Glyph="&#xE787;" FontSize="{StaticResource DimmyIconXL}"
                               VerticalAlignment="Center"
                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                     <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                      <TextBlock Text="Outlook or Google Calendar" FontSize="16" FontWeight="SemiBold"/>
+                      <TextBlock Text="Outlook or Google Calendar" Style="{StaticResource DimmyCardTitle}"/>
                       <TextBlock x:Name="CalendarStatusText"
                                  Text="Off"
-                                 FontSize="12"
-                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                                 Style="{StaticResource DimmyCaption}"/>
                     </StackPanel>
                     <ToggleSwitch Grid.Column="2" x:Name="CalendarContextToggle"
                                   IsOn="{Binding CalendarContextEnabled, Mode=TwoWay}"
@@ -2052,11 +1959,10 @@
                                   Toggled="CalendarContextToggle_Toggled"/>
                   </Grid>
 
-                  <TextBlock TextWrapping="Wrap" FontSize="12"
-                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                  <TextBlock TextWrapping="Wrap" Style="{StaticResource DimmyCaption}"
                              Text="When a meeting starts, Dimmy asks which appointment it is and offers to link it, so the recap can name who was invited. It uses the calendar connector in your own Claude subscription, so there is no separate login to Dimmy. Your appointments for that day are read through it." />
 
-                  <StackPanel x:Name="CalendarSetupRow" Orientation="Horizontal" Spacing="10"
+                  <StackPanel x:Name="CalendarSetupRow" Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}"
                               Visibility="Collapsed">
                     <Button x:Name="CalendarSetupBtn" Content="Connect the calendar"
                             Click="CalendarSetup_Click"/>
@@ -2067,21 +1973,19 @@
               </Border>
 
               <!-- Group: NOTION -->
-              <StackPanel Orientation="Horizontal" Spacing="6" Margin="2,16,0,8">
-                <TextBlock Text="NOTION"
-                           FontSize="12" FontWeight="SemiBold"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                           CharacterSpacing="40" VerticalAlignment="Center" />
+              <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" Margin="2,16,0,8">
+                <TextBlock Text="Notion"
+                           Style="{StaticResource DimmySection}" VerticalAlignment="Center" />
                 <Button Background="Transparent" BorderThickness="0" Padding="0"
                         Width="18" Height="18" MinWidth="0" MinHeight="0"
                         VerticalAlignment="Center" VerticalContentAlignment="Center"
                         HorizontalContentAlignment="Center"
                         ToolTipService.ToolTip="Free Notion accounts work fine. Your token and destination stay on this device. Only the recap text leaves, and only when you send it.">
-                  <FontIcon Glyph="&#xE946;" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                  <FontIcon Glyph="&#xE946;" FontSize="{StaticResource DimmyIconS}" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                   <Button.Flyout>
                     <Flyout>
-                      <StackPanel MaxWidth="300" Spacing="10">
-                        <TextBlock TextWrapping="Wrap" FontSize="13"
+                      <StackPanel MaxWidth="300" Spacing="{StaticResource DimmySpaceM}">
+                        <TextBlock TextWrapping="Wrap" Style="{StaticResource DimmyBody}"
                                    Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                                    Text="Free Notion accounts work fine. Your token and destination stay on this device. Only the recap text leaves, and only when you send it." />
                         <HyperlinkButton Content="Open full guide →" Padding="0"
@@ -2097,10 +2001,8 @@
                    accent button) vs CONNECTED (workspace + destination
                    + change/disconnect buttons + auto-send toggle).
                    The wizard handles all setup; this card just summarises. -->
-              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="8" Padding="16">
-                <Grid ColumnSpacing="14" RowSpacing="12">
+              <Border Style="{StaticResource DimmyCard}" Padding="16">
+                <Grid ColumnSpacing="{StaticResource DimmySpaceL}" RowSpacing="{StaticResource DimmySpaceM}">
                   <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
@@ -2116,18 +2018,17 @@
                          Width="40" Height="40"
                          Source="{ThemeResource NotionMarkSource}"
                          VerticalAlignment="Top"/>
-                  <StackPanel Grid.Column="1" Grid.Row="0" VerticalAlignment="Center" Spacing="2">
-                    <TextBlock Text="Notion" FontSize="16" FontWeight="SemiBold" />
+                  <StackPanel Grid.Column="1" Grid.Row="0" VerticalAlignment="Center" Spacing="{StaticResource DimmySpaceXS}">
+                    <TextBlock Text="Notion" Style="{StaticResource DimmyCardTitle}" />
                     <TextBlock x:Name="NotionStatusText"
                                Text="Not connected"
-                               FontSize="13"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               Style="{StaticResource DimmySecondary}"
                                TextWrapping="Wrap"/>
                   </StackPanel>
-                  <StackPanel Grid.Column="2" Grid.Row="0" Orientation="Horizontal" Spacing="8" VerticalAlignment="Top">
+                  <StackPanel Grid.Column="2" Grid.Row="0" Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" VerticalAlignment="Top">
                     <FontIcon x:Name="NotionStatusGlyph"
                               Glyph="&#xEA39;"
-                              FontSize="20"
+                              FontSize="{StaticResource DimmyIconXL}"
                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
                   </StackPanel>
                   <!-- Action button row — Connect (when disconnected)
@@ -2135,7 +2036,7 @@
                        connected). Visibility flipped from code-behind. -->
                   <StackPanel x:Name="NotionDisconnectedActions"
                               Grid.Column="1" Grid.ColumnSpan="2" Grid.Row="1"
-                              Orientation="Horizontal" Spacing="8"
+                              Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}"
                               Visibility="Visible">
                     <Button Content="Connect Notion"
                             Click="NotionConnect_Click"
@@ -2143,7 +2044,7 @@
                   </StackPanel>
                   <StackPanel x:Name="NotionConnectedActions"
                               Grid.Column="1" Grid.ColumnSpan="2" Grid.Row="1"
-                              Orientation="Horizontal" Spacing="8"
+                              Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}"
                               Visibility="Collapsed">
                     <Button Content="Change destination"
                             Click="NotionChangeDestination_Click"/>
@@ -2172,7 +2073,7 @@
               <Border x:Name="NotionMessageBar" Background="{ThemeResource SystemFillColorAttentionBackgroundBrush}"
                       BorderThickness="0" CornerRadius="6" Padding="12,8"
                       Margin="0,16,0,0" Visibility="Collapsed">
-                <TextBlock x:Name="NotionMessageText" FontSize="13" TextWrapping="Wrap" />
+                <TextBlock x:Name="NotionMessageText" Style="{StaticResource DimmyBody}" TextWrapping="Wrap" />
               </Border>
 
               <!-- Group: CONFLUENCE
@@ -2181,11 +2082,9 @@
                    separate card rather than a "destination" dropdown on one
                    card because the two can be on at the same time — a personal
                    Notion and a team wiki are not alternatives. -->
-              <StackPanel Orientation="Horizontal" Spacing="6" Margin="2,32,0,8">
-                <TextBlock Text="CONFLUENCE"
-                           FontSize="12" FontWeight="SemiBold"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                           CharacterSpacing="40" VerticalAlignment="Center" />
+              <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" Margin="2,32,0,8">
+                <TextBlock Text="Confluence"
+                           Style="{StaticResource DimmySection}" VerticalAlignment="Center" />
               </StackPanel>
 
               <!-- Same anatomy as the Anthropic and Notion cards: mark on the
@@ -2194,10 +2093,8 @@
                    visibility rather than one row changing labels, so a
                    half-configured state cannot show a button that does not
                    apply. -->
-              <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                      BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="8" Padding="16">
-                <Grid ColumnSpacing="14" RowSpacing="12">
+              <Border Style="{StaticResource DimmyCard}" Padding="16">
+                <Grid ColumnSpacing="{StaticResource DimmySpaceL}" RowSpacing="{StaticResource DimmySpaceM}">
                   <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
@@ -2212,27 +2109,26 @@
                          Width="40" Height="40" VerticalAlignment="Top"
                          Source="{ThemeResource ConfluenceMarkSource}"/>
 
-                  <StackPanel Grid.Column="1" Grid.Row="0" VerticalAlignment="Center" Spacing="2">
-                    <TextBlock Text="Confluence" FontSize="16" FontWeight="SemiBold"/>
+                  <StackPanel Grid.Column="1" Grid.Row="0" VerticalAlignment="Center" Spacing="{StaticResource DimmySpaceXS}">
+                    <TextBlock Text="Confluence" Style="{StaticResource DimmyCardTitle}"/>
                     <TextBlock x:Name="ConfluenceStatusText"
-                               FontSize="13" TextWrapping="Wrap"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               Style="{StaticResource DimmySecondary}" TextWrapping="Wrap"
                                Text="Not connected."/>
                   </StackPanel>
 
                   <FontIcon x:Name="ConfluenceStatusGlyph"
                             Grid.Column="2" Grid.Row="0"
-                            Glyph="&#xEA39;" FontSize="20" VerticalAlignment="Top"
+                            Glyph="&#xEA39;" FontSize="{StaticResource DimmyIconXL}" VerticalAlignment="Top"
                             Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
 
                   <StackPanel x:Name="ConfluenceDisconnectedActions"
                               Grid.Column="1" Grid.ColumnSpan="2" Grid.Row="1"
-                              Orientation="Horizontal" Spacing="8"
+                              Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}"
                               Visibility="Visible">
                     <Button Click="ConfluenceConnect_Click"
                             Style="{ThemeResource AccentButtonStyle}">
-                      <StackPanel Orientation="Horizontal" Spacing="6">
-                        <FontIcon Glyph="&#xE9F5;" FontSize="14"/>
+                      <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                        <FontIcon Glyph="&#xE9F5;" FontSize="{StaticResource DimmyIconM}"/>
                         <TextBlock Text="Set up wizard"/>
                       </StackPanel>
                     </Button>
@@ -2240,12 +2136,12 @@
 
                   <StackPanel x:Name="ConfluenceConnectedActions"
                               Grid.Column="1" Grid.ColumnSpan="2" Grid.Row="1"
-                              Orientation="Horizontal" Spacing="8"
+                              Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}"
                               Visibility="Collapsed">
                     <Button Click="ConfluenceTest_Click"
                             ToolTipService.ToolTip="Check the saved credentials against Confluence right now">
-                      <StackPanel Orientation="Horizontal" Spacing="6">
-                        <FontIcon Glyph="&#xE945;" FontSize="14"/>
+                      <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                        <FontIcon Glyph="&#xE945;" FontSize="{StaticResource DimmyIconM}"/>
                         <TextBlock Text="Test connection"/>
                       </StackPanel>
                     </Button>
@@ -2280,7 +2176,7 @@
               <Border x:Name="ConfluenceMessageBar" Background="{ThemeResource SystemFillColorAttentionBackgroundBrush}"
                       BorderThickness="0" CornerRadius="6" Padding="12,8"
                       Margin="0,12,0,0" Visibility="Collapsed">
-                <TextBlock x:Name="ConfluenceMessageText" FontSize="13" TextWrapping="Wrap" />
+                <TextBlock x:Name="ConfluenceMessageText" Style="{StaticResource DimmyBody}" TextWrapping="Wrap" />
               </Border>
 
               <!-- Group: ANTHROPIC SUBSCRIPTION
@@ -2289,21 +2185,19 @@
                    the Output → LLM and Output → Recap sections
                    expose toggles to route those calls through the
                    subscription instead of through API keys. -->
-              <StackPanel Orientation="Horizontal" Spacing="6" Margin="2,32,0,8">
-                <TextBlock Text="ANTHROPIC SUBSCRIPTION"
-                           FontSize="12" FontWeight="SemiBold"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                           CharacterSpacing="40" VerticalAlignment="Center" />
+              <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" Margin="2,32,0,8">
+                <TextBlock Text="Anthropic subscription"
+                           Style="{StaticResource DimmySection}" VerticalAlignment="Center" />
                 <Button Background="Transparent" BorderThickness="0" Padding="0"
                         Width="18" Height="18" MinWidth="0" MinHeight="0"
                         VerticalAlignment="Center" VerticalContentAlignment="Center"
                         HorizontalContentAlignment="Center"
                         ToolTipService.ToolTip="Use your Anthropic Pro, Team, or Max plan through the local Claude CLI, so no API credit is spent. Dimmy never sees your token. Turn it on under Output once connected.">
-                  <FontIcon Glyph="&#xE946;" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                  <FontIcon Glyph="&#xE946;" FontSize="{StaticResource DimmyIconS}" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                   <Button.Flyout>
                     <Flyout>
-                      <StackPanel MaxWidth="300" Spacing="10">
-                        <TextBlock TextWrapping="Wrap" FontSize="13"
+                      <StackPanel MaxWidth="300" Spacing="{StaticResource DimmySpaceM}">
+                        <TextBlock TextWrapping="Wrap" Style="{StaticResource DimmyBody}"
                                    Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                                    Text="Use your Anthropic Pro, Team, or Max plan through the local Claude CLI, so no API credit is spent. Dimmy never sees your token. Turn it on under Output once connected." />
                         <HyperlinkButton Content="Open full guide →" Padding="0"
@@ -2314,10 +2208,8 @@
                 </Button>
               </StackPanel>
 
-              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="8" Padding="16">
-                <Grid ColumnSpacing="14" RowSpacing="12">
+              <Border Style="{StaticResource DimmyCard}" Padding="16">
+                <Grid ColumnSpacing="{StaticResource DimmySpaceL}" RowSpacing="{StaticResource DimmySpaceM}">
                   <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
@@ -2331,18 +2223,17 @@
                          Width="40" Height="40"
                          VerticalAlignment="Top"
                          Source="{ThemeResource AnthropicMarkSource}" />
-                  <StackPanel Grid.Column="1" Grid.Row="0" VerticalAlignment="Center" Spacing="2">
-                    <TextBlock Text="Anthropic" FontSize="16" FontWeight="SemiBold" />
+                  <StackPanel Grid.Column="1" Grid.Row="0" VerticalAlignment="Center" Spacing="{StaticResource DimmySpaceXS}">
+                    <TextBlock Text="Anthropic" Style="{StaticResource DimmyCardTitle}" />
                     <TextBlock x:Name="AnthropicIntegrationStatusText"
                                Text="Probing…"
-                               FontSize="13"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               Style="{StaticResource DimmySecondary}"
                                TextWrapping="Wrap"/>
                   </StackPanel>
-                  <StackPanel Grid.Column="2" Grid.Row="0" Orientation="Horizontal" Spacing="8" VerticalAlignment="Top">
+                  <StackPanel Grid.Column="2" Grid.Row="0" Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" VerticalAlignment="Top">
                     <FontIcon x:Name="AnthropicIntegrationStatusGlyph"
                               Glyph="&#xEA39;"
-                              FontSize="20"
+                              FontSize="{StaticResource DimmyIconXL}"
                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
                   </StackPanel>
                   <!-- DISCONNECTED action row. When the binary is
@@ -2355,20 +2246,20 @@
                        primary per state. -->
                   <StackPanel x:Name="AnthropicIntegrationDisconnectedActions"
                               Grid.Column="1" Grid.ColumnSpan="2" Grid.Row="1"
-                              Orientation="Horizontal" Spacing="8"
+                              Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}"
                               Visibility="Collapsed">
                     <Button x:Name="AnthropicIntegrationWizardBtn"
                             Click="AnthropicIntegrationWizard_Click"
                             Visibility="Collapsed">
-                      <StackPanel Orientation="Horizontal" Spacing="6">
-                        <FontIcon Glyph="&#xE9F5;" FontSize="14"/>
+                      <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                        <FontIcon Glyph="&#xE9F5;" FontSize="{StaticResource DimmyIconM}"/>
                         <TextBlock Text="Set up wizard"/>
                       </StackPanel>
                     </Button>
                     <Button x:Name="AnthropicIntegrationSignInBtn"
                             Click="AnthropicIntegrationSignIn_Click">
-                      <StackPanel Orientation="Horizontal" Spacing="6">
-                        <FontIcon Glyph="&#xE8A7;" FontSize="14"/>
+                      <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                        <FontIcon Glyph="&#xE8A7;" FontSize="{StaticResource DimmyIconM}"/>
                         <TextBlock x:Name="AnthropicIntegrationSignInLabel" Text="Sign in via browser"/>
                       </StackPanel>
                     </Button>
@@ -2378,13 +2269,13 @@
                   <!-- CONNECTED action row: Re-sign in + Test + Refresh. -->
                   <StackPanel x:Name="AnthropicIntegrationConnectedActions"
                               Grid.Column="1" Grid.ColumnSpan="2" Grid.Row="1"
-                              Orientation="Horizontal" Spacing="8"
+                              Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}"
                               Visibility="Collapsed">
                     <Button x:Name="AnthropicIntegrationTestBtn"
                             Click="AnthropicIntegrationTest_Click"
                             ToolTipService.ToolTip="Send a tiny ping prompt through the CLI to verify end-to-end (binary + login + Anthropic API)">
-                      <StackPanel Orientation="Horizontal" Spacing="6">
-                        <FontIcon Glyph="&#xE945;" FontSize="14"/>
+                      <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                        <FontIcon Glyph="&#xE945;" FontSize="{StaticResource DimmyIconM}"/>
                         <TextBlock Text="Test connection"/>
                       </StackPanel>
                     </Button>
@@ -2402,7 +2293,7 @@
               <Border x:Name="AnthropicIntegrationMessageBar" Background="{ThemeResource SystemFillColorAttentionBackgroundBrush}"
                       BorderThickness="0" CornerRadius="6" Padding="12,8"
                       Margin="0,16,0,0" Visibility="Collapsed">
-                <TextBlock x:Name="AnthropicIntegrationMessageText" FontSize="13" TextWrapping="Wrap" />
+                <TextBlock x:Name="AnthropicIntegrationMessageText" Style="{StaticResource DimmyBody}" TextWrapping="Wrap" />
               </Border>
 
               <!-- Group: OPENAI SUBSCRIPTION
@@ -2410,21 +2301,19 @@
                    the local `codex` CLI. Same shape as the Anthropic card:
                    once signed in, Output to LLM and Output to Recap can
                    route through the subscription instead of API keys. -->
-              <StackPanel Orientation="Horizontal" Spacing="6" Margin="2,32,0,8">
-                <TextBlock Text="OPENAI SUBSCRIPTION"
-                           FontSize="12" FontWeight="SemiBold"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                           CharacterSpacing="40" VerticalAlignment="Center" />
+              <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" Margin="2,32,0,8">
+                <TextBlock Text="Openai subscription"
+                           Style="{StaticResource DimmySection}" VerticalAlignment="Center" />
                 <Button Background="Transparent" BorderThickness="0" Padding="0"
                         Width="18" Height="18" MinWidth="0" MinHeight="0"
                         VerticalAlignment="Center" VerticalContentAlignment="Center"
                         HorizontalContentAlignment="Center"
                         ToolTipService.ToolTip="Use your ChatGPT Plus, Pro, or Team plan through the local Codex CLI, so no API credit is spent. Dimmy never sees your token. Turn it on under Output once connected.">
-                  <FontIcon Glyph="&#xE946;" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                  <FontIcon Glyph="&#xE946;" FontSize="{StaticResource DimmyIconS}" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                   <Button.Flyout>
                     <Flyout>
-                      <StackPanel MaxWidth="300" Spacing="10">
-                        <TextBlock TextWrapping="Wrap" FontSize="13"
+                      <StackPanel MaxWidth="300" Spacing="{StaticResource DimmySpaceM}">
+                        <TextBlock TextWrapping="Wrap" Style="{StaticResource DimmyBody}"
                                    Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                                    Text="Use your ChatGPT plan through the local Codex CLI, so no API credit is spent. Dimmy never sees your token. Install the Codex CLI, sign in with ChatGPT, then turn it on under Output." />
                         <HyperlinkButton Content="How to install Codex →" Padding="0"
@@ -2435,10 +2324,8 @@
                 </Button>
               </StackPanel>
 
-              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="8" Padding="16">
-                <Grid ColumnSpacing="14" RowSpacing="12">
+              <Border Style="{StaticResource DimmyCard}" Padding="16">
+                <Grid ColumnSpacing="{StaticResource DimmySpaceL}" RowSpacing="{StaticResource DimmySpaceM}">
                   <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
@@ -2451,18 +2338,17 @@
                   <Image Grid.Column="0" Grid.Row="0" Grid.RowSpan="2"
                          Width="36" Height="36" VerticalAlignment="Top"
                          Source="{ThemeResource OpenAIMarkSource}" />
-                  <StackPanel Grid.Column="1" Grid.Row="0" VerticalAlignment="Center" Spacing="2">
-                    <TextBlock Text="ChatGPT (Codex)" FontSize="16" FontWeight="SemiBold" />
+                  <StackPanel Grid.Column="1" Grid.Row="0" VerticalAlignment="Center" Spacing="{StaticResource DimmySpaceXS}">
+                    <TextBlock Text="ChatGPT (Codex)" Style="{StaticResource DimmyCardTitle}" />
                     <TextBlock x:Name="CodexIntegrationStatusText"
                                Text="Probing…"
-                               FontSize="13"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               Style="{StaticResource DimmySecondary}"
                                TextWrapping="Wrap"/>
                   </StackPanel>
-                  <StackPanel Grid.Column="2" Grid.Row="0" Orientation="Horizontal" Spacing="8" VerticalAlignment="Top">
+                  <StackPanel Grid.Column="2" Grid.Row="0" Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" VerticalAlignment="Top">
                     <FontIcon x:Name="CodexIntegrationStatusGlyph"
                               Glyph="&#xEA39;"
-                              FontSize="20"
+                              FontSize="{StaticResource DimmyIconXL}"
                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
                   </StackPanel>
                   <!-- DISCONNECTED action row: Sign in (when installed but
@@ -2470,20 +2356,20 @@
                        the message bar explains how to install it. -->
                   <StackPanel x:Name="CodexIntegrationDisconnectedActions"
                               Grid.Column="1" Grid.ColumnSpan="2" Grid.Row="1"
-                              Orientation="Horizontal" Spacing="8"
+                              Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}"
                               Visibility="Collapsed">
                     <Button x:Name="CodexIntegrationWizardBtn"
                             Click="CodexIntegrationWizard_Click"
                             ToolTipService.ToolTip="Guided install + ChatGPT sign-in walkthrough">
-                      <StackPanel Orientation="Horizontal" Spacing="6">
-                        <FontIcon Glyph="&#xE8FC;" FontSize="14"/>
+                      <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                        <FontIcon Glyph="&#xE8FC;" FontSize="{StaticResource DimmyIconM}"/>
                         <TextBlock Text="Set up wizard"/>
                       </StackPanel>
                     </Button>
                     <Button x:Name="CodexIntegrationSignInBtn"
                             Click="CodexIntegrationSignIn_Click">
-                      <StackPanel Orientation="Horizontal" Spacing="6">
-                        <FontIcon Glyph="&#xE8A7;" FontSize="14"/>
+                      <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                        <FontIcon Glyph="&#xE8A7;" FontSize="{StaticResource DimmyIconM}"/>
                         <TextBlock x:Name="CodexIntegrationSignInLabel" Text="Sign in with ChatGPT"/>
                       </StackPanel>
                     </Button>
@@ -2493,13 +2379,13 @@
                   <!-- CONNECTED action row: Test + Re-sign in + Refresh. -->
                   <StackPanel x:Name="CodexIntegrationConnectedActions"
                               Grid.Column="1" Grid.ColumnSpan="2" Grid.Row="1"
-                              Orientation="Horizontal" Spacing="8"
+                              Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}"
                               Visibility="Collapsed">
                     <Button x:Name="CodexIntegrationTestBtn"
                             Click="CodexIntegrationTest_Click"
                             ToolTipService.ToolTip="Send a tiny ping prompt through `codex exec` to verify end-to-end (binary + login + ChatGPT)">
-                      <StackPanel Orientation="Horizontal" Spacing="6">
-                        <FontIcon Glyph="&#xE945;" FontSize="14"/>
+                      <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                        <FontIcon Glyph="&#xE945;" FontSize="{StaticResource DimmyIconM}"/>
                         <TextBlock Text="Test connection"/>
                       </StackPanel>
                     </Button>
@@ -2515,7 +2401,7 @@
               <Border x:Name="CodexIntegrationMessageBar" Background="{ThemeResource SystemFillColorAttentionBackgroundBrush}"
                       BorderThickness="0" CornerRadius="6" Padding="12,8"
                       Margin="0,16,0,0" Visibility="Collapsed">
-                <TextBlock x:Name="CodexIntegrationMessageText" FontSize="13" TextWrapping="Wrap" />
+                <TextBlock x:Name="CodexIntegrationMessageText" Style="{StaticResource DimmyBody}" TextWrapping="Wrap" />
               </Border>
 
               <!-- Group: GOOGLE (Gemini CLI)
@@ -2523,12 +2409,10 @@
                    above. NOT the Gemini desktop app that shipped for
                    Windows on 2026-09-10: that is a GUI with no local API,
                    so there is nothing to drive. -->
-              <TextBlock Text="Google (Gemini CLI)" FontSize="16" FontWeight="SemiBold" Margin="0,28,0,12"/>
+              <TextBlock Text="Google (Gemini CLI)" Style="{StaticResource DimmyCardTitle}" Margin="0,28,0,12"/>
 
-              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="8" Padding="16">
-                <Grid ColumnSpacing="14" RowSpacing="12">
+              <Border Style="{StaticResource DimmyCard}" Padding="16">
+                <Grid ColumnSpacing="{StaticResource DimmySpaceL}" RowSpacing="{StaticResource DimmySpaceM}">
                   <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
@@ -2542,18 +2426,17 @@
                   <Image Grid.Column="0" Grid.Row="0" Grid.RowSpan="3"
                          Width="36" Height="36" VerticalAlignment="Top"
                          Source="{ThemeResource GeminiMarkSource}" />
-                  <StackPanel Grid.Column="1" Grid.Row="0" VerticalAlignment="Center" Spacing="2">
-                    <TextBlock Text="Gemini (Google account)" FontSize="16" FontWeight="SemiBold" />
+                  <StackPanel Grid.Column="1" Grid.Row="0" VerticalAlignment="Center" Spacing="{StaticResource DimmySpaceXS}">
+                    <TextBlock Text="Gemini (Google account)" Style="{StaticResource DimmyCardTitle}" />
                     <TextBlock x:Name="GeminiIntegrationStatusText"
                                Text="Probing…"
-                               FontSize="13"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               Style="{StaticResource DimmySecondary}"
                                TextWrapping="Wrap"/>
                   </StackPanel>
-                  <StackPanel Grid.Column="2" Grid.Row="0" Orientation="Horizontal" Spacing="6" VerticalAlignment="Top">
+                  <StackPanel Grid.Column="2" Grid.Row="0" Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" VerticalAlignment="Top">
                     <FontIcon x:Name="GeminiIntegrationStatusGlyph"
                               Glyph="&#xEA39;"
-                              FontSize="20"
+                              FontSize="{StaticResource DimmyIconXL}"
                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
                     <!-- The caveat is three sentences and only matters to the
                          handful of people who reach for this, so it lives
@@ -2563,18 +2446,16 @@
                             VerticalAlignment="Top"
                             AutomationProperties.Name="Who can use this"
                             ToolTipService.ToolTip="Who can use this">
-                      <FontIcon Glyph="&#xE946;" FontSize="15"
+                      <FontIcon Glyph="&#xE946;" FontSize="{StaticResource DimmyIconM}"
                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                       <Button.Flyout>
                         <Flyout>
-                          <StackPanel Width="320" Spacing="8">
-                            <TextBlock TextWrapping="Wrap" FontSize="13"
+                          <StackPanel Width="320" Spacing="{StaticResource DimmySpaceS}">
+                            <TextBlock TextWrapping="Wrap" Style="{StaticResource DimmyBody}"
                                        Text="Turn this on only if your organisation gives you Gemini Code Assist Standard or Enterprise."/>
-                            <TextBlock TextWrapping="Wrap" FontSize="13"
-                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            <TextBlock TextWrapping="Wrap" Style="{StaticResource DimmySecondary}"
                                        Text="Check with whoever administers it first: that seat is governed by your organisation's Google Cloud agreement, not by us."/>
-                            <TextBlock TextWrapping="Wrap" FontSize="13"
-                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            <TextBlock TextWrapping="Wrap" Style="{StaticResource DimmySecondary}"
                                        Text="Personal Google accounts, including AI Pro and Ultra, lost access to this CLI on 18 June 2026 and will be refused at sign-in."/>
                           </StackPanel>
                         </Flyout>
@@ -2590,31 +2471,31 @@
                        and a dead end. -->
                   <StackPanel x:Name="GeminiIntegrationGate"
                               Grid.Column="1" Grid.ColumnSpan="2" Grid.Row="1"
-                              Spacing="6">
+                              Spacing="{StaticResource DimmySpaceS}">
                     <ToggleSwitch x:Name="GeminiEnabledToggle"
                                   Header="I have a Gemini Code Assist work account"
                                   OffContent="Off" OnContent="On"
                                   Toggled="GeminiEnabled_Toggled"/>
-                    <TextBlock x:Name="GeminiGateNote" FontSize="12" TextWrapping="Wrap"
+                    <TextBlock x:Name="GeminiGateNote" Style="{StaticResource DimmyCaption}" TextWrapping="Wrap"
                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                                Text="Work accounts only. See the (i) above."/>
                   </StackPanel>
                   <StackPanel x:Name="GeminiIntegrationDisconnectedActions"
                               Grid.Column="1" Grid.ColumnSpan="2" Grid.Row="2"
-                              Orientation="Horizontal" Spacing="8"
+                              Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}"
                               Visibility="Collapsed">
                     <Button x:Name="GeminiIntegrationWizardBtn"
                             Click="GeminiIntegrationWizard_Click"
                             ToolTipService.ToolTip="Guided install + Google sign-in walkthrough">
-                      <StackPanel Orientation="Horizontal" Spacing="6">
-                        <FontIcon Glyph="&#xE8FC;" FontSize="14"/>
+                      <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                        <FontIcon Glyph="&#xE8FC;" FontSize="{StaticResource DimmyIconM}"/>
                         <TextBlock Text="Set up wizard"/>
                       </StackPanel>
                     </Button>
                     <Button x:Name="GeminiIntegrationSignInBtn"
                             Click="GeminiIntegrationSignIn_Click">
-                      <StackPanel Orientation="Horizontal" Spacing="6">
-                        <FontIcon Glyph="&#xE8A7;" FontSize="14"/>
+                      <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                        <FontIcon Glyph="&#xE8A7;" FontSize="{StaticResource DimmyIconM}"/>
                         <TextBlock Text="Sign in with Google"/>
                       </StackPanel>
                     </Button>
@@ -2623,13 +2504,13 @@
                   </StackPanel>
                   <StackPanel x:Name="GeminiIntegrationConnectedActions"
                               Grid.Column="1" Grid.ColumnSpan="2" Grid.Row="2"
-                              Orientation="Horizontal" Spacing="8"
+                              Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}"
                               Visibility="Collapsed">
                     <Button x:Name="GeminiIntegrationTestBtn"
                             Click="GeminiIntegrationTest_Click"
                             ToolTipService.ToolTip="Send a tiny ping prompt through the CLI to verify end-to-end (binary + sign-in + quota)">
-                      <StackPanel Orientation="Horizontal" Spacing="6">
-                        <FontIcon Glyph="&#xE945;" FontSize="14"/>
+                      <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                        <FontIcon Glyph="&#xE945;" FontSize="{StaticResource DimmyIconM}"/>
                         <TextBlock Text="Test connection"/>
                       </StackPanel>
                     </Button>
@@ -2645,7 +2526,7 @@
               <Border x:Name="GeminiIntegrationMessageBar" Background="{ThemeResource SystemFillColorAttentionBackgroundBrush}"
                       BorderThickness="0" CornerRadius="6" Padding="12,8"
                       Margin="0,16,0,0" Visibility="Collapsed">
-                <TextBlock x:Name="GeminiIntegrationMessageText" FontSize="13" TextWrapping="Wrap" />
+                <TextBlock x:Name="GeminiIntegrationMessageText" Style="{StaticResource DimmyBody}" TextWrapping="Wrap" />
               </Border>
 
               <!-- Once signed in, turn Codex on per-output from
@@ -2657,21 +2538,19 @@
                    writes recaps back via the dimmy-mcp stdio binary.
                    Distinct from the Anthropic CLI subscription above
                    (which is the LLM dispatch path for recap/rewrite). -->
-              <StackPanel Orientation="Horizontal" Spacing="6" Margin="2,32,0,8">
-                <TextBlock Text="CLAUDE DESKTOP (MCP)"
-                           FontSize="12" FontWeight="SemiBold"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                           CharacterSpacing="40" VerticalAlignment="Center" />
+              <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" Margin="2,32,0,8">
+                <TextBlock Text="Claude desktop (mcp)"
+                           Style="{StaticResource DimmySection}" VerticalAlignment="Center" />
                 <Button Background="Transparent" BorderThickness="0" Padding="0"
                         Width="18" Height="18" MinWidth="0" MinHeight="0"
                         VerticalAlignment="Center" VerticalContentAlignment="Center"
                         HorizontalContentAlignment="Center"
                         ToolTipService.ToolTip="Lets Claude Desktop read your recent meetings and save recaps back. Everything runs on this device. Disconnect anytime and Dimmy removes its entry.">
-                  <FontIcon Glyph="&#xE946;" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                  <FontIcon Glyph="&#xE946;" FontSize="{StaticResource DimmyIconS}" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                   <Button.Flyout>
                     <Flyout>
-                      <StackPanel MaxWidth="300" Spacing="10">
-                        <TextBlock TextWrapping="Wrap" FontSize="13"
+                      <StackPanel MaxWidth="300" Spacing="{StaticResource DimmySpaceM}">
+                        <TextBlock TextWrapping="Wrap" Style="{StaticResource DimmyBody}"
                                    Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                                    Text="Lets Claude Desktop read your recent meetings and save recaps back. Everything runs on this device. Disconnect anytime and Dimmy removes its entry." />
                         <HyperlinkButton Content="Open full guide →" Padding="0"
@@ -2682,10 +2561,8 @@
                 </Button>
               </StackPanel>
 
-              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="8" Padding="16">
-                <Grid ColumnSpacing="14" RowSpacing="12">
+              <Border Style="{StaticResource DimmyCard}" Padding="16">
+                <Grid ColumnSpacing="{StaticResource DimmySpaceL}" RowSpacing="{StaticResource DimmySpaceM}">
                   <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
@@ -2704,23 +2581,22 @@
                          Width="40" Height="40"
                          VerticalAlignment="Top"
                          Source="{ThemeResource AnthropicMarkSource}"/>
-                  <StackPanel Grid.Column="1" Grid.Row="0" VerticalAlignment="Center" Spacing="2">
-                    <TextBlock Text="Claude Desktop" FontSize="16" FontWeight="SemiBold" />
+                  <StackPanel Grid.Column="1" Grid.Row="0" VerticalAlignment="Center" Spacing="{StaticResource DimmySpaceXS}">
+                    <TextBlock Text="Claude Desktop" Style="{StaticResource DimmyCardTitle}" />
                     <TextBlock x:Name="McpStatusText"
                                Text="Probing…"
-                               FontSize="13"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               Style="{StaticResource DimmySecondary}"
                                TextWrapping="Wrap"/>
                   </StackPanel>
-                  <StackPanel Grid.Column="2" Grid.Row="0" Orientation="Horizontal" Spacing="8" VerticalAlignment="Top">
+                  <StackPanel Grid.Column="2" Grid.Row="0" Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" VerticalAlignment="Top">
                     <FontIcon x:Name="McpStatusGlyph"
                               Glyph="&#xEA39;"
-                              FontSize="20"
+                              FontSize="{StaticResource DimmyIconXL}"
                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
                   </StackPanel>
                   <StackPanel x:Name="McpDisconnectedActions"
                               Grid.Column="1" Grid.ColumnSpan="2" Grid.Row="1"
-                              Orientation="Horizontal" Spacing="8"
+                              Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}"
                               Visibility="Visible">
                     <Button Content="Connect Claude Desktop"
                             Click="McpConnect_Click"
@@ -2728,7 +2604,7 @@
                   </StackPanel>
                   <StackPanel x:Name="McpConnectedActions"
                               Grid.Column="1" Grid.ColumnSpan="2" Grid.Row="1"
-                              Orientation="Horizontal" Spacing="8"
+                              Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}"
                               Visibility="Collapsed">
                     <Button Content="Re-run wizard" Click="McpConnect_Click"/>
                     <Button Content="Disconnect" Click="McpDisconnect_Click"/>
@@ -2738,28 +2614,25 @@
               </Border>
 
               <!-- Group: TELEGRAM -->
-              <StackPanel Orientation="Horizontal" Spacing="6" Margin="2,32,0,8">
-                <TextBlock Text="TELEGRAM" FontSize="12" FontWeight="SemiBold"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                           CharacterSpacing="40" VerticalAlignment="Center" />
+              <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" Margin="2,32,0,8">
+                <TextBlock Text="Telegram" Style="{StaticResource DimmySection}" VerticalAlignment="Center" />
                 <Button Background="Transparent" BorderThickness="0" Padding="2"
                         VerticalAlignment="Center"
                         ToolTipService.ToolTip="Record a voice note on your phone, share it to your Telegram Saved Messages, and Dimmy transcribes + recaps it on this PC.">
-                  <FontIcon Glyph="&#xE946;" FontSize="12"
+                  <FontIcon Glyph="&#xE946;" FontSize="{StaticResource DimmyIconS}"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                   <Button.Flyout>
                     <Flyout>
-                      <StackPanel MaxWidth="320" Spacing="10">
-                        <TextBlock TextWrapping="Wrap" FontSize="13"
+                      <StackPanel MaxWidth="320" Spacing="{StaticResource DimmySpaceM}">
+                        <TextBlock TextWrapping="Wrap" Style="{StaticResource DimmyBody}"
                                    Text="1. Connect your own Telegram account below, with the QR code or your phone number." />
-                        <TextBlock TextWrapping="Wrap" FontSize="13"
+                        <TextBlock TextWrapping="Wrap" Style="{StaticResource DimmyBody}"
                                    Text="2. On your phone, record a voice message or pick any audio file." />
-                        <TextBlock TextWrapping="Wrap" FontSize="13"
+                        <TextBlock TextWrapping="Wrap" Style="{StaticResource DimmyBody}"
                                    Text="3. Send it to Saved Messages, your chat with yourself. Inside Telegram: touch and hold the audio, Forward, Saved Messages. From another app: Share, Telegram, Saved Messages." />
-                        <TextBlock TextWrapping="Wrap" FontSize="13"
+                        <TextBlock TextWrapping="Wrap" Style="{StaticResource DimmyBody}"
                                    Text="4. Dimmy on this PC picks it up, transcribes it and writes the recap." />
-                        <TextBlock TextWrapping="Wrap" FontSize="13"
-                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        <TextBlock TextWrapping="Wrap" Style="{StaticResource DimmySecondary}"
                                    Text="Dimmy is an unofficial app that uses the Telegram API. It signs in as you and reads only the audio in Saved Messages. It never touches your other chats, and the login stays on this PC." />
                       </StackPanel>
                     </Flyout>
@@ -2768,11 +2641,9 @@
               </StackPanel>
 
               <Border x:Name="TelegramCard"
-                      Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="8" Padding="16">
-                <StackPanel Spacing="14">
-                  <Grid ColumnSpacing="14">
+                      Style="{StaticResource DimmyCard}" Padding="16">
+                <StackPanel Spacing="{StaticResource DimmySpaceL}">
+                  <Grid ColumnSpacing="{StaticResource DimmySpaceL}">
                     <Grid.ColumnDefinitions>
                       <ColumnDefinition Width="Auto"/>
                       <ColumnDefinition Width="*"/>
@@ -2794,10 +2665,9 @@
                         <Path Fill="White" Data="M54.6 118.8c34.98-15.24 58.31-25.29 69.99-30.15 33.32-13.86 40.25-16.27 44.76-16.35 1-.02 3.22.23 4.66 1.4a5.07 5.07 0 0 1 1.71 3.25c.16.94.36 3.08.2 4.75-1.8 18.98-9.62 65.02-13.6 86.27-1.68 8.99-4.99 12-8.2 12.3-6.98.64-12.28-4.6-19.03-9.04-10.56-6.92-16.53-11.23-26.77-17.98-11.85-7.8-4.17-12.09 2.59-19.1 1.76-1.83 32.5-29.8 33.09-32.33.07-.32.14-1.5-.56-2.12s-1.74-.41-2.49-.24c-1.06.24-17.94 11.4-50.64 33.48-4.79 3.29-9.13 4.89-13.02 4.81-4.28-.09-12.52-2.42-18.65-4.41-7.52-2.44-13.49-3.73-12.97-7.87.27-2.16 3.24-4.37 8.92-6.63z"/>
                       </Canvas>
                     </Viewbox>
-                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
-                      <TextBlock Text="Telegram" FontSize="16" FontWeight="SemiBold"/>
-                      <TextBlock x:Name="TelegramStatusText" Text="Off" FontSize="13"
-                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="{StaticResource DimmySpaceXS}">
+                      <TextBlock Text="Telegram" Style="{StaticResource DimmyCardTitle}"/>
+                      <TextBlock x:Name="TelegramStatusText" Text="Off" Style="{StaticResource DimmySecondary}"
                                  TextWrapping="Wrap"/>
                     </StackPanel>
                     <ToggleSwitch Grid.Column="2" IsOn="{Binding TelegramEnabled, Mode=TwoWay}"
@@ -2806,13 +2676,12 @@
                                   VerticalAlignment="Center"/>
                   </Grid>
 
-                  <StackPanel x:Name="TelegramPhonePanel" Spacing="8" Visibility="Collapsed">
+                  <StackPanel x:Name="TelegramPhonePanel" Spacing="{StaticResource DimmySpaceS}" Visibility="Collapsed">
                     <Button x:Name="TelegramQrLoginBtn" Content="Log in with QR code"
                             Click="TelegramQrLogin_Click" Style="{ThemeResource AccentButtonStyle}"/>
                     <TextBlock Text="Or use your phone number, with country code. The code arrives in the Telegram app, not by SMS."
-                               FontSize="13" TextWrapping="Wrap"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                    <StackPanel Orientation="Horizontal" Spacing="8">
+                               Style="{StaticResource DimmySecondary}" TextWrapping="Wrap"/>
+                    <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
                       <TextBox x:Name="TelegramPhoneBox" PlaceholderText="+39 333 1234567" Width="220"/>
                       <Button x:Name="TelegramSendCodeBtn" Content="Send code"
                               Click="TelegramSendCode_Click"/>
@@ -2821,11 +2690,10 @@
                     </StackPanel>
                   </StackPanel>
 
-                  <StackPanel x:Name="TelegramCodePanel" Spacing="8" Visibility="Collapsed">
+                  <StackPanel x:Name="TelegramCodePanel" Spacing="{StaticResource DimmySpaceS}" Visibility="Collapsed">
                     <TextBlock Text="Look in the Telegram app on your phone: the code arrives as a message from Telegram, usually not by SMS."
-                               FontSize="13" TextWrapping="Wrap"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                    <StackPanel Orientation="Horizontal" Spacing="8">
+                               Style="{StaticResource DimmySecondary}" TextWrapping="Wrap"/>
+                    <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
                       <TextBox x:Name="TelegramCodeBox" PlaceholderText="12345" Width="140"/>
                       <Button x:Name="TelegramSubmitCodeBtn" Content="Confirm"
                               Click="TelegramSubmitCode_Click" Style="{ThemeResource AccentButtonStyle}"/>
@@ -2834,11 +2702,10 @@
                     </StackPanel>
                   </StackPanel>
 
-                  <StackPanel x:Name="TelegramQrPanel" Spacing="8" Visibility="Collapsed">
+                  <StackPanel x:Name="TelegramQrPanel" Spacing="{StaticResource DimmySpaceS}" Visibility="Collapsed">
                     <TextBlock Text="On your phone, open Telegram, go to Settings, Devices, Link Desktop Device, and scan this code."
-                               FontSize="13" TextWrapping="Wrap"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                    <Border Background="White" CornerRadius="8" Width="220" Height="220"
+                               Style="{StaticResource DimmySecondary}" TextWrapping="Wrap"/>
+                    <Border Background="White" CornerRadius="{StaticResource DimmyCardRadius}" Width="220" Height="220"
                             HorizontalAlignment="Left">
                       <Viewbox Stretch="Uniform">
                         <Canvas x:Name="TelegramQrCanvas" Width="1" Height="1"/>
@@ -2847,29 +2714,27 @@
                     <HyperlinkButton Content="Use phone number instead" Click="TelegramBackToPhone_Click"/>
                   </StackPanel>
 
-                  <StackPanel x:Name="TelegramPasswordPanel" Spacing="8" Visibility="Collapsed">
+                  <StackPanel x:Name="TelegramPasswordPanel" Spacing="{StaticResource DimmySpaceS}" Visibility="Collapsed">
                     <TextBlock Text="Two-step verification is on. Enter your Telegram password."
-                               FontSize="13" TextWrapping="Wrap"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                    <StackPanel Orientation="Horizontal" Spacing="8">
+                               Style="{StaticResource DimmySecondary}" TextWrapping="Wrap"/>
+                    <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
                       <PasswordBox x:Name="TelegramPasswordBox" Width="220"/>
                       <Button x:Name="TelegramSubmitPasswordBtn" Content="Confirm"
                               Click="TelegramSubmitPassword_Click" Style="{ThemeResource AccentButtonStyle}"/>
                     </StackPanel>
                   </StackPanel>
 
-                  <Grid x:Name="TelegramConnectedActions" ColumnSpacing="10" Visibility="Collapsed">
+                  <Grid x:Name="TelegramConnectedActions" ColumnSpacing="{StaticResource DimmySpaceM}" Visibility="Collapsed">
                     <Grid.ColumnDefinitions>
                       <ColumnDefinition Width="Auto"/>
                       <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
                     <Button Grid.Column="0" Content="Log out" Click="TelegramLogout_Click"/>
-                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6"
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}"
                                 HorizontalAlignment="Right" VerticalAlignment="Center">
-                      <TextBlock x:Name="TelegramConnectedAccount" Text="Connected" FontSize="13"
-                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                      <TextBlock x:Name="TelegramConnectedAccount" Text="Connected" Style="{StaticResource DimmySecondary}"
                                  VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-                      <FontIcon x:Name="TelegramStatusGlyph" Glyph="&#xE73E;" FontSize="20"
+                      <FontIcon x:Name="TelegramStatusGlyph" Glyph="&#xE73E;" FontSize="{StaticResource DimmyIconXL}"
                                 Foreground="{ThemeResource SystemFillColorSuccessBrush}"
                                 VerticalAlignment="Center"/>
                     </StackPanel>
@@ -2890,30 +2755,26 @@
                       Background="{ThemeResource SystemFillColorAttentionBackgroundBrush}"
                       BorderThickness="0" CornerRadius="6" Padding="12,8" Margin="0,12,0,0"
                       Visibility="Collapsed">
-                <TextBlock x:Name="TelegramMessageText" FontSize="13" TextWrapping="Wrap" />
+                <TextBlock x:Name="TelegramMessageText" Style="{StaticResource DimmyBody}" TextWrapping="Wrap" />
               </Border>
 
             </StackPanel>
 
             <!-- ═══ Privacy & data ═══ -->
-            <StackPanel x:Name="PrivacyPanel" Spacing="4" Visibility="Collapsed">
-              <StackPanel Spacing="2" Margin="0,0,0,16">
-                <TextBlock Text="Privacy &amp; data" FontSize="28" FontWeight="SemiBold" />
+            <StackPanel x:Name="PrivacyPanel" Spacing="{StaticResource DimmySpaceXS}" Visibility="Collapsed">
+              <StackPanel Spacing="{StaticResource DimmySpaceXS}" Margin="0,0,0,16">
+                <TextBlock Text="Privacy &amp; data" Style="{StaticResource DimmyPageTitle}" />
                 <TextBlock Text="What leaves your machine, and what doesn't."
-                           FontSize="13"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                           Style="{StaticResource DimmySecondary}" />
               </StackPanel>
 
               <!-- Promise card — kept as full-width info card, not a setting row -->
-              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="4" Padding="16,12">
-                <StackPanel Orientation="Horizontal" Spacing="16">
-                  <FontIcon Glyph="&#xE72E;" FontSize="16" Width="24" Height="24"
+              <Border Style="{StaticResource DimmyCard}" Padding="16,12">
+                <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceL}">
+                  <FontIcon Glyph="&#xE72E;" FontSize="{StaticResource DimmyIconL}" Width="24" Height="24"
                             Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                             VerticalAlignment="Top" Margin="0,2,0,0" />
-                  <TextBlock TextWrapping="Wrap" FontSize="13"
-                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                  <TextBlock TextWrapping="Wrap" Style="{StaticResource DimmySecondary}"
                              Text="Dimmy's own statistics never include your audio, transcripts, prompts or API keys. They use a random per-install ID. If you choose a cloud provider, your audio and text go to that provider." />
                 </StackPanel>
               </Border>
@@ -2921,10 +2782,8 @@
               <!-- Telemetry + Anonymous ID — Advanced-gated per the settings map.
                    Send feedback + policy links stay in Simple. -->
               <StackPanel Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
-              <TextBlock Text="TELEMETRY"
-                         FontSize="12" FontWeight="SemiBold"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         CharacterSpacing="40" Margin="2,20,0,8" />
+              <TextBlock Text="Telemetry"
+                         Style="{StaticResource DimmySection}" />
               <controls:SettingCard Glyph="&#xE9D9;"
                                     Label="Send anonymous usage data"
                                     InfoTip="Things like &quot;app started&quot; or &quot;transcription took 2.3s&quot;. Never your text, audio, or anything that identifies you."
@@ -2942,19 +2801,16 @@
                               Style="{StaticResource CompactToggleSwitch}" />
               </controls:SettingCard>
 
-              <TextBlock Text="ANONYMOUS IDENTIFIER"
-                         FontSize="12" FontWeight="SemiBold"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         CharacterSpacing="40" Margin="2,20,0,8" />
+              <TextBlock Text="Anonymous identifier"
+                         Style="{StaticResource DimmySection}" />
               <controls:SettingCard Glyph="&#xE77B;"
                                     Label="Your anonymous ID"
                                     InfoTip="Created on this device at first launch. It ties anonymous events together without identifying you. Reset applies after a restart."
                                     HelpUrl="https://dimmy.app/help/telemetry">
-                <StackPanel Orientation="Horizontal" Spacing="12">
-                  <TextBlock x:Name="AnonymousIdText" FontSize="12"
+                <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}">
+                  <TextBlock x:Name="AnonymousIdText" Style="{StaticResource DimmyCaption}"
                              FontFamily="Consolas"
-                             VerticalAlignment="Center"
-                             Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                             VerticalAlignment="Center" />
                   <Button x:Name="ResetAnonymousIdBtn"
                           Content="Reset"
                           Click="ResetAnonymousId_Click" />
@@ -2962,10 +2818,8 @@
               </controls:SettingCard>
               </StackPanel>
 
-              <TextBlock Text="SEND FEEDBACK"
-                         FontSize="12" FontWeight="SemiBold"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         CharacterSpacing="40" Margin="2,20,0,8" />
+              <TextBlock Text="Send feedback"
+                         Style="{StaticResource DimmySection}" />
               <controls:SettingCard Glyph="&#xE939;"
                                     Label="Kind"
                                     InfoTip="Helps us route your message: a general note, a bug, or a feature idea.">
@@ -2976,10 +2830,8 @@
                 </ComboBox>
               </controls:SettingCard>
               <!-- Free-form fields: too tall for a single-row card; full-width form card. -->
-              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="4" Padding="16,12">
-                <StackPanel Spacing="10">
+              <Border Style="{StaticResource DimmyCard}" Padding="16,12">
+                <StackPanel Spacing="{StaticResource DimmySpaceM}">
                   <TextBox x:Name="FeedbackText"
                            AcceptsReturn="True"
                            TextWrapping="Wrap"
@@ -2987,7 +2839,7 @@
                            PlaceholderText="What's on your mind? Bugs, ideas, anything." />
                   <TextBox x:Name="FeedbackEmail"
                            PlaceholderText="Your email (optional, only if you want a reply)" />
-                  <StackPanel Orientation="Horizontal" Spacing="12">
+                  <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}">
                     <Button x:Name="SendFeedbackBtn"
                             Content="Send"
                             Click="SendFeedback_Click"
@@ -3000,17 +2852,15 @@
                             Visibility="Collapsed"
                             ToolTipService.ToolTip="Feedback rides on crash reporting, which is currently off. This turns it on and sends your message in one click."
                             Style="{ThemeResource AccentButtonStyle}" />
-                    <TextBlock x:Name="FeedbackStatus" FontSize="11"
+                    <TextBlock x:Name="FeedbackStatus" Style="{StaticResource DimmyCaption}"
                                VerticalAlignment="Center"
                                Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                   </StackPanel>
                 </StackPanel>
               </Border>
 
-              <TextBlock Text="RESOURCES"
-                         FontSize="12" FontWeight="SemiBold"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         CharacterSpacing="40" Margin="2,20,0,8" />
+              <TextBlock Text="Resources"
+                         Style="{StaticResource DimmySection}" />
               <controls:SettingCard Glyph="&#xE72E;"
                                     Label="Privacy policy"
                                     InfoTip="Opens the complete privacy policy on dimmy.app."
@@ -3032,18 +2882,15 @@
                    the standing explanation, and it says plainly which
                    surfaces are marked and which are not, because "everything
                    is AI" would be both false and useless. -->
-              <TextBlock Text="AI TRANSPARENCY"
-                         FontSize="12" FontWeight="SemiBold"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         CharacterSpacing="40" Margin="2,20,0,8" />
+              <TextBlock Text="Ai transparency"
+                         Style="{StaticResource DimmySection}" />
               <Border Background="{ThemeResource LayerFillColorDefaultBrush}"
                       BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="8" Padding="16">
-                <StackPanel Spacing="10">
-                  <TextBlock TextWrapping="Wrap" FontSize="13"
+                      BorderThickness="1" CornerRadius="{StaticResource DimmyCardRadius}" Padding="16">
+                <StackPanel Spacing="{StaticResource DimmySpaceM}">
+                  <TextBlock TextWrapping="Wrap" Style="{StaticResource DimmyBody}"
                              Text="Meeting recaps are written by an AI model. They are new text, not a transcript, so they can be wrong or miss things: read one before you share it. Every recap Dimmy saves carries a marker identifying it as AI-generated, and recaps sent to Notion carry a visible note." />
-                  <TextBlock TextWrapping="Wrap" FontSize="13"
-                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                  <TextBlock TextWrapping="Wrap" Style="{StaticResource DimmySecondary}"
                              Text="Dictation is not marked. Transcribing what you said, removing filler words and translating do not change the meaning of your words, so stamping them would be noise in your own documents." />
                 </StackPanel>
               </Border>
@@ -3057,12 +2904,11 @@
             </StackPanel>
 
             <!-- ═══ License ═══ -->
-            <StackPanel x:Name="LicensePanel" Spacing="4" Visibility="Collapsed">
-              <StackPanel Spacing="2" Margin="0,0,0,16">
-                <TextBlock Text="License" FontSize="28" FontWeight="SemiBold" />
+            <StackPanel x:Name="LicensePanel" Spacing="{StaticResource DimmySpaceXS}" Visibility="Collapsed">
+              <StackPanel Spacing="{StaticResource DimmySpaceXS}" Margin="0,0,0,16">
+                <TextBlock Text="License" Style="{StaticResource DimmyPageTitle}" />
                 <TextBlock Text="Activate Dimmy, manage your trial, or paste an activation code from email."
-                           FontSize="13"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                           Style="{StaticResource DimmySecondary}" />
               </StackPanel>
 
               <!-- Status hero card. Mirrors macOS MacLicensePage statusHero:
@@ -3071,8 +2917,8 @@
                    border pulls a 35%-opacity stroke from the same color. -->
               <Border x:Name="LicenseStatusBorder"
                       BorderThickness="1" CornerRadius="6" Padding="18,16" Margin="0,0,0,16">
-                <StackPanel Spacing="10">
-                  <Grid ColumnSpacing="14">
+                <StackPanel Spacing="{StaticResource DimmySpaceM}">
+                  <Grid ColumnSpacing="{StaticResource DimmySpaceL}">
                     <Grid.ColumnDefinitions>
                       <ColumnDefinition Width="Auto" />
                       <ColumnDefinition Width="*" />
@@ -3090,15 +2936,14 @@
                             VerticalAlignment="Center"
                             Visibility="Collapsed">
                       <TextBlock x:Name="LicenseTierBadge"
-                                 FontSize="11" FontWeight="SemiBold"
+                                 Style="{StaticResource DimmyLabel}" FontWeight="SemiBold"
                                  CharacterSpacing="40"
                                  Text="" />
                     </Border>
-                    <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
-                      <TextBlock x:Name="LicenseStatusHeadline" FontSize="18" FontWeight="SemiBold"
+                    <StackPanel Grid.Column="1" Spacing="{StaticResource DimmySpaceXS}" VerticalAlignment="Center">
+                      <TextBlock x:Name="LicenseStatusHeadline" Style="{StaticResource DimmyHeadline}"
                                  Text="Loading…" />
-                      <TextBlock x:Name="LicenseStatusDetail" FontSize="12"
-                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                      <TextBlock x:Name="LicenseStatusDetail" Style="{StaticResource DimmyCaption}"
                                  TextWrapping="Wrap"
                                  Text="Fetching status from the licensing module…" />
                     </StackPanel>
@@ -3106,18 +2951,17 @@
                                 Spacing="0" HorizontalAlignment="Right" VerticalAlignment="Center"
                                 Visibility="Collapsed">
                       <TextBlock x:Name="LicenseTrailingValue"
-                                 FontSize="20" FontWeight="SemiBold"
+                                 Style="{StaticResource DimmyHeadline}"
                                  HorizontalAlignment="Right"
                                  Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                                  Text="" />
                       <TextBlock x:Name="LicenseTrailingLabel"
-                                 FontSize="11" FontWeight="Normal"
-                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                 Style="{StaticResource DimmyCaption}" FontWeight="Normal"
                                  HorizontalAlignment="Right"
                                  Text="" />
                     </StackPanel>
                   </Grid>
-                  <StackPanel Orientation="Horizontal" Spacing="8">
+                  <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
                     <Button Content="Refresh now" Click="License_Refresh_Click" />
                     <Button Content="Sign out (this device)" Click="License_Clear_Click" />
                     <Button x:Name="LicenseManageSubButton"
@@ -3131,24 +2975,21 @@
               </Border>
 
               <!-- Devices on this license — list + per-row "Sign out". -->
-              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="4" Padding="20,16" Margin="0,0,0,16">
-                <StackPanel Spacing="10">
+              <Border Style="{StaticResource DimmyCard}" Padding="20,16" Margin="0,0,0,16">
+                <StackPanel Spacing="{StaticResource DimmySpaceM}">
                   <Grid>
                     <Grid.ColumnDefinitions>
                       <ColumnDefinition Width="*" />
                       <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0" Spacing="2">
-                      <TextBlock Text="Devices" FontSize="16" FontWeight="SemiBold" />
-                      <TextBlock x:Name="LicenseDeviceCountLabel" FontSize="11"
-                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    <StackPanel Grid.Column="0" Spacing="{StaticResource DimmySpaceXS}">
+                      <TextBlock Text="Devices" Style="{StaticResource DimmyCardTitle}" />
+                      <TextBlock x:Name="LicenseDeviceCountLabel" Style="{StaticResource DimmyCaption}"
                                  Text="…" />
                     </StackPanel>
                     <Button Grid.Column="1" Content="Reload" Click="License_DevicesReload_Click" />
                   </Grid>
-                  <StackPanel x:Name="LicenseDevicesList" Spacing="6" />
+                  <StackPanel x:Name="LicenseDevicesList" Spacing="{StaticResource DimmySpaceS}" />
                 </StackPanel>
               </Border>
 
@@ -3158,18 +2999,15 @@
                    Suspended / Unrestricted. Each button POSTs the tier to
                    /api/checkout/create and opens the returned Stripe URL. -->
               <Border x:Name="LicenseBuyCard"
-                      Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="4" Padding="20,16" Margin="0,0,0,16"
+                      Style="{StaticResource DimmyCard}" Padding="20,16" Margin="0,0,0,16"
                       Visibility="Collapsed">
-                <StackPanel Spacing="10">
+                <StackPanel Spacing="{StaticResource DimmySpaceM}">
                   <TextBlock x:Name="LicenseBuyHeadline" Text="Upgrade to Pro"
-                             FontSize="16" FontWeight="SemiBold" />
-                  <TextBlock x:Name="LicenseBuyDetail" FontSize="12"
-                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                             Style="{StaticResource DimmyCardTitle}" />
+                  <TextBlock x:Name="LicenseBuyDetail" Style="{StaticResource DimmyCaption}"
                              TextWrapping="Wrap"
                              Text="Pick a plan. Stripe handles payment + tax; we email you a magic link the moment payment clears." />
-                  <Grid x:Name="LicenseBuyButtonsGrid" ColumnSpacing="8">
+                  <Grid x:Name="LicenseBuyButtonsGrid" ColumnSpacing="{StaticResource DimmySpaceS}">
                     <Grid.ColumnDefinitions>
                       <ColumnDefinition Width="*" />
                       <ColumnDefinition Width="*" />
@@ -3178,28 +3016,26 @@
                     <Button Grid.Column="0" x:Name="LicenseBuyMonthlyButton"
                             Click="License_BuyMonthly_Click"
                             HorizontalAlignment="Stretch">
-                      <StackPanel Spacing="2">
+                      <StackPanel Spacing="{StaticResource DimmySpaceXS}">
                         <TextBlock x:Name="LicenseBuyMonthlyLabel" Text="Monthly" FontWeight="SemiBold" />
-                        <TextBlock Text="recurring" FontSize="10"
-                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <TextBlock Text="recurring" Style="{StaticResource DimmyCaption}" />
                       </StackPanel>
                     </Button>
                     <Button Grid.Column="1" x:Name="LicenseBuyAnnualButton"
                             Click="License_BuyAnnual_Click"
                             HorizontalAlignment="Stretch"
                             Style="{ThemeResource AccentButtonStyle}">
-                      <StackPanel Spacing="2">
+                      <StackPanel Spacing="{StaticResource DimmySpaceXS}">
                         <TextBlock x:Name="LicenseBuyAnnualLabel" Text="Annual" FontWeight="SemiBold" />
-                        <TextBlock Text="best value" FontSize="10" Opacity="0.85" />
+                        <TextBlock Text="best value" Style="{StaticResource DimmyLabel}" Opacity="0.85" />
                       </StackPanel>
                     </Button>
                     <Button Grid.Column="2" x:Name="LicenseBuyLifetimeButton"
                             Click="License_BuyLifetime_Click"
                             HorizontalAlignment="Stretch">
-                      <StackPanel Spacing="2">
+                      <StackPanel Spacing="{StaticResource DimmySpaceXS}">
                         <TextBlock x:Name="LicenseBuyLifetimeLabel" Text="Supporter" FontWeight="SemiBold" />
-                        <TextBlock Text="once · 3 years" FontSize="10"
-                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <TextBlock Text="once · 3 years" Style="{StaticResource DimmyCaption}" />
                       </StackPanel>
                     </Button>
                   </Grid>
@@ -3209,8 +3045,7 @@
                        they don't accidentally double-purchase by hitting
                        a Buy button thinking it switches plans. -->
                   <TextBlock x:Name="LicenseBuyPortalHint"
-                             FontSize="11"
-                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                             Style="{StaticResource DimmyCaption}"
                              TextWrapping="Wrap"
                              Visibility="Collapsed"
                              Text="Need to downgrade, cancel, or update payment? Use the &quot;Manage subscription&quot; button above. It opens the secure Stripe billing portal." />
@@ -3221,30 +3056,24 @@
 
               <!-- Capabilities grid — populated by RefreshLicenseStatus.
                    Each row = one entry in LicenseService.ScopeNames.All. -->
-              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="4" Padding="20,16" Margin="0,0,0,16">
-                <StackPanel Spacing="10">
-                  <TextBlock Text="Included with your license" FontSize="16" FontWeight="SemiBold" />
-                  <TextBlock FontSize="12"
-                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+              <Border Style="{StaticResource DimmyCard}" Padding="20,16" Margin="0,0,0,16">
+                <StackPanel Spacing="{StaticResource DimmySpaceM}">
+                  <TextBlock Text="Included with your license" Style="{StaticResource DimmyCardTitle}" />
+                  <TextBlock Style="{StaticResource DimmyCaption}"
                              TextWrapping="Wrap"
                              Text="Local features (BYOK STT/LLM, history, hotkey, paste) are always free. The capabilities below are unlocked by an active license." />
-                  <StackPanel x:Name="LicenseScopeGrid" Spacing="6" />
+                  <StackPanel x:Name="LicenseScopeGrid" Spacing="{StaticResource DimmySpaceS}" />
                 </StackPanel>
               </Border>
 
               <!-- Activate / Start trial — primary path -->
-              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="4" Padding="20,16" Margin="0,0,0,16">
-                <StackPanel Spacing="10">
-                  <TextBlock Text="Activate Dimmy" FontSize="16" FontWeight="SemiBold" />
-                  <TextBlock FontSize="12"
-                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+              <Border Style="{StaticResource DimmyCard}" Padding="20,16" Margin="0,0,0,16">
+                <StackPanel Spacing="{StaticResource DimmySpaceM}">
+                  <TextBlock Text="Activate Dimmy" Style="{StaticResource DimmyCardTitle}" />
+                  <TextBlock Style="{StaticResource DimmyCaption}"
                              TextWrapping="Wrap"
                              Text="Enter your email and we send you a sign-in link." />
-                  <Grid ColumnSpacing="8">
+                  <Grid ColumnSpacing="{StaticResource DimmySpaceS}">
                     <Grid.ColumnDefinitions>
                       <ColumnDefinition Width="*" />
                       <ColumnDefinition Width="Auto" />
@@ -3265,9 +3094,8 @@
                    that strips dimmy:// schemes, copy-paste from another box). -->
               <Expander Header="Activation didn't open Dimmy? Paste the code"
                         HorizontalAlignment="Stretch" Margin="0,0,0,16">
-                <StackPanel Spacing="10">
-                  <TextBlock FontSize="12"
-                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                <StackPanel Spacing="{StaticResource DimmySpaceM}">
+                  <TextBlock Style="{StaticResource DimmyCaption}"
                              TextWrapping="Wrap"
                              Text="Some email clients (especially corporate) strip custom URL schemes. Paste the bare code or full magic-link URL from your email here." />
                   <TextBox x:Name="LicenseCodeBox" AcceptsReturn="False"
@@ -3286,25 +3114,22 @@
                  SpeakingTimeText / TimeSavedText doesn't NPE. The stats are
                  now surfaced in the Home dashboard quick-stats card. This
                  panel is never made Visible by Nav_SelectionChanged. -->
-            <StackPanel x:Name="StatsPanel" Spacing="12" Visibility="Collapsed">
+            <StackPanel x:Name="StatsPanel" Spacing="{StaticResource DimmySpaceM}" Visibility="Collapsed">
               <TextBlock Text="{Binding StatsTotalWords, Mode=OneWay}" Visibility="Collapsed" />
               <TextBlock x:Name="SpeakingTimeText" Visibility="Collapsed" />
               <TextBlock x:Name="TimeSavedText" Visibility="Collapsed" />
             </StackPanel>
 
             <!-- ═══ Debug ═══ -->
-            <StackPanel x:Name="DebugPanel" Spacing="4" Visibility="Collapsed">
-              <StackPanel Spacing="2" Margin="0,0,0,16">
-                <TextBlock Text="Debug" FontSize="28" FontWeight="SemiBold" />
+            <StackPanel x:Name="DebugPanel" Spacing="{StaticResource DimmySpaceXS}" Visibility="Collapsed">
+              <StackPanel Spacing="{StaticResource DimmySpaceXS}" Margin="0,0,0,16">
+                <TextBlock Text="Debug" Style="{StaticResource DimmyPageTitle}" />
                 <TextBlock Text="Developer-leaning controls and diagnostics."
-                           FontSize="13"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                           Style="{StaticResource DimmySecondary}" />
               </StackPanel>
 
-              <TextBlock Text="DIAGNOSTICS"
-                         FontSize="12" FontWeight="SemiBold"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         CharacterSpacing="40" Margin="2,16,0,8" />
+              <TextBlock Text="Diagnostics"
+                         Style="{StaticResource DimmySection}" />
               <controls:SettingCard Glyph="&#xE82D;"
                                     Label="LLM log enabled"
                                     InfoTip="Writes each rewrite prompt and response to llm.log. Useful when a rewrite looks wrong."
@@ -3327,16 +3152,14 @@
                               Style="{StaticResource CompactToggleSwitch}" />
               </controls:SettingCard>
 
-              <TextBlock Text="GPU ACCELERATION"
-                         FontSize="12" FontWeight="SemiBold"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         CharacterSpacing="40" Margin="2,20,0,8" />
+              <TextBlock Text="Gpu acceleration"
+                         Style="{StaticResource DimmySection}" />
               <controls:SettingCard Glyph="&#xE950;"
                                     Label="GPU status"
                                     InfoTip="Dimmy turns the GPU off after a driver crash and falls back to CPU. Update your drivers, then press Retry."
                                     HelpUrl="https://dimmy.app/help/install-issues">
-                <StackPanel Spacing="4">
-                  <StackPanel Orientation="Horizontal" Spacing="12">
+                <StackPanel Spacing="{StaticResource DimmySpaceXS}">
+                  <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}">
                   <TextBlock Text="Enabled"
                              VerticalAlignment="Center"
                              Foreground="#16a34a"
@@ -3355,32 +3178,29 @@
                   </StackPanel>
                   <TextBlock Text="{Binding GpuDeviceLine, Mode=OneWay}"
                              Visibility="{Binding HasGpuDeviceLine, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
-                             FontSize="12" TextWrapping="Wrap"
-                             Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                             Style="{StaticResource DimmyCaption}" TextWrapping="Wrap" />
                 </StackPanel>
               </controls:SettingCard>
               <!-- GPU crash detail card — full-width, only when known-bad. -->
-              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="4" Padding="16,12"
+              <Border Style="{StaticResource DimmyCard}" Padding="16,12"
                       Visibility="{Binding GpuKnownBad, Mode=OneWay,
                                    Converter={StaticResource BoolToVisibilityConverter}}">
-                <StackPanel Spacing="6">
-                  <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}">
+                <StackPanel Spacing="{StaticResource DimmySpaceS}">
+                  <TextBlock Style="{StaticResource DimmyCaption}">
                     <Run Text="Last crash: " />
                     <Run Text="{Binding GpuKnownBadSince, Mode=OneWay}" />
                   </TextBlock>
-                  <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                  <TextBlock Style="{StaticResource DimmyCaption}"
                              TextWrapping="Wrap">
                     <Run Text="Context: " />
                     <Run Text="{Binding GpuKnownBadContext, Mode=OneWay}" />
                   </TextBlock>
-                  <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                  <TextBlock Style="{StaticResource DimmyCaption}" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                              TextWrapping="Wrap"
                              Text="Driver fingerprint matches the crash. Dimmy will keep using CPU. If you've updated drivers, click Retry GPU and restart Dimmy."
                              Visibility="{Binding GpuFingerprintMatches, Mode=OneWay,
                                           Converter={StaticResource BoolToVisibilityConverter}}" />
-                  <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                  <TextBlock Style="{StaticResource DimmyCaption}" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                              TextWrapping="Wrap"
                              Text="Driver fingerprint changed since the crash. GPU will be retried automatically on next launch."
                              Visibility="{Binding GpuFingerprintMatches, Mode=OneWay,
@@ -3399,7 +3219,7 @@
     <!-- Bottom action bar: auto-save badge as a button-height pill
          (WinUI's stock InfoBar is ~50 px tall and dwarfs Cancel/Save).
          Same 32 px height as the buttons it sits next to. -->
-    <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8"
+    <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}"
                 HorizontalAlignment="Right" Margin="16">
       <!-- All 4 colours derive from SystemAccentColor (user's Windows
            accent in Personalisation → Colours). Previous hardcoded
@@ -3415,11 +3235,11 @@
               Padding="10,0"
               Height="32"
               VerticalAlignment="Center">
-        <StackPanel Orientation="Horizontal" Spacing="6"
+        <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}"
                     VerticalAlignment="Center">
-          <FontIcon Glyph="&#xE73E;" FontSize="14"
+          <FontIcon Glyph="&#xE73E;" FontSize="{StaticResource DimmyIconM}"
                     Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/>
-          <TextBlock Text="Saved" FontSize="13"
+          <TextBlock Text="Saved" Style="{StaticResource DimmyBody}"
                      Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
                      VerticalAlignment="Center"/>
         </StackPanel>

@@ -29,14 +29,14 @@
     <x:Double x:Key="ContentDialogMinWidth">560</x:Double>
   </ContentDialog.Resources>
 
-  <Grid RowSpacing="14" MinHeight="340">
+  <Grid RowSpacing="{StaticResource DimmySpaceL}" MinHeight="340">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto"/>
       <RowDefinition Height="*"/>
     </Grid.RowDefinitions>
 
     <!-- Progress dots -->
-    <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="8"
+    <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}"
                 HorizontalAlignment="Center" Margin="0,0,0,4">
       <Ellipse x:Name="Dot1" Width="10" Height="10"
                Fill="{ThemeResource AccentFillColorDefaultBrush}"/>
@@ -49,39 +49,36 @@
     <Grid Grid.Row="1">
 
       <!-- ════ Step 1 - detect Claude Desktop ════ -->
-      <StackPanel x:Name="Step1Panel" Spacing="12" Visibility="Visible">
-        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-          <TextBlock Text="1 - Install Claude Desktop" FontSize="18" FontWeight="SemiBold"/>
+      <StackPanel x:Name="Step1Panel" Spacing="{StaticResource DimmySpaceM}" Visibility="Visible">
+        <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" VerticalAlignment="Center">
+          <TextBlock Text="1 - Install Claude Desktop" Style="{StaticResource DimmyHeadline}"/>
           <Button Background="Transparent" BorderThickness="0" Padding="2"
                   VerticalAlignment="Center" ToolTipService.ToolTip="Why Claude Desktop">
-            <FontIcon Glyph="&#xE946;" FontSize="14"
+            <FontIcon Glyph="&#xE946;" FontSize="{StaticResource DimmyIconM}"
                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
             <Button.Flyout>
               <Flyout>
-                <TextBlock Width="300" TextWrapping="Wrap" FontSize="13"
+                <TextBlock Width="300" TextWrapping="Wrap" Style="{StaticResource DimmyBody}"
                            Text="Dimmy talks to Claude Desktop over MCP. You'll be able to ask Claude about your meetings, generate recaps from a different angle, and have Claude write notes back into Dimmy."/>
               </Flyout>
             </Button.Flyout>
           </Button>
         </StackPanel>
 
-        <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                BorderThickness="1" CornerRadius="6" Padding="14">
-          <StackPanel Spacing="10">
-            <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
-              <FontIcon x:Name="DetectGlyph" Glyph="&#xE9CE;" FontSize="20"
+        <Border Style="{StaticResource DimmyCard}" Padding="{StaticResource DimmyCardPaddingCompact}">
+          <StackPanel Spacing="{StaticResource DimmySpaceM}">
+            <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}" VerticalAlignment="Center">
+              <FontIcon x:Name="DetectGlyph" Glyph="&#xE9CE;" FontSize="{StaticResource DimmyIconXL}"
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-              <TextBlock x:Name="DetectStatus" FontSize="13" VerticalAlignment="Center"
+              <TextBlock x:Name="DetectStatus" Style="{StaticResource DimmyBody}" VerticalAlignment="Center"
                          Text="Looking for Claude Desktop..."/>
             </StackPanel>
-            <TextBlock x:Name="DetectPath" FontSize="12"
-                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+            <TextBlock x:Name="DetectPath" Style="{StaticResource DimmyCaption}"
                        TextWrapping="Wrap" Visibility="Collapsed"/>
           </StackPanel>
         </Border>
 
-        <StackPanel Orientation="Horizontal" Spacing="10">
+        <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}">
           <Button x:Name="InstallBtn" Content="Download Claude Desktop"
                   Click="InstallClaude_Click" Visibility="Collapsed"
                   Style="{ThemeResource AccentButtonStyle}"/>
@@ -91,79 +88,72 @@
       </StackPanel>
 
       <!-- ════ Step 2 - patch config ════ -->
-      <StackPanel x:Name="Step2Panel" Spacing="12" Visibility="Collapsed">
-        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-          <TextBlock Text="2 - Register Dimmy" FontSize="18" FontWeight="SemiBold"/>
+      <StackPanel x:Name="Step2Panel" Spacing="{StaticResource DimmySpaceM}" Visibility="Collapsed">
+        <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" VerticalAlignment="Center">
+          <TextBlock Text="2 - Register Dimmy" Style="{StaticResource DimmyHeadline}"/>
           <Button Background="Transparent" BorderThickness="0" Padding="2"
                   VerticalAlignment="Center" ToolTipService.ToolTip="What this changes">
-            <FontIcon Glyph="&#xE946;" FontSize="14"
+            <FontIcon Glyph="&#xE946;" FontSize="{StaticResource DimmyIconM}"
                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
             <Button.Flyout>
               <Flyout>
-                <TextBlock Width="300" TextWrapping="Wrap" FontSize="13"
+                <TextBlock Width="300" TextWrapping="Wrap" Style="{StaticResource DimmyBody}"
                            Text="Dimmy adds itself to Claude Desktop's MCP servers list. Your existing servers (Notion, Slack, custom ones) stay untouched. We back up the file before changing it."/>
               </Flyout>
             </Button.Flyout>
           </Button>
         </StackPanel>
 
-        <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                BorderThickness="1" CornerRadius="6" Padding="14">
-          <StackPanel Spacing="6">
-            <TextBlock Text="Extension folder" FontSize="11"
-                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-            <TextBlock x:Name="ConfigPathText" FontSize="12" FontFamily="Consolas"
+        <Border Style="{StaticResource DimmyCard}" Padding="{StaticResource DimmyCardPaddingCompact}">
+          <StackPanel Spacing="{StaticResource DimmySpaceS}">
+            <TextBlock Text="Extension folder" Style="{StaticResource DimmyCaption}"/>
+            <TextBlock x:Name="ConfigPathText" Style="{StaticResource DimmyLabel}" FontFamily="Consolas"
                        TextWrapping="Wrap"/>
-            <TextBlock Text="MCP binary (copied into the extension folder)" FontSize="11" Margin="0,8,0,0"
-                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-            <TextBlock x:Name="BinaryPathText" FontSize="12" FontFamily="Consolas"
+            <TextBlock Text="MCP binary (copied into the extension folder)" Style="{StaticResource DimmyCaption}" Margin="0,8,0,0"/>
+            <TextBlock x:Name="BinaryPathText" Style="{StaticResource DimmyLabel}" FontFamily="Consolas"
                        TextWrapping="Wrap"/>
           </StackPanel>
         </Border>
 
-        <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+        <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}" VerticalAlignment="Center">
           <Button x:Name="PatchBtn" Content="Connect" Click="Patch_Click"
                   Style="{ThemeResource AccentButtonStyle}"/>
           <ProgressRing x:Name="PatchRing" Width="20" Height="20"
                         IsActive="False" Visibility="Collapsed"/>
-          <FontIcon x:Name="PatchOkGlyph" Glyph="&#xE73E;" FontSize="18"
+          <FontIcon x:Name="PatchOkGlyph" Glyph="&#xE73E;" FontSize="{StaticResource DimmyIconXL}"
                     Foreground="{ThemeResource SystemFillColorSuccessBrush}"
                     Visibility="Collapsed"/>
           <TextBlock x:Name="PatchStatus" VerticalAlignment="Center"
-                     FontSize="13" TextWrapping="Wrap"/>
+                     Style="{StaticResource DimmyBody}" TextWrapping="Wrap"/>
         </StackPanel>
       </StackPanel>
 
       <!-- ════ Step 3 - verify heartbeat ════ -->
-      <StackPanel x:Name="Step3Panel" Spacing="12" Visibility="Collapsed">
-        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-          <TextBlock Text="3 - Restart Claude Desktop" FontSize="18" FontWeight="SemiBold"/>
+      <StackPanel x:Name="Step3Panel" Spacing="{StaticResource DimmySpaceM}" Visibility="Collapsed">
+        <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" VerticalAlignment="Center">
+          <TextBlock Text="3 - Restart Claude Desktop" Style="{StaticResource DimmyHeadline}"/>
           <Button Background="Transparent" BorderThickness="0" Padding="2"
                   VerticalAlignment="Center" ToolTipService.ToolTip="Why a restart">
-            <FontIcon Glyph="&#xE946;" FontSize="14"
+            <FontIcon Glyph="&#xE946;" FontSize="{StaticResource DimmyIconM}"
                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
             <Button.Flyout>
               <Flyout>
-                <TextBlock Width="300" TextWrapping="Wrap" FontSize="13"
+                <TextBlock Width="300" TextWrapping="Wrap" Style="{StaticResource DimmyBody}"
                            Text="Claude Desktop only spawns MCP servers at startup, so it has to be restarted once for Dimmy to appear. Dimmy detects the first heartbeat automatically."/>
               </Flyout>
             </Button.Flyout>
           </Button>
         </StackPanel>
 
-        <TextBlock TextWrapping="Wrap" FontSize="13"
-                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+        <TextBlock TextWrapping="Wrap" Style="{StaticResource DimmySecondary}"
                    Text="Quit Claude Desktop (system-tray icon, Quit) and reopen it."/>
 
-        <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                BorderThickness="1" CornerRadius="6" Padding="14">
-          <StackPanel Spacing="10">
-            <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
-              <FontIcon x:Name="HeartbeatGlyph" Glyph="&#xE9CE;" FontSize="20"
+        <Border Style="{StaticResource DimmyCard}" Padding="{StaticResource DimmyCardPaddingCompact}">
+          <StackPanel Spacing="{StaticResource DimmySpaceM}">
+            <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}" VerticalAlignment="Center">
+              <FontIcon x:Name="HeartbeatGlyph" Glyph="&#xE9CE;" FontSize="{StaticResource DimmyIconXL}"
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-              <TextBlock x:Name="HeartbeatStatus" FontSize="13" VerticalAlignment="Center"
+              <TextBlock x:Name="HeartbeatStatus" Style="{StaticResource DimmyBody}" VerticalAlignment="Center"
                          Text="Waiting for first heartbeat..."/>
               <ProgressRing x:Name="HeartbeatRing" Width="16" Height="16"
                             IsActive="True"/>

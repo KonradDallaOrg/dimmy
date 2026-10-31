@@ -7,25 +7,25 @@
     Title="Dimmy">
 
     <Grid Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
-          Padding="40" RowSpacing="16">
+          Padding="40" RowSpacing="{StaticResource DimmySpaceL}">
         <Grid.RowDefinitions>
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
         <!-- Step 0: Welcome -->
-        <StackPanel x:Name="Step0Panel" Spacing="12" VerticalAlignment="Center"
+        <StackPanel x:Name="Step0Panel" Spacing="{StaticResource DimmySpaceM}" VerticalAlignment="Center"
                     HorizontalAlignment="Center"
                     Visibility="{Binding IsStep0, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
-            <Ellipse Width="64" Height="64" Fill="{ThemeResource AccentFillColorDefaultBrush}"
-                     HorizontalAlignment="Center" />
-            <TextBlock Text="Dimmy" FontSize="32" FontWeight="Bold"
+            <Image Source="ms-appx:///Assets/dimmy-logo.png" Width="64" Height="64"
+                   HorizontalAlignment="Center" />
+            <TextBlock Text="Dimmy" Style="{StaticResource DimmyPageTitle}"
                        HorizontalAlignment="Center" />
             <TextBlock Text="Voice dictation that stays out of your way"
-                       FontSize="15" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                       Style="{StaticResource DimmyCardTitle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                        HorizontalAlignment="Center" />
             <TextBlock Text="Hold a shortcut, speak, release.&#x0a;Your words appear wherever you're typing."
-                       FontSize="13" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                       Style="{StaticResource DimmySecondary}"
                        HorizontalAlignment="Center" TextAlignment="Center" />
             <CheckBox x:Name="TermsCheck"
                       AutomationProperties.AutomationId="OnboardingTermsCheckBox"
@@ -42,16 +42,16 @@
         </StackPanel>
 
         <!-- Step 1: Local or Cloud -->
-        <StackPanel x:Name="Step1Panel" Spacing="14" VerticalAlignment="Center"
+        <StackPanel x:Name="Step1Panel" Spacing="{StaticResource DimmySpaceL}" VerticalAlignment="Center"
                     HorizontalAlignment="Stretch"
                     Visibility="{Binding IsStep1, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
-            <TextBlock Text="How should Dimmy transcribe?" FontSize="26" FontWeight="Bold"
+            <TextBlock Text="How should Dimmy transcribe?" Style="{StaticResource DimmyPageTitle}"
                        HorizontalAlignment="Center" />
             <TextBlock Text="Private and offline, or fastest with cloud"
-                       FontSize="13" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                       Style="{StaticResource DimmySecondary}"
                        HorizontalAlignment="Center" />
 
-            <Grid ColumnSpacing="16" Margin="0,8,0,0">
+            <Grid ColumnSpacing="{StaticResource DimmySpaceL}" Margin="0,8,0,0">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="*" />
@@ -68,20 +68,19 @@
                         Padding="18"
                         MinHeight="220"
                         Tapped="LocalCard_Tapped">
-                    <StackPanel Spacing="8">
-                        <FontIcon Glyph="&#xE72E;" FontSize="24"
+                    <StackPanel Spacing="{StaticResource DimmySpaceS}">
+                        <FontIcon Glyph="&#xE72E;" FontSize="{StaticResource DimmyIconXL}"
                                   HorizontalAlignment="Left"
                                   Foreground="{ThemeResource AccentFillColorDefaultBrush}" />
-                        <TextBlock Text="Local" FontSize="18" FontWeight="SemiBold" />
+                        <TextBlock Text="Local" Style="{StaticResource DimmyHeadline}" />
                         <TextBlock Text="Private · offline · runs on your machine"
-                                   FontSize="12"
-                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                   Style="{StaticResource DimmyCaption}" />
                         <TextBlock Text="Your voice never leaves your device"
-                                   FontSize="11" TextWrapping="Wrap"
+                                   Style="{StaticResource DimmyCaption}" TextWrapping="Wrap"
                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                         <TextBlock Text="{Binding HardwareLine, Mode=OneWay}"
                                    Visibility="{Binding HasHardwareLine, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
-                                   FontSize="11" TextWrapping="Wrap"
+                                   Style="{StaticResource DimmyCaption}" TextWrapping="Wrap"
                                    Foreground="{ThemeResource AccentTextFillColorSecondaryBrush}" />
                         <!-- Model picker. Same shape as Settings → Local model.
                              Default selection is the whisper base file (smallest,
@@ -93,27 +92,25 @@
                                   Margin="0,8,0,0"
                                   SelectionChanged="OnboardingLocalModel_SelectionChanged" />
 
-                        <StackPanel Spacing="4" Margin="0,8,0,0"
+                        <StackPanel Spacing="{StaticResource DimmySpaceXS}" Margin="0,8,0,0"
                                     Visibility="{Binding IsLocalReady, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Invert}">
                             <ProgressBar Value="{Binding DownloadPercent, Mode=OneWay}"
                                          Maximum="100" Height="4" />
                             <TextBlock Text="{Binding DownloadStatusText, Mode=OneWay}"
-                                       FontSize="11"
-                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                       Style="{StaticResource DimmyCaption}" />
                             <TextBlock Text="{Binding DownloadBytesText, Mode=OneWay}"
-                                       FontSize="11"
+                                       Style="{StaticResource DimmyCaption}"
                                        Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                             <TextBlock Text="{Binding LocalErrorText, Mode=OneWay}"
-                                       FontSize="11" Foreground="#E06060"
+                                       Style="{StaticResource DimmyCaption}" Foreground="#E06060"
                                        TextWrapping="Wrap"
                                        Visibility="{Binding IsLocalFailed, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
                         </StackPanel>
 
-                        <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,8,0,0"
+                        <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" Margin="0,8,0,0"
                                     Visibility="{Binding IsLocalReady, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
-                            <FontIcon Glyph="&#xE73E;" FontSize="14" Foreground="#60C060" />
-                            <TextBlock Text="Ready to use" FontSize="12"
-                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            <FontIcon Glyph="&#xE73E;" FontSize="{StaticResource DimmyIconM}" Foreground="#60C060" />
+                            <TextBlock Text="Ready to use" Style="{StaticResource DimmyCaption}" />
                         </StackPanel>
                     </StackPanel>
                 </Border>
@@ -129,16 +126,15 @@
                         Padding="18"
                         MinHeight="220"
                         Tapped="CloudCard_Tapped">
-                    <StackPanel Spacing="8">
-                        <FontIcon Glyph="&#xE753;" FontSize="24"
+                    <StackPanel Spacing="{StaticResource DimmySpaceS}">
+                        <FontIcon Glyph="&#xE753;" FontSize="{StaticResource DimmyIconXL}"
                                   HorizontalAlignment="Left"
                                   Foreground="{ThemeResource AccentFillColorDefaultBrush}" />
-                        <TextBlock Text="Cloud (Groq)" FontSize="18" FontWeight="SemiBold" />
+                        <TextBlock Text="Cloud (Groq)" Style="{StaticResource DimmyHeadline}" />
                         <TextBlock Text="Fastest · most accurate"
-                                   FontSize="12"
-                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                   Style="{StaticResource DimmyCaption}" />
                         <TextBlock Text="Free tier available · uses your API key"
-                                   FontSize="11" TextWrapping="Wrap"
+                                   Style="{StaticResource DimmyCaption}" TextWrapping="Wrap"
                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
 
                         <PasswordBox x:Name="GroqKeyBox"
@@ -149,24 +145,23 @@
 
                         <HyperlinkButton NavigateUri="https://console.groq.com/keys"
                                          Padding="0,4,0,0">
-                            <TextBlock Text="Get API key →" FontSize="12" />
+                            <TextBlock Text="Get API key →" Style="{StaticResource DimmyLabel}" />
                         </HyperlinkButton>
 
-                        <StackPanel Orientation="Horizontal" Spacing="6">
+                        <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
                             <ProgressRing IsActive="{Binding IsValidatingKey, Mode=OneWay}"
                                           Width="14" Height="14"
                                           Visibility="{Binding IsValidatingKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
-                            <FontIcon Glyph="&#xE73E;" FontSize="14" Foreground="#60C060"
+                            <FontIcon Glyph="&#xE73E;" FontSize="{StaticResource DimmyIconM}" Foreground="#60C060"
                                       Visibility="{Binding IsCloudReady, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
-                            <TextBlock Text="{Binding CloudErrorText, Mode=OneWay}" FontSize="11"
-                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            <TextBlock Text="{Binding CloudErrorText, Mode=OneWay}" Style="{StaticResource DimmyCaption}"
                                        TextWrapping="Wrap" />
                         </StackPanel>
                     </StackPanel>
                 </Border>
             </Grid>
 
-            <StackPanel Orientation="Horizontal" Spacing="12" HorizontalAlignment="Center"
+            <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}" HorizontalAlignment="Center"
                         Margin="0,8,0,0">
                 <Button Content="Back"
                         AutomationProperties.AutomationId="OnboardingChoiceBackButton"
@@ -180,33 +175,32 @@
         </StackPanel>
 
         <!-- Step 2: Shortcut -->
-        <StackPanel x:Name="Step2Panel" Spacing="12" VerticalAlignment="Center"
+        <StackPanel x:Name="Step2Panel" Spacing="{StaticResource DimmySpaceM}" VerticalAlignment="Center"
                     HorizontalAlignment="Center"
                     Visibility="{Binding IsStep2, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
-            <TextBlock Text="Your Shortcut" FontSize="28" FontWeight="Bold"
+            <TextBlock Text="Your Shortcut" Style="{StaticResource DimmyPageTitle}"
                        HorizontalAlignment="Center" />
-            <TextBlock Text="Press the keys you want to dictate with." FontSize="14"
-                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+            <TextBlock Text="Press the keys you want to dictate with." Style="{StaticResource DimmySecondary}"
                        HorizontalAlignment="Center" />
             <Border x:Name="ShortcutCaptureBorder"
                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                    CornerRadius="8" Padding="24,16" HorizontalAlignment="Center"
+                    CornerRadius="{StaticResource DimmyCardRadius}" Padding="24,16" HorizontalAlignment="Center"
                     MinWidth="220" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1" Tapped="ShortcutCapture_Tapped">
                 <TextBlock x:Name="ShortcutCaptureText" Text="{Binding Shortcut, Mode=OneWay}"
-                           FontSize="24" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                           Style="{StaticResource DimmyPageTitle}" HorizontalAlignment="Center" />
             </Border>
-            <TextBlock Text="Click here, then press and hold your combo." FontSize="12"
+            <TextBlock Text="Click here, then press and hold your combo." Style="{StaticResource DimmyCaption}"
                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                        HorizontalAlignment="Center" />
-            <StackPanel Orientation="Horizontal" Spacing="16" HorizontalAlignment="Center"
+            <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceL}" HorizontalAlignment="Center"
                         Margin="0,12,0,0">
                 <RadioButton Content="Push-to-Talk" GroupName="Mode"
                              IsChecked="{Binding ShortcutMode, Mode=TwoWay, Converter={StaticResource StringToBoolConverter}, ConverterParameter=hold}" />
                 <RadioButton Content="Toggle" GroupName="Mode"
                              IsChecked="{Binding ShortcutMode, Mode=TwoWay, Converter={StaticResource StringToBoolConverter}, ConverterParameter=toggle}" />
             </StackPanel>
-            <StackPanel Orientation="Horizontal" Spacing="12" HorizontalAlignment="Center"
+            <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}" HorizontalAlignment="Center"
                         Margin="0,16,0,0">
                 <Button Content="Back" Click="PrevStep_Click" Width="90" />
                 <Button Content="Next" Click="NextStep_Click"
@@ -215,28 +209,25 @@
         </StackPanel>
 
         <!-- Step 3: Try It -->
-        <StackPanel x:Name="Step3Panel" Spacing="12" VerticalAlignment="Center"
+        <StackPanel x:Name="Step3Panel" Spacing="{StaticResource DimmySpaceM}" VerticalAlignment="Center"
                     HorizontalAlignment="Center"
                     Visibility="{Binding IsStep3, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
             <StackPanel Visibility="{Binding IsTrialSuccess, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Invert}"
-                        Spacing="12" HorizontalAlignment="Center">
-                <TextBlock Text="Try it!" FontSize="28" FontWeight="Bold"
+                        Spacing="{StaticResource DimmySpaceM}" HorizontalAlignment="Center">
+                <TextBlock Text="Try it!" Style="{StaticResource DimmyPageTitle}"
                            HorizontalAlignment="Center" />
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                    <TextBlock Text="{Binding TrialPromptVerb, Mode=OneWay}" FontSize="14"
+                    <TextBlock Text="{Binding TrialPromptVerb, Mode=OneWay}" Style="{StaticResource DimmySecondary}" />
+                    <TextBlock Text=" " Style="{StaticResource DimmyBody}" />
+                    <TextBlock Text="{Binding Shortcut, Mode=OneWay}" Style="{StaticResource DimmyCardTitle}"
                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                    <TextBlock Text=" " FontSize="14" />
-                    <TextBlock Text="{Binding Shortcut, Mode=OneWay}" FontSize="14"
-                               FontWeight="SemiBold"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                    <TextBlock Text=" and say something" FontSize="14"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <TextBlock Text=" and say something" Style="{StaticResource DimmySecondary}" />
                 </StackPanel>
                 <TextBlock Text="Look at the pill overlay. It will animate while you speak."
-                           FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                           Style="{StaticResource DimmyCaption}" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                            HorizontalAlignment="Center" />
                 <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                        CornerRadius="8" Padding="16" MinHeight="80" MinWidth="320"
+                        CornerRadius="{StaticResource DimmyCardRadius}" Padding="16" MinHeight="80" MinWidth="320"
                         BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
                     <Grid>
                         <TextBlock Text="{Binding TrialBoxPlaceholder, Mode=OneWay}"
@@ -249,13 +240,12 @@
                                    Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
                     </Grid>
                 </Border>
-                <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Center"
+                <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" HorizontalAlignment="Center"
                             Visibility="{Binding TrialHasResult, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
-                    <FontIcon Glyph="&#xE73E;" FontSize="16" Foreground="Green" />
-                    <TextBlock Text="Transcribed. Looks right?" FontSize="13"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <FontIcon Glyph="&#xE73E;" FontSize="{StaticResource DimmyIconL}" Foreground="Green" />
+                    <TextBlock Text="Transcribed. Looks right?" Style="{StaticResource DimmySecondary}" />
                 </StackPanel>
-                <StackPanel Orientation="Horizontal" Spacing="12" HorizontalAlignment="Center" Margin="0,8,0,0">
+                <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}" HorizontalAlignment="Center" Margin="0,8,0,0">
                     <Button Content="Back" Click="PrevStep_Click" Width="90" />
                     <Button Content="Continue" Click="TrialContinue_Click"
                             Style="{ThemeResource AccentButtonStyle}" Width="140"
@@ -266,34 +256,29 @@
             </StackPanel>
 
             <StackPanel Visibility="{Binding IsTrialSuccess, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
-                        Spacing="12" HorizontalAlignment="Center">
-                <FontIcon Glyph="&#xE73E;" FontSize="56" Foreground="Green"
+                        Spacing="{StaticResource DimmySpaceM}" HorizontalAlignment="Center">
+                <FontIcon Glyph="&#xE73E;" FontSize="{StaticResource DimmyIconHero}" Foreground="Green"
                           HorizontalAlignment="Center" />
-                <TextBlock Text="You're all set!" FontSize="24" FontWeight="Bold"
+                <TextBlock Text="You're all set!" Style="{StaticResource DimmyPageTitle}"
                            HorizontalAlignment="Center" />
-                <StackPanel HorizontalAlignment="Center" Spacing="2">
-                    <TextBlock Text="Dimmy lives in your system tray." FontSize="13"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                <StackPanel HorizontalAlignment="Center" Spacing="{StaticResource DimmySpaceXS}">
+                    <TextBlock Text="Dimmy lives in your system tray." Style="{StaticResource DimmySecondary}"
                                HorizontalAlignment="Center" />
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                        <TextBlock Text="{Binding TrialPromptVerb, Mode=OneWay}" FontSize="13"
+                        <TextBlock Text="{Binding TrialPromptVerb, Mode=OneWay}" Style="{StaticResource DimmySecondary}" />
+                        <TextBlock Text=" " Style="{StaticResource DimmyBody}" />
+                        <TextBlock Text="{Binding Shortcut, Mode=OneWay}" Style="{StaticResource DimmyCardTitle}"
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                        <TextBlock Text=" " FontSize="13" />
-                        <TextBlock Text="{Binding Shortcut, Mode=OneWay}" FontSize="13"
-                                   FontWeight="SemiBold"
-                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                        <TextBlock Text=" anywhere to dictate." FontSize="13"
-                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <TextBlock Text=" anywhere to dictate." Style="{StaticResource DimmySecondary}" />
                     </StackPanel>
                 </StackPanel>
                 <!-- Two doors out of the wizard, for the two features whose setup is
                      more than a checkbox. Offered, not imposed: "Start Using Dimmy"
                      finishes exactly as it did before and nobody is walked through
                      something they did not ask for. -->
-                <TextBlock Text="Want to set up more?" FontSize="13" Margin="0,10,0,0"
-                           HorizontalAlignment="Center"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                <StackPanel Orientation="Horizontal" Spacing="10" HorizontalAlignment="Center">
+                <TextBlock Text="Want to set up more?" Style="{StaticResource DimmySecondary}" Margin="0,10,0,0"
+                           HorizontalAlignment="Center" />
+                <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}" HorizontalAlignment="Center">
                   <controls:WizardCard Glyph="&#xE8BD;" Title="Meetings"
                                        Description="Record and get a recap"
                                        Click="OpenMeetingWizard_Click" />
@@ -301,7 +286,7 @@
                                        Description="Change selected text by voice"
                                        Click="OpenCommandWizard_Click" />
                 </StackPanel>
-                <StackPanel Orientation="Horizontal" Spacing="12" HorizontalAlignment="Center" Margin="0,8,0,0">
+                <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}" HorizontalAlignment="Center" Margin="0,8,0,0">
                     <Button Content="Back" Click="TrialBack_Click" Width="90" />
                     <Button Content="Continue" Click="ContinueWithoutWizard_Click"
                             AutomationProperties.AutomationId="OnboardingToUpdatesButton"
@@ -312,18 +297,17 @@
 
         <!-- Step 4: Thank you + the one optional ask. Every way out of the
              wizard passes here; skipping is a real choice, said plainly. -->
-        <StackPanel x:Name="Step4Panel" Spacing="12" VerticalAlignment="Center"
+        <StackPanel x:Name="Step4Panel" Spacing="{StaticResource DimmySpaceM}" VerticalAlignment="Center"
                     HorizontalAlignment="Center" MaxWidth="420"
                     Visibility="{Binding IsStep4, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
-            <TextBlock Text="Thank you for installing Dimmy" FontSize="24" FontWeight="Bold"
+            <TextBlock Text="Thank you for installing Dimmy" Style="{StaticResource DimmyPageTitle}"
                        HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" />
 
-            <StackPanel Spacing="12"
+            <StackPanel Spacing="{StaticResource DimmySpaceM}"
                         Visibility="{Binding UpdatesSent, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Invert}">
-                <TextBlock FontSize="14" TextWrapping="Wrap" TextAlignment="Center"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                <TextBlock Style="{StaticResource DimmySecondary}" TextWrapping="Wrap" TextAlignment="Center"
                            Text="Enter your email to start the free 14-day trial and get the latest updates automatically." />
-                <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
+                <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" HorizontalAlignment="Center">
                     <TextBox x:Name="UpdatesEmailBox" Width="250" PlaceholderText="you@example.com"
                              AutomationProperties.AutomationId="OnboardingUpdatesEmailBox"
                              Text="{Binding UpdatesEmail, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
@@ -333,25 +317,24 @@
                             Style="{ThemeResource AccentButtonStyle}"
                             IsEnabled="{Binding CanSendUpdatesEmail, Mode=OneWay}" />
                 </StackPanel>
-                <TextBlock Text="{Binding UpdatesError, Mode=OneWay}" FontSize="12" TextWrapping="Wrap"
+                <TextBlock Text="{Binding UpdatesError, Mode=OneWay}" Style="{StaticResource DimmyCaption}" TextWrapping="Wrap"
                            TextAlignment="Center"
                            Foreground="{ThemeResource SystemFillColorCriticalBrush}"
                            Visibility="{Binding HasUpdatesError, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
-                <TextBlock FontSize="12" TextWrapping="Wrap" TextAlignment="Center" Margin="0,6,0,0"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                <TextBlock Style="{StaticResource DimmyCaption}" TextWrapping="Wrap" TextAlignment="Center" Margin="0,6,0,0"
                            Text="Or continue as you are: Dimmy stays free, on this version, until you update it yourself." />
-                <StackPanel Orientation="Horizontal" Spacing="12" HorizontalAlignment="Center" Margin="0,4,0,0">
+                <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}" HorizontalAlignment="Center" Margin="0,4,0,0">
                     <Button Content="Back" Click="PrevStep_Click" Width="90" />
                     <Button Content="Continue without email" Click="UpdatesFinish_Click"
                             AutomationProperties.AutomationId="OnboardingUpdatesSkipButton" />
                 </StackPanel>
             </StackPanel>
 
-            <StackPanel Spacing="12"
+            <StackPanel Spacing="{StaticResource DimmySpaceM}"
                         Visibility="{Binding UpdatesSent, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
-                <FontIcon Glyph="&#xE715;" FontSize="40" HorizontalAlignment="Center"
+                <FontIcon Glyph="&#xE715;" FontSize="{StaticResource DimmyIconHero}" HorizontalAlignment="Center"
                           Foreground="{ThemeResource AccentFillColorDefaultBrush}" />
-                <TextBlock FontSize="14" TextWrapping="Wrap" TextAlignment="Center"
+                <TextBlock Style="{StaticResource DimmyBody}" TextWrapping="Wrap" TextAlignment="Center"
                            Text="Check your inbox. The link in the email activates Dimmy on this PC; until you open it nothing changes." />
                 <Button Content="Start Using Dimmy" Click="UpdatesFinish_Click"
                         AutomationProperties.AutomationId="OnboardingUpdatesDoneButton"
@@ -360,7 +343,7 @@
         </StackPanel>
 
         <!-- Progress dots -->
-        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Center" Spacing="8">
+        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Center" Spacing="{StaticResource DimmySpaceS}">
             <Ellipse Width="8" Height="8"
                      Fill="{ThemeResource AccentFillColorDefaultBrush}" />
             <Ellipse Width="8" Height="8"

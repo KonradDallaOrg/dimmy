@@ -34,13 +34,13 @@
     <x:Double x:Key="ContentDialogMinWidth">560</x:Double>
   </ContentDialog.Resources>
 
-  <Grid RowSpacing="14" MinHeight="340">
+  <Grid RowSpacing="{StaticResource DimmySpaceL}" MinHeight="340">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto"/>
       <RowDefinition Height="*"/>
     </Grid.RowDefinitions>
 
-    <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="8"
+    <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}"
                 HorizontalAlignment="Center" Margin="0,0,0,4">
       <Ellipse x:Name="Dot1" Width="10" Height="10"
                Fill="{ThemeResource AccentFillColorDefaultBrush}"/>
@@ -51,11 +51,10 @@
     <Grid Grid.Row="1">
 
       <!-- ════ Step 1 — credentials ════ -->
-      <StackPanel x:Name="Step1Panel" Spacing="12" Visibility="Visible">
+      <StackPanel x:Name="Step1Panel" Spacing="{StaticResource DimmySpaceM}" Visibility="Visible">
         <TextBlock Text="Sign in to your Confluence"
-                   FontSize="16" FontWeight="SemiBold"/>
-        <TextBlock TextWrapping="Wrap" FontSize="13"
-                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                   Style="{StaticResource DimmyCardTitle}"/>
+        <TextBlock TextWrapping="Wrap" Style="{StaticResource DimmySecondary}"
                    Text="Dimmy writes recap pages as you, with your own permissions. It never reads anything else."/>
 
         <TextBox x:Name="SiteBox" Header="Confluence site"
@@ -71,27 +70,26 @@
         <!-- Atlassian issues two kinds of token and the page offers both, so
              say which is fine rather than leaving the user to guess. Either
              works; a scoped one needs exactly these two. -->
-        <TextBlock TextWrapping="Wrap" FontSize="12"
+        <TextBlock TextWrapping="Wrap" Style="{StaticResource DimmyCaption}"
                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                    Text="A plain API token works. If you create one with scopes, it needs read:space:confluence and write:page:confluence."/>
 
-        <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+        <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}" VerticalAlignment="Center">
           <Button Content="Create an API token" Click="OpenTokenPage_Click"/>
           <Button x:Name="VerifyBtn" Content="Check" Click="Verify_Click"
                   Style="{ThemeResource AccentButtonStyle}"/>
           <ProgressRing x:Name="VerifyRing" Width="18" Height="18"
                         IsActive="False" Visibility="Collapsed"/>
           <TextBlock x:Name="VerifyStatus" VerticalAlignment="Center"
-                     FontSize="13" TextWrapping="Wrap"/>
+                     Style="{StaticResource DimmyBody}" TextWrapping="Wrap"/>
         </StackPanel>
       </StackPanel>
 
       <!-- ════ Step 2 — destination ════ -->
-      <StackPanel x:Name="Step2Panel" Spacing="12" Visibility="Collapsed">
+      <StackPanel x:Name="Step2Panel" Spacing="{StaticResource DimmySpaceM}" Visibility="Collapsed">
         <TextBlock Text="Where should recaps go?"
-                   FontSize="16" FontWeight="SemiBold"/>
-        <TextBlock TextWrapping="Wrap" FontSize="13"
-                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                   Style="{StaticResource DimmyCardTitle}"/>
+        <TextBlock TextWrapping="Wrap" Style="{StaticResource DimmySecondary}"
                    Text="Each recap becomes a new page in this space. Your personal space is picked by default."/>
 
         <!-- A filter, not a nicety: a real tenant returned 530 spaces, and
@@ -110,11 +108,11 @@
         <!-- Auto-send lives in Settings, not here, exactly as Notion does it:
              it is a single switch a user flips over time, and burying it in a
              wizard means the only way to change your mind is to re-run setup. -->
-        <TextBlock TextWrapping="Wrap" FontSize="12"
+        <TextBlock TextWrapping="Wrap" Style="{StaticResource DimmyCaption}"
                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                    Text="Recaps are sent when you click Send on a meeting. You can turn on automatic sending in Settings afterwards. Every page carries a visible note saying it was generated with AI."/>
 
-        <TextBlock x:Name="SpaceStatus" FontSize="13" TextWrapping="Wrap"/>
+        <TextBlock x:Name="SpaceStatus" Style="{StaticResource DimmyBody}" TextWrapping="Wrap"/>
       </StackPanel>
 
     </Grid>
