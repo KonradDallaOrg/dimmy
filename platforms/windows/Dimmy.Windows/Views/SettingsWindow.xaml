@@ -130,98 +130,118 @@
           <StackPanel Grid.Row="1" MaxWidth="1100" HorizontalAlignment="Stretch">
 
             <!-- ═══ Home — hero + system prefs (theme, autostart) + quick stats ═══ -->
-            <StackPanel x:Name="HomePanel" Spacing="4" Visibility="Visible">
-              <StackPanel Spacing="2" Margin="0,0,0,16">
-                <TextBlock Text="Home" FontSize="28" FontWeight="SemiBold" />
-                <TextBlock Text="Get a quick read on Dimmy and jump to what you need."
-                           FontSize="13"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            <StackPanel x:Name="HomePanel" Visibility="Visible">
+              <TextBlock Text="Home" Style="{StaticResource DimmyPageTitle}" Margin="0,0,0,16" />
+
+              <!-- Hero: how to use Dimmy right now, and what it is set to. -->
+              <Border Style="{StaticResource DimmyCard}">
+                <StackPanel Spacing="{StaticResource DimmySpaceL}">
+                  <Grid ColumnSpacing="{StaticResource DimmySpaceL}">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="Auto" />
+                      <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Image Source="ms-appx:///Assets/dimmy-logo.png" Width="48" Height="48"
+                           VerticalAlignment="Center" />
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                      <TextBlock x:Name="HomeHeadline" Style="{StaticResource DimmyHeadline}" TextWrapping="Wrap" />
+                      <TextBlock Style="{StaticResource DimmySecondary}" TextWrapping="Wrap"
+                                 Text="Your words appear wherever you're typing." />
+                    </StackPanel>
+                  </Grid>
+                  <Border Style="{StaticResource DimmyDivider}" />
+                  <Grid ColumnSpacing="{StaticResource DimmySpaceS}">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="*" />
+                      <ColumnDefinition Width="*" />
+                      <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Button Grid.Column="0" Style="{StaticResource DimmyStatusButton}"
+                            Tag="shortcut" Click="HomeNavigate_Click">
+                      <StackPanel Spacing="2">
+                        <TextBlock Style="{StaticResource DimmyCaption}" Text="Shortcut" />
+                        <TextBlock x:Name="HomeShortcutValue" Style="{StaticResource DimmyCardTitle}"
+                                   TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+                      </StackPanel>
+                    </Button>
+                    <Button Grid.Column="1" Style="{StaticResource DimmyStatusButton}"
+                            Tag="voice" Click="HomeNavigate_Click">
+                      <StackPanel Spacing="2">
+                        <TextBlock Style="{StaticResource DimmyCaption}" Text="Transcription" />
+                        <TextBlock x:Name="HomeEngineValue" Style="{StaticResource DimmyCardTitle}"
+                                   TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+                      </StackPanel>
+                    </Button>
+                    <Button Grid.Column="2" Style="{StaticResource DimmyStatusButton}"
+                            Tag="voice" Click="HomeNavigate_Click">
+                      <StackPanel Spacing="2">
+                        <TextBlock Style="{StaticResource DimmyCaption}" Text="Microphone" />
+                        <TextBlock x:Name="HomeMicValue" Style="{StaticResource DimmyCardTitle}"
+                                   TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+                      </StackPanel>
+                    </Button>
+                  </Grid>
+                </StackPanel>
+              </Border>
+
+              <TextBlock Text="Your dictation" Style="{StaticResource DimmySection}" />
+              <Grid ColumnSpacing="{StaticResource DimmySpaceM}">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Border Grid.Column="0" Style="{StaticResource DimmyCard}">
+                  <StackPanel Spacing="{StaticResource DimmySpaceXS}">
+                    <FontIcon Glyph="&#xE8D2;" FontSize="16" HorizontalAlignment="Left"
+                              Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                    <TextBlock Style="{StaticResource DimmyStat}" Text="{Binding StatsTotalWords, Mode=OneWay}" />
+                    <TextBlock Style="{StaticResource DimmyCaption}" Text="words transcribed" />
+                  </StackPanel>
+                </Border>
+                <Border Grid.Column="1" Style="{StaticResource DimmyCard}">
+                  <StackPanel Spacing="{StaticResource DimmySpaceXS}">
+                    <FontIcon Glyph="&#xE720;" FontSize="16" HorizontalAlignment="Left"
+                              Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                    <TextBlock Style="{StaticResource DimmyStat}" Text="{Binding SpeakingTimeDisplay, Mode=OneWay}" />
+                    <TextBlock Style="{StaticResource DimmyCaption}" Text="time speaking" />
+                  </StackPanel>
+                </Border>
+                <Border Grid.Column="2" Style="{StaticResource DimmyCard}">
+                  <StackPanel Spacing="{StaticResource DimmySpaceXS}">
+                    <FontIcon Glyph="&#xE823;" FontSize="16" HorizontalAlignment="Left"
+                              Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                    <TextBlock Style="{StaticResource DimmyStat}" Text="{Binding TimeSavedDisplay, Mode=OneWay}" />
+                    <TextBlock Style="{StaticResource DimmyCaption}" Text="time saved vs typing" />
+                  </StackPanel>
+                </Border>
+              </Grid>
+
+              <Grid>
+                <TextBlock Text="Recent" Style="{StaticResource DimmySection}" />
+                <HyperlinkButton Content="See all" Tag="history" Click="HomeNavigate_Click"
+                                 HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                 Margin="0,0,0,4" />
+              </Grid>
+              <Border Style="{StaticResource DimmyCard}">
+                <StackPanel>
+                  <TextBlock x:Name="HomeRecentEmpty" Style="{StaticResource DimmySecondary}"
+                             Text="Your transcriptions will appear here." />
+                  <StackPanel x:Name="HomeRecentRows" />
+                </StackPanel>
+              </Border>
+
+              <StackPanel x:Name="HomeSetupSection">
+                <TextBlock Text="Set up more" Style="{StaticResource DimmySection}" />
+                <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}">
+                  <controls:WizardCard x:Name="HomeSetupMeeting" Glyph="&#xE8BD;" Title="Meetings"
+                                       Description="Record and get a recap"
+                                       Click="OpenMeetingWizard_Click" />
+                  <controls:WizardCard x:Name="HomeSetupCommand" Glyph="&#xE90F;" Title="Command mode"
+                                       Description="Change selected text by voice"
+                                       Click="OpenCommandWizard_Click" />
+                </StackPanel>
               </StackPanel>
-
-              <!-- Hero card: app icon + name + tagline -->
-              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="4" Padding="20,18">
-                <Grid ColumnSpacing="18">
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="*" />
-                  </Grid.ColumnDefinitions>
-
-                  <!-- App icon: rounded square with Dimmy mark -->
-                  <Border Grid.Column="0" Width="56" Height="56" CornerRadius="12"
-                          VerticalAlignment="Center"
-                          Background="{ThemeResource AccentFillColorDefaultBrush}">
-                    <FontIcon Glyph="&#xE720;" FontSize="28"
-                              Foreground="White"
-                              HorizontalAlignment="Center" VerticalAlignment="Center" />
-                  </Border>
-
-                  <!-- Title + tagline -->
-                  <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="4">
-                    <TextBlock Text="Welcome to Dimmy" FontSize="20" FontWeight="SemiBold" />
-                    <TextBlock TextWrapping="Wrap"
-                               FontSize="13"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                               Text="Voice dictation that stays out of your way. Press your shortcut, speak, and the transcript pastes into whatever app has focus." />
-                  </StackPanel>
-                </Grid>
-              </Border>
-
-              <!-- Quick stats: bordered card with two big numbers — visually
-                   distinct from setting rows so it reads as a dashboard.
-                   Placed right under the hero (user-requested order). -->
-              <TextBlock Text="YOUR DICTATION"
-                         FontSize="12" FontWeight="SemiBold"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         CharacterSpacing="40" Margin="2,20,0,8" />
-              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="4" Padding="20,16">
-                <Grid ColumnSpacing="24">
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="*" />
-                  </Grid.ColumnDefinitions>
-                  <!-- Words transcribed -->
-                  <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="12">
-                    <FontIcon Glyph="&#xE8D2;" FontSize="20" VerticalAlignment="Center"
-                              Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
-                    <StackPanel Spacing="2">
-                      <TextBlock FontSize="24" FontWeight="SemiBold"
-                                 Text="{Binding StatsTotalWords, Mode=OneWay}" />
-                      <TextBlock FontSize="12"
-                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                 Text="words transcribed" />
-                    </StackPanel>
-                  </StackPanel>
-                  <!-- Speaking time -->
-                  <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="12">
-                    <FontIcon Glyph="&#xE720;" FontSize="20" VerticalAlignment="Center"
-                              Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
-                    <StackPanel Spacing="2">
-                      <TextBlock FontSize="24" FontWeight="SemiBold"
-                                 Text="{Binding SpeakingTimeDisplay, Mode=OneWay}" />
-                      <TextBlock FontSize="12"
-                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                 Text="time speaking" />
-                    </StackPanel>
-                  </StackPanel>
-                  <!-- Time saved vs typing -->
-                  <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="12">
-                    <FontIcon Glyph="&#xE823;" FontSize="20" VerticalAlignment="Center"
-                              Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
-                    <StackPanel Spacing="2">
-                      <TextBlock FontSize="24" FontWeight="SemiBold"
-                                 Text="{Binding TimeSavedDisplay, Mode=OneWay}" />
-                      <TextBlock FontSize="12"
-                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                 Text="time saved vs typing" />
-                    </StackPanel>
-                  </StackPanel>
-                </Grid>
-              </Border>
 
               <!-- Meeting + Transcribe side by side to keep the cards compact. -->
               <Grid ColumnSpacing="16">
@@ -232,16 +252,11 @@
                 <StackPanel Grid.Column="0" VerticalAlignment="Top">
               <!-- Meeting mode launcher — long-form recording with
                    streaming-to-disk + post-process recap + actions. -->
-              <TextBlock Text="MEETING MODE"
-                         FontSize="12" FontWeight="SemiBold"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         CharacterSpacing="40" Margin="2,20,0,8" />
-              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="4" Padding="20,16">
+              <TextBlock Text="Meeting mode" Style="{StaticResource DimmySection}" />
+              <Border Style="{StaticResource DimmyCard}">
                 <StackPanel Spacing="8">
                   <StackPanel Orientation="Horizontal" Spacing="6">
-                    <TextBlock Text="Record a meeting" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    <TextBlock Text="Record a meeting" Style="{StaticResource DimmyCardTitle}" VerticalAlignment="Center" />
                     <Button Background="Transparent" BorderThickness="0" Padding="0"
                             Width="18" Height="18" MinWidth="0" MinHeight="0"
                             VerticalAlignment="Center" VerticalContentAlignment="Center"
@@ -275,22 +290,17 @@
                    pick one with the file picker. Routes through the
                    active local backend (whisper / parakeet) and saves
                    the transcript to History. -->
-              <TextBlock Text="TRANSCRIBE A FILE"
-                         FontSize="12" FontWeight="SemiBold"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         CharacterSpacing="40" Margin="2,20,0,8" />
+              <TextBlock Text="Transcribe a file" Style="{StaticResource DimmySection}" />
               <!-- DragOver/Drop are wired in code-behind via AddHandler
                    with handledEventsToo=true: the parent ScrollViewer's
                    built-in drag-to-scroll marks DragOver as handled,
                    so the declarative attribute path never fires. -->
               <Border x:Name="FileLoadDropTarget"
-                      Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="4" Padding="20,16"
+                      Style="{StaticResource DimmyCard}"
                       AllowDrop="True">
                 <StackPanel Spacing="8">
                   <StackPanel Orientation="Horizontal" Spacing="6">
-                    <TextBlock Text="Transcribe an audio file" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    <TextBlock Text="Transcribe an audio file" Style="{StaticResource DimmyCardTitle}" VerticalAlignment="Center" />
                     <Button Background="Transparent" BorderThickness="0" Padding="0"
                             Width="18" Height="18" MinWidth="0" MinHeight="0"
                             VerticalAlignment="Center" VerticalContentAlignment="Center"
@@ -320,7 +330,7 @@
                                   Width="20" Height="20" />
                     <TextBlock x:Name="FileLoadStatus" Text=""
                                VerticalAlignment="Center"
-                               FontSize="12"
+                               Style="{StaticResource DimmyCaption}"
                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                TextWrapping="Wrap" />
                   </StackPanel>
@@ -354,7 +364,7 @@
                                   Width="18" Height="18" />
                     <TextBlock x:Name="FileLoadRecapStatus"
                                VerticalAlignment="Center"
-                               FontSize="12"
+                               Style="{StaticResource DimmyCaption}"
                                TextWrapping="Wrap"
                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                   </StackPanel>
@@ -366,10 +376,7 @@
               <!-- System group: theme + launch-at-login — Advanced-gated. -->
               <StackPanel Spacing="4"
                           Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
-                <TextBlock Text="SYSTEM"
-                           FontSize="12" FontWeight="SemiBold"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                           CharacterSpacing="40" Margin="2,20,0,8" />
+                <TextBlock Text="System" Style="{StaticResource DimmySection}" />
                 <controls:SettingCard Glyph="&#xE790;"
                                       Label="Theme"
                                       InfoTip="Sets the look of the Settings window. Auto follows your Windows theme.">
