@@ -106,6 +106,20 @@ no longer starts by itself past 5 minutes (`speaker_pass_after_stop`, stop JSON
 `speaker_pass`), and refuses with rc -8 when memory is short (`pass_fits`). Why the
 pass adds 5.5 GB without loading a model is not known yet.
 
+**Release when idle.** Ten minutes after the last use, `release_idle` destroys the
+recognizers no stream holds. Measured on a T600: F32 8.5 GB -> 0.5 GB of commit and
+2825 MB -> 65 MB of VRAM, Q8_0 6.8 GB -> 0.5 GB and 1069 MB -> 59 MB, four cycles
+without growth or a crash (`nemotron_release_probe`). The library stays loaded: its
+threads run from it. Loading again costs about 3 s at F32 and 1.2 s at Q8_0. The next
+load also chooses again, so a new model pick or a GPU with memory free again applies.
+
+**GPU held back.** A laptop can hold the GPU at a fraction of its speed from outside
+Dimmy: 300 MHz of 2100 with the limit at 20 W of 35, seen after a heavy run, cleared by
+`pnputil /restart-device "ACPI\NVDA0820\NPCF"` as admin. A 25-second AC unplug on the
+same machine dropped live speakers. `hardware::read_nvidia` reads the driver at meeting
+start and every 30 s, and the host is told once (`nemotron_gpu_limited`). NVIDIA only:
+Metal has no such numbers. Thresholds come from one machine.
+
 A CPU recognizer commits 3.1 GB at Q8_0 without the diarizer and 4.4 GB with it,
 so a meeting on CPU needs about 7.5 GB. The CPU engine always runs Q8_0, also when
 F32 is on disk. `RECOGNIZERS` changes only after a new recognizer exists, because

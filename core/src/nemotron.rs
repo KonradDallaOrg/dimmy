@@ -762,7 +762,6 @@ struct Api {
     stream_finish: unsafe extern "C" fn(*mut StreamHandle) -> Status,
     stream_next: unsafe extern "C" fn(*mut StreamHandle, *mut *mut ResultHandle) -> Status,
     stream_close: unsafe extern "C" fn(*mut StreamHandle),
-    #[cfg(target_os = "macos")]
     destroy: unsafe extern "C" fn(*mut RecognizerHandle),
     result_is_final: unsafe extern "C" fn(*const ResultHandle) -> bool,
     result_transcript: unsafe extern "C" fn(*const ResultHandle, usize) -> *const c_char,
@@ -825,7 +824,6 @@ impl Api {
             stream_finish: sym!("nemo_speech_asr_stream_finish"),
             stream_next: sym!("nemo_speech_asr_stream_next"),
             stream_close: sym!("nemo_speech_asr_stream_close"),
-            #[cfg(target_os = "macos")]
             destroy: sym!("nemo_speech_asr_destroy"),
             result_is_final: sym!("nemo_speech_asr_result_is_final"),
             result_transcript: sym!("nemo_speech_asr_result_transcript"),
@@ -1117,9 +1115,72 @@ impl Drop for Recognizer {
     fn drop(&mut self) {
         // Deliberately not destroyed: `nemo_speech_asr_destroy` tears down
         // worker threads that may still be finishing a stream another thread
-        // just closed, and a recognizer lives for the whole process anyway.
-        // The handle and the library are reclaimed at exit.
+        // just closed, unless `release_idle` already did it after a grace period.
+        // The library stays: its threads run from it, and unloading it under
+        // them crashes. A CPU recognizer replaced by a later GPU load gets here.
+        std::mem::forget(Arc::clone(&self.api));
     }
+}
+
+/// A loaded model holds 7-9 GB of commit and 1-3 GB of VRAM on a GPU, whether
+/// anyone is talking or not. Loading it again costs 1-3 s, once.
+const RELEASE_AFTER_IDLE: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+static LAST_USE: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+static RELEASE_THREAD_RUNNING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+fn note_use() {
+    *LAST_USE.lock().unwrap_or_else(|p| p.into_inner()) = Some(std::time::Instant::now());
+}
+
+fn idle_for_long_enough(last_use: Option<std::time::Instant>, now: std::time::Instant) -> bool {
+    last_use.is_none_or(|t| now.duration_since(t) >= RELEASE_AFTER_IDLE)
+}
+
+/// Sleeps while a model is loaded, and only then: no thread is left once the
+/// slot is empty, and the next load starts another.
+fn keep_release_thread_running() {
+    use std::sync::atomic::Ordering;
+    if RELEASE_THREAD_RUNNING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(|| loop {
+        std::thread::sleep(std::time::Duration::from_secs(30));
+        let last_use = *LAST_USE.lock().unwrap_or_else(|p| p.into_inner());
+        if !idle_for_long_enough(last_use, std::time::Instant::now()) {
+            continue;
+        }
+        let released = release_idle();
+        if released > 0 {
+            crate::log(&format!(
+                "[Nemotron] idle for {} min: released {released} recognizer(s)",
+                RELEASE_AFTER_IDLE.as_secs() / 60
+            ));
+        }
+        // Under the lock, so a load cannot slip between the check and the exit.
+        let slot = RECOGNIZERS.lock().unwrap_or_else(|p| p.into_inner());
+        if slot.is_empty() {
+            RELEASE_THREAD_RUNNING.store(false, Ordering::SeqCst);
+            return;
+        }
+    });
+}
+
+/// Destroys the recognizers no stream uses, and returns how many.
+pub fn release_idle() -> usize {
+    let mut slot = RECOGNIZERS.lock().unwrap_or_else(|p| p.into_inner());
+    let before = slot.len();
+    slot.retain(|r| {
+        if Arc::strong_count(r) > 1 {
+            return true;
+        }
+        // SAFETY: the slot held the last reference, so no stream or caller can
+        // reach this handle, and it leaves the slot here, so once only.
+        unsafe { (r.api.destroy)(r.handle) };
+        false
+    });
+    before - slot.len()
 }
 
 /// The strings a request points at, kept alive for as long as the C side
@@ -1267,6 +1328,7 @@ impl Drop for Stream {
     fn drop(&mut self) {
         // SAFETY: closed exactly once, here.
         unsafe { (self.recognizer.api.stream_close)(self.handle) };
+        note_use();
     }
 }
 
@@ -1282,12 +1344,15 @@ static RECOGNIZERS: Mutex<Vec<Arc<Recognizer>>> = Mutex::new(Vec::new());
 pub fn recognizer(spec: &EngineSpec) -> Result<Arc<Recognizer>, TranscribeError> {
     let mut slot = RECOGNIZERS.lock().unwrap_or_else(|p| p.into_inner());
     let available = crate::setup::available_memory_bytes();
-    load_into(&mut slot, spec, available, Recognizer::spec, || {
+    let r = load_into(&mut slot, spec, available, Recognizer::spec, || {
         let r = Arc::new(Recognizer::create(spec.clone())?);
         warm_up(&r)?;
         release_before_ggml_exits();
         Ok(r)
-    })
+    })?;
+    note_use();
+    keep_release_thread_running();
+    Ok(r)
 }
 
 /// Touches the slot only after the new recognizer exists, because what leaves
@@ -2196,6 +2261,15 @@ mod tests {
         assert_eq!(slot.len(), 2, "one with and one without the diarizer");
         fake_load(&mut slot, &fake_spec(true, true), None, &mut loads).expect("GPU");
         assert_eq!(slot.len(), 1, "one model serves every stream on a GPU");
+    }
+
+    #[test]
+    fn a_model_is_released_only_after_ten_idle_minutes() {
+        let now = std::time::Instant::now() + RELEASE_AFTER_IDLE * 2;
+        assert!(idle_for_long_enough(None, now));
+        assert!(idle_for_long_enough(Some(now - RELEASE_AFTER_IDLE), now));
+        let recent = now - RELEASE_AFTER_IDLE + std::time::Duration::from_secs(1);
+        assert!(!idle_for_long_enough(Some(recent), now));
     }
 
     #[test]
