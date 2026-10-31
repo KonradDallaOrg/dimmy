@@ -58,7 +58,9 @@ public sealed partial class MeetingWindow : Window
     // bars visibly stutter. The rectangles are now pooled and only their
     // height moves; the scroll itself is a transform driven per frame.
     private Microsoft.UI.Xaml.Controls.Canvas? _ampScrollLayer;
-    private Microsoft.UI.Xaml.Media.TranslateTransform? _ampScrollTransform;
+    private Microsoft.UI.Composition.Visual? _ampLayerVisual;
+    private double _ampLayerOriginMs;
+    private DispatcherQueueTimer? _ampTimer;
     private readonly List<Microsoft.UI.Xaml.Shapes.Rectangle> _ampBarsMic = new();
     private readonly List<Microsoft.UI.Xaml.Shapes.Rectangle> _ampBarsSys = new();
     private SolidColorBrush? _liveBrushMic;
@@ -70,7 +72,6 @@ public sealed partial class MeetingWindow : Window
     private readonly System.Diagnostics.Stopwatch _ampClock = new();
     // Samples laid on the strip so far, one per AMP_SAMPLE_MS of clock.
     private long _ampSamplesLaid;
-    private bool _ampRenderHooked;
     // Second history for the loopback (system) stream so the live
     // waveform can draw mic and system as two distinct bands.
     private readonly Queue<float> _ampHistorySystem = new();
@@ -79,8 +80,8 @@ public sealed partial class MeetingWindow : Window
     // Recomputed in LiveWaveformCanvas_SizeChanged.
     // One bar per sample, so this is also how much audio a bar represents.
     // 12 Hz is the documented cadence for VU sampling (see the polling-rule
-    // exception in CLAUDE.md); the SCROLL is interpolated between samples so
-    // the eye never sees the 83 ms step.
+    // exception in CLAUDE.md); the SCROLL runs on the compositor, so the eye
+    // never sees the 83 ms step.
     private const double AMP_SAMPLE_MS = 83.0;
     private const double AMP_BAR_PX = 4.0;
     private const double AMP_GAP_PX = 2.0;
@@ -88,6 +89,7 @@ public sealed partial class MeetingWindow : Window
     // (~83 ms each) behind the microphone, and a tick can be that late before
     // the strip has to wait for it.
     private const double AMP_SLACK_SAMPLES = 2.0;
+    private const double AMP_LAYER_CYCLE_MS = 3_600_000;
     private const int AMP_MIN_HISTORY = 20;
     private const int AMP_MAX_HISTORY = 240;
     private int _ampHistorySize = 40;
@@ -855,6 +857,9 @@ public sealed partial class MeetingWindow : Window
         // recording. Polling never stopped — only the UI panel was
         // hidden — so flipping state back is enough.
         if (!_recordingActive) return;
+        // Clearing the selection does not stop the player of the meeting that
+        // was open, and it would stay loaded behind the live view.
+        StopDoneMediaPlayback();
         HistoryList.SelectedItem = null;
         SetState(MeetingState.Recording);
     }
@@ -1205,32 +1210,37 @@ public sealed partial class MeetingWindow : Window
     {
         _ampClock.Restart();
         _ampSamplesLaid = 0;
-        HookAmpRendering(true);
+        if (_ampTimer == null)
+        {
+            _ampTimer = DispatcherQueue.CreateTimer();
+            _ampTimer.Interval = TimeSpan.FromMilliseconds(AMP_SAMPLE_MS);
+            _ampTimer.IsRepeating = true;
+            _ampTimer.Tick += (_, _) => LayDueAmpSamples();
+        }
+        _ampTimer.Start();
+        StartAmpScroll();
     }
 
-    /// <summary>Per-frame scroll and new bars. CompositionTarget.Rendering fires
-    /// once per composed frame, so the offset lands on the same clock the screen
-    /// does. The bars are laid here too: from a timer they could arrive between
-    /// this handler and the frame, and that frame showed the new bars at the old
-    /// offset, one bar out of place.</summary>
-    private void HookAmpRendering(bool on)
+    /// <summary>The layer scrolls on the compositor, so a busy UI thread (a long
+    /// transcript laying out, a burst of partials) cannot stop it. A late tick
+    /// only makes the newest bars wait past the right edge a little longer.
+    ///
+    /// One hour per animation: its progress is a float, and over a much longer
+    /// run a step of it would be a visible fraction of a pixel.</summary>
+    private void StartAmpScroll()
     {
-        if (on == _ampRenderHooked) return;
-        _ampRenderHooked = on;
-        if (on) Microsoft.UI.Xaml.Media.CompositionTarget.Rendering += OnAmpRendering;
-        else Microsoft.UI.Xaml.Media.CompositionTarget.Rendering -= OnAmpRendering;
-    }
-
-    private void OnAmpRendering(object? sender, object e)
-    {
-        LayDueAmpSamples();
-        if (_ampScrollTransform == null) return;
-        // How far the clock is past the last sample laid. The newest bars wait
-        // PAST the right edge and the layer glides left on the clock, so a bar
-        // enters continuously. The second pitch of slack is what lets a late
-        // tick go unseen: the strip keeps moving into it instead of stopping.
-        double frac = _ampClock.Elapsed.TotalMilliseconds / AMP_SAMPLE_MS - _ampSamplesLaid;
-        _ampScrollTransform.X = -(AMP_BAR_PX + AMP_GAP_PX) * Math.Clamp(frac, 0.0, AMP_SLACK_SAMPLES);
+        if (_ampLayerVisual == null) return;
+        _ampLayerOriginMs = _ampClock.Elapsed.TotalMilliseconds;
+        var compositor = _ampLayerVisual.Compositor;
+        var linear = compositor.CreateLinearEasingFunction();
+        var scroll = compositor.CreateScalarKeyFrameAnimation();
+        double pitch = AMP_BAR_PX + AMP_GAP_PX;
+        double spanMs = AMP_LAYER_CYCLE_MS + 60_000;
+        scroll.InsertKeyFrame(0f, 0f, linear);
+        scroll.InsertKeyFrame(1f, (float)Helpers.LiveWaveformLayout.LayerX(spanMs, AMP_SAMPLE_MS, pitch, 0), linear);
+        scroll.Duration = TimeSpan.FromMilliseconds(spanMs);
+        _ampLayerVisual.StartAnimation("Translation.X", scroll);
+        DrawLiveWaveform();
     }
 
     private void StopAmplitudePoll()
@@ -1239,29 +1249,28 @@ public sealed partial class MeetingWindow : Window
         // the auto-stop that killed those one-second meetings. A pending
         // announcement dies with the recording it was going to describe.
         CancelAutoAnnounce();
-        HookAmpRendering(false);
+        _ampTimer?.Stop();
+        _ampLayerVisual?.StopAnimation("Translation.X");
     }
 
     private void LayDueAmpSamples()
     {
         try
         {
-            // Every sample the clock has passed gets a bar, so a late frame
+            double elapsedMs = _ampClock.Elapsed.TotalMilliseconds;
+            if (elapsedMs - _ampLayerOriginMs >= AMP_LAYER_CYCLE_MS) StartAmpScroll();
+
+            // Every sample the clock has passed gets a bar, so a late tick
             // fills its gap with the level it reads now and the strip keeps
             // the speed of real time.
-            long due = (long)(_ampClock.Elapsed.TotalMilliseconds / AMP_SAMPLE_MS);
-            long missing = Math.Min(due - _ampSamplesLaid, _ampHistorySize);
-            if (missing <= 0) return;
+            long due = (long)(elapsedMs / AMP_SAMPLE_MS);
+            if (due <= _ampSamplesLaid) return;
+            long first = Math.Max(_ampSamplesLaid, due - _ampHistorySize);
             _ampSamplesLaid = due;
 
             float ampMic = DimmyNative.dimmy_get_amplitude();
             if (!float.IsFinite(ampMic)) ampMic = 0;
             ampMic = (float)Math.Min(1.0, Math.Sqrt(ampMic) * 1.4);
-            for (long k = 0; k < missing; k++)
-            {
-                while (_ampHistory.Count >= _ampHistorySize) _ampHistory.Dequeue();
-                _ampHistory.Enqueue(ampMic);
-            }
 
             // Loopback (system) amplitude — populated only in Mix mode.
             // In Mic-only / System-only modes this is 0, which collapses
@@ -1270,13 +1279,21 @@ public sealed partial class MeetingWindow : Window
             float ampSys = DimmyNative.dimmy_get_loopback_amplitude();
             if (!float.IsFinite(ampSys)) ampSys = 0;
             ampSys = (float)Math.Min(1.0, Math.Sqrt(ampSys) * 1.4);
-            for (long k = 0; k < missing; k++)
+
+            double w = LiveWaveformCanvas.ActualWidth;
+            double h = LiveWaveformCanvas.ActualHeight;
+            bool ready = w > 0 && h > 0 && _ampBarsMic.Count == _ampHistorySize;
+            for (long k = first; k < due; k++)
             {
+                while (_ampHistory.Count >= _ampHistorySize) _ampHistory.Dequeue();
+                _ampHistory.Enqueue(ampMic);
                 while (_ampHistorySystem.Count >= _ampHistorySize) _ampHistorySystem.Dequeue();
                 _ampHistorySystem.Enqueue(ampSys);
+                if (!ready) continue;
+                PlaceBar(_ampBarsMic, k, ampMic, h / 4.0, h / 2.0 - 4, w);
+                PlaceBar(_ampBarsSys, k, ampSys, h * 3.0 / 4.0, h / 2.0 - 4, w);
             }
-
-            DrawLiveWaveform();
+            if (!ready) DrawLiveWaveform();
         }
         catch { }
     }
@@ -1289,15 +1306,15 @@ public sealed partial class MeetingWindow : Window
         // stretches the existing 40 bars across the whole canvas.
         double w = LiveWaveformCanvas.ActualWidth;
         if (w <= 0) return;
-        // + the bars waiting past the right edge, or the left edge shows a gap.
-        int n = (int)(w / (AMP_BAR_PX + AMP_GAP_PX)) + (int)AMP_SLACK_SAMPLES;
-        n = Math.Clamp(n, AMP_MIN_HISTORY, AMP_MAX_HISTORY);
+        int n = Helpers.LiveWaveformLayout.Capacity(w, AMP_BAR_PX + AMP_GAP_PX, AMP_SLACK_SAMPLES, AMP_MIN_HISTORY, AMP_MAX_HISTORY);
         _ampHistorySize = n;
         while (_ampHistory.Count > n) _ampHistory.Dequeue();
         while (_ampHistorySystem.Count > n) _ampHistorySystem.Dequeue();
         DrawLiveWaveform();
     }
 
+    /// <summary>Lay every bar from the history: only when the size or the layer's
+    /// origin changes. A normal sample goes through <see cref="PlaceBar"/>.</summary>
     private void DrawLiveWaveform()
     {
         if (LiveWaveformCanvas == null) return;
@@ -1305,7 +1322,11 @@ public sealed partial class MeetingWindow : Window
         double h = LiveWaveformCanvas.ActualHeight;
         if (w <= 0 || h <= 0) return;
 
-        EnsureAmpScrollLayer(w, h);
+        if (EnsureAmpScrollLayer()) { StartAmpScroll(); return; }
+        LiveWaveformCanvas.Clip = new Microsoft.UI.Xaml.Media.RectangleGeometry
+        {
+            Rect = new global::Windows.Foundation.Rect(0, 0, w, h),
+        };
 
         // Two stacked bands so mic and system are clearly readable at a
         // glance, each centred on its own midline so bars grow up and down
@@ -1317,55 +1338,29 @@ public sealed partial class MeetingWindow : Window
         // (so the pairing was never designed, only whatever the user had) next
         // to a raw system colour. Live and done are the same waveform of the
         // same meeting; there was no reason for two palettes.
-        double pitch = AMP_BAR_PX + AMP_GAP_PX;
-        double bandHeight = h / 2.0;
-        double midTop = bandHeight / 2.0;
-        double midBottom = bandHeight + bandHeight / 2.0;
-        // Mic uses the resolved-theme accent brush (Dark2 on light,
-        // Light2 on dark — matches what AccentFillColorDefaultBrush
-        // does in XAML ThemeResource lookups but respects the window's
-        // RequestedTheme override, which Application.Resources doesn't).
-        // Cached, not per-tick: LayoutBand skips the Fill assignment when the
-        // brush is the same reference, and a fresh brush every sample defeated
-        // that on every bar.
         _liveBrushMic ??= new SolidColorBrush(WaveGreen);
         _liveBrushSys ??= new SolidColorBrush(WaveViolet);
-
-        LayoutBand(_ampBarsMic, _ampHistory.ToArray(), _liveBrushMic, midTop, bandHeight - 4, w, pitch);
-        LayoutBand(_ampBarsSys, _ampHistorySystem.ToArray(), _liveBrushSys, midBottom, bandHeight - 4, w, pitch);
+        LayoutBand(_ampBarsMic, _ampHistory.ToArray(), _liveBrushMic, h / 4.0, h / 2.0 - 4, w);
+        LayoutBand(_ampBarsSys, _ampHistorySystem.ToArray(), _liveBrushSys, h * 3.0 / 4.0, h / 2.0 - 4, w);
     }
 
-    /// <summary>The layer every bar lives on. It exists so the scroll is ONE
-    /// transform instead of N repositioned rectangles, and it is clipped so the
-    /// bar that is still sliding in stays hidden until it belongs on screen.</summary>
-    private void EnsureAmpScrollLayer(double w, double h)
+    /// <summary>The layer every bar lives on, created once the canvas has a size.
+    /// True when this call created it.</summary>
+    private bool EnsureAmpScrollLayer()
     {
-        if (_ampScrollLayer == null)
-        {
-            _ampScrollTransform = new Microsoft.UI.Xaml.Media.TranslateTransform();
-            _ampScrollLayer = new Microsoft.UI.Xaml.Controls.Canvas
-            {
-                RenderTransform = _ampScrollTransform,
-            };
-            LiveWaveformCanvas.Children.Add(_ampScrollLayer);
-        }
-        // The layer is one pitch wider than the canvas: that is where the
-        // incoming bar waits. Clipping the CANVAS (not the layer) keeps it out
-        // of sight without moving with it.
-        LiveWaveformCanvas.Clip = new Microsoft.UI.Xaml.Media.RectangleGeometry
-        {
-            Rect = new global::Windows.Foundation.Rect(0, 0, w, h),
-        };
+        if (_ampScrollLayer != null) return false;
+        _ampScrollLayer = new Microsoft.UI.Xaml.Controls.Canvas();
+        LiveWaveformCanvas.Children.Add(_ampScrollLayer);
+        Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.SetIsTranslationEnabled(_ampScrollLayer, true);
+        _ampLayerVisual = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(_ampScrollLayer);
+        _ampLayerVisual.Properties.InsertVector3("Translation", System.Numerics.Vector3.Zero);
+        return true;
     }
 
-    /// <summary>Update one band in place. Rectangles are created only when the
-    /// bar COUNT changes (resize); a normal sample just moves heights, which is
-    /// what makes this cheap enough to leave running for a whole meeting.</summary>
     private void LayoutBand(List<Microsoft.UI.Xaml.Shapes.Rectangle> pool, float[] samples,
-                            SolidColorBrush brush, double mid, double maxHeight, double w, double pitch)
+                            SolidColorBrush brush, double mid, double maxHeight, double w)
     {
-        int n = samples.Length;
-        while (pool.Count < n)
+        while (pool.Count < _ampHistorySize)
         {
             var r = new Microsoft.UI.Xaml.Shapes.Rectangle
             {
@@ -1375,29 +1370,33 @@ public sealed partial class MeetingWindow : Window
                 // nick out of it rather than as a soft bar.
                 RadiusX = AMP_BAR_PX / 2,
                 RadiusY = AMP_BAR_PX / 2,
+                Fill = brush,
             };
             pool.Add(r);
             _ampScrollLayer!.Children.Add(r);
         }
-        for (int i = pool.Count - 1; i >= n; i--)
+        for (int i = pool.Count - 1; i >= _ampHistorySize; i--)
         {
             _ampScrollLayer!.Children.Remove(pool[i]);
             pool.RemoveAt(i);
         }
 
-        for (int i = 0; i < n; i++)
-        {
-            // The newest AMP_SLACK_SAMPLES bars sit off the right edge and the
-            // layer transform walks them in. Without it a bar would appear
-            // already in place and the whole strip would jump.
-            double x = w + AMP_SLACK_SAMPLES * pitch - (n - i) * pitch;
-            double height = Math.Max(AMP_BAR_PX, samples[i] * maxHeight);
-            var rect = pool[i];
-            if (!ReferenceEquals(rect.Fill, brush)) rect.Fill = brush;
-            rect.Height = height;
-            Microsoft.UI.Xaml.Controls.Canvas.SetLeft(rect, x);
-            Microsoft.UI.Xaml.Controls.Canvas.SetTop(rect, mid - height / 2.0);
-        }
+        foreach (var r in pool) r.Height = 0;
+        for (int i = 0; i < samples.Length; i++)
+            PlaceBar(pool, _ampSamplesLaid - samples.Length + i, samples[i], mid, maxHeight, w);
+    }
+
+    /// <summary>Put one sample on the rectangle of the oldest. This is all a new
+    /// sample costs: the other bars keep their place, height and position.</summary>
+    private void PlaceBar(List<Microsoft.UI.Xaml.Shapes.Rectangle> pool, long k, float sample,
+                          double mid, double maxHeight, double w)
+    {
+        var rect = pool[Helpers.LiveWaveformLayout.RingIndex(k, pool.Count)];
+        double height = Math.Max(AMP_BAR_PX, sample * maxHeight);
+        rect.Height = height;
+        Microsoft.UI.Xaml.Controls.Canvas.SetLeft(rect, Helpers.LiveWaveformLayout.BarX(
+            k, AMP_SAMPLE_MS, AMP_BAR_PX + AMP_GAP_PX, w, AMP_SLACK_SAMPLES, _ampLayerOriginMs));
+        Microsoft.UI.Xaml.Controls.Canvas.SetTop(rect, mid - height / 2.0);
     }
 
 
