@@ -1113,6 +1113,10 @@ impl NemoTracks {
                         speakers.extend(crate::nemotron::speaker_list(label, &spoken.segments));
                     } else if had_speakers {
                         complete = false;
+                    } else {
+                        // The mic on a call: no pass after the meeting will
+                        // add its lane when the system track covers the rest.
+                        speakers.extend(crate::nemotron::track_lane(label, &spoken.voiced));
                     }
                 }
                 Err(e) => {
@@ -1124,6 +1128,8 @@ impl NemoTracks {
         if !(wanted && labelled && complete && !windows_lost) {
             return false;
         }
+        // Same order as label_bands: the call first, the mic lane under it.
+        speakers.sort_by_key(|s| s.band != "system");
         match crate::diarize::save_speakers(std::path::Path::new(sink.dir), &speakers) {
             Ok(()) => {
                 crate::log(&format!(

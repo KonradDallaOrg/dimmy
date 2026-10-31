@@ -1652,6 +1652,8 @@ pub fn turns(words: &[Word], fallback_text: &str, offset: f64) -> Vec<Line> {
 pub struct Spoken {
     /// (speaker, start, end) per tagged word, track seconds.
     pub segments: Vec<(u8, f64, f64)>,
+    /// (start, end) per word on a track without a diarizer, track seconds.
+    pub voiced: Vec<(f64, f64)>,
     /// The diarizer ran for the whole track, so the labels already in the
     /// transcript are complete and no pass after the meeting is needed.
     pub covered: bool,
@@ -1666,17 +1668,12 @@ pub fn speaker_list(band: &str, segments: &[(u8, f64, f64)]) -> Vec<crate::diari
     ids.dedup();
     ids.into_iter()
         .map(|n| {
-            let mut spans: Vec<(f64, f64)> = Vec::new();
-            for &(_, a, e) in segments.iter().filter(|s| s.0 == n) {
-                match spans.last_mut() {
-                    Some(last) if a - last.1 < 0.3 => last.1 = last.1.max(e),
-                    _ => spans.push((a, e)),
-                }
-            }
-            let spans: Vec<(f64, f64)> = spans
-                .into_iter()
-                .map(|(a, e)| ((a * 100.0).round() / 100.0, (e * 100.0).round() / 100.0))
-                .collect();
+            let spans = join_spans(
+                segments
+                    .iter()
+                    .filter(|s| s.0 == n)
+                    .map(|&(_, a, e)| (a, e)),
+            );
             crate::diarize::SpeakerInfo {
                 id: format!("S{n}"),
                 name: crate::diarize::default_name(n as usize),
@@ -1685,6 +1682,37 @@ pub fn speaker_list(band: &str, segments: &[(u8, f64, f64)]) -> Vec<crate::diari
                 segments: spans,
             }
         })
+        .collect()
+}
+
+/// The one lane of a track without a diarizer (the mic on a call), under the
+/// label its lines already carry. `None` when nobody spoke on it.
+pub fn track_lane(band: &str, voiced: &[(f64, f64)]) -> Option<crate::diarize::SpeakerInfo> {
+    let spans = join_spans(voiced.iter().copied());
+    if spans.is_empty() {
+        return None;
+    }
+    Some(crate::diarize::SpeakerInfo {
+        id: band.to_string(),
+        name: band.to_string(),
+        band: band.to_string(),
+        talk_secs: spans.iter().map(|(a, e)| e - a).sum(),
+        segments: spans,
+    })
+}
+
+/// Words closer than 0.3 s join into one span, rounded to centiseconds.
+fn join_spans(words: impl Iterator<Item = (f64, f64)>) -> Vec<(f64, f64)> {
+    let mut spans: Vec<(f64, f64)> = Vec::new();
+    for (a, e) in words {
+        match spans.last_mut() {
+            Some(last) if a - last.1 < 0.3 => last.1 = last.1.max(e),
+            _ => spans.push((a, e)),
+        }
+    }
+    spans
+        .into_iter()
+        .map(|(a, e)| ((a * 100.0).round() / 100.0, (e * 100.0).round() / 100.0))
         .collect()
 }
 
@@ -1733,6 +1761,8 @@ pub struct MeetingTrack {
     /// Every tagged word as (speaker, start, end), track seconds: the lanes
     /// and talk time `speakers.json` carries.
     spoken: Vec<(u8, f64, f64)>,
+    /// Every word as (start, end) while the track has no diarizer.
+    voiced: Vec<(f64, f64)>,
     /// Set once the diarizer was dropped mid-meeting: the labels then cover
     /// only part of it.
     dropped: bool,
@@ -1769,6 +1799,7 @@ impl MeetingTrack {
             stream_secs: 0.0,
             last_partial: String::new(),
             spoken: Vec::new(),
+            voiced: Vec::new(),
             dropped: false,
         })
     }
@@ -1848,6 +1879,7 @@ impl MeetingTrack {
             lines,
             Spoken {
                 segments: self.spoken,
+                voiced: self.voiced,
                 covered,
             },
         ))
@@ -1873,6 +1905,8 @@ impl MeetingTrack {
                         .filter(|w| w.speaker > 0)
                         .map(|w| (w.speaker, w.start, w.end)),
                 );
+            } else {
+                self.voiced.extend(words.iter().map(|w| (w.start, w.end)));
             }
             // Word times are already on the track's clock; a result without
             // words is placed where the current stream began.
@@ -2300,6 +2334,21 @@ mod tests {
             "a short sentence waits for its pause"
         );
         assert!(should_close(&words(60)), "someone who never stops");
+    }
+
+    #[test]
+    fn a_track_without_diarizer_gets_one_lane_under_its_label() {
+        let lane = track_lane("mic", &[(1.0, 1.5), (1.6, 2.0), (5.0, 6.0)]).expect("a lane");
+        assert_eq!(lane.id, "mic");
+        assert_eq!(lane.name, "mic");
+        assert_eq!(lane.band, "mic");
+        assert_eq!(lane.segments, vec![(1.0, 2.0), (5.0, 6.0)]);
+        assert!((lane.talk_secs - 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_silent_track_gets_no_lane() {
+        assert!(track_lane("mic", &[]).is_none());
     }
 
     #[test]
