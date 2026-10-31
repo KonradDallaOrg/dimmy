@@ -702,6 +702,9 @@ struct MacVoicePage: View {
                             get: { appState.selectedDevice ?? "" },
                             set: { newValue in
                                 appState.selectedDevice = newValue.isEmpty ? nil : newValue
+                                // A full save leaves the device out when it is nil,
+                                // so "System default" has to clear it by name.
+                                if newValue.isEmpty { _ = DimmyCore.shared.setConfig(["selected_device": ""]) }
                                 persistConfig()
                             }
                         )) {

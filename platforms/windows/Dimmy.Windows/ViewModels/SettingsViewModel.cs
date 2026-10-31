@@ -588,7 +588,7 @@ public partial class SettingsViewModel : ObservableObject
             Prompt = r.TryGetProperty("prompt", out var prompt) ? prompt.GetString() ?? "" : "";
             Shortcut = r.TryGetProperty("shortcut", out var sc) ? sc.GetString() ?? "Win+Alt" : "Win+Alt";
             ShortcutMode = r.TryGetProperty("shortcut_mode", out var sm) ? sm.GetString() ?? "toggle" : "toggle";
-            SelectedDevice = r.TryGetProperty("selected_device", out var dev) ? dev.GetString() : null;
+            SelectedDevice = r.TryGetProperty("selected_device", out var dev) ? Helpers.InputDeviceChoice.ForDisplay(dev.GetString()) : null;
             // Absent means off, matching the core's default since 2026-08-31.
             // The core is the single writer of config.json, so a fallback here
             // that disagrees with it would show the toggle ON while the audio
@@ -760,7 +760,7 @@ public partial class SettingsViewModel : ObservableObject
                 var list = new List<string>();
                 foreach (var d in devArr.EnumerateArray())
                     if (d.GetString() is string s) list.Add(s);
-                Devices = list;
+                RefreshDevices(list);
             }
 
             _snapshotJson = ToJsonFull();
@@ -774,11 +774,16 @@ public partial class SettingsViewModel : ObservableObject
     public void RefreshDevices(List<string> fresh)
     {
         ArgumentNullException.ThrowIfNull(fresh);
-        if (fresh.SequenceEqual(Devices)) return;
+        ConnectedDevices = fresh;
+        var entries = Helpers.InputDeviceChoice.Entries(fresh, SelectedDevice);
+        if (entries.SequenceEqual(Devices)) return;
         var keep = SelectedDevice;
-        Devices = fresh;
+        Devices = entries;
         SelectedDevice = keep;
     }
+
+    /// The picker's list also holds "System default" and a saved device that is gone.
+    public List<string> ConnectedDevices { get; private set; } = new();
 
     /// <summary>
     /// Serialize the Settings ViewModel to a JSON payload for
@@ -871,7 +876,7 @@ public partial class SettingsViewModel : ObservableObject
         // "follow-up" risk.
         if (!string.IsNullOrEmpty(ApiUrl)) dict["api_url"] = ApiUrl;
         if (!string.IsNullOrEmpty(ApiModel)) dict["api_model"] = ApiModel;
-        if (!string.IsNullOrEmpty(SelectedDevice)) dict["selected_device"] = SelectedDevice;
+        if (Helpers.InputDeviceChoice.ConfigValue(SelectedDevice) is string device) dict["selected_device"] = device;
         if (!string.IsNullOrEmpty(LocalModel)) dict["local_model"] = LocalModel;
         if (!string.IsNullOrEmpty(QwenAsrModel)) dict["qwen_asr_model"] = QwenAsrModel;
         if (!string.IsNullOrEmpty(NemotronModel)) dict["nemotron_model"] = NemotronModel;
