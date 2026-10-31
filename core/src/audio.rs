@@ -1343,16 +1343,19 @@ pub fn spawn_audio_thread(
 
 // ── Device-resolution helpers used by spawn_audio_thread ─────────────
 
+fn find_input_device(host: &cpal::Host, name: &str) -> Option<cpal::Device> {
+    host.input_devices()
+        .ok()
+        .and_then(|mut devs| devs.find(|d| d.name().ok().as_deref() == Some(name)))
+}
+
 /// Resolve the input device for Mic capture. If a specific name was
 /// requested, search the input list; otherwise return the system
 /// default. Logs the resolution path so "device disappeared" / typos
 /// in the saved config are debuggable from dimmy.log alone.
 fn resolve_input_device(host: &cpal::Host, name: Option<&str>) -> Option<cpal::Device> {
     if let Some(name) = name {
-        let found = host
-            .input_devices()
-            .ok()
-            .and_then(|mut devs| devs.find(|d| d.name().ok().as_deref() == Some(name)));
+        let found = find_input_device(host, name);
         if found.is_some() {
             crate::log(&format!("[Audio] Found input device by name: {}", name));
             return found;
@@ -1376,7 +1379,11 @@ fn resolve_input_device(host: &cpal::Host, name: Option<&str>) -> Option<cpal::D
 /// flip, and reading a format property never opens/destroys a HAL object
 /// so it is safe on the 1 Hz heartbeat even on macOS 26.
 fn probe_input_native_rate(host: &cpal::Host, name: Option<&str>) -> Option<u32> {
-    let device = resolve_input_device(host, name)?;
+    // Not resolve_input_device: this runs every second, and a saved name that
+    // is gone would write one log line for each of them.
+    let device = name
+        .and_then(|n| find_input_device(host, n))
+        .or_else(|| host.default_input_device())?;
     device
         .default_input_config()
         .ok()

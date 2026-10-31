@@ -2621,7 +2621,8 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
     }
     if let Some(s) = v["selected_device"].as_str() {
         if let Ok(mut d) = st.selected_device.lock() {
-            *d = Some(s.to_string());
+            // Empty is "System default": no name stored, nothing to look up.
+            *d = (!s.is_empty()).then(|| s.to_string());
         }
     }
 
@@ -13045,6 +13046,30 @@ mod tests {
     }
 
     // ── dimmy_set_config_json tests ─────────────────────────────────
+
+    #[test]
+    #[serial]
+    fn set_config_json_empty_device_means_system_default() {
+        ensure_test_state();
+        let pin = CString::new(r#"{"selected_device":"Test Mic"}"#).unwrap();
+        assert_eq!(unsafe { dimmy_set_config_json(pin.as_ptr()) }, 0);
+        assert_eq!(
+            state().selected_device.lock().unwrap().as_deref(),
+            Some("Test Mic")
+        );
+
+        // A save that does not mention the device leaves the choice alone.
+        let omitted = CString::new(r#"{"language":"en"}"#).unwrap();
+        assert_eq!(unsafe { dimmy_set_config_json(omitted.as_ptr()) }, 0);
+        assert_eq!(
+            state().selected_device.lock().unwrap().as_deref(),
+            Some("Test Mic")
+        );
+
+        let clear = CString::new(r#"{"selected_device":""}"#).unwrap();
+        assert_eq!(unsafe { dimmy_set_config_json(clear.as_ptr()) }, 0);
+        assert_eq!(*state().selected_device.lock().unwrap(), None);
+    }
 
     #[test]
     #[serial]

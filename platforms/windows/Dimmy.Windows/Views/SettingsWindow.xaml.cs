@@ -5716,9 +5716,7 @@ public sealed partial class SettingsWindow : Window
             : $"Cloud · {ViewModel.ApiModel}";
         // A saved device that is gone falls back to the system default at capture
         // time (audio.rs resolve_input_device), so that is what Dimmy is using.
-        var savedMic = ViewModel.SelectedDevice;
-        HomeMicValue.Text = string.IsNullOrEmpty(savedMic) || !ViewModel.Devices.Contains(savedMic)
-            ? "System default" : savedMic;
+        HomeMicValue.Text = Helpers.InputDeviceChoice.InUse(ViewModel.SelectedDevice, ViewModel.ConnectedDevices);
         ToolTipService.SetToolTip(HomeMicValue, HomeMicValue.Text);
 
         HomeSetupMeeting.Visibility = string.IsNullOrEmpty(ViewModel.MeetingHotkey) ? Visibility.Visible : Visibility.Collapsed;
