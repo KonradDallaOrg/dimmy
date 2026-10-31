@@ -250,6 +250,7 @@ A fresh session must know these exist too — all in the shared core, so each is
 | Save anything in C# Settings → ToJson | `SettingsViewModel.cs::ToJson` — **identity fields (api_url, api_model, llm_api_url, llm_api_model, local_model, selected_device) emit ONLY when non-empty** (`if-empty-omit` pattern). Adding a new identity-class field? Mirror that pattern, otherwise a transient empty VM will wipe the saved value via `dimmy_set_config_json`. Burned 2026-05-16 (config.json wiped after a recap_model_override save). |
 | Derive %APPDATA% / config dir in host UI | Use `BuildInfo.ConfigDirName` (Win) / `appState.configDirURL` (Mac), which read from `dimmy_config_dir_name()` FFI. **NEVER** derive from `IsStaging` / build flavor — the two are decoupled. |
 | Trigger a release / pre-release | See the **Release pipelines** table below. Wrong trigger = wrong licensing endpoint (Stripe Live vs Test). |
+| Add or restyle Windows UI | `platforms/windows/Dimmy.Windows/Styles/DimmyStyle.xaml`: text styles, spacing, card, icon sizes. No literal `FontSize` in new XAML. Small overlays (pill, toasts, nudges) keep their own sizes. |
 | Add a test | Read `docs/dev/testing.md` (tier definitions) + `docs/dev/v2-test-hardening-plan.md` (Phase 7+8 hardening) |
 | Add a doc | `docs/dev/` (permanent) or `docs/superpowers/handoffs/` (time-bound). DO NOT link handoffs from `CLAUDE.md` — they decay; this file describes the codebase, not work-in-progress. |
 

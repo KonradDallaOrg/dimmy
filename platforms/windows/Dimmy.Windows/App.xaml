@@ -8,6 +8,7 @@
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
+                <ResourceDictionary Source="ms-appx:///Styles/DimmyStyle.xaml" />
             </ResourceDictionary.MergedDictionaries>
 
             <!-- Brand-mark SVGs (Notion, Anthropic) need to invert

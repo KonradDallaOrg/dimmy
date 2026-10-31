@@ -12,13 +12,13 @@
             Padding="16" MinWidth="150" MinHeight="120"
             HorizontalContentAlignment="Stretch"
             VerticalContentAlignment="Top">
-        <StackPanel Spacing="10" HorizontalAlignment="Center">
-            <FontIcon x:Name="Icon" FontSize="26"
+        <StackPanel Spacing="{StaticResource DimmySpaceM}" HorizontalAlignment="Center">
+            <FontIcon x:Name="Icon" FontSize="{StaticResource DimmyIconXL}"
                       Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
                       HorizontalAlignment="Center" />
-            <TextBlock x:Name="TitleText" FontWeight="SemiBold" FontSize="14"
+            <TextBlock x:Name="TitleText" Style="{StaticResource DimmyCardTitle}"
                        TextAlignment="Center" TextWrapping="Wrap" />
-            <TextBlock x:Name="DescriptionText" Opacity="0.7" FontSize="12"
+            <TextBlock x:Name="DescriptionText" Opacity="0.7" Style="{StaticResource DimmyLabel}"
                        TextAlignment="Center" TextWrapping="Wrap" />
         </StackPanel>
     </Button>

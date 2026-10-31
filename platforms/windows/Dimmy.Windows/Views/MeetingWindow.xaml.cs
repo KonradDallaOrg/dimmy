@@ -340,10 +340,6 @@ public sealed partial class MeetingWindow : Window
             && s != MeetingState.Recording
             && s != MeetingState.Processing)
             ? Visibility.Visible : Visibility.Collapsed;
-        // Hide "New meeting" while a capture is in flight — clicking it
-        // would only show the toast block. Stop is the actual action.
-        TitlebarNewBtn.Visibility = (_recordingActive || s == MeetingState.Processing)
-            ? Visibility.Collapsed : Visibility.Visible;
         NewMeetingHeaderBtn.IsEnabled = !_recordingActive && s != MeetingState.Processing;
         TitlebarTitle.Text = s switch
         {
@@ -454,7 +450,7 @@ public sealed partial class MeetingWindow : Window
                     HistoryList.SelectedItem = null;
                     AppContextName.Text = "Microphone";
                     SetState(MeetingState.Recording);
-                    TranscriptText.Text = "🎙️ Re-attached to ongoing recording…";
+                    ShowLivePlaceholder("🎙️ Re-attached to ongoing recording…");
                     StartPolling();
                     StartAmplitudePoll();
                     ShowToast("Re-attached to an ongoing recording.");
@@ -504,7 +500,7 @@ public sealed partial class MeetingWindow : Window
             HistoryList.SelectedItem = null;
             _recordingActive = true;
             SetState(MeetingState.Recording);
-            TranscriptText.Text = "🎙️ Listening… first transcript appears in ~15 s.";
+            ShowLivePlaceholder("🎙️ Listening… first transcript appears in ~15 s.");
             StartPolling();
             StartAmplitudePoll();
             if (autoConsent) ArmAutoAnnounce(lang);
@@ -813,7 +809,7 @@ public sealed partial class MeetingWindow : Window
         SetState(MeetingState.Idle);
         StartBtn.IsEnabled = true;
         ClearDoneCards();
-        TranscriptText.Text = "🎙️ Listening… first transcript appears in ~15 s.";
+        ShowLivePlaceholder("🎙️ Listening… first transcript appears in ~15 s.");
         TitlebarTitle.Text = "New meeting";
     }
 
@@ -1028,12 +1024,13 @@ public sealed partial class MeetingWindow : Window
 
         if (_liveTranscriptBuilder.Length > 0)
         {
-            TranscriptText.Text = HumanizeTranscript(_liveTranscriptBuilder.ToString());
+            ShowLivePlaceholder("");
+            AppendLiveLines(_liveTranscriptBuilder.ToString());
             TranscriptScroll?.ChangeView(null, double.MaxValue, null, true);
         }
         else
         {
-            TranscriptText.Text = "🎙️ Re-attached to ongoing recording…";
+            ShowLivePlaceholder("🎙️ Re-attached to ongoing recording…");
         }
     }
 
@@ -1059,10 +1056,50 @@ public sealed partial class MeetingWindow : Window
         // Append the new line to the live transcript view. The
         // line already ends with '\n' from Rust.
         _liveTranscriptBuilder.Append(line);
-        TranscriptText.Text = HumanizeTranscript(_liveTranscriptBuilder.ToString());
+        AppendLiveLines(line);
         RecChunks.Text = $"{chunkCount} chunks";
         TranscriptMeta.Text = $"{chunkCount} chunks";
         TranscriptScroll?.ChangeView(null, double.MaxValue, null, true);
+    }
+
+    // Layout of the whole text reruns on every chunk: measured 115 ms at 1000
+    // blocks, 1100 ms at 6000. The file on disk keeps everything.
+    private const int LiveBlockLimit = 1000;
+    private bool _liveTrimmed;
+    private bool _livePlaceholder;
+    private string? _liveLastSpeaker;
+
+    private void ShowLivePlaceholder(string text)
+    {
+        TranscriptText.Blocks.Clear();
+        _liveLastSpeaker = null;
+        _liveTrimmed = false;
+        _livePlaceholder = text.Length > 0;
+        if (!_livePlaceholder) return;
+        var p = new Microsoft.UI.Xaml.Documents.Paragraph();
+        p.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = text });
+        TranscriptText.Blocks.Add(p);
+    }
+
+    /// Only the new lines: a chunk arrives every few seconds and the
+    /// transcript above can be an hour long.
+    private void AppendLiveLines(string lines)
+    {
+        if (_livePlaceholder) ShowLivePlaceholder("");
+        Helpers.TranscriptRenderer.AppendLive(TranscriptText, HumanizeTranscript(lines), ref _liveLastSpeaker);
+        if (TranscriptText.Blocks.Count <= LiveBlockLimit) return;
+        if (!_liveTrimmed)
+        {
+            _liveTrimmed = true;
+            var note = new Microsoft.UI.Xaml.Documents.Paragraph { Margin = new Thickness(0, 0, 0, 8) };
+            note.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run
+            {
+                Text = "Earlier lines are saved. The full transcript opens when the meeting ends.",
+                FontStyle = global::Windows.UI.Text.FontStyle.Italic,
+            });
+            TranscriptText.Blocks.Insert(0, note);
+        }
+        while (TranscriptText.Blocks.Count > LiveBlockLimit) TranscriptText.Blocks.RemoveAt(1);
     }
 
     /// The sentence still being said, one per track, under the finished
@@ -1680,12 +1717,12 @@ public sealed partial class MeetingWindow : Window
             });
             content.Children.Add(new TextBlock
             {
-                Text = s.Name, FontSize = 12, VerticalAlignment = VerticalAlignment.Center,
+                Text = s.Name, FontSize = (double)Application.Current.Resources["DimmyFontCaption"], VerticalAlignment = VerticalAlignment.Center,
             });
             content.Children.Add(new TextBlock
             {
                 Text = Helpers.MeetingSpeakers.FormatTalkTime(s.TalkSecs),
-                FontSize = 11, Opacity = 0.6, FontFamily = new FontFamily("Consolas"),
+                FontSize = (double)Application.Current.Resources["DimmyFontCaption"], Opacity = 0.6, FontFamily = new FontFamily("Consolas"),
                 VerticalAlignment = VerticalAlignment.Center,
             });
             var chip = new Button
@@ -1713,7 +1750,7 @@ public sealed partial class MeetingWindow : Window
         };
         var err = new TextBlock
         {
-            FontSize = 12, TextWrapping = TextWrapping.Wrap, MaxWidth = 240,
+            FontSize = (double)Application.Current.Resources["DimmyFontCaption"], TextWrapping = TextWrapping.Wrap, MaxWidth = 240,
             Foreground = (Brush)Application.Current.Resources["SystemFillColorCriticalBrush"],
             Visibility = Visibility.Collapsed,
         };

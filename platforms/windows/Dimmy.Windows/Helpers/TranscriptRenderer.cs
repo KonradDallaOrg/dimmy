@@ -127,7 +127,7 @@ public static class TranscriptRenderer
                 var spkLabel = turn.Groups["spk"].Value.Trim();
                 var spk = spkLabel.ToLowerInvariant();
                 if (lastTrack != null && lastTrack != spk)
-                    target.Blocks.Add(BuildSpeakerSeparator());
+                    target.Blocks.Add(BuildSpeakerSeparator(target));
                 var tsText = turn.Groups["ts"].Value.Trim();
                 var turnBlock = BuildSpeakerTurn(tsText, spkLabel, turn.Groups["body"].Value, speakerColors);
                 target.Blocks.Add(turnBlock);
@@ -147,7 +147,7 @@ public static class TranscriptRenderer
                 if (current != null) { target.Blocks.Add(current); current = null; }
                 var track = m.Groups[1].Value.Trim().ToLowerInvariant();
                 if (lastTrack != null && lastTrack != track)
-                    target.Blocks.Add(BuildSpeakerSeparator());
+                    target.Blocks.Add(BuildSpeakerSeparator(target));
                 target.Blocks.Add(BuildSectionBadge(m.Groups[1].Value, m.Groups[2].Value));
                 lastWasSection = true;
                 lastTrack = track;
@@ -173,6 +173,32 @@ public static class TranscriptRenderer
 
         if (current != null) target.Blocks.Add(current);
         return anchors;
+    }
+
+    /// Add finished lines under what `target` already shows, in the look of
+    /// <see cref="Render"/>. `lastSpeaker` carries the speaker across calls, so
+    /// the divider still lands on a change of speaker between two chunks.
+    public static void AppendLive(RichTextBlock target, string lines, ref string? lastSpeaker)
+    {
+        foreach (var rawLine in lines.Replace("\r\n", "\n").Split('\n'))
+        {
+            var line = rawLine.TrimEnd();
+            if (line.Length == 0) continue;
+            var turn = TurnRe.Match(line);
+            if (!turn.Success)
+            {
+                var plain = new Paragraph { Margin = new Thickness(0, 4, 0, 4), LineHeight = 22 };
+                AppendLineWithTimestamps(plain, line);
+                target.Blocks.Add(plain);
+                continue;
+            }
+            var label = turn.Groups["spk"].Value.Trim();
+            var key = label.ToLowerInvariant();
+            if (lastSpeaker != null && lastSpeaker != key)
+                target.Blocks.Add(BuildSpeakerSeparator(target));
+            target.Blocks.Add(BuildSpeakerTurn(turn.Groups["ts"].Value.Trim(), label, turn.Groups["body"].Value, null));
+            lastSpeaker = key;
+        }
     }
 
     /// Mic = mint, system = violet. Two shades per track: a LIGHT one for
@@ -206,6 +232,8 @@ public static class TranscriptRenderer
     /// violet, theme-aware), the body in default Foreground. One paragraph
     /// per turn so consecutive same-speaker turns stack tightly; cross-
     /// speaker turns get a thin divider above via BuildSpeakerSeparator.
+    private static double CaptionSize => (double)Application.Current.Resources["DimmyFontCaption"];
+
     private static Paragraph BuildSpeakerTurn(
         string ts, string speaker, string body, IReadOnlyDictionary<string, int>? speakerColors)
     {
@@ -218,7 +246,7 @@ public static class TranscriptRenderer
         p.Inlines.Add(new Run
         {
             Text = $"[{ts}]  ",
-            FontSize = 10,
+            FontSize = CaptionSize,
             FontFamily = new FontFamily("Consolas"),
             Foreground = tint,
         });
@@ -226,7 +254,7 @@ public static class TranscriptRenderer
         {
             // Tracks read as tags (MIC / SYSTEM); people keep their name.
             Text = IsTrack(speaker) ? $"{speaker.ToUpperInvariant()}  " : $"{speaker}  ",
-            FontSize = IsTrack(speaker) ? 10 : 12,
+            FontSize = CaptionSize,
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
             Foreground = tint,
         });
@@ -238,11 +266,14 @@ public static class TranscriptRenderer
     /// of U+2500 (BOX DRAWINGS LIGHT HORIZONTAL) chars — the InlineUIContainer +
     /// Rectangle approach refused to render visibly in RichTextBlock
     /// (likely a line-layout interaction); a tinted Run always renders.
-    /// 120 chars at FontSize 8 spans ~600 px, fits most transcript columns
-    /// without wrapping (U+2500 is line-break class AL → glues to itself).
+    /// One char is ~7.2 px at FontSize 8. Sized from the column so the rule
+    /// never wraps into a second, shorter line; a target not laid out yet
+    /// reports 0 and gets a width that fits the smallest window.
     /// </summary>
-    private static Paragraph BuildSpeakerSeparator()
+    private static Paragraph BuildSpeakerSeparator(RichTextBlock target)
     {
+        // A RichTextBlock can be only as wide as its text so far; the parent knows the column.
+        var ruleWidth = Math.Max(target.ActualWidth, ((target.Parent as FrameworkElement)?.ActualWidth ?? 0) - 32);
         var p = new Paragraph
         {
             Margin = new Thickness(0, 12, 0, 6),
@@ -250,7 +281,7 @@ public static class TranscriptRenderer
         };
         p.Inlines.Add(new Run
         {
-            Text = new string('─', 120),
+            Text = new string('─', ruleWidth > 0 ? (int)(ruleWidth / 7.2) : 60),
             FontSize = 8,
             Foreground = new SolidColorBrush(IsAppDarkTheme()
                 ? Microsoft.UI.ColorHelper.FromArgb(0x80, 0xFF, 0xFF, 0xFF)  // ~50% white
@@ -299,7 +330,7 @@ public static class TranscriptRenderer
                 ? $"  {label.ToUpperInvariant()}  "
                 : $"  {label.ToUpperInvariant()}   {extra.Trim()}  ",
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-            FontSize = 11,
+            FontSize = CaptionSize,
             Foreground = new SolidColorBrush(fg),
         };
         // Trick to give the badge "fill": a thin run before/after with
@@ -308,7 +339,7 @@ public static class TranscriptRenderer
         {
             Text = "▎",
             Foreground = new SolidColorBrush(fg),
-            FontSize = 12,
+            FontSize = CaptionSize,
         };
         p.Inlines.Add(leftPad);
         p.Inlines.Add(badge);
@@ -340,7 +371,7 @@ public static class TranscriptRenderer
             p.Inlines.Add(new Run
             {
                 Text = m.Value,
-                FontSize = 10,
+                FontSize = CaptionSize,
                 FontFamily = new FontFamily("Consolas"),
                 Foreground = new SolidColorBrush(tsFg),
             });

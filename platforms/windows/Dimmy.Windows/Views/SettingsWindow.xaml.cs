@@ -254,6 +254,7 @@ public sealed partial class SettingsWindow : Window
             // so modifier-only combos (Win+Alt) are valid — load it verbatim.
             ViewModel.CommandHotkey = prefs.CommandHotkey ?? "";
             ViewModel.MeetingHotkey = prefs.MeetingHotkey ?? "";
+            RefreshHome();
         }
         catch { }
 
@@ -3623,6 +3624,7 @@ public sealed partial class SettingsWindow : Window
                 _ => HomePanel,
             };
             panel.Visibility = Visibility.Visible;
+            if (tag == "home") RefreshHome();
             if (tag == "history") LoadHistoryItems();
             if (tag == "providers") EnsureProviderCards();
 
@@ -5698,6 +5700,85 @@ public sealed partial class SettingsWindow : Window
     /// <summary>Focused setup for Meeting mode. A separate window, not a
     /// branch of the onboarding wizard: the Mac pins that wizard's step
     /// count in a launch assertion.</summary>
+    private void HomeNavigate_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: string tag }) NavigateToTag(tag);
+    }
+
+    private void RefreshHome()
+    {
+        var verb = ViewModel.ShortcutMode == "hold" ? "Hold" : "Press";
+        var ending = ViewModel.ShortcutMode == "hold" ? "speak, release." : "speak, press again.";
+        HomeHeadline.Text = $"{verb} {ViewModel.Shortcut}, {ending}";
+        HomeShortcutValue.Text = ViewModel.Shortcut;
+        HomeEngineValue.Text = ViewModel.SttMode == "local"
+            ? $"Local · {ViewModel.LocalSttBackend}"
+            : $"Cloud · {ViewModel.ApiModel}";
+        // A saved device that is gone falls back to the system default at capture
+        // time (audio.rs resolve_input_device), so that is what Dimmy is using.
+        var savedMic = ViewModel.SelectedDevice;
+        HomeMicValue.Text = string.IsNullOrEmpty(savedMic) || !ViewModel.Devices.Contains(savedMic)
+            ? "System default" : savedMic;
+        ToolTipService.SetToolTip(HomeMicValue, HomeMicValue.Text);
+
+        HomeSetupMeeting.Visibility = string.IsNullOrEmpty(ViewModel.MeetingHotkey) ? Visibility.Visible : Visibility.Collapsed;
+        HomeSetupCommand.Visibility = string.IsNullOrEmpty(ViewModel.CommandHotkey) ? Visibility.Visible : Visibility.Collapsed;
+        HomeSetupSection.Visibility = HomeSetupMeeting.Visibility == Visibility.Visible || HomeSetupCommand.Visibility == Visibility.Visible
+            ? Visibility.Visible : Visibility.Collapsed;
+
+        HomeRecentRows.Children.Clear();
+        try
+        {
+            const int BufLen = 4 << 20;
+            var buf = new byte[BufLen];
+            int len = DimmyNative.dimmy_history_recent(5, buf, BufLen);
+            if (len <= 0) return;
+            using var doc = System.Text.Json.JsonDocument.Parse(System.Text.Encoding.UTF8.GetString(buf, 0, len));
+            foreach (var el in doc.RootElement.EnumerateArray())
+            {
+                var text = el.TryGetProperty("enhanced_text", out var et) && et.ValueKind == System.Text.Json.JsonValueKind.String
+                    ? et.GetString() : el.GetProperty("text").GetString();
+                AddHomeRecentRow(el.GetProperty("timestamp").GetDouble(), text ?? "");
+            }
+        }
+        catch (Exception ex)
+        {
+            App.Log($"Home recent load failed: {ex.Message}", "Settings");
+        }
+        finally
+        {
+            HomeRecentEmpty.Visibility = HomeRecentRows.Children.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        }
+    }
+
+    private void AddHomeRecentRow(double timestamp, string text)
+    {
+        var res = Application.Current.Resources;
+        if (HomeRecentRows.Children.Count > 0)
+            HomeRecentRows.Children.Add(new Border { Style = (Style)res["DimmyDivider"], Margin = new Thickness(0, 8, 0, 8) });
+
+        var when = DateTimeOffset.FromUnixTimeSeconds((long)timestamp).LocalDateTime;
+        var row = new Grid { ColumnSpacing = 12 };
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(64) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        row.Children.Add(new TextBlock
+        {
+            Style = (Style)res["DimmyTimestamp"],
+            VerticalAlignment = VerticalAlignment.Center,
+            Text = when.Date == DateTime.Today ? when.ToString("HH:mm") : when.ToString("d MMM"),
+        });
+        var body = new TextBlock
+        {
+            Style = (Style)res["DimmyBody"],
+            Text = text.ReplaceLineEndings(" "),
+            TextWrapping = TextWrapping.NoWrap,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        Grid.SetColumn(body, 1);
+        row.Children.Add(body);
+        HomeRecentRows.Children.Add(row);
+    }
+
     private void OpenMeetingWizard_Click(object sender, RoutedEventArgs e)
     {
         try { new MeetingWizardWindow().Activate(); }

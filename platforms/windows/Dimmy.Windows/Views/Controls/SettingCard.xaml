@@ -29,11 +29,9 @@
     - Control (object)      the right-side control (default Content slot)
   -->
 
-  <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-          BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-          BorderThickness="1" CornerRadius="4"
+  <Border Style="{StaticResource DimmyCard}"
           MinHeight="64" Padding="16,12">
-    <Grid ColumnSpacing="16" VerticalAlignment="Center">
+    <Grid ColumnSpacing="{StaticResource DimmySpaceL}" VerticalAlignment="Center">
       <Grid.ColumnDefinitions>
         <ColumnDefinition Width="Auto" />
         <ColumnDefinition Width="*" />
@@ -45,16 +43,16 @@
            the same baseline and x regardless of the right-side control height. -->
       <FontIcon Grid.Column="0"
                 x:Name="GlyphIcon"
-                FontSize="16"
+                FontSize="{StaticResource DimmyIconL}"
                 Width="24" Height="24"
                 HorizontalAlignment="Center" VerticalAlignment="Center"
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
 
       <!-- Meta: label (+ optional ⓘ) + optional description -->
-      <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+      <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="{StaticResource DimmySpaceXS}">
         <StackPanel Orientation="Horizontal" Spacing="5">
           <TextBlock x:Name="LabelText"
-                     FontSize="14" VerticalAlignment="Center"
+                     Style="{StaticResource DimmyBody}" VerticalAlignment="Center"
                      Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
           <!-- Info affordance. Hover shows a tooltip; click opens an in-app
                card with the text + an optional "Open full guide →" link. The
@@ -69,13 +67,13 @@
                   VerticalAlignment="Center"
                   VerticalContentAlignment="Center"
                   HorizontalContentAlignment="Center">
-            <FontIcon Glyph="&#xE946;" FontSize="13"
+            <FontIcon Glyph="&#xE946;" FontSize="{StaticResource DimmyIconM}"
                       Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
             <Button.Flyout>
               <Flyout>
-                <StackPanel MaxWidth="300" Spacing="10">
+                <StackPanel MaxWidth="300" Spacing="{StaticResource DimmySpaceM}">
                   <TextBlock x:Name="InfoFlyoutText"
-                             TextWrapping="Wrap" FontSize="13"
+                             TextWrapping="Wrap" Style="{StaticResource DimmyBody}"
                              Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
                   <HyperlinkButton x:Name="InfoFlyoutLink"
                                    Content="Open full guide →"
@@ -90,9 +88,8 @@
              reserve height and push the centred label upward. Code-behind flips
              it Visible only when Description is non-empty. -->
         <TextBlock x:Name="DescriptionText"
-                   FontSize="12"
+                   Style="{StaticResource DimmyCaption}"
                    Visibility="Collapsed"
-                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                    TextWrapping="Wrap" />
       </StackPanel>
 

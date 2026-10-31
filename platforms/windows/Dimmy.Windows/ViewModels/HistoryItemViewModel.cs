@@ -22,6 +22,15 @@ public partial class HistoryItemViewModel : ObservableObject
     [ObservableProperty] private long _sizeBytes;
 
     /// Display-friendly timestamp (local time, "yyyy-MM-dd HH:mm").
+    public string RowTimeDisplay
+    {
+        get
+        {
+            var when = DateTimeOffset.FromUnixTimeSeconds((long)Timestamp).LocalDateTime;
+            return when.Date == DateTime.Today ? when.ToString("HH:mm") : when.ToString("d MMM HH:mm");
+        }
+    }
+
     public string TimestampDisplay
     {
         get
