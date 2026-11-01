@@ -1792,6 +1792,9 @@ jobs:
           cp platforms/linux/target/release/dimmy-linux AppDir/usr/bin/
           cp platforms/linux/assets/com.dimmy.app.desktop AppDir/usr/share/applications/
           cp platforms/linux/assets/com.dimmy.app.svg AppDir/usr/share/icons/hicolor/scalable/apps/
+          # appimagetool makes .DirIcon only from a PNG in the AppDir root, and
+          # linuxdeploy links just the SVG there.
+          cp platforms/linux/assets/com.dimmy.app.png AppDir/
 
           export DEPLOY_GTK_VERSION=4
           ./linuxdeploy-x86_64.AppImage \
@@ -1799,7 +1802,6 @@ jobs:
             --plugin gtk \
             --desktop-file platforms/linux/assets/com.dimmy.app.desktop \
             --icon-file platforms/linux/assets/com.dimmy.app.svg \
-            --icon-file platforms/linux/assets/com.dimmy.app.png \
             --output appimage
 
           mv Dimmy*.AppImage Dimmy-linux-x86_64.AppImage
