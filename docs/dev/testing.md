@@ -192,6 +192,7 @@ Existing IDs (keep stable — renaming breaks tests):
 - `OnboardingLocalCard` / `OnboardingCloudCard`
 - `OnboardingGroqKeyBox`
 - `OnboardingChoiceBackButton` / `OnboardingChoiceContinueButton`
+- `AboutLicenseViewButton` / `AboutNoticesViewButton` / `LegalTextBox`
 
 **Headless note.** GHA `windows-2025` runners don't reliably render windows to the desktop. Tests that rely on mouse clicks at screen coordinates (e.g. clicking a `Border` which has no `InvokePattern`) may pass locally but fail in CI. Prefer UIA patterns (`AsButton().Invoke()`, `AsTextBox().Enter(...)`) over `element.Click()`.
 

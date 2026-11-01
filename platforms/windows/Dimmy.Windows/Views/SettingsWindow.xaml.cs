@@ -5663,17 +5663,19 @@ public sealed partial class SettingsWindow : Window
     {
         var box = new TextBox
         {
+            // Before Text: a single-line TextBox keeps only the first line.
+            AcceptsReturn = true,
             Text = string.IsNullOrEmpty(text)
                 ? "Text unavailable."
                 : text.Replace("\r\n", "\n").Replace("\n", "\r"),
             IsReadOnly = true,
-            AcceptsReturn = true,
             TextWrapping = TextWrapping.Wrap,
             FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"),
             FontSize = 12,
             MinWidth = 640,
             Height = 440,
         };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(box, "LegalTextBox");
         ScrollViewer.SetVerticalScrollBarVisibility(box, ScrollBarVisibility.Auto);
         var dlg = new ContentDialog
         {
