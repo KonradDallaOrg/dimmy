@@ -1026,6 +1026,7 @@ jobs:
             --plugin gtk \
             --desktop-file platforms/linux/assets/com.dimmy.app.desktop \
             --icon-file platforms/linux/assets/com.dimmy.app.svg \
+            --icon-file platforms/linux/assets/com.dimmy.app.png \
             --output appimage
 
           # Rename to consistent name
