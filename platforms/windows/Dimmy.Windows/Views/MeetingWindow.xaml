@@ -383,16 +383,27 @@
                         Padding="{StaticResource DimmyCardPaddingCompact}" RowSpacing="{StaticResource DimmySpaceS}">
                     <Grid.RowDefinitions>
                       <RowDefinition Height="*"/>
+                      <RowDefinition Height="88"/>
                       <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
-                    <TextBox x:Name="NoteInput" Grid.Row="0"
+                    <!-- The notes so far, editable: the same notes.md the Done
+                         view opens and the recap reads. -->
+                    <TextBox x:Name="LiveNotesBox" Grid.Row="0"
+                             AutomationProperties.AutomationId="MeetingLiveNotes"
+                             PlaceholderText="No notes yet. The notes you add appear here, and you can edit them."
+                             AcceptsReturn="True" TextWrapping="Wrap"
+                             VerticalAlignment="Stretch"
+                             VerticalContentAlignment="Top"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto"
+                             TextChanged="LiveNotesBox_TextChanged"/>
+                    <TextBox x:Name="NoteInput" Grid.Row="1"
                              PlaceholderText="Jot a note — multi-line, markdown ok. Flagged as important for the recap."
                              AcceptsReturn="True" TextWrapping="Wrap"
                              VerticalAlignment="Stretch"
                              VerticalContentAlignment="Top" MaxLength="4000"
                              ScrollViewer.VerticalScrollBarVisibility="Auto"
                              KeyDown="NoteInput_KeyDown"/>
-                    <Grid Grid.Row="1">
+                    <Grid Grid.Row="2">
                       <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>

@@ -222,31 +222,25 @@ struct MeetingRecordingView: View {
 
     /// Notes during a recording, the way Windows does them: write a note,
     /// Add it, and it lands in notes.md stamped with the meeting time. The
-    /// notes added so far stay in view above, so it is plain that they were
-    /// kept. The recap reads them as the user's own emphasis.
+    /// notes so far stay above and can be edited, and every change is saved
+    /// at once. The recap reads them as the user's own emphasis.
     private var notesEditor: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    Group {
-                        if vm.doneNotes.isEmpty {
-                            Text("No notes yet. What you add here is stamped with the meeting time, and the recap gives it the most weight.")
-                                .foregroundStyle(Color.macTextSecondary)
-                        } else {
-                            Text(Self.rendered(vm.doneNotes))
-                                .textSelection(.enabled)
-                        }
-                    }
+            ZStack(alignment: .topLeading) {
+                if vm.doneNotes.isEmpty {
+                    Text("No notes yet. The notes you add appear here, and you can edit them.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.macTextSecondary)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 8)
+                        .allowsHitTesting(false)
+                }
+                TextEditor(text: $vm.doneNotes)
                     .font(.system(size: 13))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .id("notes-end")
-                }
-                .onChange(of: vm.doneNotes) { _, _ in
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        proxy.scrollTo("notes-end", anchor: .bottom)
-                    }
-                }
+                    .scrollContentBackground(.hidden)
+                    .onChange(of: vm.doneNotes) { _, _ in vm.saveNotes() }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             ZStack(alignment: .topLeading) {
                 if noteDraft.isEmpty {
                     Text("Write a note…")
@@ -283,15 +277,6 @@ struct MeetingRecordingView: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    /// The bold stamps rendered, line breaks kept. Plain text when the notes
-    /// are not valid markdown.
-    static func rendered(_ notes: String) -> AttributedString {
-        (try? AttributedString(
-            markdown: notes,
-            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-            ?? AttributedString(notes)
     }
 
     private func addNote() {

@@ -780,6 +780,9 @@ public partial class SettingsViewModel : ObservableObject
         var keep = SelectedDevice;
         Devices = entries;
         SelectedDevice = keep;
+        // Unchanged, the line above raises nothing, and a ComboBox that got its
+        // items after the value would stay empty.
+        OnPropertyChanged(nameof(SelectedDevice));
     }
 
     /// The picker's list also holds "System default" and a saved device that is gone.
