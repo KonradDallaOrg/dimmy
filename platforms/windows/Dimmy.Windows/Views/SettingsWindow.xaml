@@ -1754,12 +1754,12 @@
               <controls:SettingCard Glyph="&#xE8A5;"
                                     Label="Licence (AGPL-3.0)"
                                     InfoTip="The full GNU Affero General Public License v3 text.">
-                <Button Content="View" Click="ShowLicense_Click" />
+                <Button AutomationProperties.AutomationId="AboutLicenseViewButton" Content="View" Click="ShowLicense_Click" />
               </controls:SettingCard>
               <controls:SettingCard Glyph="&#xE8A5;"
                                     Label="Open source notices"
                                     InfoTip="Licences and copyright notices of the components Dimmy includes.">
-                <Button Content="View" Click="ShowNotices_Click" />
+                <Button AutomationProperties.AutomationId="AboutNoticesViewButton" Content="View" Click="ShowNotices_Click" />
               </controls:SettingCard>
 
             </StackPanel>
