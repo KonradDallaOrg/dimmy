@@ -3385,6 +3385,13 @@ pub extern "C" fn dimmy_gpu_clear_known_bad() -> c_int {
 
 // ── Audio ───────────────────────────────────────────────────────────
 
+/// Samples in the 50 ms the level meters read. A fixed count was 50 ms only at
+/// 16 kHz: capture runs at 48 kHz now, where it covered 17 ms of every 83 ms
+/// sample and the bars jumped with whatever those 17 ms happened to hold.
+fn amplitude_window(rate: u32) -> usize {
+    (rate as usize / 20).max(1)
+}
+
 /// Get current microphone amplitude (0.0 - 1.0).
 #[no_mangle]
 pub extern "C" fn dimmy_get_amplitude() -> c_float {
@@ -3392,6 +3399,7 @@ pub extern "C" fn dimmy_get_amplitude() -> c_float {
         Some(s) => s,
         None => return 0.0, // polled before init — silent zero, not a crash
     };
+    let rate = st.audio_sample_rate.lock().map(|s| *s).unwrap_or(16_000);
     let buffer = match st.audio_buffer.lock() {
         Ok(b) => b,
         Err(_) => return 0.0,
@@ -3399,9 +3407,9 @@ pub extern "C" fn dimmy_get_amplitude() -> c_float {
     if buffer.is_empty() {
         return 0.0;
     }
-    // Peak amplitude of last ~800 samples (~50ms at 16kHz)
+    // Peak amplitude of the last 50 ms.
     // Use fold that skips NaN/Inf samples defensively
-    let start = buffer.len().saturating_sub(800);
+    let start = buffer.len().saturating_sub(amplitude_window(rate));
     let peak = buffer[start..].iter().fold(0.0f32, |max, &s| {
         let abs = s.abs();
         if abs.is_finite() {
@@ -3425,6 +3433,8 @@ pub extern "C" fn dimmy_get_loopback_amplitude() -> c_float {
         Some(s) => s,
         None => return 0.0, // polled before init — silent zero, not a crash
     };
+    let primary_rate = st.audio_sample_rate.lock().map(|s| *s).unwrap_or(16_000);
+    let rate = crate::audio::secondary_sample_rate(primary_rate);
     let buffer = match st.audio_buffer_secondary.lock() {
         Ok(b) => b,
         Err(_) => return 0.0,
@@ -3432,7 +3442,7 @@ pub extern "C" fn dimmy_get_loopback_amplitude() -> c_float {
     if buffer.is_empty() {
         return 0.0;
     }
-    let start = buffer.len().saturating_sub(800);
+    let start = buffer.len().saturating_sub(amplitude_window(rate));
     let peak = buffer[start..].iter().fold(0.0f32, |max, &s| {
         let abs = s.abs();
         if abs.is_finite() {
@@ -12840,6 +12850,24 @@ mod tests {
         }
         let amp = dimmy_get_amplitude();
         assert_eq!(amp, 0.0);
+    }
+
+    #[test]
+    #[serial]
+    fn get_amplitude_covers_50_ms_at_the_capture_rate() {
+        ensure_test_state();
+        let saved_rate = *state().audio_sample_rate.lock().unwrap();
+        *state().audio_sample_rate.lock().unwrap() = 48_000;
+        let mut samples = vec![0.0f32; 3000];
+        samples[3000 - 2000] = 0.9; // 42 ms back: inside 50 ms at 48 kHz.
+        samples[0] = 1.0; // 62 ms back: outside.
+        if let Ok(mut b) = state().audio_buffer.lock() {
+            b.clear();
+            b.extend_from_slice(&samples);
+        }
+        let amp = dimmy_get_amplitude();
+        *state().audio_sample_rate.lock().unwrap() = saved_rate;
+        assert!((amp - 0.9).abs() < 0.001, "peak should be 0.9, got {}", amp);
     }
 
     #[test]
