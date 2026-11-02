@@ -179,13 +179,17 @@ public sealed partial class PillWindow : Window
         var inCommand = _vm.CommandMode || _vm.CommandOneShot;
         ReadyIcon.Foreground = new SolidColorBrush(inCommand ? CommandAmber : ColorCompleting);
         StyleIcon.Glyph = StyleGlyph(_vm.LlmStyle);
-        StyleIcon.Foreground = new SolidColorBrush(ParseColor(_vm.LlmStyleColor));
+        var styleColor = ParseColor(_vm.LlmStyleColor);
+        if (IsGlass)
+            styleColor = global::Windows.UI.Color.FromArgb(255,
+                (byte)(styleColor.R * 0.6), (byte)(styleColor.G * 0.6), (byte)(styleColor.B * 0.6));
+        StyleIcon.Foreground = new SolidColorBrush(styleColor);
     }
 
     private static string StyleGlyph(string style) => style switch
     {
         "off" => "\uE711",            // Cancel
-        "correct" => "\uE73E",        // CheckMark
+        "correct" => "\uE70F",        // Edit (pencil)
         "summarize" => "\uE8FD",      // BulletedList
         "elaborate" => "\uE740",      // FullScreen (expand)
         "comprehensible" => "\uEA80", // Lightbulb
@@ -196,7 +200,7 @@ public sealed partial class PillWindow : Window
         "emoji" => "\uE899",          // Emoji
         "acronyms" => "\uE8D2",       // Font
         "imbruttito" => "\uE7BA",     // Warning
-        _ => "\uE70F",                // Edit (custom)
+        _ => "\uE713",                // Settings (custom)
     };
 
     /// <summary>The LLM that the next dictation goes through, as the user
@@ -312,6 +316,12 @@ public sealed partial class PillWindow : Window
             : global::Windows.UI.Color.FromArgb(0, 0, 0, 0);
         _animTargetColor = targetBorderColor;
 
+        if (_animNewPanel != null && _animNewPanel != newPanel) _animNewPanel.Opacity = 1;
+        if (_animOldPanel != null && _animOldPanel != newPanel)
+        {
+            _animOldPanel.Opacity = 1;
+            if (_animOldPanel != _currentVisiblePanel) _animOldPanel.Visibility = Visibility.Collapsed;
+        }
         _animNewPanel = newPanel;
         _animOldPanel = oldPanel;
         _animOnComplete = onComplete;
@@ -1068,8 +1078,8 @@ public sealed partial class PillWindow : Window
         TimerText.Visibility = shown;
         StopButton.Visibility = shown;
         RecordingPanel.Margin = compact ? new Thickness(0) : new Thickness(12, 0, 12, 0);
-        Waveform.SetCompact(compact);
-        Waveform.Width = compact ? 17 : 34;
+        var compactWidth = Waveform.SetCompact(compact);
+        Waveform.Width = compact ? compactWidth : 34;
     }
 
     private void AnimateRecordingShape(FrameworkElement? newPanel = null, FrameworkElement? oldPanel = null)
