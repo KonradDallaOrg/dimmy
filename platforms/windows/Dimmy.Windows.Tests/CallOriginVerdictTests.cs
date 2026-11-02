@@ -119,6 +119,82 @@ public class CallOriginVerdictTests
             t.Observe(42, Sessions((42, "{speakers}", Inactive)), true, false));
     }
 
+    // ── Rows 2b and 4b: the call's playback and media (2026-11-02) ──
+
+    /// Measured 16:52:52: microphone switched from Teams' own menu. Every
+    /// Teams capture session Inactive, the registry naming nobody but
+    /// Dimmy, no device event - and Teams still playing the call. The old
+    /// matrix stopped the recording here and a new one started 1.1 s later.
+    [Fact]
+    public void SwitchingTheMicrophoneInsideTheAppIsNotAHangup()
+        => Assert.Equal(CallOriginState.OnTheCall, CallOriginVerdict.Judge(
+            42, Sessions((42, "{headset}", Inactive), (42, "{laptop}", Inactive)),
+            processAlive: true, someoneElseHoldsTheMic: false, deviceChanging: false,
+            callStillPlaying: true));
+
+    /// Mid-switch the session can be missing altogether.
+    [Fact]
+    public void NoSessionWhileTheCallStillPlaysIsInTransit()
+        => Assert.Equal(CallOriginState.OnTheCall, CallOriginVerdict.Judge(
+            42, Sessions(),
+            processAlive: true, someoneElseHoldsTheMic: false, deviceChanging: false,
+            callStillPlaying: true));
+
+    /// Measured 17:05:03-17:05:13: playback stopped, 9 of 11 UDP sockets
+    /// closed, then the microphone was released.
+    [Fact]
+    public void HangingUpWithPlaybackAndMediaGoneEnds()
+        => Assert.Equal(CallOriginState.Ended, CallOriginVerdict.Judge(
+            42, Sessions((42, "{headset}", Inactive)),
+            processAlive: true, someoneElseHoldsTheMic: false, deviceChanging: false,
+            callStillPlaying: false, callMediaClosed: true));
+
+    /// A browser keeps playing another tab after the call: the media
+    /// closing still ends it.
+    [Fact]
+    public void ClosedMediaEndsTheCallEvenIfTheAppKeepsPlaying()
+        => Assert.Equal(CallOriginState.Ended, CallOriginVerdict.Judge(
+            42, Sessions((42, "{headset}", Inactive)),
+            processAlive: true, someoneElseHoldsTheMic: true, deviceChanging: false,
+            callStillPlaying: true, callMediaClosed: true));
+
+    /// Talking wins over everything, closed media included.
+    [Fact]
+    public void ClosedMediaDoesNotEndACallThatIsCapturing()
+        => Assert.Equal(CallOriginState.OnTheCall, CallOriginVerdict.Judge(
+            42, Sessions((42, "{headset}", Active)),
+            processAlive: true, someoneElseHoldsTheMic: false, deviceChanging: false,
+            callStillPlaying: false, callMediaClosed: true));
+
+    // ── CallMediaSockets.Closed ──────────────────────────────────────
+    private static List<(uint, ushort)> Ports(params ushort[] ports)
+    {
+        var list = new List<(uint, ushort)>();
+        foreach (var p in ports) list.Add((33224, p));
+        return list;
+    }
+
+    /// 17:05:05: 11 sockets while talking, 2 left (the two Teams holds all day).
+    [Fact]
+    public void HangupClosesTheMediaSockets()
+        => Assert.True(CallMediaSockets.Closed(
+            Ports(50005, 50014, 50023, 50024, 50045, 50051, 50054, 50058, 55832, 50086, 64966),
+            Ports(50086, 64966)));
+
+    /// 17:04:50: the same 11 sockets across the in-app switch.
+    [Fact]
+    public void AnInAppSwitchKeepsTheMediaSockets()
+    {
+        var talking = Ports(50005, 50014, 50023, 50024, 50045, 50051, 50054, 50058, 55832, 50086, 64966);
+        Assert.False(CallMediaSockets.Closed(talking, talking));
+    }
+
+    /// A call relayed over TCP has only the app's everyday sockets: two of
+    /// them closing is churn, not a hangup.
+    [Fact]
+    public void ChurnOnAFewEverydaySocketsIsNotAHangup()
+        => Assert.False(CallMediaSockets.Closed(Ports(50086, 64966), Ports()));
+
     /// The window a device change opens has to close, or one headset switch
     /// would make the recording immortal.
     [Fact]

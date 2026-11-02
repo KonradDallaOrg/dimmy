@@ -19,14 +19,21 @@ tested in `CallOriginVerdictTests.cs`. The macOS equivalent is
 `CallAudioWatch` in `Services/CallDetectionManager.swift`, which reaches the
 same four outcomes from per-process CoreAudio facts.
 
-| # | sessions of the call | someone else on the mic | devices moving | verdict |
-|---|---|---|---|---|
-| 1 | one is **Active** | — | — | on the call |
-| 2 | process **dead** | — | — | **ENDED** |
-| 3 | all Inactive | no | no | **ENDED** — hung up |
-| 4 | all Inactive | **yes** | — | on the call — it moved device |
-| 5 | all Inactive | no | **yes** | on the call — mid-move |
-| 6 | none at all | — | yes / no | on the call / conclude nothing |
+| # | sessions of the call | someone else on the mic | devices moving | call still playing | call media closed | verdict |
+|---|---|---|---|---|---|---|
+| 1 | one is **Active** | — | — | — | — | on the call |
+| 2 | process **dead** | — | — | — | — | **ENDED** |
+| 2b | not Active | — | — | — | **yes** | **ENDED** — hung up, app plays on |
+| 3 | all Inactive | no | no | no | no | **ENDED** — hung up |
+| 4 | all Inactive | **yes** | — | — | no | on the call — it moved device |
+| 4b | all Inactive | — | — | **yes** | no | on the call — moved inside the app |
+| 5 | all Inactive | no | **yes** | — | no | on the call — mid-move |
+| 6 | none at all | — | yes / no | yes / no | no | on the call / conclude nothing |
+
+"Call still playing" = a process with the call app's executable name has an
+active PLAYBACK session. "Call media closed" = at least half, and at least
+3, of the UDP sockets that app held while the call was last capturing have
+closed (`CallMediaSockets.Closed`).
 
 Why every input is needed:
 
@@ -43,6 +50,16 @@ Why every input is needed:
   recording there.
 - **Row 2 outranks everything.** Quitting the app during a device change is
   still quitting the app.
+- **Rows 2b and 4b, measured 2026-11-02** (Teams, microphone and speaker
+  switched from Teams' own menu, no Windows device event). During the
+  switch every capture session of the call went idle for 0.29 s (1.1 s at
+  16:52:52), and the registry named nobody but Dimmy: the old matrix ended
+  the call and a new recording started a second later. Teams' playback
+  never stopped (the session on the new speaker started before the old one
+  closed) and its 11 UDP sockets stayed open. At the hangup playback
+  stopped, 9 of the 11 sockets closed within a second, and the microphone
+  was released ~8 s later. Sockets are evidence of an END only: a call
+  relayed over TCP 443 has none, and "still open" would keep it recording.
 
 The only clock left is a 60 s backstop under row 6, so a recording can
 never run for ever on a process that vanished and never came back. It
