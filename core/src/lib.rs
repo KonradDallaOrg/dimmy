@@ -26,6 +26,7 @@ pub mod confluence;
 pub mod consent;
 pub mod coreml_encoder;
 pub mod deepgram_stream;
+pub mod device_events;
 pub mod dfn;
 #[cfg(feature = "local-dfn")]
 pub mod dfn3;

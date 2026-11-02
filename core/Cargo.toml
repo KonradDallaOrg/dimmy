@@ -419,8 +419,9 @@ clap = { version = "4", features = ["derive"], optional = true }
 # AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK (activation PROPVARIANT, the
 # COM completion handler via windows-core's `implement`, an event handle).
 # audio.rs: IAudioSessionManager2 on capture endpoints + their friendly names,
-# so the mic can follow the device the call app captures from. Other
-# platforms ignore.
+# so the mic can follow the device the call app captures from.
+# device_events.rs: IMMNotificationClient + the microphone privacy key
+# (registry change notification). Other platforms ignore.
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-core = "0.62"
 windows = { version = "0.62", features = [
@@ -442,6 +443,12 @@ windows = { version = "0.62", features = [
 # Already in the tree through cpal and friends; this only makes it direct.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# CoreAudio property listeners (device_events.rs: default device, device
+# list, sample-rate changes). Already in the tree through cpal's
+# coreaudio-rs at this version and feature; this only makes it direct.
+[target.'cfg(target_os = "macos")'.dependencies]
+coreaudio-sys = { version = "0.2", default-features = false, features = ["core_audio"] }
 
 [dev-dependencies]
 # CSPRNG for ed25519 keypair generation in tests. Pulled here (not into

@@ -290,6 +290,26 @@ Full reference: [`audio-pipeline.md`](audio-pipeline.md). Headline:
   so the PROPVARIANT is held in `ManuallyDrop` (heap corruption
   0xC0000374 otherwise; a release build hid it).
 
+## `device_events.rs` — wake the audio thread on device events
+
+- Device follow (default in/out, device list, sample rate, which app holds
+  a mic) reacts to OS events instead of a timer. Windows:
+  `IMMNotificationClient` (default change, add/remove, state, and
+  `PKEY_AudioEngine_DeviceFormat` only — other endpoint properties churn)
+  plus the microphone privacy registry key (`RegNotifyChangeKeyValue`, the
+  same source as `MicUsageWatcher.cs`; any app, packaged or not). macOS:
+  CoreAudio listeners on the default input/output, the device list and
+  the default input's nominal sample rate. Linux: none.
+- The callback only sends `AudioCommand::DevicesChanged`; the audio
+  thread reads and decides. Watching exists only while recording
+  (registered at each Start, dropped at Stop).
+- The heartbeat is the net: 5 s, 1 s while a change is settling (tests:
+  1 s). A new device/rate must hold `DEVICE_SETTLE_MS` (900 ms, a
+  DURATION — events can arrive ms apart) before streams are rebuilt: the
+  macOS 26 HAL-wedge guard.
+- The mic callback sends one `DevicesChanged` when a run of digital zeros
+  crosses 4 s (no OS event exists for that).
+
 ## `capture_sessions.rs` — which mics other apps capture from (Win-only)
 
 - Friendly names (= cpal names) of active capture endpoints on which a

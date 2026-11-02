@@ -330,6 +330,10 @@ pub enum AudioCommand {
     /// AEC ref ring drained 480-sample frames at the wrong wall-clock rate,
     /// and the mix track's per-sample align broke.
     PushLoopback(Vec<f32>, u32),
+    /// The audio hardware picture changed (device_events.rs), or the mic
+    /// just crossed into digital silence: run the device checks now
+    /// instead of at the next heartbeat.
+    DevicesChanged,
 }
 
 /// Cached input-device names, refreshed by every LIVE enumeration
@@ -394,6 +398,7 @@ pub fn spawn_audio_thread(
     loopback_gain: Arc<std::sync::atomic::AtomicU32>,
 ) -> mpsc::Sender<AudioCommand> {
     let (tx, rx) = mpsc::channel::<AudioCommand>();
+    let wake_tx = tx.clone();
     #[cfg(feature = "sim-audio")]
     let sim_tx = tx.clone();
 
@@ -471,8 +476,7 @@ pub fn spawn_audio_thread(
             // polls before rebuilding keeps the audio thread out of that
             // transition window — a meeting froze exactly this way
             // (Francesco, macOS 26, 2026-07-06).
-            let mut pending_input_default: Option<String> = None;
-            let mut input_stable_polls: u32 = 0;
+            let mut input_settle: Settle<String> = Settle::default();
             // Rate-based device-change detection (complements the
             // name-based input-follow above). The name check misses a
             // device that KEEPS its name but changes sample rate — e.g. a
@@ -489,8 +493,17 @@ pub fn spawn_audio_thread(
             // the name path so a transient flicker can't wedge the macOS 26
             // HAL lock.
             let mut bound_input_rate: Option<u32> = None;
-            let mut pending_input_rate: Option<u32> = None;
-            let mut input_rate_stable_polls: u32 = 0;
+            let mut rate_settle: Settle<u32> = Settle::default();
+            // OS device notifications for the recording in progress (None
+            // while idle). `wake` is how they, and the mic callback's
+            // digital-silence edge, reach this loop.
+            let wake: crate::device_events::Wake = {
+                let tx = wake_tx;
+                Arc::new(move || {
+                    let _ = tx.send(AudioCommand::DevicesChanged);
+                })
+            };
+            let mut device_events: Option<crate::device_events::DeviceEvents> = None;
             // "Follow the call" mode (`mic_decision`): the input we moved to
             // because the call app captures from it, and the system default
             // at that moment, so a NEW default can still take us back.
@@ -560,10 +573,14 @@ pub fn spawn_audio_thread(
             // doubles as the heartbeat for device-change auto-recovery.
             let mut last_heartbeat = std::time::Instant::now();
             loop {
-                let cmd = match next_command(&rx, &mut last_heartbeat) {
-                    Next::Command(c) => c,
-                    Next::Disconnected => break,
-                    Next::Heartbeat => {
+                let period = if input_settle.is_pending() || rate_settle.is_pending() {
+                    HEARTBEAT_SETTLING
+                } else {
+                    HEARTBEAT_IDLE
+                };
+                let cmd = match next_command(&rx, &mut last_heartbeat, period) {
+                    Next::Command(AudioCommand::DevicesChanged) | Next::Heartbeat => {
+                        last_heartbeat = std::time::Instant::now();
                         // Test-only heartbeat counter: lets the guardrail
                         // integration test key its assertions to OBSERVED
                         // ticks instead of wall-clock sleeps (which flaked
@@ -675,12 +692,8 @@ pub fn spawn_audio_thread(
                                     }
                                     match decision {
                                         MicMove::To(ref name) | MicMove::ToDefault(ref name) => {
-                                            let stable = debounce_input_change(
-                                                true,
-                                                Some(name),
-                                                &mut pending_input_default,
-                                                &mut input_stable_polls,
-                                            );
+                                            let stable =
+                                                input_settle.observe(Some(name.clone()), now);
                                             if stable {
                                                 if let MicMove::To(_) = decision {
                                                     default_when_followed = current_default.clone();
@@ -688,29 +701,23 @@ pub fn spawn_audio_thread(
                                                 decision
                                             } else {
                                                 crate::log(&format!(
-                                                    "[Audio] mic should move to {:?} — debouncing (poll {}/2) before rebuild",
-                                                    name, input_stable_polls
+                                                    "[Audio] mic should move to {:?} — waiting for it to settle before rebuild",
+                                                    name
                                                 ));
                                                 MicMove::Stay
                                             }
                                         }
                                         other => {
-                                            debounce_input_change(
-                                                false,
-                                                None,
-                                                &mut pending_input_default,
-                                                &mut input_stable_polls,
-                                            );
+                                            input_settle.observe(None, now);
                                             other
                                         }
                                     }
                                 }
                                 None => {
                                     // Idle (not recording): nothing to follow,
-                                    // no WASAPI query. Reset the debounce so the
+                                    // no WASAPI query. Reset the settle so the
                                     // next Start begins clean.
-                                    pending_input_default = None;
-                                    input_stable_polls = 0;
+                                    input_settle = Settle::default();
                                     MicMove::Stay
                                 }
                             }
@@ -743,16 +750,12 @@ pub fn spawn_audio_thread(
                                     );
                                     let raw_changed =
                                         rate_changed_requires_rebuild(built_rate, probed);
-                                    let stable = debounce_rate_change(
-                                        raw_changed,
-                                        probed,
-                                        &mut pending_input_rate,
-                                        &mut input_rate_stable_polls,
-                                    );
+                                    let stable = rate_settle
+                                        .observe(probed.filter(|_| raw_changed), mono_ms());
                                     if raw_changed && !stable {
                                         crate::log(&format!(
-                                            "[Audio] bound input rate changed {} Hz -> {:?} — debouncing (poll {}/2) before rebuild",
-                                            built_rate, probed, input_rate_stable_polls
+                                            "[Audio] bound input rate changed {} Hz -> {:?} — waiting for it to settle before rebuild",
+                                            built_rate, probed
                                         ));
                                     }
                                     stable
@@ -807,8 +810,13 @@ pub fn spawn_audio_thread(
                             continue;
                         }
                     }
+                    Next::Command(c) => c,
+                    Next::Disconnected => break,
                 };
                 match cmd {
+                    AudioCommand::DevicesChanged => {
+                        unreachable!("DevicesChanged is handled as a heartbeat")
+                    }
                     AudioCommand::Start {
                         device_name,
                         source,
@@ -823,6 +831,11 @@ pub fn spawn_audio_thread(
                         last_start_params = Some((device_name.clone(), source));
                         // Drop any prior streams before re-opening.
                         streams.clear();
+                        // Re-registered on every Start: on a Mac the
+                        // sample-rate listener sits on whatever is the
+                        // default input NOW.
+                        drop(device_events.take());
+                        device_events = Some(crate::device_events::watch(wake.clone()));
                         #[cfg(target_os = "windows")]
                         {
                             process_capture = None;
@@ -1071,8 +1084,10 @@ pub fn spawn_audio_thread(
                         let sample_count =
                             std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
                         let sc1 = sample_count.clone();
+                        let wake1 = wake.clone();
+                        let wake2 = wake.clone();
                         let track_silence = !primary_is_loopback;
-                        note_mic_callback(true);
+                        note_mic_callback(true, &wake);
                         let s = match config.sample_format() {
                             cpal::SampleFormat::F32 => {
                                 let pr = primary_resampler.clone();
@@ -1084,7 +1099,10 @@ pub fn spawn_audio_thread(
                                             std::sync::atomic::Ordering::Relaxed,
                                         );
                                         if track_silence {
-                                            note_mic_callback(data.iter().any(|&s| s != 0.0));
+                                            note_mic_callback(
+                                                data.iter().any(|&s| s != 0.0),
+                                                &wake1,
+                                            );
                                         }
                                         if prev == 0 {
                                             crate::log(&format!(
@@ -1156,7 +1174,7 @@ pub fn spawn_audio_thread(
                                     move |data: &[i16], _: &cpal::InputCallbackInfo| {
                                         let prev = sc2.fetch_add(data.len(), std::sync::atomic::Ordering::Relaxed);
                                         if track_silence {
-                                            note_mic_callback(data.iter().any(|&s| s != 0));
+                                            note_mic_callback(data.iter().any(|&s| s != 0), &wake2);
                                         }
                                         if prev == 0 {
                                             crate::log(&format!("[Audio] First I16 callback: {} samples", data.len()));
@@ -1288,6 +1306,7 @@ pub fn spawn_audio_thread(
                         }
                         follow_input_name = None;
                         default_when_followed = None;
+                        device_events = None;
                         #[cfg(feature = "sim-audio")]
                         {
                             sim_feed = None;
@@ -1300,8 +1319,7 @@ pub fn spawn_audio_thread(
                         bound_loopback_name = None;
                         bound_input_name = None;
                         bound_input_rate = None;
-                        pending_input_rate = None;
-                        input_rate_stable_polls = 0;
+                        rate_settle = Settle::default();
                         AUDIO_STREAM_DEAD.store(false, Ordering::Relaxed);
                         // Clear the published mic rate so callers
                         // (e.g. SystemAudioCaptureService on Mac)
@@ -1493,7 +1511,57 @@ pub fn spawn_audio_thread(
     tx
 }
 
-const HEARTBEAT: std::time::Duration = std::time::Duration::from_secs(1);
+/// The device checks run on every OS device event (device_events.rs) and
+/// on the mic's digital-silence edge. The heartbeat is only the net for an
+/// event that never came, and Linux's only source: 5 s, down to 1 s while
+/// a change is settling so a move completes promptly. Tests keep 1 s so the
+/// tick-counting guardrail tests stay fast.
+#[cfg(not(any(test, feature = "test-ffi")))]
+const HEARTBEAT_IDLE: std::time::Duration = std::time::Duration::from_secs(5);
+#[cfg(any(test, feature = "test-ffi"))]
+const HEARTBEAT_IDLE: std::time::Duration = std::time::Duration::from_secs(1);
+const HEARTBEAT_SETTLING: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// How long a new device / rate must hold before streams are rebuilt on
+/// it. Rebuilding mid-transition (the flicker of an unplug/replug or a BT
+/// renegotiation) wedged the macOS 26 CoreAudio HAL lock and froze a
+/// meeting (Francesco, 2026-07-06). It used to be "seen on 2 consecutive
+/// 1 s polls"; with events two sightings can be milliseconds apart, so it
+/// is a duration now.
+const DEVICE_SETTLE_MS: u64 = 900;
+
+/// A changed value that must be seen again, `DEVICE_SETTLE_MS` or more
+/// after it first appeared, before it is acted on.
+#[derive(Default)]
+struct Settle<T> {
+    pending: Option<T>,
+    since_ms: u64,
+}
+
+impl<T: PartialEq> Settle<T> {
+    /// `changed_to`: the new value, or None when nothing is changing.
+    /// True once the same value has held for `DEVICE_SETTLE_MS`.
+    fn observe(&mut self, changed_to: Option<T>, now_ms: u64) -> bool {
+        match changed_to {
+            None => {
+                self.pending = None;
+                false
+            }
+            Some(v) if self.pending.as_ref() == Some(&v) => {
+                now_ms.saturating_sub(self.since_ms) >= DEVICE_SETTLE_MS
+            }
+            Some(v) => {
+                self.pending = Some(v);
+                self.since_ms = now_ms;
+                false
+            }
+        }
+    }
+
+    fn is_pending(&self) -> bool {
+        self.pending.is_some()
+    }
+}
 
 /// A live mic delivers noise even in a silent room; seconds of nothing but
 /// exact zeros mean the device has stopped handing us audio while the
@@ -1510,6 +1578,9 @@ const PROCESS_LOOPBACK_MAX_DEATHS: u32 = 3;
 /// least one non-zero sample (raw, before gain).
 static MIC_LAST_CALLBACK_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static MIC_LAST_SIGNAL_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// The current run of zeros has already woken the audio thread once.
+static MIC_SILENCE_REPORTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 fn mono_ms() -> u64 {
     static T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
@@ -1518,11 +1589,18 @@ fn mono_ms() -> u64 {
         .as_millis() as u64
 }
 
-fn note_mic_callback(has_signal: bool) {
+/// Runs on the cpal callback thread: two atomic stores, and at most one
+/// channel send per run of zeros (the moment it crosses `MIC_SILENCE_MS`).
+fn note_mic_callback(has_signal: bool, wake: &crate::device_events::Wake) {
     let now = mono_ms();
     MIC_LAST_CALLBACK_MS.store(now, Ordering::Relaxed);
     if has_signal {
         MIC_LAST_SIGNAL_MS.store(now, Ordering::Relaxed);
+        MIC_SILENCE_REPORTED.store(false, Ordering::Relaxed);
+    } else if now.saturating_sub(MIC_LAST_SIGNAL_MS.load(Ordering::Relaxed)) >= MIC_SILENCE_MS
+        && !MIC_SILENCE_REPORTED.swap(true, Ordering::Relaxed)
+    {
+        wake();
     }
 }
 
@@ -1689,18 +1767,22 @@ enum Next<T> {
     Disconnected,
 }
 
-/// What the audio thread does next. The device-change heartbeat is due
-/// once a second whatever arrives on the channel: it used to run only when
-/// a second passed with NO command, and a host pushing loopback audio (the
-/// macOS tap, dozens of times a second) kept that from ever happening — so
-/// on a Mac no meeting followed a new default mic or noticed a rate flip.
-fn next_command<T>(rx: &mpsc::Receiver<T>, last_heartbeat: &mut std::time::Instant) -> Next<T> {
+/// What the audio thread does next. The heartbeat is due every `period`
+/// whatever arrives on the channel: it used to run only when a full period
+/// passed with NO command, and a host pushing loopback audio (the macOS
+/// tap, dozens of times a second) kept that from ever happening — so on a
+/// Mac no meeting followed a new default mic or noticed a rate flip.
+fn next_command<T>(
+    rx: &mpsc::Receiver<T>,
+    last_heartbeat: &mut std::time::Instant,
+    period: std::time::Duration,
+) -> Next<T> {
     let since = last_heartbeat.elapsed();
-    if since >= HEARTBEAT {
+    if since >= period {
         *last_heartbeat = std::time::Instant::now();
         return Next::Heartbeat;
     }
-    match rx.recv_timeout(HEARTBEAT - since) {
+    match rx.recv_timeout(period - since) {
         Ok(c) => Next::Command(c),
         Err(mpsc::RecvTimeoutError::Timeout) => {
             *last_heartbeat = std::time::Instant::now();
@@ -1834,34 +1916,6 @@ fn loopback_should_follow_default(
     }
 }
 
-/// Debounce a default-input change so a stream rebuild never lands
-/// mid-transition. Returns `true` (rebuild now) only once the SAME new
-/// default has been observed across 2 consecutive polls; the caller owns
-/// the persistent `pending`/`streak` state. Rebuilding on the transient
-/// flicker of an unplug/replug is what wedged the macOS 26 CoreAudio HAL
-/// lock and froze a meeting (Francesco, 2026-07-06); this keeps the audio
-/// thread out of that window.
-fn debounce_input_change(
-    raw_changed: bool,
-    current_default: Option<&str>,
-    pending: &mut Option<String>,
-    streak: &mut u32,
-) -> bool {
-    if raw_changed {
-        if pending.as_deref() == current_default {
-            *streak += 1;
-        } else {
-            *pending = current_default.map(str::to_string);
-            *streak = 1;
-        }
-        *streak >= 2
-    } else {
-        *pending = None;
-        *streak = 0;
-        false
-    }
-}
-
 /// Pure decision: does a re-probed input rate warrant a stream rebuild?
 /// True only when the probe returned a sane audio rate that differs from
 /// the rate the live resampler was built with. A `None` probe (device
@@ -1875,34 +1929,6 @@ fn rate_changed_requires_rebuild(built_rate: u32, probed: Option<u32>) -> bool {
     match probed {
         Some(r) if (8_000..=192_000).contains(&r) => r != built_rate,
         _ => false,
-    }
-}
-
-/// Debounce a bound-input RATE change so a stream rebuild never lands
-/// mid-transition — the rate-side mirror of `debounce_input_change`.
-/// Returns `true` (rebuild now) only once the SAME new rate has been
-/// observed across 2 consecutive polls; the caller owns the persistent
-/// `pending`/`streak` state. Same rationale as the name-side debounce: a
-/// rebuild issued during the flicker of a BT renegotiation wedged the
-/// macOS 26 CoreAudio HAL lock (Francesco, 2026-07-06).
-fn debounce_rate_change(
-    raw_changed: bool,
-    current_rate: Option<u32>,
-    pending: &mut Option<u32>,
-    streak: &mut u32,
-) -> bool {
-    if raw_changed {
-        if *pending == current_rate {
-            *streak += 1;
-        } else {
-            *pending = current_rate;
-            *streak = 1;
-        }
-        *streak >= 2
-    } else {
-        *pending = None;
-        *streak = 0;
-        false
     }
 }
 
@@ -2747,7 +2773,7 @@ mod tests {
         let mut last = std::time::Instant::now();
         let mut heartbeats = 0;
         while started.elapsed() < std::time::Duration::from_millis(3_200) {
-            match next_command(&rx, &mut last) {
+            match next_command(&rx, &mut last, HEARTBEAT_SETTLING) {
                 Next::Heartbeat => heartbeats += 1,
                 Next::Command(_) => {}
                 Next::Disconnected => break,
@@ -2762,7 +2788,10 @@ mod tests {
     fn heartbeat_fires_on_an_idle_channel() {
         let (_tx, rx) = mpsc::channel::<u32>();
         let mut last = std::time::Instant::now();
-        assert!(matches!(next_command(&rx, &mut last), Next::Heartbeat));
+        assert!(matches!(
+            next_command(&rx, &mut last, HEARTBEAT_SETTLING),
+            Next::Heartbeat
+        ));
     }
 
     // ── Mic digital silence + following the call (2026-11-02) ────────
@@ -2906,61 +2935,34 @@ mod tests {
 
     // ── Device-change debounce (Tahoe HAL-wedge avoidance) ───────────
     #[test]
-    fn debounce_fires_only_after_two_consecutive_stable_polls() {
-        let mut pending = None;
-        let mut streak = 0;
-        assert!(!debounce_input_change(
-            true,
-            Some("Mic"),
-            &mut pending,
-            &mut streak
-        ));
-        assert!(debounce_input_change(
-            true,
-            Some("Mic"),
-            &mut pending,
-            &mut streak
-        ));
+    fn settle_fires_only_once_the_value_has_held() {
+        let mut settle = Settle::default();
+        assert!(!settle.observe(Some("Mic"), 10_000));
+        // Two events a few ms apart are not "stable": this is what the
+        // poll-count debounce would have let through with event wake-ups.
+        assert!(!settle.observe(Some("Mic"), 10_005));
+        assert!(settle.observe(Some("Mic"), 10_000 + DEVICE_SETTLE_MS));
     }
 
     #[test]
-    fn debounce_resets_when_the_new_default_keeps_flapping() {
-        let mut pending = None;
-        let mut streak = 0;
-        assert!(!debounce_input_change(
-            true,
-            Some("Mic"),
-            &mut pending,
-            &mut streak
-        ));
-        // A different device on the next poll (unplug flicker) must reset,
-        // never fire — this is the exact case that wedged the HAL.
-        assert!(!debounce_input_change(
-            true,
-            Some("Jabra"),
-            &mut pending,
-            &mut streak
-        ));
-        assert!(!debounce_input_change(
-            true,
-            Some("Mic"),
-            &mut pending,
-            &mut streak
-        ));
+    fn settle_restarts_when_the_value_keeps_flapping() {
+        let mut settle = Settle::default();
+        assert!(!settle.observe(Some("Mic"), 0));
+        // A different device mid-transition (unplug flicker) restarts the
+        // clock, never fires — the exact case that wedged the HAL.
+        assert!(!settle.observe(Some("Jabra"), 1_000));
+        assert!(!settle.observe(Some("Mic"), 2_000));
+        assert!(!settle.observe(Some("Mic"), 2_000 + DEVICE_SETTLE_MS - 1));
     }
 
     #[test]
-    fn debounce_clears_state_when_the_change_stops() {
-        let mut pending = Some("Mic".to_string());
-        let mut streak = 1;
-        assert!(!debounce_input_change(
-            false,
-            None,
-            &mut pending,
-            &mut streak
-        ));
-        assert_eq!(streak, 0);
-        assert!(pending.is_none());
+    fn settle_clears_when_the_change_stops() {
+        let mut settle = Settle::default();
+        settle.observe(Some(16_000u32), 0);
+        assert!(settle.is_pending());
+        assert!(!settle.observe(None, 5_000));
+        assert!(!settle.is_pending());
+        assert!(!settle.observe(Some(16_000), 5_001));
     }
 
     #[test]
@@ -2983,64 +2985,6 @@ mod tests {
         assert!(!rate_changed_requires_rebuild(48_000, Some(0)));
         assert!(!rate_changed_requires_rebuild(48_000, Some(4_000)));
         assert!(!rate_changed_requires_rebuild(48_000, Some(384_000)));
-    }
-
-    #[test]
-    fn rate_debounce_fires_only_after_two_consecutive_stable_polls() {
-        let mut pending: Option<u32> = None;
-        let mut streak = 0;
-        // First observation of the new rate: arm, don't rebuild yet.
-        assert!(!debounce_rate_change(
-            true,
-            Some(16_000),
-            &mut pending,
-            &mut streak
-        ));
-        assert_eq!(streak, 1);
-        // Same new rate again: now stable → rebuild.
-        assert!(debounce_rate_change(
-            true,
-            Some(16_000),
-            &mut pending,
-            &mut streak
-        ));
-        assert_eq!(streak, 2);
-    }
-
-    #[test]
-    fn rate_debounce_resets_when_the_rate_keeps_flapping() {
-        let mut pending: Option<u32> = None;
-        let mut streak = 0;
-        assert!(!debounce_rate_change(
-            true,
-            Some(16_000),
-            &mut pending,
-            &mut streak
-        ));
-        // A DIFFERENT transient rate resets the streak — never rebuilds
-        // mid-flicker (the macOS 26 HAL-wedge guard).
-        assert!(!debounce_rate_change(
-            true,
-            Some(24_000),
-            &mut pending,
-            &mut streak
-        ));
-        assert_eq!(streak, 1);
-        assert_eq!(pending, Some(24_000));
-    }
-
-    #[test]
-    fn rate_debounce_clears_when_the_change_stops() {
-        let mut pending: Option<u32> = Some(16_000);
-        let mut streak = 1;
-        assert!(!debounce_rate_change(
-            false,
-            Some(48_000),
-            &mut pending,
-            &mut streak
-        ));
-        assert_eq!(streak, 0);
-        assert!(pending.is_none());
     }
 
     #[test]

@@ -16,9 +16,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   starts delivering nothing but digital silence (a Bluetooth headset
   leaving hands-free mode), Dimmy reopens it, or follows the call to the
   microphone it moved to.
-- Mac: during a meeting the audio thread checks for device changes once
-  a second again. The system-audio stream kept it busy, so a new default
-  microphone or a sample-rate change was never noticed mid-meeting.
+- Device changes are followed on the operating system's own events (new
+  default device, device plugged or unplugged, a Bluetooth headset
+  switching mode, an app taking or releasing a microphone) instead of a
+  once-a-second check. A check every 5 s stays as a safety net. On a Mac
+  that check had never run during a meeting at all: the system-audio
+  stream kept the audio thread too busy for it.
 
 ### Added
 
