@@ -201,14 +201,18 @@ public sealed partial class PillWindow : Window
 
     /// <summary>The LLM that the next dictation goes through, as the user
     /// knows it: the model id, or the local GGUF name.</summary>
-    private static string CurrentLlmLabel()
+    private static string ConfigString(string key)
     {
         var json = DimmyNative.ReadBuffer(DimmyNative.dimmy_get_config_json, 65536);
         if (string.IsNullOrEmpty(json)) return "";
         using var doc = System.Text.Json.JsonDocument.Parse(json);
-        var r = doc.RootElement;
-        string Get(string k) => r.TryGetProperty(k, out var v)
+        return doc.RootElement.TryGetProperty(key, out var v)
             && v.ValueKind == System.Text.Json.JsonValueKind.String ? v.GetString() ?? "" : "";
+    }
+
+    private static string CurrentLlmLabel()
+    {
+        static string Get(string k) => ConfigString(k);
         if (Get("llm_mode") == "local")
         {
             var m = Get("local_llm_model");
@@ -1064,8 +1068,8 @@ public sealed partial class PillWindow : Window
         TimerText.Visibility = shown;
         StopButton.Visibility = shown;
         RecordingPanel.Margin = compact ? new Thickness(0) : new Thickness(12, 0, 12, 0);
-        Waveform.RenderTransformOrigin = new global::Windows.Foundation.Point(0.5, 0.5);
-        Waveform.RenderTransform = compact ? new ScaleTransform { ScaleX = 0.6, ScaleY = 0.6 } : null;
+        Waveform.SetCompact(compact);
+        Waveform.Width = compact ? 17 : 34;
     }
 
     private void AnimateRecordingShape(FrameworkElement? newPanel = null, FrameworkElement? oldPanel = null)
@@ -1194,6 +1198,12 @@ public sealed partial class PillWindow : Window
     {
         HighlightItem(sender, true);
         ShowHoverTip(TranslateTip());
+    }
+
+    private void Mic_PointerEntered(object sender, PointerRoutedEventArgs e)
+    {
+        HighlightItem(sender, true);
+        ShowHoverTip(Helpers.InputDeviceChoice.ForDisplay(ConfigString("selected_device")));
     }
 
     private void Shortcut_PointerEntered(object sender, PointerRoutedEventArgs e)

@@ -71,6 +71,15 @@ public sealed partial class WaveformControl : UserControl
         BuildPolyline();
     }
 
+    /// <summary>Three central bars only, sized to them, for the round
+    /// recording pill. 17 = three 3 px bars + two 4 px gaps.</summary>
+    public void SetCompact(bool compact)
+    {
+        for (int i = 0; i < _bars.Length; i++)
+            _bars[i].Visibility = compact && (i < 2 || i > 4) ? Visibility.Collapsed : Visibility.Visible;
+        WaveGrid.Width = compact ? 17 : 40;
+    }
+
     private void BuildPolyline()
     {
         _polyline = new Polyline
