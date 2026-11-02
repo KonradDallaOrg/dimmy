@@ -826,7 +826,7 @@ pub fn spawn_audio_thread(
                         // Re-registered on every Start: on a Mac the
                         // sample-rate listener sits on whatever is the
                         // default input NOW.
-                        drop(device_events.take());
+                        device_events = None;
                         device_events = Some(crate::device_events::watch(wake.clone()));
                         if !is_recovery_start {
                             follow_output_name = None;
