@@ -7,8 +7,8 @@
 
     <!-- Background must be Transparent so the backdrop shows through -->
     <Grid Background="Transparent">
-    <Grid x:Name="RootGrid"
-          HorizontalAlignment="Center" VerticalAlignment="Center">
+    <Grid x:Name="RootGrid" Margin="0,0,0,10"
+          HorizontalAlignment="Center" VerticalAlignment="Bottom">
 
         <!-- Glow host: Composition DropShadow is inserted here as a child visual -->
         <Border x:Name="GlowHost" IsHitTestVisible="False"
@@ -19,7 +19,7 @@
                 HorizontalAlignment="Center" VerticalAlignment="Center" />
 
         <!-- Colored border + interaction layer -->
-        <Border x:Name="ColorBorder" CornerRadius="50" BorderThickness="2"
+        <Border x:Name="ColorBorder" CornerRadius="50" BorderThickness="1.5"
                 HorizontalAlignment="Center" VerticalAlignment="Center"
                 PointerPressed="Pill_PointerPressed"
                 PointerMoved="Pill_PointerMoved"
@@ -39,17 +39,38 @@
                     <Grid x:Name="IdlePanel" Visibility="Visible">
                         <StackPanel x:Name="IdleContent" Orientation="Horizontal" Spacing="5"
                                     HorizontalAlignment="Center" VerticalAlignment="Center">
-                            <Border Background="Transparent" Padding="4,3"
-                                    PointerWheelChanged="StyleDot_PointerWheelChanged">
-                                <Ellipse x:Name="StyleDot" Width="5" Height="5" />
+                            <Border x:Name="ReadyHost" Background="Transparent"
+                                    Width="22" Height="22" CornerRadius="11" VerticalAlignment="Center"
+                                    PointerEntered="Mic_PointerEntered"
+                                    PointerExited="HoverTip_PointerExited">
+                                <FontIcon x:Name="ReadyIcon" Glyph="&#xE720;" FontSize="13" />
                             </Border>
-                            <TextBlock x:Name="LanguageLabel" FontSize="10" FontWeight="SemiBold"
-                                       Foreground="#AAFFFFFF" VerticalAlignment="Center"
-                                       Visibility="Collapsed"
-                                       PointerWheelChanged="LanguageLabel_PointerWheelChanged" />
-                            <TextBlock x:Name="ShortcutLabel" FontSize="9" FontFamily="Consolas"
-                                       Foreground="#77FFFFFF" VerticalAlignment="Center"
-                                       Visibility="Collapsed" />
+                            <Border x:Name="LanguageHost" Background="Transparent"
+                                    Width="22" Height="22" CornerRadius="11"
+                                    VerticalAlignment="Center" Visibility="Collapsed"
+                                    PointerEntered="LanguageLabel_PointerEntered"
+                                    PointerExited="HoverTip_PointerExited"
+                                    PointerWheelChanged="LanguageLabel_PointerWheelChanged">
+                                <TextBlock x:Name="LanguageLabel" FontSize="10" FontWeight="SemiBold"
+                                           Foreground="#AAFFFFFF" VerticalAlignment="Center"
+                                           HorizontalAlignment="Center" />
+                            </Border>
+                            <Border x:Name="StyleIconHost" Background="Transparent"
+                                    Width="22" Height="22" CornerRadius="11"
+                                    VerticalAlignment="Center" Visibility="Collapsed"
+                                    PointerEntered="StyleIcon_PointerEntered"
+                                    PointerExited="HoverTip_PointerExited"
+                                    PointerWheelChanged="StyleDot_PointerWheelChanged">
+                                <FontIcon x:Name="StyleIcon" FontSize="12" />
+                            </Border>
+                            <Border x:Name="ShortcutHost" Background="Transparent"
+                                    Width="22" Height="22" CornerRadius="11"
+                                    VerticalAlignment="Center" Visibility="Collapsed"
+                                    PointerEntered="Shortcut_PointerEntered"
+                                    PointerExited="HoverTip_PointerExited">
+                                <FontIcon x:Name="ShortcutIcon" Glyph="&#xE765;" FontSize="12"
+                                          Foreground="#77FFFFFF" />
+                            </Border>
                         </StackPanel>
                     </Grid>
 
@@ -70,7 +91,7 @@
                     <!-- Transcribing -->
                     <StackPanel x:Name="TranscribingPanel" Orientation="Horizontal" Spacing="8"
                                 VerticalAlignment="Center" Margin="7,0" Visibility="Collapsed">
-                        <ProgressRing IsActive="True" Width="14" Height="14" />
+                        <ProgressRing IsActive="True" Width="14" Height="14" Foreground="#38bdf8" />
                         <TextBlock x:Name="TranscribingText" Text="Transcribing..." FontSize="10" Foreground="#EEFFFFFF" />
                         <TextBlock x:Name="ChunkText" FontSize="9" Foreground="#77FFFFFF" />
                     </StackPanel>
@@ -78,8 +99,10 @@
                     <!-- Processing -->
                     <StackPanel x:Name="ProcessingPanel" Orientation="Horizontal" Spacing="8"
                                 VerticalAlignment="Center" Margin="7,0" Visibility="Collapsed">
-                        <ProgressRing IsActive="True" Width="14" Height="14" />
-                        <TextBlock x:Name="ProcessingText" Text="Processing..." FontSize="10" Foreground="#EEFFFFFF" />
+                        <TextBlock Text="&#x2726;" FontSize="14" Foreground="#c084fc"
+                                   VerticalAlignment="Center" />
+                        <TextBlock x:Name="ProcessingText" Text="Processing..." FontSize="10" Foreground="#EEFFFFFF"
+                                   VerticalAlignment="Center" MaxWidth="150" TextTrimming="CharacterEllipsis" />
                     </StackPanel>
 
                     <!-- Recap: a meeting recap is running while nothing

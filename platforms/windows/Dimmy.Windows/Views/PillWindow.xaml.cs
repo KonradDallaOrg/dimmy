@@ -61,10 +61,12 @@ public sealed partial class PillWindow : Window
     // Circle size for idle/completing states — matched to macOS (36pt)
     private const double CircleSize = 32;
     // Capsule height for recording/transcribing states
-    private const double CapsuleHeight = 36;
+    private const double CapsuleHeight = CircleSize;
 
     private const int WindowWidth = 240;
-    private const int WindowHeight = 56;
+    // The pill sits at the bottom; the space above it holds the hover tip,
+    // so the tip never covers the pill.
+    private const int WindowHeight = 88;
 
     public PillWindow(AppViewModel vm)
     {
@@ -175,8 +177,67 @@ public sealed partial class PillWindow : Window
         // toggle (CommandMode) or a one-shot fired by the dedicated hotkey
         // (CommandOneShot).
         var inCommand = _vm.CommandMode || _vm.CommandOneShot;
-        var color = inCommand ? CommandAmber : ParseColor(_vm.LlmStyleColor);
-        StyleDot.Fill = new SolidColorBrush(color);
+        ReadyIcon.Foreground = new SolidColorBrush(inCommand ? CommandAmber : ColorCompleting);
+        StyleIcon.Glyph = StyleGlyph(_vm.LlmStyle);
+        var styleColor = ParseColor(_vm.LlmStyleColor);
+        if (IsGlass)
+            styleColor = global::Windows.UI.Color.FromArgb(255,
+                (byte)(styleColor.R * 0.6), (byte)(styleColor.G * 0.6), (byte)(styleColor.B * 0.6));
+        StyleIcon.Foreground = new SolidColorBrush(styleColor);
+    }
+
+    private static string StyleGlyph(string style) => style switch
+    {
+        "off" => "\uE711",            // Cancel
+        "correct" => "\uE70F",        // Edit (pencil)
+        "summarize" => "\uE8FD",      // BulletedList
+        "elaborate" => "\uE740",      // FullScreen (expand)
+        "comprehensible" => "\uEA80", // Lightbulb
+        "professional" => "\uE821",   // Work
+        "prompt" => "\uE756",         // CommandPrompt
+        "genz" => "\uE76E",           // Emoji2
+        "boomer" => "\uE81C",         // History
+        "emoji" => "\uE899",          // Emoji
+        "acronyms" => "\uE8D2",       // Font
+        "imbruttito" => "\uE7BA",     // Warning
+        _ => "\uE713",                // Settings (custom)
+    };
+
+    /// <summary>The LLM that the next dictation goes through, as the user
+    /// knows it: the model id, or the local GGUF name.</summary>
+    private static string ConfigString(string key)
+    {
+        var json = DimmyNative.ReadBuffer(DimmyNative.dimmy_get_config_json, 65536);
+        if (string.IsNullOrEmpty(json)) return "";
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+        return doc.RootElement.TryGetProperty(key, out var v)
+            && v.ValueKind == System.Text.Json.JsonValueKind.String ? v.GetString() ?? "" : "";
+    }
+
+    private static string CurrentLlmLabel()
+    {
+        static string Get(string k) => ConfigString(k);
+        if (Get("llm_mode") == "local")
+        {
+            var m = Get("local_llm_model");
+            return m.EndsWith(".gguf", StringComparison.OrdinalIgnoreCase) ? m[..^5] : m;
+        }
+        var model = Get("llm_api_model");
+        return Get("llm_auth_method") == "subscription" ? $"{model} (subscription)" : model;
+    }
+
+    private string StyleTip()
+    {
+        if (_vm.LlmStyle == "off") return "LLM off";
+        return char.ToUpperInvariant(_vm.LlmStyle[0]) + _vm.LlmStyle[1..];
+    }
+
+    private string TranslateTip()
+    {
+        var idx = LangList.FindIndex(kv => kv.Key == _vm.LlmTranslateTo);
+        return string.IsNullOrEmpty(_vm.LlmTranslateTo) || idx < 0
+            ? "No translation"
+            : $"Translate to: {LangList[idx].Value}";
     }
 
     // ── Shape helpers ───────────────────────────────────────────────
@@ -255,6 +316,12 @@ public sealed partial class PillWindow : Window
             : global::Windows.UI.Color.FromArgb(0, 0, 0, 0);
         _animTargetColor = targetBorderColor;
 
+        if (_animNewPanel != null && _animNewPanel != newPanel) _animNewPanel.Opacity = 1;
+        if (_animOldPanel != null && _animOldPanel != newPanel)
+        {
+            _animOldPanel.Opacity = 1;
+            if (_animOldPanel != _currentVisiblePanel) _animOldPanel.Visibility = Visibility.Collapsed;
+        }
         _animNewPanel = newPanel;
         _animOldPanel = oldPanel;
         _animOnComplete = onComplete;
@@ -379,6 +446,12 @@ public sealed partial class PillWindow : Window
         global::Windows.UI.Color.FromArgb(255, 168, 139, 250);
     private static readonly global::Windows.UI.Color ColorCompleting =
         global::Windows.UI.Color.FromArgb(255, 74, 222, 128);
+    // Thin glass edge of the idle pill, and the "AI is working" accent.
+    private global::Windows.UI.Color IdleEdge => IsGlass
+        ? global::Windows.UI.Color.FromArgb(26, 0, 0, 0)
+        : global::Windows.UI.Color.FromArgb(28, 255, 255, 255);
+    private static readonly global::Windows.UI.Color ColorAi =
+        global::Windows.UI.Color.FromArgb(255, 168, 85, 247);
     private static readonly global::Windows.UI.Color ColorError =
         global::Windows.UI.Color.FromArgb(255, 239, 68, 68);
 
@@ -413,9 +486,9 @@ public sealed partial class PillWindow : Window
     private static readonly global::Windows.UI.Color BgDark =
         global::Windows.UI.Color.FromArgb(255, 26, 26, 26);       // #FF1a1a1a
     private static readonly global::Windows.UI.Color BgGlassActive =
-        global::Windows.UI.Color.FromArgb(160, 210, 210, 218);    // #A0D2D2DA — more transparent, lighter glass
+        global::Windows.UI.Color.FromArgb(245, 248, 248, 250);    // #A0D2D2DA — more transparent, lighter glass
     private static readonly global::Windows.UI.Color BgGlassIdle =
-        global::Windows.UI.Color.FromArgb(140, 200, 200, 210);    // #8CC8C8D2 — idle, more transparent
+        global::Windows.UI.Color.FromArgb(235, 248, 248, 250);    // #8CC8C8D2 — idle, more transparent
 
     private SolidColorBrush GetPillBackground(bool idle = false) =>
         new(IsGlass ? (idle ? BgGlassIdle : BgGlassActive) : BgDark);
@@ -434,13 +507,18 @@ public sealed partial class PillWindow : Window
         LanguageLabel.Foreground = IsGlass
             ? new SolidColorBrush(global::Windows.UI.Color.FromArgb(170, 30, 30, 30))
             : new SolidColorBrush(global::Windows.UI.Color.FromArgb(170, 255, 255, 255));
-        ShortcutLabel.Foreground = textSecondary;
+        ShortcutIcon.Foreground = textSecondary;
 
-        // Recording / Transcribing / Processing — always white to match waveform bars
+        // Recording / Transcribing / Processing — same ink as the waveform:
+        // white on the dark pill, near-black on the light one.
+        var ink = IsGlass
+            ? global::Windows.UI.Color.FromArgb(255, 30, 30, 30)
+            : global::Windows.UI.Color.FromArgb(255, 255, 255, 255);
+        Waveform.SetInk(ink);
         var activeFg = new SolidColorBrush(
-            global::Windows.UI.Color.FromArgb(230, 255, 255, 255));
+            global::Windows.UI.Color.FromArgb(230, ink.R, ink.G, ink.B));
         var activeSecondary = new SolidColorBrush(
-            global::Windows.UI.Color.FromArgb(119, 255, 255, 255));
+            global::Windows.UI.Color.FromArgb(140, ink.R, ink.G, ink.B));
         TimerText.Foreground = activeFg;
         StopIcon.Background = activeFg;
         TranscribingText.Foreground = activeFg;
@@ -481,7 +559,7 @@ public sealed partial class PillWindow : Window
         if (w <= 0 || h <= 0) return;
 
         // Inset by border thickness so the body sits inside the border ring
-        const float inset = 2f; // matches BorderThickness
+        const float inset = 1.5f; // matches BorderThickness
         var innerW = (float)w - inset * 2;
         var innerH = (float)h - inset * 2;
         var cr = Math.Max(0f, (float)ColorBorder.CornerRadius.TopLeft - inset);
@@ -592,7 +670,7 @@ public sealed partial class PillWindow : Window
         _glowShadow.Color = color;
         // Same blur for all states; opacity controls intensity
         _glowShadow.BlurRadius = 10;
-        _glowShadow.Opacity = _glowSubtle ? 0.15f : 0.5f;
+        _glowShadow.Opacity = _glowSubtle ? 0.15f : 0.3f;
     }
 
     private void UpdateGlow(global::Windows.UI.Color color, bool subtle = false)
@@ -650,8 +728,10 @@ public sealed partial class PillWindow : Window
         _amplitudeTimer?.Stop();
         _recordingTimer?.Stop();
 
-        LanguageLabel.Visibility = Visibility.Collapsed;
-        ShortcutLabel.Visibility = Visibility.Collapsed;
+        LanguageHost.Visibility = Visibility.Collapsed;
+        StyleIconHost.Visibility = Visibility.Collapsed;
+        ShortcutHost.Visibility = Visibility.Collapsed;
+        ScrollTooltip.Visibility = Visibility.Collapsed;
 
         // Apply text colors for theme
         ApplyThemeColors();
@@ -679,14 +759,13 @@ public sealed partial class PillWindow : Window
                 RootGrid.Opacity = 1.0;
                 SetPillBodyColor(IsGlass ? BgGlassIdle : BgDark);
                 StopRainbowAnimation();
-                AnimateToCircle(global::Windows.UI.Color.FromArgb(0, 0, 0, 0), newPanel, oldPanel);
+                AnimateToCircle(IdleEdge, newPanel, oldPanel);
                 UpdateGlow((_vm.CommandMode || _vm.CommandOneShot) ? CommandAmber : ParseColor(_vm.LlmStyleColor), subtle: true);
                 break;
 
             case AppState.Recording:
                 RootGrid.Opacity = 1.0;
                 SetPillBodyColor(IsGlass ? BgGlassActive : BgDark);
-                StopButton.Visibility = Visibility.Visible;
                 StartAmplitudePolling();
                 _recordingStartTime = DateTime.Now;
                 StartRecordingTimer();
@@ -696,14 +775,15 @@ public sealed partial class PillWindow : Window
                     // Set rainbow brush first, then animate size only (skip border color)
                     ColorBorder.BorderBrush = _rainbowBrush;
                     StartRainbowAnimation();
-                    AnimateToCapsule(BorderBlue, newPanel, oldPanel, skipBorderColor: true);
+                    AnimateRecordingShape(newPanel, oldPanel);
                 }
                 else
                 {
                     StopRainbowAnimation();
-                    AnimateToCapsule(GetBorderColorForRecording(), newPanel, oldPanel);
+                    AnimateRecordingShape(newPanel, oldPanel);
                 }
-                UpdateGlow(GetBorderColorForRecording());
+                // Soft under the rainbow, so the ring stays crisp.
+                UpdateGlow(GetBorderColorForRecording(), subtle: _vm.BorderStyle == "Rainbow");
                 break;
 
             case AppState.Transcribing:
@@ -720,8 +800,9 @@ public sealed partial class PillWindow : Window
                 SetPillBodyColor(IsGlass ? BgGlassActive : BgDark);
                 RootGrid.Opacity = 1.0;
                 StopRainbowAnimation();
-                AnimateToCapsule(ParseColor(_vm.LlmStyleColor), newPanel, oldPanel);
-                UpdateGlow(ParseColor(_vm.LlmStyleColor));
+                ProcessingText.Text = CurrentLlmLabel() is { Length: > 0 } llm ? llm : "Processing...";
+                AnimateToCapsule(ColorAi, newPanel, oldPanel);
+                UpdateGlow(ColorAi);
                 break;
 
             case AppState.Completing:
@@ -732,7 +813,7 @@ public sealed partial class PillWindow : Window
                     ? ParseColor(_vm.LlmStyleColor)
                     : ColorCompleting;
                 AnimateToCircle(completingColor, newPanel, oldPanel);
-                UpdateGlow(completingColor);
+                UpdateGlow(completingColor, subtle: true);
                 if (_completingTimer is null)
                     _completingTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1200) };
                 if (!_completingHandlerAttached)
@@ -833,9 +914,7 @@ public sealed partial class PillWindow : Window
     // ── Rainbow ─────────────────────────────────────────────────────
     private static readonly (double Offset, string Hex)[] RainbowStops =
     [
-        (0.000, "#FF4D4D"), (0.125, "#FF6633"), (0.250, "#FFB84D"),
-        (0.375, "#49F249"), (0.500, "#66E0FF"), (0.625, "#4D7AFF"),
-        (0.750, "#9966FF"), (0.875, "#E066FF"), (0.940, "#FF4D8C"),
+        (0.00, "#4285F4"), (0.25, "#EA4335"), (0.50, "#FBBC05"), (0.75, "#34A853"),
     ];
 
     private void BuildRainbowBrush()
@@ -995,8 +1074,37 @@ public sealed partial class PillWindow : Window
     }
 
     // ── Hover ───────────────────────────────────────────────────────
+    // While recording the pill is a circle with the bars only; the pointer
+    // on it opens the full capsule (bars, timer, stop).
+    private bool _pointerOver;
+
+    private void SetRecordingCompact(bool compact)
+    {
+        var shown = compact ? Visibility.Collapsed : Visibility.Visible;
+        TimerText.Visibility = shown;
+        StopButton.Visibility = shown;
+        RecordingPanel.Margin = compact ? new Thickness(0) : new Thickness(12, 0, 12, 0);
+        var compactWidth = Waveform.SetCompact(compact);
+        Waveform.Width = compact ? compactWidth : 34;
+        // 18 = the control's own height, so the bars sit on the circle's centre.
+        Waveform.Height = compact ? 18 : 14;
+    }
+
+    private void AnimateRecordingShape(FrameworkElement? newPanel = null, FrameworkElement? oldPanel = null)
+    {
+        var compact = !_pointerOver;
+        SetRecordingCompact(compact);
+        var rainbow = _vm.BorderStyle == "Rainbow";
+        if (compact)
+            AnimateToCircle(GetBorderColorForRecording(), newPanel, oldPanel, skipBorderColor: rainbow);
+        else
+            AnimateToCapsule(GetBorderColorForRecording(), newPanel, oldPanel, skipBorderColor: rainbow);
+    }
+
     private void Pill_PointerEntered(object sender, PointerRoutedEventArgs e)
     {
+        _pointerOver = true;
+        if (_vm.CurrentState == AppState.Recording) AnimateRecordingShape();
         if (_vm.CurrentState == AppState.Idle)
         {
             RootGrid.Opacity = 0.95;
@@ -1008,25 +1116,30 @@ public sealed partial class PillWindow : Window
             LanguageLabel.Text = string.IsNullOrEmpty(_vm.LlmTranslateTo)
                 ? "—"
                 : _vm.LlmTranslateTo.ToUpperInvariant();
-            ShortcutLabel.Text = _vm.Shortcut;
-            LanguageLabel.Visibility = Visibility.Visible;
-            ShortcutLabel.Visibility = Visibility.Visible;
+            RefreshStyleDot();
+            LanguageHost.Visibility = Visibility.Visible;
+            StyleIconHost.Visibility = Visibility.Visible;
+            ShortcutHost.Visibility = Visibility.Visible;
             IdleContent.Margin = new Thickness(7, 0, 7, 0);
             // Hover keeps same transparent border — just animate size
-            AnimateToCapsule(global::Windows.UI.Color.FromArgb(0, 0, 0, 0));
+            AnimateToCapsule(IdleEdge);
             UpdateGlow(ParseColor(_vm.LlmStyleColor), subtle: true);
         }
     }
 
     private void Pill_PointerExited(object sender, PointerRoutedEventArgs e)
     {
+        _pointerOver = false;
+        if (_vm.CurrentState == AppState.Recording) AnimateRecordingShape();
         if (_vm.CurrentState == AppState.Idle)
         {
             RootGrid.Opacity = 1.0;
-            LanguageLabel.Visibility = Visibility.Collapsed;
-            ShortcutLabel.Visibility = Visibility.Collapsed;
+            LanguageHost.Visibility = Visibility.Collapsed;
+            StyleIconHost.Visibility = Visibility.Collapsed;
+            ShortcutHost.Visibility = Visibility.Collapsed;
+            ScrollTooltip.Visibility = Visibility.Collapsed;
             IdleContent.Margin = new Thickness(0);
-            AnimateToCircle(global::Windows.UI.Color.FromArgb(0, 0, 0, 0));
+            AnimateToCircle(IdleEdge);
             UpdateGlow(ParseColor(_vm.LlmStyleColor), subtle: true);
         }
     }
@@ -1091,6 +1204,54 @@ public sealed partial class PillWindow : Window
         _tooltipTimer.Start();
     }
 
+    /// <summary>Same tip as the scroll one, but it stays while the pointer
+    /// is on the item; leaving the item hides it.</summary>
+    private void ShowHoverTip(string text)
+    {
+        ShowScrollTooltip(text);
+        _tooltipTimer!.Stop();
+    }
+
+    private void LanguageLabel_PointerEntered(object sender, PointerRoutedEventArgs e)
+    {
+        HighlightItem(sender, true);
+        ShowHoverTip(TranslateTip());
+    }
+
+    private void Mic_PointerEntered(object sender, PointerRoutedEventArgs e)
+    {
+        HighlightItem(sender, true);
+        ShowHoverTip(Helpers.InputDeviceChoice.ForDisplay(ConfigString("selected_device")));
+    }
+
+    private void Shortcut_PointerEntered(object sender, PointerRoutedEventArgs e)
+    {
+        HighlightItem(sender, true);
+        ShowHoverTip(string.IsNullOrEmpty(_vm.Shortcut) ? "No shortcut" : _vm.Shortcut);
+    }
+
+    private void StyleIcon_PointerEntered(object sender, PointerRoutedEventArgs e)
+    {
+        HighlightItem(sender, true);
+        ShowHoverTip(StyleTip());
+    }
+
+    private void HoverTip_PointerExited(object sender, PointerRoutedEventArgs e)
+    {
+        HighlightItem(sender, false);
+        ScrollTooltip.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>The round highlight behind the item under the pointer.</summary>
+    private void HighlightItem(object sender, bool on)
+    {
+        var tint = IsGlass
+            ? global::Windows.UI.Color.FromArgb(26, 0, 0, 0)
+            : global::Windows.UI.Color.FromArgb(26, 255, 255, 255);
+        ((Border)sender).Background = new SolidColorBrush(
+            on ? tint : global::Windows.UI.Color.FromArgb(0, 0, 0, 0));
+    }
+
     private void StyleDot_PointerWheelChanged(object sender, PointerRoutedEventArgs e)
     {
         var delta = e.GetCurrentPoint(null).Properties.MouseWheelDelta;
@@ -1103,7 +1264,7 @@ public sealed partial class PillWindow : Window
         idx = (idx + (delta > 0 ? -1 : 1) + LlmStyles.Length) % LlmStyles.Length;
         _vm.LlmStyle = LlmStyles[idx];
         RefreshStyleDot();
-        ShowScrollTooltip(_vm.LlmStyle == "off" ? "Off" : _vm.LlmStyle);
+        ShowHoverTip(StyleTip());
         // Single writer: only FFI, Rust saves to disk
         DimmyNative.dimmy_set_config_json(System.Text.Json.JsonSerializer.Serialize(
             new System.Collections.Generic.Dictionary<string, object>
@@ -1133,7 +1294,7 @@ public sealed partial class PillWindow : Window
         LanguageLabel.Text = string.IsNullOrEmpty(_vm.LlmTranslateTo)
             ? "—"
             : _vm.LlmTranslateTo.ToUpperInvariant();
-        ShowScrollTooltip($"Translate to: {LangList[idx].Value}");
+        ShowHoverTip(TranslateTip());
         // Single writer: only FFI, Rust saves to disk
         DimmyNative.dimmy_set_config_json(System.Text.Json.JsonSerializer.Serialize(
             new System.Collections.Generic.Dictionary<string, string> { ["llm_translate_to"] = _vm.LlmTranslateTo }));

@@ -71,6 +71,69 @@ public sealed partial class WaveformControl : UserControl
         BuildPolyline();
     }
 
+    // Round recording pill: three bars (tall centre, short sides) close
+    // together and centred on both axes, a short thicker line, pure white.
+    private bool _compact;
+    private double _lineStep = 5.0;
+    private static readonly double[] CompactBarWeights = [0, 0, 0.25, 1.0, 0.25, 0, 0];
+    private static readonly double[] CompactDotWeights = [0, 0.4, 1.0, 0.4, 0];
+    // Ink follows the pill theme: white on the dark pill, near-black on the
+    // light one. Full strength in the round pill, 90% in the capsule.
+    private SolidColorBrush _ink = new(Colors.White);
+    private SolidColorBrush _inkSoft = new(global::Windows.UI.Color.FromArgb(230, 255, 255, 255));
+
+    public void SetInk(global::Windows.UI.Color color)
+    {
+        _ink = new SolidColorBrush(color);
+        _inkSoft = new SolidColorBrush(global::Windows.UI.Color.FromArgb(230, color.R, color.G, color.B));
+        ApplyInk();
+    }
+
+    private void ApplyInk()
+    {
+        var brush = _compact ? _ink : _inkSoft;
+        foreach (var b in _bars) b.Background = brush;
+        foreach (var d in _dots) d.Fill = brush;
+        if (_polyline != null) _polyline.Stroke = brush;
+    }
+
+    /// <summary>Switch to the round-pill look; returns the width it needs.</summary>
+    public double SetCompact(bool compact)
+    {
+        _compact = compact;
+        for (int i = 0; i < _bars.Length; i++)
+        {
+            _bars[i].Visibility = compact && (i < 2 || i > 4) ? Visibility.Collapsed : Visibility.Visible;
+        }
+        ApplyInk();
+        BarsPanel.Spacing = compact ? 2 : 4;
+        for (int i = 0; i < _dots.Length; i++)
+        {
+            _dots[i].Visibility = compact && (i == 0 || i == 4) ? Visibility.Collapsed : Visibility.Visible;
+        }
+        DotsPanel.Spacing = compact ? 2 : 4;
+        ApplyStyle();
+
+        _lineStep = compact ? 2.5 : 5.0;
+        if (_polyline != null)
+        {
+            _polyline.StrokeThickness = compact ? 2.5 : 2;
+            for (int i = 0; i < 9; i++)
+                _polyline.Points[i] = new global::Windows.Foundation.Point(i * _lineStep, _linePoints[i]);
+        }
+
+        // Bars: 3 x 3 px + 2 x 2 px. Line: 8 steps of 2.5 px. Dots: 3 x 10 px max + gaps.
+        var width = !compact ? 40 : (StyleMode ?? "Bars") switch
+        {
+            "Line" => 20,
+            "Dots" => 26,
+            "Bars Round" => 16,
+            _ => 13,
+        };
+        WaveGrid.Width = width;
+        return width;
+    }
+
     private void BuildPolyline()
     {
         _polyline = new Polyline
@@ -101,6 +164,13 @@ public sealed partial class WaveformControl : UserControl
     }
 
     private void ApplyStyle()
+    {
+        ApplyStyleCore();
+        if (_compact)
+            foreach (var b in _bars) b.VerticalAlignment = VerticalAlignment.Center;
+    }
+
+    private void ApplyStyleCore()
     {
         var mode = StyleMode ?? "Bars";
 
@@ -177,7 +247,7 @@ public sealed partial class WaveformControl : UserControl
             for (int i = 0; i < 9; i++)
             {
                 _linePoints[i] = 9.0;
-                _polyline.Points[i] = new global::Windows.Foundation.Point(i * 5.0, 9.0);
+                _polyline.Points[i] = new global::Windows.Foundation.Point(i * _lineStep, 9.0);
             }
     }
 
@@ -199,7 +269,8 @@ public sealed partial class WaveformControl : UserControl
         for (int i = 0; i < _bars.Length; i++)
         {
             double jitter = 0.7 + _rng.NextDouble() * 0.6;
-            double target = BarMinHeight + (amp * _barWeights[i] * jitter * (BarMaxHeight - BarMinHeight));
+            var weight = _compact ? CompactBarWeights[i] : _barWeights[i];
+            double target = BarMinHeight + (amp * weight * jitter * (BarMaxHeight - BarMinHeight));
             target = Math.Clamp(target, BarMinHeight, BarMaxHeight);
             _currentHeights[i] += (target - _currentHeights[i]) * 0.4;
             _bars[i].Height = _currentHeights[i];
@@ -218,7 +289,7 @@ public sealed partial class WaveformControl : UserControl
             double target = 9.0 + (amp * weights[i] * jitter * maxDeflection * (_rng.NextDouble() > 0.5 ? 1 : -1));
             target = Math.Clamp(target, 1.0, 17.0);
             _linePoints[i] += (target - _linePoints[i]) * 0.35;
-            _polyline.Points[i] = new global::Windows.Foundation.Point(i * 5.0, _linePoints[i]);
+            _polyline.Points[i] = new global::Windows.Foundation.Point(i * _lineStep, _linePoints[i]);
         }
     }
 
@@ -227,7 +298,8 @@ public sealed partial class WaveformControl : UserControl
         for (int i = 0; i < _dots.Length; i++)
         {
             double jitter = 0.7 + _rng.NextDouble() * 0.6;
-            double target = DotMinSize + (amp * _dotWeights[i] * jitter * (DotMaxSize - DotMinSize));
+            var weight = _compact ? CompactDotWeights[i] : _dotWeights[i];
+            double target = DotMinSize + (amp * weight * jitter * (DotMaxSize - DotMinSize));
             target = Math.Clamp(target, DotMinSize, DotMaxSize);
             _dotSizes[i] += (target - _dotSizes[i]) * 0.35;
             _dots[i].Width = _dotSizes[i];
