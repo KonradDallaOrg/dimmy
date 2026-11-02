@@ -59,9 +59,14 @@
                                     PointerWheelChanged="StyleDot_PointerWheelChanged">
                                 <FontIcon x:Name="StyleIcon" FontSize="12" />
                             </Border>
-                            <TextBlock x:Name="ShortcutLabel" FontSize="9" FontFamily="Consolas"
-                                       Foreground="#77FFFFFF" VerticalAlignment="Center"
-                                       Visibility="Collapsed" />
+                            <Border x:Name="ShortcutHost" Background="Transparent"
+                                    Width="22" Height="22" CornerRadius="11"
+                                    VerticalAlignment="Center" Visibility="Collapsed"
+                                    PointerEntered="Shortcut_PointerEntered"
+                                    PointerExited="HoverTip_PointerExited">
+                                <FontIcon x:Name="ShortcutIcon" Glyph="&#xE765;" FontSize="12"
+                                          Foreground="#77FFFFFF" />
+                            </Border>
                         </StackPanel>
                     </Grid>
 

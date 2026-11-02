@@ -492,7 +492,7 @@ public sealed partial class PillWindow : Window
         LanguageLabel.Foreground = IsGlass
             ? new SolidColorBrush(global::Windows.UI.Color.FromArgb(170, 30, 30, 30))
             : new SolidColorBrush(global::Windows.UI.Color.FromArgb(170, 255, 255, 255));
-        ShortcutLabel.Foreground = textSecondary;
+        ShortcutIcon.Foreground = textSecondary;
 
         // Recording / Transcribing / Processing — always white to match waveform bars
         var activeFg = new SolidColorBrush(
@@ -710,7 +710,7 @@ public sealed partial class PillWindow : Window
 
         LanguageHost.Visibility = Visibility.Collapsed;
         StyleIconHost.Visibility = Visibility.Collapsed;
-        ShortcutLabel.Visibility = Visibility.Collapsed;
+        ShortcutHost.Visibility = Visibility.Collapsed;
         ScrollTooltip.Visibility = Visibility.Collapsed;
 
         // Apply text colors for theme
@@ -746,7 +746,6 @@ public sealed partial class PillWindow : Window
             case AppState.Recording:
                 RootGrid.Opacity = 1.0;
                 SetPillBodyColor(IsGlass ? BgGlassActive : BgDark);
-                StopButton.Visibility = Visibility.Visible;
                 StartAmplitudePolling();
                 _recordingStartTime = DateTime.Now;
                 StartRecordingTimer();
@@ -756,12 +755,12 @@ public sealed partial class PillWindow : Window
                     // Set rainbow brush first, then animate size only (skip border color)
                     ColorBorder.BorderBrush = _rainbowBrush;
                     StartRainbowAnimation();
-                    AnimateToCapsule(BorderBlue, newPanel, oldPanel, skipBorderColor: true);
+                    AnimateRecordingShape(newPanel, oldPanel);
                 }
                 else
                 {
                     StopRainbowAnimation();
-                    AnimateToCapsule(GetBorderColorForRecording(), newPanel, oldPanel);
+                    AnimateRecordingShape(newPanel, oldPanel);
                 }
                 // Soft under the rainbow, so the ring stays crisp.
                 UpdateGlow(GetBorderColorForRecording(), subtle: _vm.BorderStyle == "Rainbow");
@@ -1055,8 +1054,35 @@ public sealed partial class PillWindow : Window
     }
 
     // ── Hover ───────────────────────────────────────────────────────
+    // While recording the pill is a circle with the bars only; the pointer
+    // on it opens the full capsule (bars, timer, stop).
+    private bool _pointerOver;
+
+    private void SetRecordingCompact(bool compact)
+    {
+        var shown = compact ? Visibility.Collapsed : Visibility.Visible;
+        TimerText.Visibility = shown;
+        StopButton.Visibility = shown;
+        RecordingPanel.Margin = compact ? new Thickness(0) : new Thickness(12, 0, 12, 0);
+        Waveform.RenderTransformOrigin = new global::Windows.Foundation.Point(0.5, 0.5);
+        Waveform.RenderTransform = compact ? new ScaleTransform { ScaleX = 0.6, ScaleY = 0.6 } : null;
+    }
+
+    private void AnimateRecordingShape(FrameworkElement? newPanel = null, FrameworkElement? oldPanel = null)
+    {
+        var compact = !_pointerOver;
+        SetRecordingCompact(compact);
+        var rainbow = _vm.BorderStyle == "Rainbow";
+        if (compact)
+            AnimateToCircle(GetBorderColorForRecording(), newPanel, oldPanel, skipBorderColor: rainbow);
+        else
+            AnimateToCapsule(GetBorderColorForRecording(), newPanel, oldPanel, skipBorderColor: rainbow);
+    }
+
     private void Pill_PointerEntered(object sender, PointerRoutedEventArgs e)
     {
+        _pointerOver = true;
+        if (_vm.CurrentState == AppState.Recording) AnimateRecordingShape();
         if (_vm.CurrentState == AppState.Idle)
         {
             RootGrid.Opacity = 0.95;
@@ -1068,11 +1094,10 @@ public sealed partial class PillWindow : Window
             LanguageLabel.Text = string.IsNullOrEmpty(_vm.LlmTranslateTo)
                 ? "—"
                 : _vm.LlmTranslateTo.ToUpperInvariant();
-            ShortcutLabel.Text = _vm.Shortcut;
             RefreshStyleDot();
             LanguageHost.Visibility = Visibility.Visible;
             StyleIconHost.Visibility = Visibility.Visible;
-            ShortcutLabel.Visibility = Visibility.Visible;
+            ShortcutHost.Visibility = Visibility.Visible;
             IdleContent.Margin = new Thickness(7, 0, 7, 0);
             // Hover keeps same transparent border — just animate size
             AnimateToCapsule(IdleEdge);
@@ -1082,12 +1107,14 @@ public sealed partial class PillWindow : Window
 
     private void Pill_PointerExited(object sender, PointerRoutedEventArgs e)
     {
+        _pointerOver = false;
+        if (_vm.CurrentState == AppState.Recording) AnimateRecordingShape();
         if (_vm.CurrentState == AppState.Idle)
         {
             RootGrid.Opacity = 1.0;
             LanguageHost.Visibility = Visibility.Collapsed;
             StyleIconHost.Visibility = Visibility.Collapsed;
-            ShortcutLabel.Visibility = Visibility.Collapsed;
+            ShortcutHost.Visibility = Visibility.Collapsed;
             ScrollTooltip.Visibility = Visibility.Collapsed;
             IdleContent.Margin = new Thickness(0);
             AnimateToCircle(IdleEdge);
@@ -1167,6 +1194,12 @@ public sealed partial class PillWindow : Window
     {
         HighlightItem(sender, true);
         ShowHoverTip(TranslateTip());
+    }
+
+    private void Shortcut_PointerEntered(object sender, PointerRoutedEventArgs e)
+    {
+        HighlightItem(sender, true);
+        ShowHoverTip(string.IsNullOrEmpty(_vm.Shortcut) ? "No shortcut" : _vm.Shortcut);
     }
 
     private void StyleIcon_PointerEntered(object sender, PointerRoutedEventArgs e)
