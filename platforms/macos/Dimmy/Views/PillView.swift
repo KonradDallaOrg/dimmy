@@ -125,8 +125,20 @@ struct PillView: View {
     /// the pill — buffering the false for ~80 ms collapses those blips
     /// into no-ops while keeping a genuine exit feeling instant.
     @State private var hoverExitTask: Task<Void, Never>? = nil
+    /// The idle item under the pointer (mic / lang / style / keys): it gets
+    /// the round highlight and its tip shows above the pill while hovered.
+    @State private var hoverItem: String? = nil
+    @Environment(\.colorScheme) private var colorScheme
 
-    private let pillHeight: CGFloat = 36
+    /// One height for every shape (circle and capsule), so no state makes
+    /// the pill bigger than the idle circle. Mirror of Win CircleSize.
+    private let pillHeight: CGFloat = 32
+
+    private static let readyGreen = Color(red: 0x4a / 255.0, green: 0xde / 255.0, blue: 0x80 / 255.0)
+    private static let commandAmber = Color(red: 1.0, green: 0x9F / 255.0, blue: 0x0A / 255.0)
+    private static let sky = Color(red: 0x38 / 255.0, green: 0xbd / 255.0, blue: 0xf8 / 255.0)
+    private static let aiPurple = Color(red: 0xa8 / 255.0, green: 0x55 / 255.0, blue: 0xf7 / 255.0)
+    private static let sparkle = Color(red: 0xc0 / 255.0, green: 0x84 / 255.0, blue: 0xfc / 255.0)
 
     private var activeBorderStyle: BorderStyle {
         BorderStyle.from(appState.borderStyle)
@@ -159,6 +171,16 @@ struct PillView: View {
         switch appState.overlayPosition {
         case "Bottom Left", "Bottom Center", "Bottom Right": return false
         default: return true
+        }
+    }
+
+    /// The tip lines up with the side the pill is parked on, so a long tip
+    /// (a microphone name) grows into the screen, not off the panel edge.
+    private var tooltipEdge: HorizontalAlignment {
+        switch appState.overlayPosition {
+        case "Top Left", "Bottom Left": return .leading
+        case "Top Center", "Bottom Center": return .center
+        default: return .trailing
         }
     }
 
@@ -218,23 +240,19 @@ struct PillView: View {
     // MARK: - Idle State
 
     private var idleView: some View {
-        HStack(spacing: isHovering ? 8 : 0) {
-            styleDot
+        HStack(spacing: isHovering ? 4 : 0) {
+            micIcon
             // Always present in the layout, but width-collapsed and
             // hidden when not hovered — keeps the HStack rect free of
             // the mid-animation hit-test gaps that an `if` block creates.
-            languageLabel
-                .frame(width: isHovering ? nil : 0)
-                .opacity(isHovering ? 1 : 0)
-                .clipped()
-            Text(appState.shortcut.displayString)
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                .foregroundColor(.secondary)
-                .lineLimit(1)
-                .fixedSize()
-                .frame(width: isHovering ? nil : 0)
-                .opacity(isHovering ? 1 : 0)
-                .clipped()
+            Group {
+                languageLabel
+                styleIcon
+                shortcutIcon
+            }
+            .frame(width: isHovering ? nil : 0)
+            .opacity(isHovering ? 1 : 0)
+            .clipped()
         }
         // When idle and not hovered (standby), force the pill to a perfect
         // circle (width = height). Hovering re-expands to show the
@@ -246,7 +264,7 @@ struct PillView: View {
             width: isHovering ? nil : pillHeight,
             height: pillHeight
         )
-        .padding(.horizontal, isHovering ? 14 : 0)
+        .padding(.horizontal, isHovering ? 5 : 0)
         // Warning badge sits on the pill itself (not on the larger panel),
         // so it follows the pill wherever the position grid moves it.
         // Borderless: just the orange triangle, no black backdrop.
@@ -274,8 +292,8 @@ struct PillView: View {
         // stays close regardless of where the position grid puts the pill.
         // Flips above the pill when the user has parked it at the bottom
         // of the screen so the bubble stays on-screen.
-        .overlay(alignment: tooltipBelowPill ? .bottom : .top) {
-            if let text = scrollTooltip {
+        .overlay(alignment: Alignment(horizontal: tooltipEdge, vertical: tooltipBelowPill ? .bottom : .top)) {
+            if let text = scrollTooltip ?? hoverItem.map(tipText) {
                 Text(text)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundColor(.white)
@@ -299,10 +317,11 @@ struct PillView: View {
         .overlay(
             Capsule()
                 .stroke(
-                    appState.showPillIntro ? rainbowGradient(phase: introPhase) : rainbowGradient(phase: 0),
-                    lineWidth: appState.showPillIntro ? 2 : 0.5
+                    appState.showPillIntro
+                        ? AnyShapeStyle(rainbowGradient(phase: introPhase))
+                        : AnyShapeStyle(Color.primary.opacity(0.12)),
+                    lineWidth: appState.showPillIntro ? 2 : 1
                 )
-                .opacity(appState.showPillIntro ? 1.0 : 0.12)
         )
         .shadow(color: appState.showPillIntro ? phaseGlowColor(phase: introPhase, offset: 0.0) : .clear, radius: 12)
         .shadow(color: appState.showPillIntro ? phaseGlowColor(phase: introPhase, offset: 0.3) : .clear, radius: 8)
@@ -313,16 +332,23 @@ struct PillView: View {
         // hover. Decoupling animation from the hover signal keeps SwiftUI's
         // hit-testing reading the final size, not the interpolated one.
         .animation(.easeInOut(duration: 0.18), value: isHovering)
-        .onHover { hovering in
-            if hovering {
-                hoverExitTask?.cancel()
-                hoverExitTask = nil
-                isHovering = true
-            } else {
-                hoverExitTask?.cancel()
-                hoverExitTask = Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 80_000_000)
-                    if !Task.isCancelled { isHovering = false }
+        .onContinuousHover(coordinateSpace: .local, perform: idleHover)
+    }
+
+    private func pillHover(_ hovering: Bool) {
+        if hovering {
+            hoverExitTask?.cancel()
+            hoverExitTask = nil
+            isHovering = true
+        } else {
+            hoverExitTask?.cancel()
+            hoverExitTask = Task { @MainActor in
+                // A grace, not a blip filter only: the pill must not close
+                // while the pointer crosses a gap or a scroll is under way.
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                if !Task.isCancelled {
+                    isHovering = false
+                    hoverItem = nil
                 }
             }
         }
@@ -336,39 +362,125 @@ struct PillView: View {
     /// is forced to amber regardless of the rewrite style — a distinct
     /// "you're about to act on a selection, not dictate" cue (mirrors
     /// Win PillWindow.xaml.cs RefreshStyleDot).
-    private var styleDot: some View {
-        let inCommandMode = appState.commandMode || appState.oneShotCommandPending
-        let styleActive = appState.llmEnabled && appState.llmStyleEnum != .off
-        let active = inCommandMode || styleActive
-        let color: Color = inCommandMode
-            ? Color(red: 1.0, green: 0x9F / 255.0, blue: 0x0A / 255.0)
-            : (styleActive ? appState.llmStyleEnum.color : Color.secondary.opacity(0.5))
-        return Circle()
-            .fill(active ? color : Color.clear)
-            .overlay(
-                Circle().stroke(color, lineWidth: active ? 0 : 1.2)
-            )
-            .frame(width: 8, height: 8)
+    /// One idle item: 22 pt, round highlight while the pointer is on it.
+    private func pillItem<Content: View>(_ id: String, @ViewBuilder content: () -> Content) -> some View {
+        content()
             .frame(width: 22, height: 22)
-            .contentShape(Rectangle())
-            .overlay(
-                ScrollWheelCatcher { delta in cycleStyle(delta: delta) }
-            )
-            .help(inCommandMode ? "Command mode (edit selection)" : currentStyleDisplayName)
+            .background(Circle().fill(Color.primary.opacity(hoverItem == id ? 0.1 : 0)))
+    }
+
+    /// Idle layout while expanded: 5 pt padding, then 22 pt items 4 pt apart.
+    private static let idleItems = ["mic", "lang", "style", "keys"]
+
+    /// One tracker for the whole idle pill: it opens the pill AND finds the
+    /// item under the pointer. Per-item `.onHover` inside the pill's own
+    /// `.onHover` took the hover away from the pill, which then closed.
+    private func idleHover(_ phase: HoverPhase) {
+        switch phase {
+        case .active(let p):
+            pillHover(true)
+            guard isHovering else { hoverItem = nil; return }
+            let x = p.x - 5
+            let slot = Int(floor(x / 26))
+            let inside = x >= 0 && x.truncatingRemainder(dividingBy: 26) < 22
+            hoverItem = inside && slot < Self.idleItems.count ? Self.idleItems[slot] : nil
+        case .ended:
+            pillHover(false)
+        }
+    }
+
+    /// The tip of each idle item, computed live so a scroll never leaves it stale.
+    private func tipText(_ id: String) -> String {
+        switch id {
+        case "mic":
+            if appState.commandMode || appState.oneShotCommandPending { return "Command mode (edit selection)" }
+            if let dev = appState.selectedDevice, !dev.isEmpty { return dev }
+            return "System default"
+        case "lang":
+            return appState.llmTranslateTo.isEmpty ? "No translation" : "Translate to: \(currentLanguageDisplayName)"
+        case "style":
+            return appState.llmEnabled && appState.llmStyleEnum != .off ? currentStyleDisplayName : "LLM off"
+        case "keys":
+            let keys = appState.shortcut.displayString
+            return keys.isEmpty ? "No shortcut" : keys
+        default:
+            return ""
+        }
+    }
+
+    /// Ready microphone: green, amber in Command Mode (the "you're about to
+    /// act on a selection, not dictate" cue — mirrors Win RefreshStyleDot).
+    private var micIcon: some View {
+        let inCommandMode = appState.commandMode || appState.oneShotCommandPending
+        return pillItem("mic") {
+            Image(systemName: "mic.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(inCommandMode ? Self.commandAmber : Self.readyGreen)
+        }
+    }
+
+    /// Style icon in the style's colour; darker on the light pill so the
+    /// pale colours (yellows) keep their contrast. Scroll cycles `llm_style`.
+    private var styleIcon: some View {
+        let styleActive = appState.llmEnabled && appState.llmStyleEnum != .off
+        let base = styleActive ? appState.llmStyleEnum.color : Color.secondary
+        let tint = colorScheme == .light
+            ? Color(nsColor: NSColor(base).blended(withFraction: 0.4, of: .black) ?? NSColor(base))
+            : base
+        return pillItem("style") {
+            Image(systemName: Self.styleSymbol(styleActive ? appState.llmStyle : "off"))
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(tint)
+        }
+        .overlay(ScrollWheelCatcher { delta in cycleStyle(delta: delta) })
+    }
+
+    private static func styleSymbol(_ style: String) -> String {
+        switch style {
+        case "off": return "xmark"
+        case "correct": return "pencil"
+        case "summarize": return "list.bullet"
+        case "elaborate": return "arrow.up.left.and.arrow.down.right"
+        case "comprehensible": return "lightbulb"
+        case "professional": return "briefcase"
+        case "prompt": return "terminal"
+        case "genz": return "face.smiling"
+        case "boomer": return "clock.arrow.circlepath"
+        case "emoji": return "face.smiling.inverse"
+        case "acronyms": return "textformat"
+        case "imbruttito": return "exclamationmark.triangle"
+        default: return "gearshape"
+        }
     }
 
     /// Translate-to indicator visible only when the pill is expanded.
     /// `—` when no translation, so scrolling can re-enable it.
     private var languageLabel: some View {
-        Text(currentLanguageShort)
-            .font(.system(size: 11, weight: .semibold, design: .rounded))
-            .foregroundColor(.primary)
-            .frame(minWidth: 18, minHeight: 20)
-            .contentShape(Rectangle())
-            .overlay(
-                ScrollWheelCatcher { delta in cycleLanguage(delta: delta) }
-            )
-            .help("Translate to: \(currentLanguageDisplayName) — scroll to change")
+        pillItem("lang") {
+            Text(currentLanguageShort)
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .foregroundColor(.primary)
+        }
+        .overlay(ScrollWheelCatcher { delta in cycleLanguage(delta: delta) })
+    }
+
+    /// The shortcut, as a keyboard icon; the keys show in its tip.
+    private var shortcutIcon: some View {
+        pillItem("keys") {
+            Image(systemName: "keyboard")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(.secondary)
+        }
+    }
+
+    /// The LLM the next dictation goes through, as the user knows it.
+    private var llmLabel: String {
+        if appState.llmMode == "local" {
+            let m = appState.localLlmModel
+            return m.lowercased().hasSuffix(".gguf") ? String(m.dropLast(5)) : m
+        }
+        let model = appState.llmApiModel
+        return appState.llmAuthMethod == "subscription" ? "\(model) (subscription)" : model
     }
 
     private var currentLanguageShort: String {
@@ -388,6 +500,8 @@ struct PillView: View {
     // MARK: - Scroll cycling (debounced 250ms, persists via FFI)
 
     private func cycleLanguage(delta: CGFloat) {
+        // Every wheel event, throttled or not, keeps the pill open.
+        DispatchQueue.main.async { keepOpenWhileScrolling("lang") }
         guard throttle() else { return }
         let keys = PillTranslateLanguages.map { $0.key }
         precondition(!keys.isEmpty, "PillTranslateLanguages must not be empty")
@@ -408,6 +522,8 @@ struct PillView: View {
     }
 
     private func cycleStyle(delta: CGFloat) {
+        // Every wheel event, throttled or not, keeps the pill open.
+        DispatchQueue.main.async { keepOpenWhileScrolling("style") }
         guard throttle() else { return }
         let keys = MacLlmStyles.map { $0.key }
         precondition(!keys.isEmpty, "MacLlmStyles must not be empty")
@@ -424,6 +540,13 @@ struct PillView: View {
             ])
             showTooltip("Style: \(currentStyleDisplayName)")
         }
+    }
+
+    private func keepOpenWhileScrolling(_ item: String) {
+        hoverExitTask?.cancel()
+        hoverExitTask = nil
+        isHovering = true
+        hoverItem = item
     }
 
     private func throttle() -> Bool {
@@ -446,6 +569,10 @@ struct PillView: View {
 
     // MARK: - Recording State (uses borderStyle from settings)
 
+    /// While recording the pill is a circle with the waveform only; the
+    /// pointer on it opens the full capsule (waveform + stop).
+    private var recordingCompact: Bool { !isHovering }
+
     private func recordingView(mode: RecordingMode) -> some View {
         HStack(spacing: 12) {
             // When the pill is mirroring a paused meeting, replace the
@@ -458,16 +585,19 @@ struct PillView: View {
                     Image(systemName: "pause.circle.fill")
                         .font(.system(size: 13))
                         .foregroundStyle(Color.orange)
-                    Text("Meeting paused")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Color.orange)
+                    if !recordingCompact {
+                        Text("Meeting paused")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(Color.orange)
+                    }
                 }
                 .accessibilityLabel("Meeting paused")
             } else {
-                WaveformView(levels: appState.waveformLevels, style: activeWaveformStyle)
+                WaveformView(levels: appState.waveformLevels, style: activeWaveformStyle,
+                             compact: recordingCompact)
             }
 
-            if mode == .toggle {
+            if mode == .toggle && !recordingCompact {
                 Button(action: {
                     // Mirror of Win PillWindow.Stop_Click: when a
                     // meeting is in flight, route Stop through the
@@ -482,23 +612,23 @@ struct PillView: View {
                     }
                 }) {
                     RoundedRectangle(cornerRadius: 2.5)
-                        .fill(Color.white.opacity(0.9))
-                        .frame(width: 12, height: 12)
+                        .fill(Color.primary.opacity(0.9))
+                        .frame(width: 11, height: 11)
                 }
                 .buttonStyle(.plain)
                 .contentShape(Rectangle())
             }
         }
-        .frame(height: pillHeight)
-        .padding(.horizontal, 18)
+        .frame(width: recordingCompact ? pillHeight : nil, height: pillHeight)
+        .padding(.horizontal, recordingCompact ? 0 : 14)
         .background(
             Capsule()
                 .fill(.ultraThickMaterial)
         )
         .overlay(recordingBorderOverlay)
-        .shadow(color: recordingGlowColor(offset: 0.0), radius: 12)
-        .shadow(color: recordingGlowColor(offset: 0.3), radius: 8)
-        .shadow(color: recordingGlowColor(offset: 0.6), radius: 4)
+        .shadow(color: recordingGlowColor(offset: 0.0), radius: 10)
+        .animation(.easeInOut(duration: 0.18), value: isHovering)
+        .onHover(perform: pillHover)
         .onAppear {
             borderPhase = 0
             // The rainbow border rotates at a voice-driven speed (see
@@ -526,14 +656,14 @@ struct PillView: View {
         switch style {
         case .rainbow:
             Capsule()
-                .stroke(rainbowGradient(phase: rotation.angleDeg), lineWidth: 2)
+                .stroke(rainbowGradient(phase: rotation.angleDeg), lineWidth: 1.5)
         case .none:
             Capsule()
                 .stroke(Color.clear, lineWidth: 0)
         default:
             // Solid color with pulsing opacity
             Capsule()
-                .stroke(style.solidColor.opacity(0.5 + 0.5 * sin(borderPhase * .pi / 180.0)), lineWidth: 2)
+                .stroke(style.solidColor.opacity(0.5 + 0.5 * sin(borderPhase * .pi / 180.0)), lineWidth: 1.5)
         }
     }
 
@@ -542,7 +672,7 @@ struct PillView: View {
         let style = activeBorderStyle
         switch style {
         case .rainbow:
-            return phaseGlowColor(phase: rotation.angleDeg, offset: offset)
+            return phaseGlowColor(phase: rotation.angleDeg, offset: offset).opacity(0.4)
         case .none:
             return .clear
         default:
@@ -558,6 +688,7 @@ struct PillView: View {
             ProgressView()
                 .controlSize(.small)
                 .scaleEffect(0.7)
+                .tint(Self.sky)
             Text("Transcribing...")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundColor(.secondary)
@@ -572,22 +703,24 @@ struct PillView: View {
         )
         .overlay(
             Capsule()
-                .stroke(Color.blue.opacity(0.4), lineWidth: 1.5)
+                .stroke(Self.sky.opacity(0.5), lineWidth: 1.5)
         )
-        .shadow(color: .blue.opacity(0.3), radius: 8)
+        .shadow(color: Self.sky.opacity(0.3), radius: 8)
     }
 
     // MARK: - LLM Processing State
 
     private var processingView: some View {
         HStack(spacing: 8) {
-            ProgressView()
-                .controlSize(.small)
-                .scaleEffect(0.7)
-            Text("Processing...")
+            Image(systemName: "sparkle")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(Self.sparkle)
+            Text(llmLabel.isEmpty ? "Processing..." : llmLabel)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundColor(.secondary)
                 .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: 160)
                 .fixedSize()
         }
         .frame(height: pillHeight)
@@ -598,9 +731,9 @@ struct PillView: View {
         )
         .overlay(
             Capsule()
-                .stroke(Color.purple.opacity(0.4), lineWidth: 1.5)
+                .stroke(Self.aiPurple.opacity(0.5), lineWidth: 1.5)
         )
-        .shadow(color: .purple.opacity(0.3), radius: 8)
+        .shadow(color: Self.aiPurple.opacity(0.3), radius: 8)
     }
 
     // MARK: - Recap State
@@ -645,21 +778,21 @@ struct PillView: View {
 
     private var completionView: some View {
         Image(systemName: "checkmark")
-            .font(.system(size: 16, weight: .bold))
-            .foregroundColor(.green)
+            .font(.system(size: 13, weight: .bold))
+            .foregroundColor(Self.readyGreen)
             .scaleEffect(showCheckmark ? 1.0 : 0.3)
             .opacity(showCheckmark ? 1.0 : 0.0)
-            .frame(height: pillHeight)
-            .padding(.horizontal, 16)
+            // A circle the size of the idle one (it used to be a wider capsule).
+            .frame(width: pillHeight, height: pillHeight)
             .background(
                 Capsule()
                     .fill(.ultraThickMaterial)
             )
             .overlay(
                 Capsule()
-                    .stroke(Color.green.opacity(0.4), lineWidth: 1.5)
+                    .stroke(Self.readyGreen.opacity(0.5), lineWidth: 1.5)
             )
-            .shadow(color: .green.opacity(0.4), radius: 10)
+            .shadow(color: Self.readyGreen.opacity(0.15), radius: 8)
             .onAppear {
                 withAnimation(.spring(response: 0.25, dampingFraction: 0.6)) {
                     showCheckmark = true
@@ -695,16 +828,13 @@ struct PillView: View {
     }
 
     private var rainbowColors: [Color] {
+        // Four clean bands, the first repeated to close the loop (no seam).
         [
-            Color(hue: 0.0, saturation: 0.7, brightness: 1.0),
-            Color(hue: 0.08, saturation: 0.8, brightness: 1.0),
-            Color(hue: 0.15, saturation: 0.7, brightness: 1.0),
-            Color(hue: 0.35, saturation: 0.7, brightness: 0.95),
-            Color(hue: 0.52, saturation: 0.6, brightness: 1.0),
-            Color(hue: 0.62, saturation: 0.7, brightness: 1.0),
-            Color(hue: 0.75, saturation: 0.6, brightness: 1.0),
-            Color(hue: 0.85, saturation: 0.6, brightness: 1.0),
-            Color(hue: 0.95, saturation: 0.7, brightness: 1.0),
+            Color(red: 0x42 / 255.0, green: 0x85 / 255.0, blue: 0xF4 / 255.0),
+            Color(red: 0xEA / 255.0, green: 0x43 / 255.0, blue: 0x35 / 255.0),
+            Color(red: 0xFB / 255.0, green: 0xBC / 255.0, blue: 0x05 / 255.0),
+            Color(red: 0x34 / 255.0, green: 0xA8 / 255.0, blue: 0x53 / 255.0),
+            Color(red: 0x42 / 255.0, green: 0x85 / 255.0, blue: 0xF4 / 255.0),
         ]
     }
 }
