@@ -61,7 +61,7 @@ public sealed partial class PillWindow : Window
     // Circle size for idle/completing states — matched to macOS (36pt)
     private const double CircleSize = 32;
     // Capsule height for recording/transcribing states
-    private const double CapsuleHeight = 36;
+    private const double CapsuleHeight = CircleSize;
 
     private const int WindowWidth = 240;
     // The pill sits at the bottom; the space above it holds the hover tip,
@@ -508,11 +508,16 @@ public sealed partial class PillWindow : Window
             : new SolidColorBrush(global::Windows.UI.Color.FromArgb(170, 255, 255, 255));
         ShortcutIcon.Foreground = textSecondary;
 
-        // Recording / Transcribing / Processing — always white to match waveform bars
+        // Recording / Transcribing / Processing — same ink as the waveform:
+        // white on the dark pill, near-black on the light one.
+        var ink = IsGlass
+            ? global::Windows.UI.Color.FromArgb(255, 30, 30, 30)
+            : global::Windows.UI.Color.FromArgb(255, 255, 255, 255);
+        Waveform.SetInk(ink);
         var activeFg = new SolidColorBrush(
-            global::Windows.UI.Color.FromArgb(230, 255, 255, 255));
+            global::Windows.UI.Color.FromArgb(230, ink.R, ink.G, ink.B));
         var activeSecondary = new SolidColorBrush(
-            global::Windows.UI.Color.FromArgb(119, 255, 255, 255));
+            global::Windows.UI.Color.FromArgb(140, ink.R, ink.G, ink.B));
         TimerText.Foreground = activeFg;
         StopIcon.Background = activeFg;
         TranscribingText.Foreground = activeFg;
@@ -759,7 +764,7 @@ public sealed partial class PillWindow : Window
 
             case AppState.Recording:
                 RootGrid.Opacity = 1.0;
-                SetPillBodyColor(BgDark);
+                SetPillBodyColor(IsGlass ? BgGlassActive : BgDark);
                 StartAmplitudePolling();
                 _recordingStartTime = DateTime.Now;
                 StartRecordingTimer();
@@ -1080,6 +1085,8 @@ public sealed partial class PillWindow : Window
         RecordingPanel.Margin = compact ? new Thickness(0) : new Thickness(12, 0, 12, 0);
         var compactWidth = Waveform.SetCompact(compact);
         Waveform.Width = compact ? compactWidth : 34;
+        // 18 = the control's own height, so the bars sit on the circle's centre.
+        Waveform.Height = compact ? 18 : 14;
     }
 
     private void AnimateRecordingShape(FrameworkElement? newPanel = null, FrameworkElement? oldPanel = null)

@@ -77,8 +77,25 @@ public sealed partial class WaveformControl : UserControl
     private double _lineStep = 5.0;
     private static readonly double[] CompactBarWeights = [0, 0, 0.25, 1.0, 0.25, 0, 0];
     private static readonly double[] CompactDotWeights = [0, 0.4, 1.0, 0.4, 0];
-    private static readonly SolidColorBrush White = new(Colors.White);
-    private static readonly SolidColorBrush SoftWhite = new(global::Windows.UI.Color.FromArgb(230, 255, 255, 255));
+    // Ink follows the pill theme: white on the dark pill, near-black on the
+    // light one. Full strength in the round pill, 90% in the capsule.
+    private SolidColorBrush _ink = new(Colors.White);
+    private SolidColorBrush _inkSoft = new(global::Windows.UI.Color.FromArgb(230, 255, 255, 255));
+
+    public void SetInk(global::Windows.UI.Color color)
+    {
+        _ink = new SolidColorBrush(color);
+        _inkSoft = new SolidColorBrush(global::Windows.UI.Color.FromArgb(230, color.R, color.G, color.B));
+        ApplyInk();
+    }
+
+    private void ApplyInk()
+    {
+        var brush = _compact ? _ink : _inkSoft;
+        foreach (var b in _bars) b.Background = brush;
+        foreach (var d in _dots) d.Fill = brush;
+        if (_polyline != null) _polyline.Stroke = brush;
+    }
 
     /// <summary>Switch to the round-pill look; returns the width it needs.</summary>
     public double SetCompact(bool compact)
@@ -87,13 +104,12 @@ public sealed partial class WaveformControl : UserControl
         for (int i = 0; i < _bars.Length; i++)
         {
             _bars[i].Visibility = compact && (i < 2 || i > 4) ? Visibility.Collapsed : Visibility.Visible;
-            _bars[i].Background = compact ? White : SoftWhite;
         }
+        ApplyInk();
         BarsPanel.Spacing = compact ? 2 : 4;
         for (int i = 0; i < _dots.Length; i++)
         {
             _dots[i].Visibility = compact && (i == 0 || i == 4) ? Visibility.Collapsed : Visibility.Visible;
-            _dots[i].Fill = compact ? White : SoftWhite;
         }
         DotsPanel.Spacing = compact ? 2 : 4;
         if (compact)
@@ -105,7 +121,6 @@ public sealed partial class WaveformControl : UserControl
         if (_polyline != null)
         {
             _polyline.StrokeThickness = compact ? 2.5 : 2;
-            _polyline.Stroke = compact ? White : SoftWhite;
             for (int i = 0; i < 9; i++)
                 _polyline.Points[i] = new global::Windows.Foundation.Point(i * _lineStep, _linePoints[i]);
         }
