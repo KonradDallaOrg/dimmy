@@ -343,7 +343,9 @@ struct PillView: View {
         } else {
             hoverExitTask?.cancel()
             hoverExitTask = Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 80_000_000)
+                // A grace, not a blip filter only: the pill must not close
+                // while the pointer crosses a gap or a scroll is under way.
+                try? await Task.sleep(nanoseconds: 350_000_000)
                 if !Task.isCancelled {
                     isHovering = false
                     hoverItem = nil
@@ -498,6 +500,8 @@ struct PillView: View {
     // MARK: - Scroll cycling (debounced 250ms, persists via FFI)
 
     private func cycleLanguage(delta: CGFloat) {
+        // Every wheel event, throttled or not, keeps the pill open.
+        DispatchQueue.main.async { keepOpenWhileScrolling("lang") }
         guard throttle() else { return }
         let keys = PillTranslateLanguages.map { $0.key }
         precondition(!keys.isEmpty, "PillTranslateLanguages must not be empty")
@@ -518,6 +522,8 @@ struct PillView: View {
     }
 
     private func cycleStyle(delta: CGFloat) {
+        // Every wheel event, throttled or not, keeps the pill open.
+        DispatchQueue.main.async { keepOpenWhileScrolling("style") }
         guard throttle() else { return }
         let keys = MacLlmStyles.map { $0.key }
         precondition(!keys.isEmpty, "MacLlmStyles must not be empty")
@@ -534,6 +540,13 @@ struct PillView: View {
             ])
             showTooltip("Style: \(currentStyleDisplayName)")
         }
+    }
+
+    private func keepOpenWhileScrolling(_ item: String) {
+        hoverExitTask?.cancel()
+        hoverExitTask = nil
+        isHovering = true
+        hoverItem = item
     }
 
     private func throttle() -> Bool {
