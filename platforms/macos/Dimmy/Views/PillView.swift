@@ -332,7 +332,7 @@ struct PillView: View {
         // hover. Decoupling animation from the hover signal keeps SwiftUI's
         // hit-testing reading the final size, not the interpolated one.
         .animation(.easeInOut(duration: 0.18), value: isHovering)
-        .onHover(perform: pillHover)
+        .onContinuousHover(coordinateSpace: .local, perform: idleHover)
     }
 
     private func pillHover(_ hovering: Bool) {
@@ -365,10 +365,26 @@ struct PillView: View {
         content()
             .frame(width: 22, height: 22)
             .background(Circle().fill(Color.primary.opacity(hoverItem == id ? 0.1 : 0)))
-            .contentShape(Circle())
-            .onHover { inside in
-                if inside { hoverItem = id } else if hoverItem == id { hoverItem = nil }
-            }
+    }
+
+    /// Idle layout while expanded: 5 pt padding, then 22 pt items 4 pt apart.
+    private static let idleItems = ["mic", "lang", "style", "keys"]
+
+    /// One tracker for the whole idle pill: it opens the pill AND finds the
+    /// item under the pointer. Per-item `.onHover` inside the pill's own
+    /// `.onHover` took the hover away from the pill, which then closed.
+    private func idleHover(_ phase: HoverPhase) {
+        switch phase {
+        case .active(let p):
+            pillHover(true)
+            guard isHovering else { hoverItem = nil; return }
+            let x = p.x - 5
+            let slot = Int(floor(x / 26))
+            let inside = x >= 0 && x.truncatingRemainder(dividingBy: 26) < 22
+            hoverItem = inside && slot < Self.idleItems.count ? Self.idleItems[slot] : nil
+        case .ended:
+            pillHover(false)
+        }
     }
 
     /// The tip of each idle item, computed live so a scroll never leaves it stale.
