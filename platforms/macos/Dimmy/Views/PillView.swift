@@ -174,6 +174,16 @@ struct PillView: View {
         }
     }
 
+    /// The tip lines up with the side the pill is parked on, so a long tip
+    /// (a microphone name) grows into the screen, not off the panel edge.
+    private var tooltipEdge: HorizontalAlignment {
+        switch appState.overlayPosition {
+        case "Top Left", "Bottom Left": return .leading
+        case "Top Center", "Bottom Center": return .center
+        default: return .trailing
+        }
+    }
+
     private var pillAlignment: Alignment {
         switch appState.overlayPosition {
         case "Top Left":      return .topLeading
@@ -282,7 +292,7 @@ struct PillView: View {
         // stays close regardless of where the position grid puts the pill.
         // Flips above the pill when the user has parked it at the bottom
         // of the screen so the bubble stays on-screen.
-        .overlay(alignment: tooltipBelowPill ? .bottom : .top) {
+        .overlay(alignment: Alignment(horizontal: tooltipEdge, vertical: tooltipBelowPill ? .bottom : .top)) {
             if let text = scrollTooltip ?? hoverItem.map(tipText) {
                 Text(text)
                     .font(.system(size: 11, weight: .medium))
