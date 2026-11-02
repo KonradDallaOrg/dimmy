@@ -11,6 +11,8 @@ pub mod autostart;
 pub mod calendar;
 pub mod call_detector;
 pub mod call_media;
+#[cfg(target_os = "windows")]
+pub mod capture_sessions;
 pub mod catalog;
 pub mod chunked_stt;
 pub mod claude_code;
@@ -81,6 +83,7 @@ pub mod parakeet;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub mod parakeet_fluid;
 pub mod preprocess;
+#[cfg(target_os = "windows")]
 pub mod process_loopback;
 pub mod provider;
 pub mod qwen_asr;

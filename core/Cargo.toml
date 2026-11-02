@@ -415,20 +415,26 @@ sha2 = { version = "0.10" }
 # CLI client.
 clap = { version = "4", features = ["derive"], optional = true }
 
-# Windows API bindings — used by process_loopback.rs (Phase 5) for the
-# AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK API + IAudioSession*
-# enumeration. Win32_Media_Audio for WASAPI core, Win32_System_Com
-# for COM init / IUnknown plumbing, Win32_System_ProcessStatus for
-# enumerating running processes by name. Other platforms ignore.
+# Windows API bindings. process_loopback.rs: system audio through
+# AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK (activation PROPVARIANT, the
+# COM completion handler via windows-core's `implement`, an event handle).
+# audio.rs: IAudioSessionManager2 on capture endpoints + their friendly names,
+# so the mic can follow the device the call app captures from. Other
+# platforms ignore.
 [target.'cfg(target_os = "windows")'.dependencies]
+windows-core = "0.62"
 windows = { version = "0.62", features = [
     "Win32_Foundation",
+    "Win32_Security",
     "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
     "Win32_System_Threading",
-    "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_Registry",
     "Win32_Media_Audio",
     "Win32_Media_KernelStreaming",
+    "Win32_Devices_FunctionDiscovery",
+    "Win32_UI_Shell_PropertiesSystem",
     "Win32_Graphics_Dxgi",
 ] }
 

@@ -49,7 +49,8 @@ pai-voice/
 │   │   ├── call_detector.rs  Auto-detect meetings (mic-in-use + app inference) → record nudge (Win + Mac)
 │   │   ├── consent.rs        Recording-consent notice text + consent.jsonl audit (GDPR / all-party)
 │   │   ├── deepgram_stream.rs Realtime streaming dictation over Deepgram WebSocket (true streaming)
-│   │   ├── process_loopback.rs Per-process WASAPI loopback (Phase 5a, Win-only)
+│   │   ├── process_loopback.rs System audio via process loopback (Win-only)
+│   │   ├── capture_sessions.rs Mics other apps capture from (Win-only)
 │   │   ├── llm.rs            LLM post-processing router + adaptive thinking dispatch
 │   │   ├── local_llm.rs      llama-cpp-4 integration (optional)
 │   │   ├── download.rs       Resumable + SHA-256-verified model downloads (LLM/whisper/parakeet)

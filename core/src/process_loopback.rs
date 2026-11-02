@@ -1,218 +1,379 @@
-//! Per-process audio loopback capture using the Windows
-//! `AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK` API.
+//! System audio on Windows through PROCESS loopback
+//! (`AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK`, Windows 10 2004+).
 //!
-//! Why this exists: standard WASAPI loopback captures whatever is
-//! routed to a specific OUTPUT device. When a meeting app (Teams,
-//! Zoom, Discord) puts a Bluetooth device into HFP/SCO profile for
-//! its bidirectional voice channel, the audio bypasses the normal
-//! WASAPI render endpoint entirely — loopback on the A2DP "Cuffie"
-//! device returns silence and loopback on the HFP "Cuffia auricolare"
-//! device isn't supported by most BT chipsets. Net result: no system
-//! audio capture during BT meetings.
+//! Endpoint loopback copies what leaves ONE output device: the default one
+//! at the moment the meeting started. Teams lets the user move its speaker
+//! to another device mid-call without touching the Windows default, and
+//! from then on the copy is of a device nobody plays to: the meeting keeps
+//! recording, the participants' side is silence (2026-11-02, a switch in
+//! Teams' own device menu).
 //!
-//! Process loopback solves this at the source: we ask Windows to
-//! capture the audio THE PROCESS ITSELF is producing, before it goes
-//! to any device. Routing is irrelevant — Bluetooth, speakers,
-//! virtual cable, the audio is the same. This is what OBS Studio
-//! "Application Audio Capture" uses, what Notion AI Meeting Notes
-//! uses, and what Microsoft documents as the recommended approach
-//! for cross-device meeting capture on Win11 22H2+.
+//! Process loopback asks Windows for what PROCESSES play instead, before it
+//! is routed to any device. We capture every process except Dimmy's own
+//! tree (`PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE` on our PID):
+//! the same "all system sound" the endpoint loopback gave, minus Dimmy's
+//! own chimes, on any output — measured here: a tone played on a speaker
+//! that was NOT the default output came through at its exact amplitude.
 //!
-//! ## API surface (this module)
+//! The format is ours to choose and Windows converts to it
+//! (`AUTOCONVERTPCM`): float, stereo, `MEETING_CANONICAL_RATE`. The output
+//! device's rate (16 kHz hands-free, 44.1 kHz Jabra, 48 kHz speakers) never
+//! reaches the meeting. Unlike endpoint loopback the stream is also
+//! continuous: silence arrives as silence, not as missing packets.
 //!
-//! - [`list_meeting_processes`]: enumerate running processes that
-//!   look like meeting apps (Teams, Zoom, Slack, Discord, browser
-//!   tabs in Meet/Webex/etc.). Returns Vec<(pid, name)> for the UI
-//!   to populate a dropdown.
-//! - [`auto_detect_meeting_pid`]: pick one PID heuristically — the
-//!   most-recently-started meeting app, falling back to any audio-
-//!   producing process. Used when the user wants "Auto" mode.
-//! - [`spawn_process_capture`]: open a process loopback stream and
-//!   spawn a worker that writes captured PCM into the shared audio
-//!   buffer (and AEC ref ring if Mix mode is active). Returns a
-//!   stop-handle the caller drops to terminate the capture.
-//!
-//! ## Implementation status
-//!
-//! Phase 5 lands the SCAFFOLDING and process enumeration. The actual
-//! WASAPI ProcessLoopback activation (`ActivateAudioInterfaceAsync`
-//! with `AUDIOCLIENT_ACTIVATION_PARAMS::ProcessLoopbackParams`) is a
-//! ~200-line block of unsafe COM + an `IActivateAudioInterfaceCompletionHandler`
-//! impl, landing in the next commit. For now `spawn_process_capture`
-//! returns Err and the audio.rs path falls back to standard loopback.
-//!
-//! ## Platform gating
-//!
-//! Windows-only. Stub on Mac/Linux returns empty enumeration and an
-//! error from `spawn_process_capture`; the audio.rs caller treats
-//! that as "not available, use default loopback".
+//! Activation fails on Windows builds without the API; the caller then
+//! falls back to endpoint loopback, so an old Windows records exactly as
+//! before.
 
-#[cfg(target_os = "windows")]
-mod windows_impl {
-    use std::sync::atomic::AtomicBool;
-    use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
-    use windows::Win32::Foundation::CloseHandle;
-    use windows::Win32::System::Diagnostics::ToolHelp::{
-        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
-        TH32CS_SNAPPROCESS,
-    };
+use windows::core::{implement, Interface, Ref, HRESULT};
+use windows::Win32::Foundation::{CloseHandle, E_FAIL, HANDLE, WAIT_OBJECT_0};
+use windows::Win32::Media::Audio::{
+    ActivateAudioInterfaceAsync, IActivateAudioInterfaceAsyncOperation,
+    IActivateAudioInterfaceCompletionHandler, IActivateAudioInterfaceCompletionHandler_Impl,
+    IAudioCaptureClient, IAudioClient, AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY,
+    AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
+    AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMFLAGS_LOOPBACK,
+    AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, AUDIOCLIENT_ACTIVATION_PARAMS,
+    AUDIOCLIENT_ACTIVATION_PARAMS_0, AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
+    AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS, PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
+    VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK, WAVEFORMATEX,
+};
+use windows::Win32::System::Com::StructuredStorage::{
+    PROPVARIANT, PROPVARIANT_0, PROPVARIANT_0_0, PROPVARIANT_0_0_0,
+};
+use windows::Win32::System::Com::{
+    CoInitializeEx, CoUninitialize, IAgileObject, IAgileObject_Impl, BLOB, COINIT_MULTITHREADED,
+};
+use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
+use windows::Win32::System::Variant::VT_BLOB;
 
-    /// Hardcoded list of process executables we recognize as meeting
-    /// apps. Lowercased for comparison. Order matters for the
-    /// auto-detect heuristic — the FIRST match wins, so listing the
-    /// most likely first (Teams) means it's preferred when multiple
-    /// run simultaneously. Add new ones as users report them.
-    const KNOWN_MEETING_EXES: &[&str] = &[
-        "ms-teams.exe",
-        "teams.exe",
-        "zoom.exe",
-        "cpthost.exe", // Zoom helper
-        "discord.exe",
-        "slack.exe",
-        "webex.exe",
-        "googlemeet.exe",
-        "skype.exe",
-        "whereby.exe",
-    ];
+use crate::audio::MEETING_CANONICAL_RATE;
 
-    /// Public process descriptor for UI consumption.
-    #[derive(Clone, Debug)]
-    pub struct MeetingProcess {
-        pub pid: u32,
-        pub name: String,
+const CHANNELS: u16 = 2;
+const WAVE_FORMAT_IEEE_FLOAT: u16 = 3;
+/// 200 ms of buffer, in 100 ns units: room for the capture thread to be
+/// late without Windows dropping audio.
+const BUFFER_DURATION_HNS: i64 = 2_000_000;
+const ACTIVATION_TIMEOUT: Duration = Duration::from_secs(5);
+const WAIT_SLICE_MS: u32 = 200;
+const DIAG_EVERY: Duration = Duration::from_secs(5);
+
+/// Receives each captured packet as mono samples at `MEETING_CANONICAL_RATE`.
+pub type MonoSink = Box<dyn FnMut(&mut Vec<f32>) + Send>;
+
+/// A running capture. Dropping it stops the capture and joins its thread.
+pub struct ProcessLoopback {
+    stop: Arc<AtomicBool>,
+    failed: Arc<AtomicBool>,
+    worker: Option<JoinHandle<()>>,
+}
+
+impl ProcessLoopback {
+    /// The capture stopped on an error (it also raised AUDIO_STREAM_DEAD).
+    pub fn failed(&self) -> bool {
+        self.failed.load(Ordering::Relaxed)
     }
+}
 
-    /// Enumerate running processes whose executable name matches a
-    /// known meeting-app pattern. Returns the list sorted by name for
-    /// stable UI display. Errors during enumeration produce an empty
-    /// vec rather than propagating — non-essential diagnostic.
-    pub fn list_meeting_processes() -> Vec<MeetingProcess> {
-        let mut out = Vec::new();
-        unsafe {
-            let snap = match CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) {
-                Ok(h) => h,
-                Err(e) => {
-                    crate::log(&format!("[ProcLoopback] snapshot failed: {}", e));
-                    return out;
-                }
-            };
-            let mut entry: PROCESSENTRY32W = std::mem::zeroed();
-            entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
-            if Process32FirstW(snap, &mut entry).is_ok() {
-                loop {
-                    let name_len = entry
-                        .szExeFile
-                        .iter()
-                        .position(|&c| c == 0)
-                        .unwrap_or(entry.szExeFile.len());
-                    let name = String::from_utf16_lossy(&entry.szExeFile[..name_len]);
-                    let lc = name.to_ascii_lowercase();
-                    if KNOWN_MEETING_EXES.iter().any(|e| *e == lc) {
-                        out.push(MeetingProcess {
-                            pid: entry.th32ProcessID,
-                            name,
-                        });
-                    }
-                    if Process32NextW(snap, &mut entry).is_err() {
-                        break;
-                    }
-                }
+impl Drop for ProcessLoopback {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(w) = self.worker.take() {
+            let _ = w.join();
+        }
+    }
+}
+
+/// Open the capture and start delivering to `sink`. `Err` when Windows
+/// cannot give us a process-loopback client; nothing is left running then.
+pub fn start(sink: MonoSink) -> Result<ProcessLoopback, String> {
+    let stop = Arc::new(AtomicBool::new(false));
+    let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<(), String>>(1);
+    let failed = Arc::new(AtomicBool::new(false));
+    let (stop_worker, failed_worker) = (stop.clone(), failed.clone());
+    let worker = std::thread::Builder::new()
+        .name("dimmy-process-loopback".into())
+        .spawn(move || run(stop_worker, failed_worker, ready_tx, sink))
+        .map_err(|e| format!("spawn: {e}"))?;
+    match ready_rx.recv_timeout(ACTIVATION_TIMEOUT + Duration::from_secs(1)) {
+        Ok(Ok(())) => Ok(ProcessLoopback {
+            stop,
+            failed,
+            worker: Some(worker),
+        }),
+        Ok(Err(e)) => {
+            let _ = worker.join();
+            Err(e)
+        }
+        Err(_) => {
+            // The thread is stuck inside a COM call; it sees the flag the
+            // moment it returns, and owns nothing we need back.
+            stop.store(true, Ordering::Relaxed);
+            Err("activation did not complete".into())
+        }
+    }
+}
+
+fn run(
+    stop: Arc<AtomicBool>,
+    failed: Arc<AtomicBool>,
+    ready: mpsc::SyncSender<Result<(), String>>,
+    mut sink: MonoSink,
+) {
+    let com = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+    match unsafe { open() } {
+        Ok(capture) => {
+            let _ = ready.send(Ok(()));
+            if let Err(e) = unsafe { pump(&capture, &stop, &mut sink) } {
+                failed.store(true, Ordering::Relaxed);
+                crate::audio::notify_capture_failed("process_loopback", &e);
             }
-            let _ = CloseHandle(snap);
+            unsafe {
+                let _ = capture.client.Stop();
+                let _ = CloseHandle(capture.event);
+            }
         }
-        out.sort_by(|a, b| {
-            a.name
-                .to_ascii_lowercase()
-                .cmp(&b.name.to_ascii_lowercase())
-        });
-        out
-    }
-
-    /// Pick one PID heuristically when the user has set the loopback
-    /// target to "auto". Strategy: take the first match from
-    /// list_meeting_processes (which is sorted alphabetically — gives
-    /// stable behaviour). If no meeting app is running, returns None;
-    /// the caller falls back to default-output loopback.
-    pub fn auto_detect_meeting_pid() -> Option<u32> {
-        let candidates = list_meeting_processes();
-        if candidates.is_empty() {
-            crate::log("[ProcLoopback] auto-detect: no known meeting apps running");
-            return None;
-        }
-        let pick = &candidates[0];
-        crate::log(&format!(
-            "[ProcLoopback] auto-detect picked '{}' (pid={}) out of {} candidates",
-            pick.name,
-            pick.pid,
-            candidates.len()
-        ));
-        Some(pick.pid)
-    }
-
-    /// Stop handle returned by spawn_process_capture. Dropping it
-    /// signals the worker to release the WASAPI capture client and
-    /// exit cleanly.
-    pub struct ProcessCaptureHandle {
-        pub stop: Arc<AtomicBool>,
-    }
-
-    impl Drop for ProcessCaptureHandle {
-        fn drop(&mut self) {
-            self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        Err(e) => {
+            let _ = ready.send(Err(e));
         }
     }
-
-    /// Spawn a worker thread that captures audio from `pid` via the
-    /// WASAPI ProcessLoopback API and writes mono f32 samples to the
-    /// shared `output_buffer`. If `aec_ref_ring` is provided (Mix
-    /// mode), samples are also pushed to the AEC reference ring so
-    /// the speaker→mic echo cancellation continues to work even when
-    /// audio comes from process capture instead of device loopback.
-    ///
-    /// PHASE 5 STUB: returns Err for now. The real
-    /// ActivateAudioInterfaceAsync + IActivateAudioInterfaceCompletionHandler
-    /// implementation lands in the next commit. Caller must check
-    /// the result and fall back to default loopback on error.
-    pub fn spawn_process_capture(
-        _pid: u32,
-        _output_buffer: Arc<Mutex<Vec<f32>>>,
-        _aec_ref_ring: Option<Arc<Mutex<Vec<f32>>>>,
-    ) -> Result<ProcessCaptureHandle, String> {
-        Err("process loopback capture not yet implemented (scaffolding only)".to_string())
+    if com.is_ok() {
+        unsafe { CoUninitialize() };
     }
 }
 
-#[cfg(target_os = "windows")]
-pub use windows_impl::*;
-
-// ── Stub for non-Windows platforms ──────────────────────────────────
-
-#[cfg(not(target_os = "windows"))]
-#[derive(Clone, Debug)]
-pub struct MeetingProcess {
-    pub pid: u32,
-    pub name: String,
+struct Capture {
+    client: IAudioClient,
+    capture: IAudioCaptureClient,
+    event: HANDLE,
 }
 
-#[cfg(not(target_os = "windows"))]
-pub fn list_meeting_processes() -> Vec<MeetingProcess> {
-    Vec::new()
+#[implement(IActivateAudioInterfaceCompletionHandler, IAgileObject)]
+struct Activation(Mutex<Option<mpsc::Sender<windows::core::Result<IAudioClient>>>>);
+
+impl IAgileObject_Impl for Activation_Impl {}
+
+impl IActivateAudioInterfaceCompletionHandler_Impl for Activation_Impl {
+    fn ActivateCompleted(
+        &self,
+        operation: Ref<IActivateAudioInterfaceAsyncOperation>,
+    ) -> windows::core::Result<()> {
+        let mut hr = HRESULT(0);
+        let mut unknown = None;
+        let result = unsafe { operation.ok()?.GetActivateResult(&mut hr, &mut unknown) }
+            .and_then(|()| hr.ok())
+            .and_then(|()| unknown.ok_or_else(|| windows::core::Error::from(E_FAIL)))
+            .and_then(|u| u.cast::<IAudioClient>());
+        if let Some(tx) = self.0.lock().ok().and_then(|mut slot| slot.take()) {
+            let _ = tx.send(result);
+        }
+        Ok(())
+    }
 }
 
-#[cfg(not(target_os = "windows"))]
-pub fn auto_detect_meeting_pid() -> Option<u32> {
-    None
+unsafe fn open() -> Result<Capture, String> {
+    let mut params = AUDIOCLIENT_ACTIVATION_PARAMS {
+        ActivationType: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
+        Anonymous: AUDIOCLIENT_ACTIVATION_PARAMS_0 {
+            ProcessLoopbackParams: AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS {
+                TargetProcessId: std::process::id(),
+                ProcessLoopbackMode: PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
+            },
+        },
+    };
+    // ManuallyDrop: windows-rs drops a PROPVARIANT with PropVariantClear,
+    // which would CoTaskMemFree the blob, i.e. `params` on this stack:
+    // heap corruption, measured (0xC0000374).
+    let activation = std::mem::ManuallyDrop::new(PROPVARIANT {
+        Anonymous: PROPVARIANT_0 {
+            Anonymous: std::mem::ManuallyDrop::new(PROPVARIANT_0_0 {
+                vt: VT_BLOB,
+                wReserved1: 0,
+                wReserved2: 0,
+                wReserved3: 0,
+                Anonymous: PROPVARIANT_0_0_0 {
+                    blob: BLOB {
+                        cbSize: std::mem::size_of::<AUDIOCLIENT_ACTIVATION_PARAMS>() as u32,
+                        pBlobData: &mut params as *mut _ as *mut u8,
+                    },
+                },
+            }),
+        },
+    });
+    let (tx, rx) = mpsc::channel();
+    let handler: IActivateAudioInterfaceCompletionHandler = Activation(Mutex::new(Some(tx))).into();
+    // `params` and `activation` must outlive the completion: both stay on
+    // this frame until `recv_timeout` returns.
+    let _operation = ActivateAudioInterfaceAsync(
+        VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
+        &IAudioClient::IID,
+        Some(&*activation),
+        &handler,
+    )
+    .map_err(|e| format!("ActivateAudioInterfaceAsync: {e}"))?;
+    let client = rx
+        .recv_timeout(ACTIVATION_TIMEOUT)
+        .map_err(|_| "activation timed out".to_string())?
+        .map_err(|e| format!("activation: {e}"))?;
+
+    let block_align = CHANNELS * 4;
+    let format = WAVEFORMATEX {
+        wFormatTag: WAVE_FORMAT_IEEE_FLOAT,
+        nChannels: CHANNELS,
+        nSamplesPerSec: MEETING_CANONICAL_RATE,
+        nAvgBytesPerSec: MEETING_CANONICAL_RATE * block_align as u32,
+        nBlockAlign: block_align,
+        wBitsPerSample: 32,
+        cbSize: 0,
+    };
+    client
+        .Initialize(
+            AUDCLNT_SHAREMODE_SHARED,
+            AUDCLNT_STREAMFLAGS_LOOPBACK
+                | AUDCLNT_STREAMFLAGS_EVENTCALLBACK
+                | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM
+                | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+            BUFFER_DURATION_HNS,
+            0,
+            &format,
+            None,
+        )
+        .map_err(|e| format!("Initialize: {e}"))?;
+    let event = CreateEventW(None, false, false, None).map_err(|e| format!("CreateEvent: {e}"))?;
+    let opened = (|| {
+        client.SetEventHandle(event)?;
+        let capture: IAudioCaptureClient = client.GetService()?;
+        client.Start()?;
+        Ok::<_, windows::core::Error>(capture)
+    })();
+    match opened {
+        Ok(capture) => Ok(Capture {
+            client,
+            capture,
+            event,
+        }),
+        Err(e) => {
+            let _ = CloseHandle(event);
+            Err(format!("start: {e}"))
+        }
+    }
 }
 
-#[cfg(not(target_os = "windows"))]
-pub struct ProcessCaptureHandle;
+unsafe fn pump(capture: &Capture, stop: &AtomicBool, sink: &mut MonoSink) -> Result<(), String> {
+    let started = Instant::now();
+    let mut total_frames: u64 = 0;
+    let mut rate_checked = false;
+    let mut diag_at = Instant::now();
+    let mut diag_peak = 0.0f32;
+    let mut diag_gaps = 0u32;
+    while !stop.load(Ordering::Relaxed) {
+        if WaitForSingleObject(capture.event, WAIT_SLICE_MS) != WAIT_OBJECT_0 {
+            continue;
+        }
+        loop {
+            let next = capture
+                .capture
+                .GetNextPacketSize()
+                .map_err(|e| format!("GetNextPacketSize: {e}"))?;
+            if next == 0 {
+                break;
+            }
+            let mut data = std::ptr::null_mut();
+            let mut frames = 0u32;
+            let mut flags = 0u32;
+            capture
+                .capture
+                .GetBuffer(&mut data, &mut frames, &mut flags, None, None)
+                .map_err(|e| format!("GetBuffer: {e}"))?;
+            let silent = flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32 != 0;
+            if flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY.0 as u32 != 0 {
+                diag_gaps += 1;
+            }
+            let mut mono = if silent || data.is_null() {
+                vec![0.0f32; frames as usize]
+            } else {
+                let interleaved = std::slice::from_raw_parts(
+                    data as *const f32,
+                    frames as usize * CHANNELS as usize,
+                );
+                downmix(interleaved, CHANNELS as usize)
+            };
+            capture
+                .capture
+                .ReleaseBuffer(frames)
+                .map_err(|e| format!("ReleaseBuffer: {e}"))?;
+            assert_eq!(mono.len(), frames as usize, "one mono sample per frame");
+            diag_peak = mono.iter().fold(diag_peak, |m, s| m.max(s.abs()));
+            total_frames += frames as u64;
+            sink(&mut mono);
+        }
+        if !rate_checked {
+            let elapsed = started.elapsed().as_secs_f64();
+            if let Some(measured) =
+                crate::audio::reconcile_loopback_rate(MEETING_CANONICAL_RATE, total_frames, elapsed)
+            {
+                crate::audio::report_loopback_rate_mismatch(
+                    MEETING_CANONICAL_RATE,
+                    measured,
+                    total_frames,
+                    elapsed,
+                );
+                rate_checked = true;
+            } else if elapsed >= 30.0 {
+                rate_checked = true;
+            }
+        }
+        if diag_at.elapsed() >= DIAG_EVERY {
+            crate::log(&format!(
+                "[Audio] Loopback diag (process): total_samples={}, last_5s_peak={:.4}, discontinuities={} (>0.001 means signal, ~0 means silence)",
+                total_frames, diag_peak, diag_gaps
+            ));
+            diag_at = Instant::now();
+            diag_peak = 0.0;
+            diag_gaps = 0;
+        }
+    }
+    Ok(())
+}
 
-#[cfg(not(target_os = "windows"))]
-pub fn spawn_process_capture(
-    _pid: u32,
-    _output_buffer: std::sync::Arc<std::sync::Mutex<Vec<f32>>>,
-    _aec_ref_ring: Option<std::sync::Arc<std::sync::Mutex<Vec<f32>>>>,
-) -> Result<ProcessCaptureHandle, String> {
-    Err("process loopback only available on Windows".to_string())
+/// Interleaved frames → mono by averaging (the endpoint-loopback path does
+/// the same, see `build_secondary_stream`). A non-finite sample from the
+/// engine becomes silence instead of reaching the mix.
+fn downmix(interleaved: &[f32], channels: usize) -> Vec<f32> {
+    assert!(channels > 0, "downmix: channels must be > 0");
+    assert_eq!(interleaved.len() % channels, 0, "downmix: partial frame");
+    interleaved
+        .chunks_exact(channels)
+        .map(|frame| {
+            let avg = frame.iter().sum::<f32>() / channels as f32;
+            if avg.is_finite() {
+                avg.clamp(-1.0, 1.0)
+            } else {
+                0.0
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn downmix_averages_each_frame() {
+        assert_eq!(downmix(&[0.5, 0.1, -0.2, -0.4], 2), vec![0.3, -0.3]);
+    }
+
+    #[test]
+    fn downmix_turns_non_finite_into_silence_and_clamps() {
+        assert_eq!(
+            downmix(&[f32::NAN, 0.0, f32::INFINITY, 1.0, 3.0, 3.0], 2),
+            vec![0.0, 0.0, 1.0]
+        );
+    }
 }

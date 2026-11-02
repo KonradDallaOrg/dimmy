@@ -265,23 +265,37 @@ Full reference: [`audio-pipeline.md`](audio-pipeline.md). Headline:
   publishes a `tract`-feature build, or we swap to `deepfilter-rt`
   riding the existing `ort` runtime. See `Cargo.toml` comment.
 
-## `process_loopback.rs` — per-process WASAPI loopback (Win-only, Phase 5a SCAFFOLDING)
+## `process_loopback.rs` — system audio through process loopback (Win-only)
 
-- Why: standard WASAPI loopback captures whatever's routed to a specific
-  OUTPUT device. When a meeting app puts a Bluetooth headset into HFP/SCO
-  for bidirectional voice, the audio bypasses the normal render endpoint
-  → loopback is silent. Per-process capture asks Windows for the audio
-  the meeting app *itself* is producing, before routing.
-- API surface: `list_meeting_processes()` enumerates known meeting exes
-  (`ms-teams.exe`, `zoom.exe`, `discord.exe`, `slack.exe`, `webex.exe`,
-  `googlemeet.exe`, …) via `Toolhelp32` snapshot. `auto_detect_meeting_pid()`
-  picks one heuristically.
-- **Status: SCAFFOLDING.** `spawn_process_capture` returns `Err` for
-  now. The real implementation (`ActivateAudioInterfaceAsync` +
-  `AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK` + an
-  `IActivateAudioInterfaceCompletionHandler` impl) is the next commit.
-- Mac/Linux: stub returning empty enumeration + Err from
-  `spawn_process_capture`. Caller falls back to default-output loopback.
+- Why: endpoint loopback copies ONE output device, the default one at
+  meeting start. A call app can move its speaker elsewhere from its own
+  menu without touching the Windows default, and the meeting then records
+  silence for the participants (2026-11-02, Teams). Process loopback
+  captures what PROCESSES play, before routing to any device.
+- Mode: `PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE` on Dimmy's
+  own PID = every app except Dimmy, on any output. Measured: a tone on a
+  speaker that was not the default output arrived at its exact amplitude.
+- Format is ours: float stereo at `MEETING_CANONICAL_RATE` with
+  `AUTOCONVERTPCM`, so the output device's rate (16 kHz hands-free,
+  44.1 kHz, 48 kHz) never reaches the meeting. The stream is continuous
+  (silence arrives as silence), unlike endpoint loopback.
+- `start(sink)` runs the capture on its own MTA thread and hands mono
+  packets to `audio.rs::start_process_loopback`'s sink, which writes the
+  meeting system buffer + AEC reference exactly like the endpoint
+  callback. A failure mid-capture raises `AUDIO_STREAM_DEAD`; after three
+  deaths in one recording the rest uses endpoint loopback. Activation
+  failure (older Windows) falls back to endpoint loopback at Start.
+- Trap: windows-rs drops a `PROPVARIANT` with `PropVariantClear`, which
+  `CoTaskMemFree`s a `VT_BLOB` — the activation blob lives on the stack,
+  so the PROPVARIANT is held in `ManuallyDrop` (heap corruption
+  0xC0000374 otherwise; a release build hid it).
+
+## `capture_sessions.rs` — which mics other apps capture from (Win-only)
+
+- Friendly names (= cpal names) of active capture endpoints on which a
+  process other than Dimmy has an ACTIVE session. Read by
+  `audio.rs::mic_decision` only when our meeting mic has delivered digital
+  zeros for 4 s, or while already following a call.
 
 ## `chunked_stt.rs` — realtime chunked Parakeet worker
 
