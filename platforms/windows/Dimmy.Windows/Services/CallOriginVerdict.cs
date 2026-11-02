@@ -34,12 +34,23 @@ public static class CallOriginVerdict
     ///
     /// `deviceChanging` is true between an audio device moving and the call
     /// being seen active again.
+    ///
+    /// `callStillPlaying`: the call's app has an active PLAYBACK session. An
+    /// in-app device switch never stops it - measured 2026-11-02, Teams' new
+    /// speaker session started before the old one closed, while its
+    /// microphone was gone for 0.29 s (and for 1.1 s at 16:52:52, with the
+    /// registry naming nobody). A hangup does stop it.
+    ///
+    /// `callMediaClosed`: the UDP sockets the call held while talking have
+    /// closed (`CallMediaSockets.Closed`). Only ever evidence of an END.
     public static CallOriginState Judge(
         uint originPid,
         IReadOnlyList<(string sessionId, uint pid, string endpointId, int state)> sessions,
         bool processAlive,
         bool someoneElseHoldsTheMic,
-        bool deviceChanging)
+        bool deviceChanging,
+        bool callStillPlaying = false,
+        bool callMediaClosed = false)
     {
         // Row 1. Talking. Nothing else matters.
         if (sessions.Any(x => x.pid == originPid && x.state == Active))
@@ -47,6 +58,11 @@ public static class CallOriginVerdict
 
         // Row 2. The app is gone. No device change excuses this.
         if (originPid != 0 && !processAlive) return CallOriginState.Ended;
+
+        // Row 2b. The call's media went away: an app that keeps playing
+        // something else after hanging up (another browser tab) is still
+        // over.
+        if (callMediaClosed) return CallOriginState.Ended;
 
         if (sessions.Any(x => x.pid == originPid && x.state != Active))
         {
@@ -61,12 +77,15 @@ public static class CallOriginVerdict
             //     the registry listed NOBODY, not even the app on the call.
             //     Either signal alone stops the recording there. Both
             //     together get it right.
-            if (someoneElseHoldsTheMic || deviceChanging) return CallOriginState.OnTheCall;
+            //   - the call is still playing to us: the microphone moved
+            //     inside the app (row 4b).
+            if (someoneElseHoldsTheMic || deviceChanging || callStillPlaying)
+                return CallOriginState.OnTheCall;
             return CallOriginState.Ended;
         }
 
         // Rows 5 and 6. No session of that process at all.
-        return deviceChanging ? CallOriginState.OnTheCall : CallOriginState.Unseen;
+        return deviceChanging || callStillPlaying ? CallOriginState.OnTheCall : CallOriginState.Unseen;
     }
 }
 
@@ -94,10 +113,13 @@ public sealed class CallOriginTracker
         uint originPid,
         IReadOnlyList<(string sessionId, uint pid, string endpointId, int state)> sessions,
         bool processAlive,
-        bool someoneElseHoldsTheMic)
+        bool someoneElseHoldsTheMic,
+        bool callStillPlaying = false,
+        bool callMediaClosed = false)
     {
         var verdict = CallOriginVerdict.Judge(
-            originPid, sessions, processAlive, someoneElseHoldsTheMic, _deviceChanging);
+            originPid, sessions, processAlive, someoneElseHoldsTheMic, _deviceChanging,
+            callStillPlaying, callMediaClosed);
 
         // Back on a device and talking: whatever moved has landed.
         if (verdict == CallOriginState.OnTheCall

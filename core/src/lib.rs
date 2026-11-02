@@ -11,6 +11,8 @@ pub mod autostart;
 pub mod calendar;
 pub mod call_detector;
 pub mod call_media;
+#[cfg(target_os = "windows")]
+pub mod capture_sessions;
 pub mod catalog;
 pub mod chunked_stt;
 pub mod claude_code;
@@ -24,6 +26,7 @@ pub mod confluence;
 pub mod consent;
 pub mod coreml_encoder;
 pub mod deepgram_stream;
+pub mod device_events;
 pub mod dfn;
 #[cfg(feature = "local-dfn")]
 pub mod dfn3;
@@ -81,7 +84,6 @@ pub mod parakeet;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub mod parakeet_fluid;
 pub mod preprocess;
-pub mod process_loopback;
 pub mod provider;
 pub mod qwen_asr;
 pub mod qwen_fluid;

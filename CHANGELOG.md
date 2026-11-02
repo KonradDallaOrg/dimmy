@@ -6,6 +6,23 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Windows meetings keep recording both sides when you switch the
+  speaker or microphone from inside Teams (or any call app). System
+  audio follows the output the call is playing to; before, it copied
+  only the Windows default output and went silent when the call moved
+  elsewhere. If the meeting microphone
+  starts delivering nothing but digital silence (a Bluetooth headset
+  leaving hands-free mode), Dimmy reopens it, or follows the call to the
+  microphone it moved to.
+- Device changes are followed on the operating system's own events (new
+  default device, device plugged or unplugged, a Bluetooth headset
+  switching mode, an app taking or releasing a microphone) instead of a
+  once-a-second check. A check every 5 s stays as a safety net. On a Mac
+  that check had never run during a meeting at all: the system-audio
+  stream kept the audio thread too busy for it.
+
 ### Added
 
 - Nemotron (NVIDIA Nemotron 3.5 ASR Streaming 0.6B) as a fifth local speech

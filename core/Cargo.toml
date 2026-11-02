@@ -415,20 +415,27 @@ sha2 = { version = "0.10" }
 # CLI client.
 clap = { version = "4", features = ["derive"], optional = true }
 
-# Windows API bindings — used by process_loopback.rs (Phase 5) for the
-# AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK API + IAudioSession*
-# enumeration. Win32_Media_Audio for WASAPI core, Win32_System_Com
-# for COM init / IUnknown plumbing, Win32_System_ProcessStatus for
-# enumerating running processes by name. Other platforms ignore.
+# Windows API bindings. capture_sessions.rs: IAudioSessionManager2 on
+# every endpoint + friendly names + a ToolHelp process snapshot, so the
+# meeting can follow the mic and speaker the call app uses.
+# device_events.rs: IMMNotificationClient (windows-core's `implement`) + the
+# microphone privacy key (registry change notification, event handles).
+# Other platforms ignore.
 [target.'cfg(target_os = "windows")'.dependencies]
+windows-core = "0.62"
 windows = { version = "0.62", features = [
     "Win32_Foundation",
+    "Win32_Security",
     "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
     "Win32_System_Threading",
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_Registry",
     "Win32_Media_Audio",
     "Win32_Media_KernelStreaming",
+    "Win32_Devices_FunctionDiscovery",
+    "Win32_UI_Shell_PropertiesSystem",
     "Win32_Graphics_Dxgi",
 ] }
 
@@ -436,6 +443,12 @@ windows = { version = "0.62", features = [
 # Already in the tree through cpal and friends; this only makes it direct.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# CoreAudio property listeners (device_events.rs: default device, device
+# list, sample-rate changes). Already in the tree through cpal's
+# coreaudio-rs at this version and feature; this only makes it direct.
+[target.'cfg(target_os = "macos")'.dependencies]
+coreaudio-sys = { version = "0.2", default-features = false, features = ["core_audio"] }
 
 [dev-dependencies]
 # CSPRNG for ed25519 keypair generation in tests. Pulled here (not into

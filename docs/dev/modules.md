@@ -265,23 +265,44 @@ Full reference: [`audio-pipeline.md`](audio-pipeline.md). Headline:
   publishes a `tract`-feature build, or we swap to `deepfilter-rt`
   riding the existing `ort` runtime. See `Cargo.toml` comment.
 
-## `process_loopback.rs` — per-process WASAPI loopback (Win-only, Phase 5a SCAFFOLDING)
+## `device_events.rs` — wake the audio thread on device events
 
-- Why: standard WASAPI loopback captures whatever's routed to a specific
-  OUTPUT device. When a meeting app puts a Bluetooth headset into HFP/SCO
-  for bidirectional voice, the audio bypasses the normal render endpoint
-  → loopback is silent. Per-process capture asks Windows for the audio
-  the meeting app *itself* is producing, before routing.
-- API surface: `list_meeting_processes()` enumerates known meeting exes
-  (`ms-teams.exe`, `zoom.exe`, `discord.exe`, `slack.exe`, `webex.exe`,
-  `googlemeet.exe`, …) via `Toolhelp32` snapshot. `auto_detect_meeting_pid()`
-  picks one heuristically.
-- **Status: SCAFFOLDING.** `spawn_process_capture` returns `Err` for
-  now. The real implementation (`ActivateAudioInterfaceAsync` +
-  `AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK` + an
-  `IActivateAudioInterfaceCompletionHandler` impl) is the next commit.
-- Mac/Linux: stub returning empty enumeration + Err from
-  `spawn_process_capture`. Caller falls back to default-output loopback.
+- Device follow (default in/out, device list, sample rate, which app holds
+  a mic) reacts to OS events instead of a timer. Windows:
+  `IMMNotificationClient` (default change, add/remove, state, and
+  `PKEY_AudioEngine_DeviceFormat` only — other endpoint properties churn)
+  plus the microphone privacy registry key (`RegNotifyChangeKeyValue`, the
+  same source as `MicUsageWatcher.cs`; any app, packaged or not). macOS:
+  CoreAudio listeners on the default input/output, the device list and
+  the default input's nominal sample rate. Linux: none.
+- The callback only sends `AudioCommand::DevicesChanged`; the audio
+  thread reads and decides. Watching exists only while recording
+  (registered at each Start, dropped at Stop).
+- The heartbeat is the net: 5 s, 1 s while a change is settling (tests:
+  1 s). A new device/rate must hold `DEVICE_SETTLE_MS` (900 ms, a
+  DURATION — events can arrive ms apart) before streams are rebuilt: the
+  macOS 26 HAL-wedge guard.
+- The mic callback sends one `DevicesChanged` when a run of digital zeros
+  crosses 4 s (no OS event exists for that).
+
+## `capture_sessions.rs` — who is on a call, on which devices (Win-only)
+
+- "The call" = any process other than Dimmy with an ACTIVE capture
+  session (no app list). `call_devices()` returns the inputs those
+  processes capture from and the outputs they, or a relative in their
+  process tree (ToolHelp snapshot; shells like explorer/svchost excluded),
+  play to. Measured: a process holding the Realtek mic and playing to the
+  Realtek speakers came back as exactly that, and nothing once it hung up.
+- `audio.rs::loopback_target`: the endpoint loopback moves to the call's
+  output when it is a single device other than the bound one (Teams' own
+  speaker menu, 2026-11-02); otherwise it follows the system default.
+- `audio.rs::mic_decision` reads the inputs when our mic goes to digital
+  zeros.
+- Why not process loopback (`AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK`):
+  tried 2026-11-02 and REMOVED. It caught other apps' audio on any output,
+  but a live Teams call came through as digital zeros (also targeting the
+  Teams process tree), while endpoint loopback recorded it at the same
+  moment.
 
 ## `chunked_stt.rs` — realtime chunked Parakeet worker
 

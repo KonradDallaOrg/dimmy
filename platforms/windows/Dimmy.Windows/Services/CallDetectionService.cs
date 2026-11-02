@@ -313,6 +313,8 @@ internal sealed class CallDetectionService : IDisposable
         _meetingOriginEndpointId = originRow.endpointId;
         _originTracker.Reset();
         _meetingOriginPid = originRow.pid;
+        _meetingOriginExe = ResolveProcessExeName(originRow.pid);
+        _mediaWhileTalking = new();
         _originEndpointAwayLogged = false;
         _meetingDrivenByCallDetect = true;
         App.Log($"meeting origin bound: exe={_lastEmittedExe} id=…{TailOf(origin.Key)}", "CallDetect");
@@ -345,6 +347,8 @@ internal sealed class CallDetectionService : IDisposable
                 _meetingOriginEndpointId = endpointId;
                 _originTracker.Reset();
                 _meetingOriginPid = pid;
+                _meetingOriginExe = exe;
+                _mediaWhileTalking = new();
                 _originEndpointAwayLogged = false;
                 _meetingDrivenByCallDetect = true;
                 try { DimmyNative.dimmy_call_meeting_started_external(); } catch { }
@@ -405,11 +409,17 @@ internal sealed class CallDetectionService : IDisposable
         _sampleInFlight = true;
         var t0 = System.Diagnostics.Stopwatch.GetTimestamp();
 
+        var originExe = _meetingOriginExe;
         System.Threading.Tasks.Task.Run(() =>
         {
             List<(string sessionId, uint pid, string endpointId, int state)>? sampled = null;
             var endpointsChanged = false;
-            try { sampled = SampleActiveCaptureSessions(out endpointsChanged); }
+            CallEvidence? evidence = null;
+            try
+            {
+                sampled = SampleActiveCaptureSessions(out endpointsChanged);
+                if (!string.IsNullOrEmpty(originExe)) evidence = SampleCallEvidence(originExe);
+            }
             catch (Exception ex) { App.Log($"sample failed: {ex.Message}", "CallDetect"); }
 
             var changed = endpointsChanged;
@@ -418,7 +428,7 @@ internal sealed class CallDetectionService : IDisposable
             {
                 try
                 {
-                    if (rows != null && !_disposed) OnTickCore(rows, changed);
+                    if (rows != null && !_disposed) OnTickCore(rows, changed, evidence);
                 }
                 catch (Exception ex)
                 {
@@ -440,7 +450,8 @@ internal sealed class CallDetectionService : IDisposable
 
     private void OnTickCore(
         List<(string sessionId, uint pid, string endpointId, int state)> sampled,
-        bool endpointsChanged)
+        bool endpointsChanged,
+        CallEvidence? evidence)
     {
         if (!_isEnabled) return;
         var app = App.Instance;
@@ -487,6 +498,8 @@ internal sealed class CallDetectionService : IDisposable
             _meetingOriginEndpointId = null;
             _originTracker.Reset();
             _meetingOriginPid = 0;
+            _meetingOriginExe = null;
+            _mediaWhileTalking = new();
             _originMissingSince = null;
             _meetingDrivenByCallDetect = false;
         }
@@ -568,11 +581,26 @@ internal sealed class CallDetectionService : IDisposable
                         _lastOriginPicture = picture;
                     }
 
+                    var talking = _tickSessions.Any(
+                        x => x.pid == _meetingOriginPid && x.state == (int)AudioSessionState.Active);
+                    if (talking && evidence != null) _mediaWhileTalking = evidence.Media;
+                    bool playing = evidence?.Playing == true;
+                    bool mediaClosed = !talking && evidence != null
+                        && CallMediaSockets.Closed(_mediaWhileTalking, evidence.Media);
+                    var evidencePicture = $"playing={playing} udp={evidence?.Media.Count ?? -1}/{_mediaWhileTalking.Count} mediaClosed={mediaClosed}";
+                    if (!talking && evidencePicture != _lastEvidencePicture)
+                    {
+                        App.Log($"call evidence: {evidencePicture}", "CallDetect");
+                        _lastEvidencePicture = evidencePicture;
+                    }
+
                     var verdict = _originTracker.Observe(
                         _meetingOriginPid,
                         _tickSessions,
                         ProcessAlive(_meetingOriginPid),
-                        MicUsageWatcher.SomeoneElseUsingMic());
+                        MicUsageWatcher.SomeoneElseUsingMic(),
+                        playing,
+                        mediaClosed);
 
                     if (verdict == CallOriginState.OnTheCall)
                     {
@@ -582,8 +610,7 @@ internal sealed class CallDetectionService : IDisposable
                     }
                     else if (verdict == CallOriginState.Ended)
                     {
-                        App.Log("the call let go of the microphone and nothing else explains it — call over",
-                            "CallDetect");
+                        App.Log($"call over: microphone released, {evidencePicture}", "CallDetect");
                         FireSessionEnded();
                     }
                     else if (_originMissingSince == null)
@@ -805,6 +832,34 @@ internal sealed class CallDetectionService : IDisposable
     /// makes an in-app device change a non-event instead of a hangup.
     private uint _meetingOriginPid;
 
+    /// The origin's executable (lowercase, no extension). Its playback and
+    /// its UDP sockets are looked for in every process of that name: the
+    /// process capturing the microphone is not always the one playing the
+    /// call or holding its media (a browser's audio and network services).
+    private string? _meetingOriginExe;
+
+    /// The call's UDP sockets the last time it was seen capturing.
+    private HashSet<(uint pid, ushort port)> _mediaWhileTalking = new();
+
+    private string _lastEvidencePicture = "";
+
+    /// What the call's app is doing besides capturing, read off the UI
+    /// thread with the capture sample.
+    private sealed record CallEvidence(bool Playing, HashSet<(uint pid, ushort port)> Media);
+
+    private static CallEvidence SampleCallEvidence(string exe)
+    {
+        var pids = new HashSet<uint>();
+        foreach (var p in System.Diagnostics.Process.GetProcessesByName(exe))
+        {
+            pids.Add((uint)p.Id);
+            p.Dispose();
+        }
+        var playing = SampleSessions(EDataFlow.eRender, new HashSet<string>(StringComparer.Ordinal))
+            .Any(x => x.state == (int)AudioSessionState.Active && pids.Contains(x.pid));
+        return new CallEvidence(playing, CallMediaSockets.Of(pids));
+    }
+
     /// How long the origin session must stay missing before we call the
     /// call over.
     ///
@@ -870,7 +925,7 @@ internal sealed class CallDetectionService : IDisposable
         out bool endpointsChanged)
     {
         var endpointIds = new HashSet<string>(StringComparer.Ordinal);
-        var result = SampleActiveCaptureSessionsInner(endpointIds);
+        var result = SampleSessions(EDataFlow.eCapture, endpointIds);
         // The first sample has no baseline to differ from. Calling that a
         // change would throw away the poll that discovers what is already
         // running, which is the one the pre-existing rule depends on.
@@ -879,8 +934,8 @@ internal sealed class CallDetectionService : IDisposable
         return result;
     }
 
-    private static List<(string sessionId, uint pid, string endpointId, int state)> SampleActiveCaptureSessionsInner(
-        HashSet<string> endpointIds)
+    private static List<(string sessionId, uint pid, string endpointId, int state)> SampleSessions(
+        EDataFlow flow, HashSet<string> endpointIds)
     {
         var result = new List<(string, uint, string, int)>();
         IMMDeviceEnumerator? enumerator = null;
@@ -892,7 +947,7 @@ internal sealed class CallDetectionService : IDisposable
             enumerator = (IMMDeviceEnumerator?)Activator.CreateInstance(enumType);
             if (enumerator == null) return result;
 
-            if (enumerator.EnumAudioEndpoints(EDataFlow.eCapture, DEVICE_STATE_ACTIVE, out devices) != 0
+            if (enumerator.EnumAudioEndpoints(flow, DEVICE_STATE_ACTIVE, out devices) != 0
                 || devices == null) return result;
             if (devices.GetCount(out uint deviceCount) != 0) return result;
 

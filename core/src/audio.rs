@@ -315,6 +315,10 @@ pub enum AudioCommand {
     /// AEC ref ring drained 480-sample frames at the wrong wall-clock rate,
     /// and the mix track's per-sample align broke.
     PushLoopback(Vec<f32>, u32),
+    /// The audio hardware picture changed (device_events.rs), or the mic
+    /// just crossed into digital silence: run the device checks now
+    /// instead of at the next heartbeat.
+    DevicesChanged,
 }
 
 /// Cached input-device names, refreshed by every LIVE enumeration
@@ -379,6 +383,7 @@ pub fn spawn_audio_thread(
     loopback_gain: Arc<std::sync::atomic::AtomicU32>,
 ) -> mpsc::Sender<AudioCommand> {
     let (tx, rx) = mpsc::channel::<AudioCommand>();
+    let wake_tx = tx.clone();
     #[cfg(feature = "sim-audio")]
     let sim_tx = tx.clone();
 
@@ -456,8 +461,7 @@ pub fn spawn_audio_thread(
             // polls before rebuilding keeps the audio thread out of that
             // transition window — a meeting froze exactly this way
             // (Francesco, macOS 26, 2026-07-06).
-            let mut pending_input_default: Option<String> = None;
-            let mut input_stable_polls: u32 = 0;
+            let mut input_settle: Settle<String> = Settle::default();
             // Rate-based device-change detection (complements the
             // name-based input-follow above). The name check misses a
             // device that KEEPS its name but changes sample rate — e.g. a
@@ -474,8 +478,31 @@ pub fn spawn_audio_thread(
             // the name path so a transient flicker can't wedge the macOS 26
             // HAL lock.
             let mut bound_input_rate: Option<u32> = None;
-            let mut pending_input_rate: Option<u32> = None;
-            let mut input_rate_stable_polls: u32 = 0;
+            let mut rate_settle: Settle<u32> = Settle::default();
+            // OS device notifications for the recording in progress (None
+            // while idle). `wake` is how they, and the mic callback's
+            // digital-silence edge, reach this loop.
+            let wake: crate::device_events::Wake = {
+                let tx = wake_tx;
+                Arc::new(move || {
+                    let _ = tx.send(AudioCommand::DevicesChanged);
+                })
+            };
+            let mut device_events: Option<crate::device_events::DeviceEvents> = None;
+            // "Follow the call" mode (`mic_decision`): the input we moved to
+            // because the call app captures from it, and the system default
+            // at that moment, so a NEW default can still take us back.
+            // None outside follow mode; reset on every fresh Start and Stop.
+            let mut follow_input_name: Option<String> = None;
+            let mut default_when_followed: Option<String> = None;
+            // Digital-silence reopen backoff, so a mic that legitimately
+            // delivers zeros (muted endpoint) is not rebuilt every 4 s.
+            let mut silence_backoff_ms: u64 = SILENCE_FIRST_RETRY_MS;
+            let mut silence_retry_at_ms: u64 = 0;
+            // The output the loopback follows because the call plays there
+            // (None: the system default). Reset on every fresh Start and Stop.
+            let mut follow_output_name: Option<String> = None;
+            let mut output_settle: Settle<String> = Settle::default();
 
             // Loopback resampler state. The external push path delivers
             // samples at whatever rate the macOS tap / ScreenCaptureKit /
@@ -525,11 +552,19 @@ pub fn spawn_audio_thread(
 
             // Event loop: wait for commands, with a 1 s timeout that
             // doubles as the heartbeat for device-change auto-recovery.
+            let mut last_heartbeat = std::time::Instant::now();
             loop {
-                let cmd = match rx.recv_timeout(std::time::Duration::from_secs(1)) {
-                    Ok(c) => c,
-                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                let period = if input_settle.is_pending()
+                    || rate_settle.is_pending()
+                    || output_settle.is_pending()
+                {
+                    HEARTBEAT_SETTLING
+                } else {
+                    HEARTBEAT_IDLE
+                };
+                let cmd = match next_command(&rx, &mut last_heartbeat, period) {
+                    Next::Command(AudioCommand::DevicesChanged) | Next::Heartbeat => {
+                        last_heartbeat = std::time::Instant::now();
                         // Test-only heartbeat counter: lets the guardrail
                         // integration test key its assertions to OBSERVED
                         // ticks instead of wall-clock sleeps (which flaked
@@ -570,69 +605,134 @@ pub fn spawn_audio_thread(
                             }
                         }
                         let dead = AUDIO_STREAM_DEAD.load(Ordering::Relaxed);
-                        // Default-output-follow (Windows): cpal raises no error
-                        // when the default output merely CHANGES (the old device
-                        // is still alive, just no longer default), so the
-                        // dead-flag path can't catch a replug. Compare the live
-                        // default output to the device the loopback is bound to.
-                        let output_changed = if !dead {
-                            match last_start_params {
-                                Some((_, src)) if bound_loopback_name.is_some() => {
-                                    loopback_should_follow_default(
-                                        src,
-                                        bound_loopback_name.as_deref(),
-                                        current_default_output_name(&host).as_deref(),
-                                    )
-                                }
-                                _ => false,
-                            }
-                        } else {
-                            false
+                        // Who is on a call and on which devices: read once per
+                        // check, only during a meeting (Windows; empty elsewhere).
+                        let call = match last_start_params {
+                            Some((_, AudioSource::Mix)) if !dead => call_devices(),
+                            _ => CallDevices::default(),
                         };
-                        let input_changed = if !dead {
-                            // Only query the OS default-input device while a
-                            // recording is active (mirrors the output-follow
-                            // guard above). Querying it on EVERY idle 1-Hz poll
-                            // made the detached audio thread keep hitting WASAPI
-                            // even after Stop; on process exit that raced with
-                            // COM/WASAPI teardown and crashed the short-lived E2E
-                            // test binaries with STATUS_ACCESS_VIOLATION (all
-                            // tests pass; only the exit faulted). Prod is a
-                            // long-lived process so it never manifested there.
+                        // Loopback follow (Windows): cpal raises no error when
+                        // the default output merely CHANGES, nor when the call
+                        // app moves its speaker from its own menu — the old
+                        // stream stays alive capturing silence. See
+                        // `loopback_target`.
+                        let output_target = if dead {
+                            None
+                        } else {
                             match last_start_params {
-                                Some((ref dn, _)) => {
+                                Some((_, src)) => loopback_target(
+                                    src,
+                                    bound_loopback_name.as_deref(),
+                                    lone(&call.outputs),
+                                    current_default_output_name(&host).as_deref(),
+                                ),
+                                None => None,
+                            }
+                        };
+                        let output_changed =
+                            output_settle.observe(output_target.clone(), mono_ms());
+                        if output_target.is_some() && !output_changed {
+                            crate::log(&format!(
+                                "[Audio] system audio should move to {:?} (call plays to {:?}) — waiting for it to settle",
+                                output_target, call.outputs
+                            ));
+                        }
+                        if output_changed {
+                            let target = output_target.clone().unwrap_or_default();
+                            follow_output_name = (current_default_output_name(&host).as_deref()
+                                != Some(target.as_str()))
+                            .then_some(target);
+                        }
+                        // Where the mic should be (see `mic_decision`). Only
+                        // queried while a recording is active: hitting WASAPI
+                        // on every idle 1-Hz poll raced COM teardown at
+                        // process exit and crashed the short-lived E2E test
+                        // binaries with STATUS_ACCESS_VIOLATION.
+                        let mic_move = if dead {
+                            MicMove::Stay
+                        } else {
+                            match last_start_params {
+                                Some((ref dn, src)) => {
+                                    let meeting_mic = matches!(src, AudioSource::Mix)
+                                        && bound_input_rate.is_some();
+                                    let now = mono_ms();
+                                    let last_signal = MIC_LAST_SIGNAL_MS.load(Ordering::Relaxed);
+                                    if now.saturating_sub(last_signal) < 1_000 {
+                                        silence_backoff_ms = SILENCE_FIRST_RETRY_MS;
+                                        silence_retry_at_ms = 0;
+                                    }
+                                    let silent = meeting_mic
+                                        && !meeting_capture_gated()
+                                        && now >= silence_retry_at_ms
+                                        && mic_digitally_silent(
+                                            now,
+                                            last_signal,
+                                            MIC_LAST_CALLBACK_MS.load(Ordering::Relaxed),
+                                        );
+                                    let others = &call.inputs;
                                     let current_default = current_default_input_name(&host);
-                                    let raw_changed = input_should_follow_default(
-                                        dn.as_deref(),
-                                        bound_input_name.as_deref(),
-                                        current_default.as_deref(),
-                                    );
-                                    let stable = debounce_input_change(
-                                        raw_changed,
-                                        current_default.as_deref(),
-                                        &mut pending_input_default,
-                                        &mut input_stable_polls,
-                                    );
-                                    if raw_changed && !stable {
+                                    let decision = mic_decision(&MicFacts {
+                                        pinned: dn.is_some(),
+                                        bound: bound_input_name.as_deref(),
+                                        current_default: current_default.as_deref(),
+                                        default_when_followed: default_when_followed.as_deref(),
+                                        others,
+                                        silent,
+                                    });
+                                    if silent {
                                         crate::log(&format!(
-                                            "[Audio] default input changed to {:?} — debouncing (poll {}/2) before rebuild",
-                                            current_default, input_stable_polls
+                                            "[Audio] mic {:?} has delivered only digital zeros for {:.1}s; other apps capture from {:?}",
+                                            bound_input_name,
+                                            now.saturating_sub(last_signal) as f64 / 1000.0,
+                                            others
                                         ));
                                     }
-                                    stable
+                                    match decision {
+                                        MicMove::To(ref name) | MicMove::ToDefault(ref name) => {
+                                            let stable =
+                                                input_settle.observe(Some(name.clone()), now);
+                                            if stable {
+                                                if let MicMove::To(_) = decision {
+                                                    default_when_followed = current_default.clone();
+                                                }
+                                                decision
+                                            } else {
+                                                crate::log(&format!(
+                                                    "[Audio] mic should move to {:?} — waiting for it to settle before rebuild",
+                                                    name
+                                                ));
+                                                MicMove::Stay
+                                            }
+                                        }
+                                        other => {
+                                            input_settle.observe(None, now);
+                                            other
+                                        }
+                                    }
                                 }
                                 None => {
                                     // Idle (not recording): nothing to follow,
-                                    // no WASAPI query. Reset the debounce so the
+                                    // no WASAPI query. Reset the settle so the
                                     // next Start begins clean.
-                                    pending_input_default = None;
-                                    input_stable_polls = 0;
-                                    false
+                                    input_settle = Settle::default();
+                                    MicMove::Stay
                                 }
                             }
-                        } else {
-                            false
                         };
+                        let input_changed = !matches!(mic_move, MicMove::Stay);
+                        match mic_move {
+                            MicMove::To(ref name) => follow_input_name = Some(name.clone()),
+                            MicMove::ToDefault(_) => {
+                                follow_input_name = None;
+                                default_when_followed = None;
+                            }
+                            MicMove::Reopen => {
+                                silence_retry_at_ms = mono_ms() + silence_backoff_ms;
+                                silence_backoff_ms =
+                                    (silence_backoff_ms * 2).min(SILENCE_MAX_RETRY_MS);
+                            }
+                            MicMove::Stay => {}
+                        }
                         // Rate-change signal: re-probe the bound input
                         // device's native rate and rebuild if it diverges
                         // from what the live resampler was built with. Closes
@@ -641,19 +741,18 @@ pub fn spawn_audio_thread(
                         let rate_changed = if !dead {
                             match (&last_start_params, bound_input_rate) {
                                 (Some((dn, _)), Some(built_rate)) => {
-                                    let probed = probe_input_native_rate(&host, dn.as_deref());
+                                    let probed = probe_input_native_rate(
+                                        &host,
+                                        dn.as_deref().or(follow_input_name.as_deref()),
+                                    );
                                     let raw_changed =
                                         rate_changed_requires_rebuild(built_rate, probed);
-                                    let stable = debounce_rate_change(
-                                        raw_changed,
-                                        probed,
-                                        &mut pending_input_rate,
-                                        &mut input_rate_stable_polls,
-                                    );
+                                    let stable = rate_settle
+                                        .observe(probed.filter(|_| raw_changed), mono_ms());
                                     if raw_changed && !stable {
                                         crate::log(&format!(
-                                            "[Audio] bound input rate changed {} Hz -> {:?} — debouncing (poll {}/2) before rebuild",
-                                            built_rate, probed, input_rate_stable_polls
+                                            "[Audio] bound input rate changed {} Hz -> {:?} — waiting for it to settle before rebuild",
+                                            built_rate, probed
                                         ));
                                     }
                                     stable
@@ -669,9 +768,15 @@ pub fn spawn_audio_thread(
                                 let trigger = if dead {
                                     "stream_dead"
                                 } else if input_changed {
-                                    "default_input_changed"
+                                    match mic_move {
+                                        MicMove::To(_) => "call_input_changed",
+                                        MicMove::Reopen => "mic_digital_silence",
+                                        _ => "default_input_changed",
+                                    }
                                 } else if rate_changed {
                                     "input_rate_changed"
+                                } else if follow_output_name.is_some() {
+                                    "call_output_changed"
                                 } else {
                                     "default_output_changed"
                                 };
@@ -697,8 +802,13 @@ pub fn spawn_audio_thread(
                             continue;
                         }
                     }
+                    Next::Command(c) => c,
+                    Next::Disconnected => break,
                 };
                 match cmd {
+                    AudioCommand::DevicesChanged => {
+                        unreachable!("DevicesChanged is handled as a heartbeat")
+                    }
                     AudioCommand::Start {
                         device_name,
                         source,
@@ -713,15 +823,30 @@ pub fn spawn_audio_thread(
                         last_start_params = Some((device_name.clone(), source));
                         // Drop any prior streams before re-opening.
                         streams.clear();
+                        // Re-registered on every Start: on a Mac the
+                        // sample-rate listener sits on whatever is the
+                        // default input NOW.
+                        device_events = None;
+                        device_events = Some(crate::device_events::watch(wake.clone()));
+                        if !is_recovery_start {
+                            follow_output_name = None;
+                            follow_input_name = None;
+                            default_when_followed = None;
+                            silence_backoff_ms = SILENCE_FIRST_RETRY_MS;
+                            silence_retry_at_ms = 0;
+                        }
 
                         // Resolve which devices to open based on source. For Mix we open
                         // both mic + system. For System on Mac/Linux we currently fall
                         // back to Mic with a warning — proper loopback support tracked
                         // in docs/dev/system-audio-capture.md.
-                        let mic_device = resolve_input_device(&host, device_name.as_deref());
+                        let mic_device = resolve_input_device(
+                            &host,
+                            device_name.as_deref().or(follow_input_name.as_deref()),
+                        );
                         let system_device =
                             if matches!(source, AudioSource::System | AudioSource::Mix) {
-                                resolve_loopback_device(&host)
+                                resolve_loopback_device(&host, follow_output_name.as_deref())
                             } else {
                                 None
                             };
@@ -945,6 +1070,10 @@ pub fn spawn_audio_thread(
                         let sample_count =
                             std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
                         let sc1 = sample_count.clone();
+                        let wake1 = wake.clone();
+                        let wake2 = wake.clone();
+                        let track_silence = !primary_is_loopback;
+                        note_mic_callback(true, &wake);
                         let s = match config.sample_format() {
                             cpal::SampleFormat::F32 => {
                                 let pr = primary_resampler.clone();
@@ -955,6 +1084,12 @@ pub fn spawn_audio_thread(
                                             data.len(),
                                             std::sync::atomic::Ordering::Relaxed,
                                         );
+                                        if track_silence {
+                                            note_mic_callback(
+                                                data.iter().any(|&s| s != 0.0),
+                                                &wake1,
+                                            );
+                                        }
                                         if prev == 0 {
                                             crate::log(&format!(
                                                 "[Audio] First F32 callback: {} samples",
@@ -1024,6 +1159,9 @@ pub fn spawn_audio_thread(
                                     &canonical_config,
                                     move |data: &[i16], _: &cpal::InputCallbackInfo| {
                                         let prev = sc2.fetch_add(data.len(), std::sync::atomic::Ordering::Relaxed);
+                                        if track_silence {
+                                            note_mic_callback(data.iter().any(|&s| s != 0), &wake2);
+                                        }
                                         if prev == 0 {
                                             crate::log(&format!("[Audio] First I16 callback: {} samples", data.len()));
                                         }
@@ -1129,6 +1267,11 @@ pub fn spawn_audio_thread(
                     AudioCommand::Stop => {
                         // Dropping the streams stops recording
                         streams.clear();
+                        follow_output_name = None;
+                        output_settle = Settle::default();
+                        follow_input_name = None;
+                        default_when_followed = None;
+                        device_events = None;
                         #[cfg(feature = "sim-audio")]
                         {
                             sim_feed = None;
@@ -1141,8 +1284,7 @@ pub fn spawn_audio_thread(
                         bound_loopback_name = None;
                         bound_input_name = None;
                         bound_input_rate = None;
-                        pending_input_rate = None;
-                        input_rate_stable_polls = 0;
+                        rate_settle = Settle::default();
                         AUDIO_STREAM_DEAD.store(false, Ordering::Relaxed);
                         // Clear the published mic rate so callers
                         // (e.g. SystemAudioCaptureService on Mac)
@@ -1214,18 +1356,11 @@ pub fn spawn_audio_thread(
                                     lb_meas_raw_samples,
                                     elapsed,
                                 ) {
-                                    crate::log(&format!(
-                                        "[Audio/loopback] WARN claimed {} Hz but MEASURED ~{:.0} Hz over {:.1}s ({} samples) — host mis-reporting the loopback rate; system audio may be time-distorted (host-side rate pin failed?)",
+                                    report_loopback_rate_mismatch(
                                         claimed_src_rate,
-                                        lb_meas_raw_samples as f64 / elapsed.max(1e-6),
-                                        elapsed,
+                                        measured,
                                         lb_meas_raw_samples,
-                                    ));
-                                    crate::telemetry::track(
-                                        crate::telemetry::Event::LoopbackRateMismatch {
-                                            claimed: std_rate_label(claimed_src_rate),
-                                            measured: std_rate_label(measured),
-                                        },
+                                        elapsed,
                                     );
                                     lb_rate_mismatch_reported = true;
                                 }
@@ -1341,6 +1476,229 @@ pub fn spawn_audio_thread(
     tx
 }
 
+/// The device checks run on every OS device event (device_events.rs) and
+/// on the mic's digital-silence edge. The heartbeat is only the net for an
+/// event that never came, and Linux's only source: 5 s, down to 1 s while
+/// a change is settling so a move completes promptly. Tests keep 1 s so the
+/// tick-counting guardrail tests stay fast.
+#[cfg(not(any(test, feature = "test-ffi")))]
+const HEARTBEAT_IDLE: std::time::Duration = std::time::Duration::from_secs(5);
+#[cfg(any(test, feature = "test-ffi"))]
+const HEARTBEAT_IDLE: std::time::Duration = std::time::Duration::from_secs(1);
+const HEARTBEAT_SETTLING: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// How long a new device / rate must hold before streams are rebuilt on
+/// it. Rebuilding mid-transition (the flicker of an unplug/replug or a BT
+/// renegotiation) wedged the macOS 26 CoreAudio HAL lock and froze a
+/// meeting (Francesco, 2026-07-06). It used to be "seen on 2 consecutive
+/// 1 s polls"; with events two sightings can be milliseconds apart, so it
+/// is a duration now.
+const DEVICE_SETTLE_MS: u64 = 900;
+
+/// A changed value that must be seen again, `DEVICE_SETTLE_MS` or more
+/// after it first appeared, before it is acted on.
+#[derive(Default)]
+struct Settle<T> {
+    pending: Option<T>,
+    since_ms: u64,
+}
+
+impl<T: PartialEq> Settle<T> {
+    /// `changed_to`: the new value, or None when nothing is changing.
+    /// True once the same value has held for `DEVICE_SETTLE_MS`.
+    fn observe(&mut self, changed_to: Option<T>, now_ms: u64) -> bool {
+        match changed_to {
+            None => {
+                self.pending = None;
+                false
+            }
+            Some(v) if self.pending.as_ref() == Some(&v) => {
+                now_ms.saturating_sub(self.since_ms) >= DEVICE_SETTLE_MS
+            }
+            Some(v) => {
+                self.pending = Some(v);
+                self.since_ms = now_ms;
+                false
+            }
+        }
+    }
+
+    fn is_pending(&self) -> bool {
+        self.pending.is_some()
+    }
+}
+
+/// A live mic delivers noise even in a silent room; seconds of nothing but
+/// exact zeros mean the device has stopped handing us audio while the
+/// stream stays open. Seen 2026-11-02: a Bluetooth headset's hands-free mic
+/// went to zeros for 100 s when Teams moved its own microphone elsewhere,
+/// and no cpal error, default change or rate change ever fired.
+const MIC_SILENCE_MS: u64 = 4_000;
+const SILENCE_FIRST_RETRY_MS: u64 = 5_000;
+const SILENCE_MAX_RETRY_MS: u64 = 60_000;
+
+/// `mono_ms()` of the last mic callback, and of the last one carrying at
+/// least one non-zero sample (raw, before gain).
+static MIC_LAST_CALLBACK_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static MIC_LAST_SIGNAL_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// The current run of zeros has already woken the audio thread once.
+static MIC_SILENCE_REPORTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+fn mono_ms() -> u64 {
+    static T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    T0.get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_millis() as u64
+}
+
+/// Runs on the cpal callback thread: two atomic stores, and at most one
+/// channel send per run of zeros (the moment it crosses `MIC_SILENCE_MS`).
+fn note_mic_callback(has_signal: bool, wake: &crate::device_events::Wake) {
+    let now = mono_ms();
+    MIC_LAST_CALLBACK_MS.store(now, Ordering::Relaxed);
+    if has_signal {
+        MIC_LAST_SIGNAL_MS.store(now, Ordering::Relaxed);
+        MIC_SILENCE_REPORTED.store(false, Ordering::Relaxed);
+    } else if now.saturating_sub(MIC_LAST_SIGNAL_MS.load(Ordering::Relaxed)) >= MIC_SILENCE_MS
+        && !MIC_SILENCE_REPORTED.swap(true, Ordering::Relaxed)
+    {
+        wake();
+    }
+}
+
+/// Callbacks are still arriving, but none has carried a sample other than
+/// zero for `MIC_SILENCE_MS`. A stream that stopped calling back entirely
+/// is not "silent": that is stream death, a different path.
+fn mic_digitally_silent(now_ms: u64, last_signal_ms: u64, last_callback_ms: u64) -> bool {
+    now_ms.saturating_sub(last_callback_ms) < 1_500
+        && now_ms.saturating_sub(last_signal_ms) >= MIC_SILENCE_MS
+}
+
+#[derive(Debug, PartialEq)]
+enum MicMove {
+    Stay,
+    /// Rebuild the stream on the device it is already on.
+    Reopen,
+    /// Follow the call onto this device ("follow mode").
+    To(String),
+    /// Back to (or along with) the system default input.
+    ToDefault(String),
+}
+
+struct MicFacts<'a> {
+    /// The user picked a device by name in Settings.
+    pinned: bool,
+    /// The device the mic stream is on (None when pinned).
+    bound: Option<&'a str>,
+    current_default: Option<&'a str>,
+    /// Some in follow mode: the system default when we started following.
+    default_when_followed: Option<&'a str>,
+    /// Devices other apps capture from (read only when it can matter).
+    others: &'a [String],
+    /// Digitally silent past the threshold, and not in reopen backoff.
+    silent: bool,
+}
+
+/// Where the meeting's mic should be.
+///
+/// Normally it follows the system default. Moving it anywhere else needs a
+/// reason, because apps that legitimately hold another microphone are
+/// common (NVIDIA Broadcast and Krisp capture the physical mic to produce
+/// a virtual one): the reason is that OUR mic delivers nothing but zeros,
+/// nobody else captures from it any more, and exactly one other device is
+/// being captured — the call app moved there. From then on we follow that
+/// app until it moves again or lets go, or the user picks a new default.
+/// A pinned device is never left: at most it is reopened.
+fn mic_decision(f: &MicFacts) -> MicMove {
+    let reopen_if_silent = || {
+        if f.silent {
+            MicMove::Reopen
+        } else {
+            MicMove::Stay
+        }
+    };
+    if f.pinned {
+        return reopen_if_silent();
+    }
+    let Some(bound) = f.bound else {
+        return MicMove::Stay;
+    };
+    let others_on_ours = f.others.iter().any(|d| d == bound);
+    let lone_other = match f.others {
+        [only] if only != bound => Some(only.as_str()),
+        _ => None,
+    };
+    let to = |name: &str| {
+        if Some(name) == f.current_default {
+            MicMove::ToDefault(name.to_string())
+        } else {
+            MicMove::To(name.to_string())
+        }
+    };
+    if let Some(followed_from) = f.default_when_followed {
+        if let Some(current) = f.current_default {
+            if current != followed_from {
+                return MicMove::ToDefault(current.to_string());
+            }
+        }
+        if others_on_ours {
+            return reopen_if_silent();
+        }
+        if let Some(other) = lone_other {
+            return to(other);
+        }
+        if f.others.is_empty() {
+            if let Some(current) = f.current_default {
+                return MicMove::ToDefault(current.to_string());
+            }
+        }
+        return reopen_if_silent();
+    }
+    if let Some(current) = f.current_default {
+        if current != bound {
+            return MicMove::ToDefault(current.to_string());
+        }
+    }
+    if f.silent && !others_on_ours {
+        if let Some(other) = lone_other {
+            return to(other);
+        }
+    }
+    reopen_if_silent()
+}
+
+enum Next<T> {
+    Command(T),
+    Heartbeat,
+    Disconnected,
+}
+
+/// What the audio thread does next. The heartbeat is due every `period`
+/// whatever arrives on the channel: it used to run only when a full period
+/// passed with NO command, and a host pushing loopback audio (the macOS
+/// tap, dozens of times a second) kept that from ever happening — so on a
+/// Mac no meeting followed a new default mic or noticed a rate flip.
+fn next_command<T>(
+    rx: &mpsc::Receiver<T>,
+    last_heartbeat: &mut std::time::Instant,
+    period: std::time::Duration,
+) -> Next<T> {
+    let since = last_heartbeat.elapsed();
+    if since >= period {
+        *last_heartbeat = std::time::Instant::now();
+        return Next::Heartbeat;
+    }
+    match rx.recv_timeout(period - since) {
+        Ok(c) => Next::Command(c),
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            *last_heartbeat = std::time::Instant::now();
+            Next::Heartbeat
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => Next::Disconnected,
+    }
+}
+
 // ── Device-resolution helpers used by spawn_audio_thread ─────────────
 
 fn find_input_device(host: &cpal::Host, name: &str) -> Option<cpal::Device> {
@@ -1390,13 +1748,54 @@ fn probe_input_native_rate(host: &cpal::Host, name: Option<&str>) -> Option<u32>
         .map(|c| c.sample_rate().0)
 }
 
-/// Resolve the loopback (system audio) device. On Windows, cpal's
-/// default OUTPUT device exposes WASAPI loopback when treated as an
-/// INPUT — `device.build_input_stream()` on it captures whatever's
-/// playing through the speakers. On macOS / Linux this returns None
-/// for now; proper implementation tracked separately.
 #[cfg(target_os = "windows")]
-fn resolve_loopback_device(host: &cpal::Host) -> Option<cpal::Device> {
+use crate::capture_sessions::{call_devices, CallDevices};
+
+#[cfg(not(target_os = "windows"))]
+#[derive(Default)]
+struct CallDevices {
+    inputs: Vec<String>,
+    outputs: Vec<String>,
+}
+
+#[cfg(not(target_os = "windows"))]
+fn call_devices() -> CallDevices {
+    CallDevices::default()
+}
+
+/// The single entry of a device list, or None when it is empty or holds
+/// several (ambiguous: never a reason to move).
+fn lone(list: &[String]) -> Option<&str> {
+    match list {
+        [only] => Some(only.as_str()),
+        _ => None,
+    }
+}
+
+/// Resolve the loopback (system audio) device. On Windows, a cpal OUTPUT
+/// device exposes WASAPI loopback when treated as an INPUT —
+/// `device.build_input_stream()` on it captures whatever's playing there.
+/// `name`: the output the call plays to, when it is not the default.
+/// On macOS / Linux this returns None (system audio is pushed by the host).
+#[cfg(target_os = "windows")]
+fn resolve_loopback_device(host: &cpal::Host, name: Option<&str>) -> Option<cpal::Device> {
+    if let Some(name) = name {
+        let found = host
+            .output_devices()
+            .ok()
+            .and_then(|mut devs| devs.find(|d| d.name().ok().as_deref() == Some(name)));
+        if found.is_some() {
+            crate::log(&format!(
+                "[Audio] Loopback device (the call's output): {:?}",
+                name
+            ));
+            return found;
+        }
+        crate::log(&format!(
+            "[Audio] call output {:?} is gone — loopback on the default output",
+            name
+        ));
+    }
     let dev = host.default_output_device();
     if let Some(ref d) = dev {
         crate::log(&format!(
@@ -1410,7 +1809,7 @@ fn resolve_loopback_device(host: &cpal::Host) -> Option<cpal::Device> {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn resolve_loopback_device(_host: &cpal::Host) -> Option<cpal::Device> {
+fn resolve_loopback_device(_host: &cpal::Host, _name: Option<&str>) -> Option<cpal::Device> {
     crate::log("[Audio] Loopback not yet implemented on this platform");
     None
 }
@@ -1439,84 +1838,30 @@ fn current_default_input_name(host: &cpal::Host) -> Option<String> {
     host.default_input_device().and_then(|d| d.name().ok())
 }
 
-/// Decide whether the audio thread should restart streams to FOLLOW a system
-/// default-output change (the Windows loopback-follow path). Pure so it can be
-/// unit-tested without cpal.
+/// The output the loopback should move to, or None to stay. Pure so it can
+/// be unit-tested without cpal.
 ///
-/// The WASAPI loopback is bound to whatever was the default output when the
-/// meeting started. If the user unplugs/replugs an output device mid-meeting,
-/// Windows can flip the default to a DIFFERENT endpoint while the old loopback
-/// stream stays alive (no cpal error) capturing silence. We detect that here:
-/// when system audio is wanted and the live default output no longer matches
-/// the device the loopback is bound to, the caller rebinds via the normal
-/// device-change recovery. Only fires when BOTH names are known and differ, so
-/// a transient "no default output" tick can't thrash the streams.
-fn loopback_should_follow_default(
+/// The WASAPI loopback copies ONE output device. It must be the one the
+/// call plays to: the device the call app has an active playback session
+/// on (`call_output`, from `capture_sessions::call_devices`), which the
+/// user can change from the app's own menu without touching the Windows
+/// default (2026-11-02, Teams: the participants went silent). With no call,
+/// or a call on several outputs at once, it follows the system default,
+/// so an unplug/replug that flips the default is still followed. Only
+/// fires when the names are known and differ, so a transient "no default
+/// output" tick can't thrash the streams.
+fn loopback_target(
     source: AudioSource,
     bound_loopback_name: Option<&str>,
+    call_output: Option<&str>,
     current_default_output: Option<&str>,
-) -> bool {
+) -> Option<String> {
     if !matches!(source, AudioSource::System | AudioSource::Mix) {
-        return false;
+        return None;
     }
-    match (bound_loopback_name, current_default_output) {
-        (Some(bound), Some(current)) => bound != current,
-        _ => false,
-    }
-}
-
-/// True when the mic stream must be rebuilt because the system default
-/// input device changed (e.g. Jabra plugged/unplugged, AirPods connect,
-/// user picked a different input in Sound preferences). Mirrors
-/// `loopback_should_follow_default` for the mic side: only fires when
-/// the user explicitly asked for the default (`requested_device_name`
-/// is None) — when they pinned a specific device by name, cpal keeps
-/// using THAT device and we don't second-guess the choice.
-///
-/// `requested_device_name`: what the caller passed to `Start` (None
-/// means "default"). `bound_input_name`: which device cpal actually
-/// resolved to and bound the stream to. `current_default_input`:
-/// the live system default input as seen from cpal right now.
-/// Debounce a default-input change so a stream rebuild never lands
-/// mid-transition. Returns `true` (rebuild now) only once the SAME new
-/// default has been observed across 2 consecutive polls; the caller owns
-/// the persistent `pending`/`streak` state. Rebuilding on the transient
-/// flicker of an unplug/replug is what wedged the macOS 26 CoreAudio HAL
-/// lock and froze a meeting (Francesco, 2026-07-06); this keeps the audio
-/// thread out of that window.
-fn debounce_input_change(
-    raw_changed: bool,
-    current_default: Option<&str>,
-    pending: &mut Option<String>,
-    streak: &mut u32,
-) -> bool {
-    if raw_changed {
-        if pending.as_deref() == current_default {
-            *streak += 1;
-        } else {
-            *pending = current_default.map(str::to_string);
-            *streak = 1;
-        }
-        *streak >= 2
-    } else {
-        *pending = None;
-        *streak = 0;
-        false
-    }
-}
-
-fn input_should_follow_default(
-    requested_device_name: Option<&str>,
-    bound_input_name: Option<&str>,
-    current_default_input: Option<&str>,
-) -> bool {
-    if requested_device_name.is_some() {
-        return false;
-    }
-    match (bound_input_name, current_default_input) {
-        (Some(bound), Some(current)) => bound != current,
-        _ => false,
-    }
+    let bound = bound_loopback_name?;
+    let want = call_output.or(current_default_output)?;
+    (want != bound).then(|| want.to_string())
 }
 
 /// Pure decision: does a re-probed input rate warrant a stream rebuild?
@@ -1532,34 +1877,6 @@ fn rate_changed_requires_rebuild(built_rate: u32, probed: Option<u32>) -> bool {
     match probed {
         Some(r) if (8_000..=192_000).contains(&r) => r != built_rate,
         _ => false,
-    }
-}
-
-/// Debounce a bound-input RATE change so a stream rebuild never lands
-/// mid-transition — the rate-side mirror of `debounce_input_change`.
-/// Returns `true` (rebuild now) only once the SAME new rate has been
-/// observed across 2 consecutive polls; the caller owns the persistent
-/// `pending`/`streak` state. Same rationale as the name-side debounce: a
-/// rebuild issued during the flicker of a BT renegotiation wedged the
-/// macOS 26 CoreAudio HAL lock (Francesco, 2026-07-06).
-fn debounce_rate_change(
-    raw_changed: bool,
-    current_rate: Option<u32>,
-    pending: &mut Option<u32>,
-    streak: &mut u32,
-) -> bool {
-    if raw_changed {
-        if *pending == current_rate {
-            *streak += 1;
-        } else {
-            *pending = current_rate;
-            *streak = 1;
-        }
-        *streak >= 2
-    } else {
-        *pending = None;
-        *streak = 0;
-        false
     }
 }
 
@@ -1650,6 +1967,20 @@ fn reconcile_loopback_rate(claimed: u32, raw_samples: u64, elapsed_secs: f64) ->
     } else {
         None
     }
+}
+
+fn report_loopback_rate_mismatch(claimed: u32, measured: u32, raw_samples: u64, elapsed_secs: f64) {
+    crate::log(&format!(
+        "[Audio/loopback] WARN claimed {} Hz but MEASURED ~{:.0} Hz over {:.1}s ({} samples) — host mis-reporting the loopback rate; system audio may be time-distorted (host-side rate pin failed?)",
+        claimed,
+        raw_samples as f64 / elapsed_secs.max(1e-6),
+        elapsed_secs,
+        raw_samples,
+    ));
+    crate::telemetry::track(crate::telemetry::Event::LoopbackRateMismatch {
+        claimed: std_rate_label(claimed),
+        measured: std_rate_label(measured),
+    });
 }
 
 /// Categorical label for a standard rate — privacy-safe telemetry value
@@ -2362,63 +2693,215 @@ mod tests {
 
     use super::*;
 
+    // ── Heartbeat under a busy channel ───────────────────────────────
+    #[test]
+    fn heartbeat_fires_while_commands_keep_arriving() {
+        // The macOS tap pushes loopback audio every ~10 ms. Before the fix
+        // recv_timeout never timed out under that load, so the heartbeat
+        // (default-follow, rate check) never ran during a Mac meeting.
+        let (tx, rx) = mpsc::channel::<u32>();
+        let pusher = std::thread::spawn(move || {
+            for i in 0..400 {
+                if tx.send(i).is_err() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        });
+        let started = std::time::Instant::now();
+        let mut last = std::time::Instant::now();
+        let mut heartbeats = 0;
+        while started.elapsed() < std::time::Duration::from_millis(3_200) {
+            match next_command(&rx, &mut last, HEARTBEAT_SETTLING) {
+                Next::Heartbeat => heartbeats += 1,
+                Next::Command(_) => {}
+                Next::Disconnected => break,
+            }
+        }
+        drop(rx);
+        let _ = pusher.join();
+        assert!(heartbeats >= 3, "expected ~1 heartbeat/s, got {heartbeats}");
+    }
+
+    #[test]
+    fn heartbeat_fires_on_an_idle_channel() {
+        let (_tx, rx) = mpsc::channel::<u32>();
+        let mut last = std::time::Instant::now();
+        assert!(matches!(
+            next_command(&rx, &mut last, HEARTBEAT_SETTLING),
+            Next::Heartbeat
+        ));
+    }
+
+    // ── Mic digital silence + following the call (2026-11-02) ────────
+    #[test]
+    fn digital_silence_needs_live_callbacks_and_four_seconds_of_zeros() {
+        // Zeros for 100 s with callbacks still flowing: the incident.
+        assert!(mic_digitally_silent(166_000, 66_000, 165_990));
+        // Just under the threshold.
+        assert!(!mic_digitally_silent(10_000, 6_500, 9_990));
+        // Real signal a moment ago.
+        assert!(!mic_digitally_silent(10_000, 9_900, 9_990));
+        // No callbacks at all is stream death, not silence.
+        assert!(!mic_digitally_silent(10_000, 1_000, 7_000));
+    }
+
+    const HFP: &str = "Cuffia auricolare (HD 350BT)";
+    const LAPTOP: &str = "Gruppo microfoni (Realtek(R) Audio)";
+    const USB: &str = "Microfono (USB)";
+
+    fn facts<'a>(others: &'a [String], silent: bool) -> MicFacts<'a> {
+        MicFacts {
+            pinned: false,
+            bound: Some(HFP),
+            current_default: Some(HFP),
+            default_when_followed: None,
+            others,
+            silent,
+        }
+    }
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn incident_mic_follows_teams_when_the_headset_goes_to_zeros() {
+        let others = names(&[LAPTOP]);
+        assert_eq!(
+            mic_decision(&facts(&others, true)),
+            MicMove::To(LAPTOP.into())
+        );
+    }
+
+    #[test]
+    fn silent_mic_with_nobody_else_capturing_is_reopened() {
+        assert_eq!(mic_decision(&facts(&[], true)), MicMove::Reopen);
+    }
+
+    #[test]
+    fn silent_mic_that_the_call_still_uses_is_reopened_not_left() {
+        let others = names(&[HFP, LAPTOP]);
+        assert_eq!(mic_decision(&facts(&others, true)), MicMove::Reopen);
+    }
+
+    #[test]
+    fn ambiguous_other_devices_are_not_followed() {
+        let others = names(&[LAPTOP, USB]);
+        assert_eq!(mic_decision(&facts(&others, true)), MicMove::Reopen);
+    }
+
+    #[test]
+    fn a_working_mic_is_never_left_for_another_apps_device() {
+        // NVIDIA Broadcast / Krisp capture the physical mic all the time.
+        let others = names(&[LAPTOP]);
+        assert_eq!(mic_decision(&facts(&others, false)), MicMove::Stay);
+    }
+
+    #[test]
+    fn default_change_is_still_followed() {
+        let f = MicFacts {
+            current_default: Some(USB),
+            ..facts(&[], false)
+        };
+        assert_eq!(mic_decision(&f), MicMove::ToDefault(USB.into()));
+    }
+
+    #[test]
+    fn pinned_device_is_only_ever_reopened() {
+        let others = names(&[LAPTOP]);
+        let pinned = |silent| MicFacts {
+            pinned: true,
+            bound: None,
+            current_default: Some(USB),
+            ..facts(&others, silent)
+        };
+        assert_eq!(mic_decision(&pinned(true)), MicMove::Reopen);
+        assert_eq!(mic_decision(&pinned(false)), MicMove::Stay);
+    }
+
+    fn following<'a>(others: &'a [String], current_default: &'a str) -> MicFacts<'a> {
+        MicFacts {
+            pinned: false,
+            bound: Some(LAPTOP),
+            current_default: Some(current_default),
+            default_when_followed: Some(HFP),
+            others,
+            silent: false,
+        }
+    }
+
+    #[test]
+    fn follow_mode_returns_to_the_default_when_the_call_does() {
+        let others = names(&[HFP]);
+        assert_eq!(
+            mic_decision(&following(&others, HFP)),
+            MicMove::ToDefault(HFP.into())
+        );
+    }
+
+    #[test]
+    fn follow_mode_follows_the_call_to_a_third_device() {
+        let others = names(&[USB]);
+        assert_eq!(
+            mic_decision(&following(&others, HFP)),
+            MicMove::To(USB.into())
+        );
+    }
+
+    #[test]
+    fn follow_mode_stays_while_the_call_is_on_our_device() {
+        let others = names(&[LAPTOP]);
+        assert_eq!(mic_decision(&following(&others, HFP)), MicMove::Stay);
+    }
+
+    #[test]
+    fn follow_mode_ends_when_the_call_lets_go() {
+        assert_eq!(
+            mic_decision(&following(&[], HFP)),
+            MicMove::ToDefault(HFP.into())
+        );
+    }
+
+    #[test]
+    fn follow_mode_yields_to_a_new_default_the_user_picked() {
+        let others = names(&[LAPTOP]);
+        assert_eq!(
+            mic_decision(&following(&others, USB)),
+            MicMove::ToDefault(USB.into())
+        );
+    }
+
     // ── Device-change debounce (Tahoe HAL-wedge avoidance) ───────────
     #[test]
-    fn debounce_fires_only_after_two_consecutive_stable_polls() {
-        let mut pending = None;
-        let mut streak = 0;
-        assert!(!debounce_input_change(
-            true,
-            Some("Mic"),
-            &mut pending,
-            &mut streak
-        ));
-        assert!(debounce_input_change(
-            true,
-            Some("Mic"),
-            &mut pending,
-            &mut streak
-        ));
+    fn settle_fires_only_once_the_value_has_held() {
+        let mut settle = Settle::default();
+        assert!(!settle.observe(Some("Mic"), 10_000));
+        // Two events a few ms apart are not "stable": this is what the
+        // poll-count debounce would have let through with event wake-ups.
+        assert!(!settle.observe(Some("Mic"), 10_005));
+        assert!(settle.observe(Some("Mic"), 10_000 + DEVICE_SETTLE_MS));
     }
 
     #[test]
-    fn debounce_resets_when_the_new_default_keeps_flapping() {
-        let mut pending = None;
-        let mut streak = 0;
-        assert!(!debounce_input_change(
-            true,
-            Some("Mic"),
-            &mut pending,
-            &mut streak
-        ));
-        // A different device on the next poll (unplug flicker) must reset,
-        // never fire — this is the exact case that wedged the HAL.
-        assert!(!debounce_input_change(
-            true,
-            Some("Jabra"),
-            &mut pending,
-            &mut streak
-        ));
-        assert!(!debounce_input_change(
-            true,
-            Some("Mic"),
-            &mut pending,
-            &mut streak
-        ));
+    fn settle_restarts_when_the_value_keeps_flapping() {
+        let mut settle = Settle::default();
+        assert!(!settle.observe(Some("Mic"), 0));
+        // A different device mid-transition (unplug flicker) restarts the
+        // clock, never fires — the exact case that wedged the HAL.
+        assert!(!settle.observe(Some("Jabra"), 1_000));
+        assert!(!settle.observe(Some("Mic"), 2_000));
+        assert!(!settle.observe(Some("Mic"), 2_000 + DEVICE_SETTLE_MS - 1));
     }
 
     #[test]
-    fn debounce_clears_state_when_the_change_stops() {
-        let mut pending = Some("Mic".to_string());
-        let mut streak = 1;
-        assert!(!debounce_input_change(
-            false,
-            None,
-            &mut pending,
-            &mut streak
-        ));
-        assert_eq!(streak, 0);
-        assert!(pending.is_none());
+    fn settle_clears_when_the_change_stops() {
+        let mut settle = Settle::default();
+        settle.observe(Some(16_000u32), 0);
+        assert!(settle.is_pending());
+        assert!(!settle.observe(None, 5_000));
+        assert!(!settle.is_pending());
+        assert!(!settle.observe(Some(16_000), 5_001));
     }
 
     #[test]
@@ -2441,64 +2924,6 @@ mod tests {
         assert!(!rate_changed_requires_rebuild(48_000, Some(0)));
         assert!(!rate_changed_requires_rebuild(48_000, Some(4_000)));
         assert!(!rate_changed_requires_rebuild(48_000, Some(384_000)));
-    }
-
-    #[test]
-    fn rate_debounce_fires_only_after_two_consecutive_stable_polls() {
-        let mut pending: Option<u32> = None;
-        let mut streak = 0;
-        // First observation of the new rate: arm, don't rebuild yet.
-        assert!(!debounce_rate_change(
-            true,
-            Some(16_000),
-            &mut pending,
-            &mut streak
-        ));
-        assert_eq!(streak, 1);
-        // Same new rate again: now stable → rebuild.
-        assert!(debounce_rate_change(
-            true,
-            Some(16_000),
-            &mut pending,
-            &mut streak
-        ));
-        assert_eq!(streak, 2);
-    }
-
-    #[test]
-    fn rate_debounce_resets_when_the_rate_keeps_flapping() {
-        let mut pending: Option<u32> = None;
-        let mut streak = 0;
-        assert!(!debounce_rate_change(
-            true,
-            Some(16_000),
-            &mut pending,
-            &mut streak
-        ));
-        // A DIFFERENT transient rate resets the streak — never rebuilds
-        // mid-flicker (the macOS 26 HAL-wedge guard).
-        assert!(!debounce_rate_change(
-            true,
-            Some(24_000),
-            &mut pending,
-            &mut streak
-        ));
-        assert_eq!(streak, 1);
-        assert_eq!(pending, Some(24_000));
-    }
-
-    #[test]
-    fn rate_debounce_clears_when_the_change_stops() {
-        let mut pending: Option<u32> = Some(16_000);
-        let mut streak = 1;
-        assert!(!debounce_rate_change(
-            false,
-            Some(48_000),
-            &mut pending,
-            &mut streak
-        ));
-        assert_eq!(streak, 0);
-        assert!(pending.is_none());
     }
 
     #[test]
@@ -2578,51 +3003,87 @@ mod tests {
 
     #[test]
     fn loopback_follows_default_when_output_changes_mid_meeting() {
-        // The exact failure from the field: meeting on "Cuffie (HD 350BT)",
-        // user unplugs/replugs, Windows flips the default to the Realtek
-        // speakers, the loopback stays on the headphones (or vice-versa) and
-        // records silence. With Mix/System we must rebind.
-        assert!(loopback_should_follow_default(
-            AudioSource::Mix,
-            Some("Cuffie (HD 350BT)"),
-            Some("Altoparlanti (2- Realtek(R) Audio)"),
-        ));
-        assert!(loopback_should_follow_default(
-            AudioSource::System,
-            Some("Altoparlanti (2- Realtek(R) Audio)"),
-            Some("Cuffie (HD 350BT)"),
-        ));
+        // The field failure: meeting on "Cuffie (HD 350BT)", user
+        // unplugs/replugs, Windows flips the default to the Realtek
+        // speakers, the loopback stays on the headphones and records silence.
+        assert_eq!(
+            loopback_target(
+                AudioSource::Mix,
+                Some("Cuffie (HD 350BT)"),
+                None,
+                Some("Altoparlanti (Realtek(R) Audio)"),
+            ),
+            Some("Altoparlanti (Realtek(R) Audio)".into())
+        );
+    }
+
+    #[test]
+    fn loopback_follows_the_speaker_the_call_moved_to() {
+        // 2026-11-02: Teams' own menu moved its speaker to the laptop; the
+        // Windows default stayed on the headphones.
+        assert_eq!(
+            loopback_target(
+                AudioSource::Mix,
+                Some("Cuffie (HD 350BT)"),
+                Some("Altoparlanti (Realtek(R) Audio)"),
+                Some("Cuffie (HD 350BT)"),
+            ),
+            Some("Altoparlanti (Realtek(R) Audio)".into())
+        );
+        // ...and stays there although the default differs.
+        assert_eq!(
+            loopback_target(
+                AudioSource::Mix,
+                Some("Altoparlanti (Realtek(R) Audio)"),
+                Some("Altoparlanti (Realtek(R) Audio)"),
+                Some("Cuffie (HD 350BT)"),
+            ),
+            None
+        );
     }
 
     #[test]
     fn loopback_does_not_follow_when_default_unchanged() {
-        assert!(!loopback_should_follow_default(
-            AudioSource::Mix,
-            Some("Cuffie (HD 350BT)"),
-            Some("Cuffie (HD 350BT)"),
-        ));
+        assert_eq!(
+            loopback_target(
+                AudioSource::Mix,
+                Some("Cuffie (HD 350BT)"),
+                None,
+                Some("Cuffie (HD 350BT)"),
+            ),
+            None
+        );
     }
 
     #[test]
     fn loopback_follow_is_noop_for_mic_only_or_unknown_names() {
         // Mic-only never has a loopback to follow.
-        assert!(!loopback_should_follow_default(
-            AudioSource::Mic,
-            Some("Cuffie (HD 350BT)"),
-            Some("Altoparlanti (2- Realtek(R) Audio)"),
-        ));
-        // A transient "no default output" tick (None) must not thrash streams.
-        assert!(!loopback_should_follow_default(
-            AudioSource::Mix,
-            Some("Cuffie (HD 350BT)"),
-            None,
-        ));
+        assert_eq!(
+            loopback_target(
+                AudioSource::Mic,
+                Some("Cuffie (HD 350BT)"),
+                Some("Altoparlanti (Realtek(R) Audio)"),
+                Some("Altoparlanti (Realtek(R) Audio)"),
+            ),
+            None
+        );
+        // A transient "no default output" tick must not thrash streams.
+        assert_eq!(
+            loopback_target(AudioSource::Mix, Some("Cuffie (HD 350BT)"), None, None),
+            None
+        );
         // No loopback bound yet → nothing to follow.
-        assert!(!loopback_should_follow_default(
-            AudioSource::Mix,
-            None,
-            Some("Cuffie (HD 350BT)"),
-        ));
+        assert_eq!(
+            loopback_target(AudioSource::Mix, None, None, Some("Cuffie (HD 350BT)")),
+            None
+        );
+    }
+
+    #[test]
+    fn several_call_outputs_are_ambiguous() {
+        assert_eq!(lone(&["A".to_string(), "B".to_string()]), None);
+        assert_eq!(lone(&[]), None);
+        assert_eq!(lone(&["A".to_string()]), Some("A"));
     }
 
     #[test]
