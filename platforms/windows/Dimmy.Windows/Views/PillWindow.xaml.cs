@@ -64,7 +64,9 @@ public sealed partial class PillWindow : Window
     private const double CapsuleHeight = 36;
 
     private const int WindowWidth = 240;
-    private const int WindowHeight = 56;
+    // The pill sits at the bottom; the space above it holds the hover tip,
+    // so the tip never covers the pill.
+    private const int WindowHeight = 88;
 
     public PillWindow(AppViewModel vm)
     {
@@ -219,9 +221,7 @@ public sealed partial class PillWindow : Window
     private string StyleTip()
     {
         if (_vm.LlmStyle == "off") return "LLM off";
-        var name = char.ToUpperInvariant(_vm.LlmStyle[0]) + _vm.LlmStyle[1..];
-        var llm = CurrentLlmLabel();
-        return string.IsNullOrEmpty(llm) ? name : $"{name} · {llm}";
+        return char.ToUpperInvariant(_vm.LlmStyle[0]) + _vm.LlmStyle[1..];
     }
 
     private string TranslateTip()
@@ -1164,13 +1164,32 @@ public sealed partial class PillWindow : Window
     }
 
     private void LanguageLabel_PointerEntered(object sender, PointerRoutedEventArgs e)
-        => ShowHoverTip(TranslateTip());
+    {
+        HighlightItem(sender, true);
+        ShowHoverTip(TranslateTip());
+    }
 
     private void StyleIcon_PointerEntered(object sender, PointerRoutedEventArgs e)
-        => ShowHoverTip(StyleTip());
+    {
+        HighlightItem(sender, true);
+        ShowHoverTip(StyleTip());
+    }
 
     private void HoverTip_PointerExited(object sender, PointerRoutedEventArgs e)
-        => ScrollTooltip.Visibility = Visibility.Collapsed;
+    {
+        HighlightItem(sender, false);
+        ScrollTooltip.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>The round highlight behind the item under the pointer.</summary>
+    private void HighlightItem(object sender, bool on)
+    {
+        var tint = IsGlass
+            ? global::Windows.UI.Color.FromArgb(26, 0, 0, 0)
+            : global::Windows.UI.Color.FromArgb(26, 255, 255, 255);
+        ((Border)sender).Background = new SolidColorBrush(
+            on ? tint : global::Windows.UI.Color.FromArgb(0, 0, 0, 0));
+    }
 
     private void StyleDot_PointerWheelChanged(object sender, PointerRoutedEventArgs e)
     {
