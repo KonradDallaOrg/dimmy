@@ -759,7 +759,7 @@ public sealed partial class PillWindow : Window
 
             case AppState.Recording:
                 RootGrid.Opacity = 1.0;
-                SetPillBodyColor(IsGlass ? BgGlassActive : BgDark);
+                SetPillBodyColor(BgDark);
                 StartAmplitudePolling();
                 _recordingStartTime = DateTime.Now;
                 StartRecordingTimer();

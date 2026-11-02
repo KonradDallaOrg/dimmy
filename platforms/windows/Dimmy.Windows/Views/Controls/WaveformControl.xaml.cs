@@ -75,7 +75,8 @@ public sealed partial class WaveformControl : UserControl
     // together and centred on both axes, a short thicker line, pure white.
     private bool _compact;
     private double _lineStep = 5.0;
-    private static readonly double[] CompactBarWeights = [0, 0, 0.5, 1.0, 0.5, 0, 0];
+    private static readonly double[] CompactBarWeights = [0, 0, 0.25, 1.0, 0.25, 0, 0];
+    private static readonly double[] CompactDotWeights = [0, 0.4, 1.0, 0.4, 0];
     private static readonly SolidColorBrush White = new(Colors.White);
     private static readonly SolidColorBrush SoftWhite = new(global::Windows.UI.Color.FromArgb(230, 255, 255, 255));
 
@@ -89,6 +90,12 @@ public sealed partial class WaveformControl : UserControl
             _bars[i].Background = compact ? White : SoftWhite;
         }
         BarsPanel.Spacing = compact ? 2 : 4;
+        for (int i = 0; i < _dots.Length; i++)
+        {
+            _dots[i].Visibility = compact && (i == 0 || i == 4) ? Visibility.Collapsed : Visibility.Visible;
+            _dots[i].Fill = compact ? White : SoftWhite;
+        }
+        DotsPanel.Spacing = compact ? 2 : 4;
         if (compact)
             foreach (var b in _bars) b.VerticalAlignment = VerticalAlignment.Center;
         else
@@ -103,11 +110,11 @@ public sealed partial class WaveformControl : UserControl
                 _polyline.Points[i] = new global::Windows.Foundation.Point(i * _lineStep, _linePoints[i]);
         }
 
-        // Bars: 3 x 3 px + 2 x 2 px. Line: 8 steps of 2.5 px. Dots keep their size.
+        // Bars: 3 x 3 px + 2 x 2 px. Line: 8 steps of 2.5 px. Dots: 3 x 10 px max + gaps.
         var width = !compact ? 40 : (StyleMode ?? "Bars") switch
         {
             "Line" => 20,
-            "Dots" => 40,
+            "Dots" => 26,
             "Bars Round" => 16,
             _ => 13,
         };
@@ -272,7 +279,8 @@ public sealed partial class WaveformControl : UserControl
         for (int i = 0; i < _dots.Length; i++)
         {
             double jitter = 0.7 + _rng.NextDouble() * 0.6;
-            double target = DotMinSize + (amp * _dotWeights[i] * jitter * (DotMaxSize - DotMinSize));
+            var weight = _compact ? CompactDotWeights[i] : _dotWeights[i];
+            double target = DotMinSize + (amp * weight * jitter * (DotMaxSize - DotMinSize));
             target = Math.Clamp(target, DotMinSize, DotMaxSize);
             _dotSizes[i] += (target - _dotSizes[i]) * 0.35;
             _dots[i].Width = _dotSizes[i];
