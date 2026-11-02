@@ -813,7 +813,7 @@ public sealed partial class PillWindow : Window
                     ? ParseColor(_vm.LlmStyleColor)
                     : ColorCompleting;
                 AnimateToCircle(completingColor, newPanel, oldPanel);
-                UpdateGlow(completingColor);
+                UpdateGlow(completingColor, subtle: true);
                 if (_completingTimer is null)
                     _completingTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1200) };
                 if (!_completingHandlerAttached)

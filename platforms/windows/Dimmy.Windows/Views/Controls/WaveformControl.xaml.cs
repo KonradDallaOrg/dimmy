@@ -285,9 +285,8 @@ public sealed partial class WaveformControl : UserControl
         for (int i = 0; i < 9; i++)
         {
             double jitter = 0.6 + _rng.NextDouble() * 0.8;
-            double maxDeflection = _compact ? 5.0 : 7.0; // max pixels from center
-            double sign = _compact ? (i % 2 == 0 ? 1 : -1) : (_rng.NextDouble() > 0.5 ? 1 : -1);
-            double target = 9.0 + (amp * weights[i] * jitter * maxDeflection * sign);
+            double maxDeflection = 7.0; // max pixels from center
+            double target = 9.0 + (amp * weights[i] * jitter * maxDeflection * (_rng.NextDouble() > 0.5 ? 1 : -1));
             target = Math.Clamp(target, 1.0, 17.0);
             _linePoints[i] += (target - _linePoints[i]) * 0.35;
             _polyline.Points[i] = new global::Windows.Foundation.Point(i * _lineStep, _linePoints[i]);
