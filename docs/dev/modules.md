@@ -265,31 +265,6 @@ Full reference: [`audio-pipeline.md`](audio-pipeline.md). Headline:
   publishes a `tract`-feature build, or we swap to `deepfilter-rt`
   riding the existing `ort` runtime. See `Cargo.toml` comment.
 
-## `process_loopback.rs` — system audio through process loopback (Win-only)
-
-- Why: endpoint loopback copies ONE output device, the default one at
-  meeting start. A call app can move its speaker elsewhere from its own
-  menu without touching the Windows default, and the meeting then records
-  silence for the participants (2026-11-02, Teams). Process loopback
-  captures what PROCESSES play, before routing to any device.
-- Mode: `PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE` on Dimmy's
-  own PID = every app except Dimmy, on any output. Measured: a tone on a
-  speaker that was not the default output arrived at its exact amplitude.
-- Format is ours: float stereo at `MEETING_CANONICAL_RATE` with
-  `AUTOCONVERTPCM`, so the output device's rate (16 kHz hands-free,
-  44.1 kHz, 48 kHz) never reaches the meeting. The stream is continuous
-  (silence arrives as silence), unlike endpoint loopback.
-- `start(sink)` runs the capture on its own MTA thread and hands mono
-  packets to `audio.rs::start_process_loopback`'s sink, which writes the
-  meeting system buffer + AEC reference exactly like the endpoint
-  callback. A failure mid-capture raises `AUDIO_STREAM_DEAD`; after three
-  deaths in one recording the rest uses endpoint loopback. Activation
-  failure (older Windows) falls back to endpoint loopback at Start.
-- Trap: windows-rs drops a `PROPVARIANT` with `PropVariantClear`, which
-  `CoTaskMemFree`s a `VT_BLOB` — the activation blob lives on the stack,
-  so the PROPVARIANT is held in `ManuallyDrop` (heap corruption
-  0xC0000374 otherwise; a release build hid it).
-
 ## `device_events.rs` — wake the audio thread on device events
 
 - Device follow (default in/out, device list, sample rate, which app holds
@@ -310,12 +285,24 @@ Full reference: [`audio-pipeline.md`](audio-pipeline.md). Headline:
 - The mic callback sends one `DevicesChanged` when a run of digital zeros
   crosses 4 s (no OS event exists for that).
 
-## `capture_sessions.rs` — which mics other apps capture from (Win-only)
+## `capture_sessions.rs` — who is on a call, on which devices (Win-only)
 
-- Friendly names (= cpal names) of active capture endpoints on which a
-  process other than Dimmy has an ACTIVE session. Read by
-  `audio.rs::mic_decision` only when our meeting mic has delivered digital
-  zeros for 4 s, or while already following a call.
+- "The call" = any process other than Dimmy with an ACTIVE capture
+  session (no app list). `call_devices()` returns the inputs those
+  processes capture from and the outputs they, or a relative in their
+  process tree (ToolHelp snapshot; shells like explorer/svchost excluded),
+  play to. Measured: a process holding the Realtek mic and playing to the
+  Realtek speakers came back as exactly that, and nothing once it hung up.
+- `audio.rs::loopback_target`: the endpoint loopback moves to the call's
+  output when it is a single device other than the bound one (Teams' own
+  speaker menu, 2026-11-02); otherwise it follows the system default.
+- `audio.rs::mic_decision` reads the inputs when our mic goes to digital
+  zeros.
+- Why not process loopback (`AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK`):
+  tried 2026-11-02 and REMOVED. It caught other apps' audio on any output,
+  but a live Teams call came through as digital zeros (also targeting the
+  Teams process tree), while endpoint loopback recorded it at the same
+  moment.
 
 ## `chunked_stt.rs` — realtime chunked Parakeet worker
 

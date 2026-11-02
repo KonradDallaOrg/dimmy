@@ -415,13 +415,12 @@ sha2 = { version = "0.10" }
 # CLI client.
 clap = { version = "4", features = ["derive"], optional = true }
 
-# Windows API bindings. process_loopback.rs: system audio through
-# AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK (activation PROPVARIANT, the
-# COM completion handler via windows-core's `implement`, an event handle).
-# audio.rs: IAudioSessionManager2 on capture endpoints + their friendly names,
-# so the mic can follow the device the call app captures from.
-# device_events.rs: IMMNotificationClient + the microphone privacy key
-# (registry change notification). Other platforms ignore.
+# Windows API bindings. capture_sessions.rs: IAudioSessionManager2 on
+# every endpoint + friendly names + a ToolHelp process snapshot, so the
+# meeting can follow the mic and speaker the call app uses.
+# device_events.rs: IMMNotificationClient (windows-core's `implement`) + the
+# microphone privacy key (registry change notification, event handles).
+# Other platforms ignore.
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-core = "0.62"
 windows = { version = "0.62", features = [
@@ -431,6 +430,7 @@ windows = { version = "0.62", features = [
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Variant",
     "Win32_System_Threading",
+    "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_Registry",
     "Win32_Media_Audio",
     "Win32_Media_KernelStreaming",

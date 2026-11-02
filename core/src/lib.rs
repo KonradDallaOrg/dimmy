@@ -84,8 +84,6 @@ pub mod parakeet;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub mod parakeet_fluid;
 pub mod preprocess;
-#[cfg(target_os = "windows")]
-pub mod process_loopback;
 pub mod provider;
 pub mod qwen_asr;
 pub mod qwen_fluid;

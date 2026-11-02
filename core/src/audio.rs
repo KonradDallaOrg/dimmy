@@ -183,21 +183,6 @@ fn notify_audio_stream_error(stream_role: &str, format: &str, err: &cpal::Stream
     crate::ffi::emit_event("audio.stream_error", &payload);
 }
 
-/// `notify_audio_stream_error` for a capture that is not a cpal stream
-/// (process loopback): same flag, so the heartbeat restarts the capture.
-#[cfg(target_os = "windows")]
-pub(crate) fn notify_capture_failed(stream_role: &str, err: &str) {
-    AUDIO_STREAM_DEAD.store(true, Ordering::Relaxed);
-    crate::log(&format!("[Audio] {} capture failed: {}", stream_role, err));
-    crate::ffi::emit_event(
-        "audio.stream_error",
-        &format!(
-            r#"{{"role":"{}","format":"F32","kind":"backend_specific"}}"#,
-            stream_role
-        ),
-    );
-}
-
 /// Sample rate (Hz) of the currently active cpal mic stream. Set to
 /// the device's native rate when the stream opens, reset to 0 when
 /// it closes. Read via `active_mic_sample_rate()` from inside the
@@ -514,14 +499,10 @@ pub fn spawn_audio_thread(
             // delivers zeros (muted endpoint) is not rebuilt every 4 s.
             let mut silence_backoff_ms: u64 = SILENCE_FIRST_RETRY_MS;
             let mut silence_retry_at_ms: u64 = 0;
-            // System audio through process loopback (Windows), and how often
-            // it died in this recording: after the third death the rest of
-            // the recording uses endpoint loopback instead of restarting a
-            // capture that keeps failing.
-            #[cfg(target_os = "windows")]
-            let mut process_capture: Option<crate::process_loopback::ProcessLoopback> = None;
-            #[cfg(target_os = "windows")]
-            let mut process_capture_deaths: u32 = 0;
+            // The output the loopback follows because the call plays there
+            // (None: the system default). Reset on every fresh Start and Stop.
+            let mut follow_output_name: Option<String> = None;
+            let mut output_settle: Settle<String> = Settle::default();
 
             // Loopback resampler state. The external push path delivers
             // samples at whatever rate the macOS tap / ScreenCaptureKit /
@@ -573,7 +554,10 @@ pub fn spawn_audio_thread(
             // doubles as the heartbeat for device-change auto-recovery.
             let mut last_heartbeat = std::time::Instant::now();
             loop {
-                let period = if input_settle.is_pending() || rate_settle.is_pending() {
+                let period = if input_settle.is_pending()
+                    || rate_settle.is_pending()
+                    || output_settle.is_pending()
+                {
                     HEARTBEAT_SETTLING
                 } else {
                     HEARTBEAT_IDLE
@@ -621,25 +605,44 @@ pub fn spawn_audio_thread(
                             }
                         }
                         let dead = AUDIO_STREAM_DEAD.load(Ordering::Relaxed);
-                        // Default-output-follow (Windows): cpal raises no error
-                        // when the default output merely CHANGES (the old device
-                        // is still alive, just no longer default), so the
-                        // dead-flag path can't catch a replug. Compare the live
-                        // default output to the device the loopback is bound to.
-                        let output_changed = if !dead {
-                            match last_start_params {
-                                Some((_, src)) if bound_loopback_name.is_some() => {
-                                    loopback_should_follow_default(
-                                        src,
-                                        bound_loopback_name.as_deref(),
-                                        current_default_output_name(&host).as_deref(),
-                                    )
-                                }
-                                _ => false,
-                            }
-                        } else {
-                            false
+                        // Who is on a call and on which devices: read once per
+                        // check, only during a meeting (Windows; empty elsewhere).
+                        let call = match last_start_params {
+                            Some((_, AudioSource::Mix)) if !dead => call_devices(),
+                            _ => CallDevices::default(),
                         };
+                        // Loopback follow (Windows): cpal raises no error when
+                        // the default output merely CHANGES, nor when the call
+                        // app moves its speaker from its own menu — the old
+                        // stream stays alive capturing silence. See
+                        // `loopback_target`.
+                        let output_target = if dead {
+                            None
+                        } else {
+                            match last_start_params {
+                                Some((_, src)) => loopback_target(
+                                    src,
+                                    bound_loopback_name.as_deref(),
+                                    lone(&call.outputs),
+                                    current_default_output_name(&host).as_deref(),
+                                ),
+                                None => None,
+                            }
+                        };
+                        let output_changed =
+                            output_settle.observe(output_target.clone(), mono_ms());
+                        if output_target.is_some() && !output_changed {
+                            crate::log(&format!(
+                                "[Audio] system audio should move to {:?} (call plays to {:?}) — waiting for it to settle",
+                                output_target, call.outputs
+                            ));
+                        }
+                        if output_changed {
+                            let target = output_target.clone().unwrap_or_default();
+                            follow_output_name = (current_default_output_name(&host).as_deref()
+                                != Some(target.as_str()))
+                            .then_some(target);
+                        }
                         // Where the mic should be (see `mic_decision`). Only
                         // queried while a recording is active: hitting WASAPI
                         // on every idle 1-Hz poll raced COM teardown at
@@ -666,20 +669,14 @@ pub fn spawn_audio_thread(
                                             last_signal,
                                             MIC_LAST_CALLBACK_MS.load(Ordering::Relaxed),
                                         );
-                                    let others = if meeting_mic
-                                        && (silent || default_when_followed.is_some())
-                                    {
-                                        devices_captured_by_others()
-                                    } else {
-                                        Vec::new()
-                                    };
+                                    let others = &call.inputs;
                                     let current_default = current_default_input_name(&host);
                                     let decision = mic_decision(&MicFacts {
                                         pinned: dn.is_some(),
                                         bound: bound_input_name.as_deref(),
                                         current_default: current_default.as_deref(),
                                         default_when_followed: default_when_followed.as_deref(),
-                                        others: &others,
+                                        others,
                                         silent,
                                     });
                                     if silent {
@@ -778,6 +775,8 @@ pub fn spawn_audio_thread(
                                     }
                                 } else if rate_changed {
                                     "input_rate_changed"
+                                } else if follow_output_name.is_some() {
+                                    "call_output_changed"
                                 } else {
                                     "default_output_changed"
                                 };
@@ -790,13 +789,6 @@ pub fn spawn_audio_thread(
                                     &format!(r#"{{"trigger":"{}"}}"#, trigger),
                                 );
                                 streams.clear();
-                                #[cfg(target_os = "windows")]
-                                {
-                                    if process_capture.as_ref().is_some_and(|c| c.failed()) {
-                                        process_capture_deaths += 1;
-                                    }
-                                    process_capture = None;
-                                }
                                 AUDIO_STREAM_DEAD.store(false, Ordering::Relaxed);
                                 is_recovery_start = true;
                                 AudioCommand::Start {
@@ -836,14 +828,8 @@ pub fn spawn_audio_thread(
                         // default input NOW.
                         drop(device_events.take());
                         device_events = Some(crate::device_events::watch(wake.clone()));
-                        #[cfg(target_os = "windows")]
-                        {
-                            process_capture = None;
-                            if !is_recovery_start {
-                                process_capture_deaths = 0;
-                            }
-                        }
                         if !is_recovery_start {
+                            follow_output_name = None;
                             follow_input_name = None;
                             default_when_followed = None;
                             silence_backoff_ms = SILENCE_FIRST_RETRY_MS;
@@ -860,7 +846,7 @@ pub fn spawn_audio_thread(
                         );
                         let system_device =
                             if matches!(source, AudioSource::System | AudioSource::Mix) {
-                                resolve_loopback_device(&host)
+                                resolve_loopback_device(&host, follow_output_name.as_deref())
                             } else {
                                 None
                             };
@@ -1252,26 +1238,7 @@ pub fn spawn_audio_thread(
                         // System-only (no Mix) was already handled above
                         // by treating the loopback as the PRIMARY device.
                         if matches!(source, AudioSource::Mix) {
-                            #[cfg(target_os = "windows")]
-                            let on_process_loopback = {
-                                if process_capture_deaths < PROCESS_LOOPBACK_MAX_DEATHS {
-                                    process_capture = start_process_loopback(
-                                        &buffer_secondary,
-                                        &aec_ref_ring,
-                                        &loopback_gain,
-                                    );
-                                } else {
-                                    crate::log("[Audio] process loopback failed repeatedly in this recording — staying on endpoint loopback");
-                                }
-                                process_capture.is_some()
-                            };
-                            #[cfg(not(target_os = "windows"))]
-                            let on_process_loopback = false;
-                            if on_process_loopback {
-                                // It hears every output device: nothing to
-                                // rebind when the default output changes.
-                                bound_loopback_name = None;
-                            } else if let Some(sysdev) = system_device {
+                            if let Some(sysdev) = system_device {
                                 if let Some(s) = build_secondary_stream(
                                     &sysdev,
                                     &buffer_secondary,
@@ -1300,10 +1267,8 @@ pub fn spawn_audio_thread(
                     AudioCommand::Stop => {
                         // Dropping the streams stops recording
                         streams.clear();
-                        #[cfg(target_os = "windows")]
-                        {
-                            process_capture = None;
-                        }
+                        follow_output_name = None;
+                        output_settle = Settle::default();
                         follow_input_name = None;
                         default_when_followed = None;
                         device_events = None;
@@ -1571,8 +1536,6 @@ impl<T: PartialEq> Settle<T> {
 const MIC_SILENCE_MS: u64 = 4_000;
 const SILENCE_FIRST_RETRY_MS: u64 = 5_000;
 const SILENCE_MAX_RETRY_MS: u64 = 60_000;
-#[cfg(target_os = "windows")]
-const PROCESS_LOOPBACK_MAX_DEATHS: u32 = 3;
 
 /// `mono_ms()` of the last mic callback, and of the last one carrying at
 /// least one non-zero sample (raw, before gain).
@@ -1705,62 +1668,6 @@ fn mic_decision(f: &MicFacts) -> MicMove {
     reopen_if_silent()
 }
 
-#[cfg(target_os = "windows")]
-fn devices_captured_by_others() -> Vec<String> {
-    crate::capture_sessions::devices_captured_by_others()
-}
-
-#[cfg(not(target_os = "windows"))]
-fn devices_captured_by_others() -> Vec<String> {
-    Vec::new()
-}
-
-/// System audio for a Windows meeting through process loopback, written
-/// exactly where the endpoint-loopback callback writes (meeting system
-/// buffer + AEC reference), with the same makeup gain and pause gate.
-/// None (logged) when Windows cannot provide it; the caller falls back.
-#[cfg(target_os = "windows")]
-fn start_process_loopback(
-    secondary: &Arc<Mutex<Vec<f32>>>,
-    aec_ref: &Arc<Mutex<Vec<f32>>>,
-    loopback_gain: &Arc<AtomicU32>,
-) -> Option<crate::process_loopback::ProcessLoopback> {
-    let (secondary, aec_ref, gain) = (secondary.clone(), aec_ref.clone(), loopback_gain.clone());
-    let sink = Box::new(move |mono: &mut Vec<f32>| {
-        let g = f32::from_bits(gain.load(Ordering::Relaxed));
-        let g = if g.is_finite() && (0.5..=4.0).contains(&g) {
-            g
-        } else {
-            1.0
-        };
-        for s in mono.iter_mut() {
-            *s = (*s * g).clamp(-1.0, 1.0);
-        }
-        if !meeting_capture_gated() {
-            if let Ok(mut b) = secondary.lock() {
-                b.extend_from_slice(mono);
-            }
-            crate::aec::push_to_ring(&aec_ref, mono);
-        }
-    });
-    match crate::process_loopback::start(sink) {
-        Ok(capture) => {
-            crate::log(&format!(
-                "[Audio] Mix mode: system audio via process loopback (every app except Dimmy, any output device, {} Hz)",
-                MEETING_CANONICAL_RATE
-            ));
-            Some(capture)
-        }
-        Err(e) => {
-            crate::log(&format!(
-                "[Audio] process loopback unavailable ({}) — using the default output's loopback",
-                e
-            ));
-            None
-        }
-    }
-}
-
 enum Next<T> {
     Command(T),
     Heartbeat,
@@ -1841,13 +1748,54 @@ fn probe_input_native_rate(host: &cpal::Host, name: Option<&str>) -> Option<u32>
         .map(|c| c.sample_rate().0)
 }
 
-/// Resolve the loopback (system audio) device. On Windows, cpal's
-/// default OUTPUT device exposes WASAPI loopback when treated as an
-/// INPUT — `device.build_input_stream()` on it captures whatever's
-/// playing through the speakers. On macOS / Linux this returns None
-/// for now; proper implementation tracked separately.
 #[cfg(target_os = "windows")]
-fn resolve_loopback_device(host: &cpal::Host) -> Option<cpal::Device> {
+use crate::capture_sessions::{call_devices, CallDevices};
+
+#[cfg(not(target_os = "windows"))]
+#[derive(Default)]
+struct CallDevices {
+    inputs: Vec<String>,
+    outputs: Vec<String>,
+}
+
+#[cfg(not(target_os = "windows"))]
+fn call_devices() -> CallDevices {
+    CallDevices::default()
+}
+
+/// The single entry of a device list, or None when it is empty or holds
+/// several (ambiguous: never a reason to move).
+fn lone(list: &[String]) -> Option<&str> {
+    match list {
+        [only] => Some(only.as_str()),
+        _ => None,
+    }
+}
+
+/// Resolve the loopback (system audio) device. On Windows, a cpal OUTPUT
+/// device exposes WASAPI loopback when treated as an INPUT —
+/// `device.build_input_stream()` on it captures whatever's playing there.
+/// `name`: the output the call plays to, when it is not the default.
+/// On macOS / Linux this returns None (system audio is pushed by the host).
+#[cfg(target_os = "windows")]
+fn resolve_loopback_device(host: &cpal::Host, name: Option<&str>) -> Option<cpal::Device> {
+    if let Some(name) = name {
+        let found = host
+            .output_devices()
+            .ok()
+            .and_then(|mut devs| devs.find(|d| d.name().ok().as_deref() == Some(name)));
+        if found.is_some() {
+            crate::log(&format!(
+                "[Audio] Loopback device (the call's output): {:?}",
+                name
+            ));
+            return found;
+        }
+        crate::log(&format!(
+            "[Audio] call output {:?} is gone — loopback on the default output",
+            name
+        ));
+    }
     let dev = host.default_output_device();
     if let Some(ref d) = dev {
         crate::log(&format!(
@@ -1861,7 +1809,7 @@ fn resolve_loopback_device(host: &cpal::Host) -> Option<cpal::Device> {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn resolve_loopback_device(_host: &cpal::Host) -> Option<cpal::Device> {
+fn resolve_loopback_device(_host: &cpal::Host, _name: Option<&str>) -> Option<cpal::Device> {
     crate::log("[Audio] Loopback not yet implemented on this platform");
     None
 }
@@ -1890,30 +1838,30 @@ fn current_default_input_name(host: &cpal::Host) -> Option<String> {
     host.default_input_device().and_then(|d| d.name().ok())
 }
 
-/// Decide whether the audio thread should restart streams to FOLLOW a system
-/// default-output change (the Windows loopback-follow path). Pure so it can be
-/// unit-tested without cpal.
+/// The output the loopback should move to, or None to stay. Pure so it can
+/// be unit-tested without cpal.
 ///
-/// The WASAPI loopback is bound to whatever was the default output when the
-/// meeting started. If the user unplugs/replugs an output device mid-meeting,
-/// Windows can flip the default to a DIFFERENT endpoint while the old loopback
-/// stream stays alive (no cpal error) capturing silence. We detect that here:
-/// when system audio is wanted and the live default output no longer matches
-/// the device the loopback is bound to, the caller rebinds via the normal
-/// device-change recovery. Only fires when BOTH names are known and differ, so
-/// a transient "no default output" tick can't thrash the streams.
-fn loopback_should_follow_default(
+/// The WASAPI loopback copies ONE output device. It must be the one the
+/// call plays to: the device the call app has an active playback session
+/// on (`call_output`, from `capture_sessions::call_devices`), which the
+/// user can change from the app's own menu without touching the Windows
+/// default (2026-11-02, Teams: the participants went silent). With no call,
+/// or a call on several outputs at once, it follows the system default,
+/// so an unplug/replug that flips the default is still followed. Only
+/// fires when the names are known and differ, so a transient "no default
+/// output" tick can't thrash the streams.
+fn loopback_target(
     source: AudioSource,
     bound_loopback_name: Option<&str>,
+    call_output: Option<&str>,
     current_default_output: Option<&str>,
-) -> bool {
+) -> Option<String> {
     if !matches!(source, AudioSource::System | AudioSource::Mix) {
-        return false;
+        return None;
     }
-    match (bound_loopback_name, current_default_output) {
-        (Some(bound), Some(current)) => bound != current,
-        _ => false,
-    }
+    let bound = bound_loopback_name?;
+    let want = call_output.or(current_default_output)?;
+    (want != bound).then(|| want.to_string())
 }
 
 /// Pure decision: does a re-probed input rate warrant a stream rebuild?
@@ -2003,11 +1951,7 @@ fn store_loopback_push(
 ///   - that standard rate must DIFFER from the claim by > 15 %,
 ///
 /// so a correctly-claimed rate is never second-guessed on measurement jitter.
-pub(crate) fn reconcile_loopback_rate(
-    claimed: u32,
-    raw_samples: u64,
-    elapsed_secs: f64,
-) -> Option<u32> {
+fn reconcile_loopback_rate(claimed: u32, raw_samples: u64, elapsed_secs: f64) -> Option<u32> {
     if elapsed_secs < 4.0 || raw_samples < 8_000 || claimed == 0 {
         return None;
     }
@@ -2025,12 +1969,7 @@ pub(crate) fn reconcile_loopback_rate(
     }
 }
 
-pub(crate) fn report_loopback_rate_mismatch(
-    claimed: u32,
-    measured: u32,
-    raw_samples: u64,
-    elapsed_secs: f64,
-) {
+fn report_loopback_rate_mismatch(claimed: u32, measured: u32, raw_samples: u64, elapsed_secs: f64) {
     crate::log(&format!(
         "[Audio/loopback] WARN claimed {} Hz but MEASURED ~{:.0} Hz over {:.1}s ({} samples) — host mis-reporting the loopback rate; system audio may be time-distorted (host-side rate pin failed?)",
         claimed,
@@ -3064,51 +3003,87 @@ mod tests {
 
     #[test]
     fn loopback_follows_default_when_output_changes_mid_meeting() {
-        // The exact failure from the field: meeting on "Cuffie (HD 350BT)",
-        // user unplugs/replugs, Windows flips the default to the Realtek
-        // speakers, the loopback stays on the headphones (or vice-versa) and
-        // records silence. With Mix/System we must rebind.
-        assert!(loopback_should_follow_default(
-            AudioSource::Mix,
-            Some("Cuffie (HD 350BT)"),
-            Some("Altoparlanti (2- Realtek(R) Audio)"),
-        ));
-        assert!(loopback_should_follow_default(
-            AudioSource::System,
-            Some("Altoparlanti (2- Realtek(R) Audio)"),
-            Some("Cuffie (HD 350BT)"),
-        ));
+        // The field failure: meeting on "Cuffie (HD 350BT)", user
+        // unplugs/replugs, Windows flips the default to the Realtek
+        // speakers, the loopback stays on the headphones and records silence.
+        assert_eq!(
+            loopback_target(
+                AudioSource::Mix,
+                Some("Cuffie (HD 350BT)"),
+                None,
+                Some("Altoparlanti (Realtek(R) Audio)"),
+            ),
+            Some("Altoparlanti (Realtek(R) Audio)".into())
+        );
+    }
+
+    #[test]
+    fn loopback_follows_the_speaker_the_call_moved_to() {
+        // 2026-11-02: Teams' own menu moved its speaker to the laptop; the
+        // Windows default stayed on the headphones.
+        assert_eq!(
+            loopback_target(
+                AudioSource::Mix,
+                Some("Cuffie (HD 350BT)"),
+                Some("Altoparlanti (Realtek(R) Audio)"),
+                Some("Cuffie (HD 350BT)"),
+            ),
+            Some("Altoparlanti (Realtek(R) Audio)".into())
+        );
+        // ...and stays there although the default differs.
+        assert_eq!(
+            loopback_target(
+                AudioSource::Mix,
+                Some("Altoparlanti (Realtek(R) Audio)"),
+                Some("Altoparlanti (Realtek(R) Audio)"),
+                Some("Cuffie (HD 350BT)"),
+            ),
+            None
+        );
     }
 
     #[test]
     fn loopback_does_not_follow_when_default_unchanged() {
-        assert!(!loopback_should_follow_default(
-            AudioSource::Mix,
-            Some("Cuffie (HD 350BT)"),
-            Some("Cuffie (HD 350BT)"),
-        ));
+        assert_eq!(
+            loopback_target(
+                AudioSource::Mix,
+                Some("Cuffie (HD 350BT)"),
+                None,
+                Some("Cuffie (HD 350BT)"),
+            ),
+            None
+        );
     }
 
     #[test]
     fn loopback_follow_is_noop_for_mic_only_or_unknown_names() {
         // Mic-only never has a loopback to follow.
-        assert!(!loopback_should_follow_default(
-            AudioSource::Mic,
-            Some("Cuffie (HD 350BT)"),
-            Some("Altoparlanti (2- Realtek(R) Audio)"),
-        ));
-        // A transient "no default output" tick (None) must not thrash streams.
-        assert!(!loopback_should_follow_default(
-            AudioSource::Mix,
-            Some("Cuffie (HD 350BT)"),
-            None,
-        ));
+        assert_eq!(
+            loopback_target(
+                AudioSource::Mic,
+                Some("Cuffie (HD 350BT)"),
+                Some("Altoparlanti (Realtek(R) Audio)"),
+                Some("Altoparlanti (Realtek(R) Audio)"),
+            ),
+            None
+        );
+        // A transient "no default output" tick must not thrash streams.
+        assert_eq!(
+            loopback_target(AudioSource::Mix, Some("Cuffie (HD 350BT)"), None, None),
+            None
+        );
         // No loopback bound yet → nothing to follow.
-        assert!(!loopback_should_follow_default(
-            AudioSource::Mix,
-            None,
-            Some("Cuffie (HD 350BT)"),
-        ));
+        assert_eq!(
+            loopback_target(AudioSource::Mix, None, None, Some("Cuffie (HD 350BT)")),
+            None
+        );
+    }
+
+    #[test]
+    fn several_call_outputs_are_ambiguous() {
+        assert_eq!(lone(&["A".to_string(), "B".to_string()]), None);
+        assert_eq!(lone(&[]), None);
+        assert_eq!(lone(&["A".to_string()]), Some("A"));
     }
 
     #[test]

@@ -196,7 +196,7 @@ before touching anything:
 | **Pill blocked when meeting active** | `dimmy_start_recording` returns -7 | C#/Swift hosts treat as silent no-op |
 | **AEC3 acoustic echo cancellation** | `aec.rs` (WebRTC AEC3 via `aec3 = 0.2`) | (none — internal worker) | (none) |
 | **DeepFilterNet noise suppression** — DEFERRED | `dfn.rs` (stub gated by `local-dfn` feature) | (none) | (none) |
-| **Process loopback** — Windows meeting system audio from every app except Dimmy, on ANY output device, 48 kHz fixed by us; endpoint loopback is the fallback | `process_loopback.rs` (Win-only) + `capture_sessions.rs` (mic follows the call when ours goes to digital zeros, `audio.rs::mic_decision`) | (none — inside Mix Start) | (none) |
+| **Follow the call's devices** — Windows meeting loopback moves to the output the call app plays to; the mic follows the call when ours goes to digital zeros; all driven by OS device events (`device_events.rs`), 5 s heartbeat as the net. Process loopback was tried and REMOVED: it delivered a live Teams call as zeros | `capture_sessions.rs`, `device_events.rs`, `audio.rs::{loopback_target,mic_decision}` | (none — inside the audio thread) | (none) |
 | **Recap-model override** | (config field, picked by `process_raw_prompt`) | inside `dimmy_set_config_json` | Win + Mac: curated dropdown in Advanced settings |
 | **Pill ↔ Meeting recap pipeline** | (no Rust) | (no FFI — uses existing meeting FFI) | Win: `Services/MeetingPostProcessService.cs`. Mac: `Services/MeetingPostProcessService.swift` (mirror) |
 
