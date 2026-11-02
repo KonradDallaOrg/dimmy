@@ -112,10 +112,7 @@ public sealed partial class WaveformControl : UserControl
             _dots[i].Visibility = compact && (i == 0 || i == 4) ? Visibility.Collapsed : Visibility.Visible;
         }
         DotsPanel.Spacing = compact ? 2 : 4;
-        if (compact)
-            foreach (var b in _bars) b.VerticalAlignment = VerticalAlignment.Center;
-        else
-            ApplyStyle();
+        ApplyStyle();
 
         _lineStep = compact ? 2.5 : 5.0;
         if (_polyline != null)
@@ -167,6 +164,13 @@ public sealed partial class WaveformControl : UserControl
     }
 
     private void ApplyStyle()
+    {
+        ApplyStyleCore();
+        if (_compact)
+            foreach (var b in _bars) b.VerticalAlignment = VerticalAlignment.Center;
+    }
+
+    private void ApplyStyleCore()
     {
         var mode = StyleMode ?? "Bars";
 
@@ -281,8 +285,9 @@ public sealed partial class WaveformControl : UserControl
         for (int i = 0; i < 9; i++)
         {
             double jitter = 0.6 + _rng.NextDouble() * 0.8;
-            double maxDeflection = 7.0; // max pixels from center
-            double target = 9.0 + (amp * weights[i] * jitter * maxDeflection * (_rng.NextDouble() > 0.5 ? 1 : -1));
+            double maxDeflection = _compact ? 5.0 : 7.0; // max pixels from center
+            double sign = _compact ? (i % 2 == 0 ? 1 : -1) : (_rng.NextDouble() > 0.5 ? 1 : -1);
+            double target = 9.0 + (amp * weights[i] * jitter * maxDeflection * sign);
             target = Math.Clamp(target, 1.0, 17.0);
             _linePoints[i] += (target - _linePoints[i]) * 0.35;
             _polyline.Points[i] = new global::Windows.Foundation.Point(i * _lineStep, _linePoints[i]);

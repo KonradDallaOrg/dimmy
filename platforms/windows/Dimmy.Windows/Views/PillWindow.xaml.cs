@@ -447,8 +447,9 @@ public sealed partial class PillWindow : Window
     private static readonly global::Windows.UI.Color ColorCompleting =
         global::Windows.UI.Color.FromArgb(255, 74, 222, 128);
     // Thin glass edge of the idle pill, and the "AI is working" accent.
-    private static readonly global::Windows.UI.Color IdleEdge =
-        global::Windows.UI.Color.FromArgb(28, 255, 255, 255);
+    private global::Windows.UI.Color IdleEdge => IsGlass
+        ? global::Windows.UI.Color.FromArgb(26, 0, 0, 0)
+        : global::Windows.UI.Color.FromArgb(28, 255, 255, 255);
     private static readonly global::Windows.UI.Color ColorAi =
         global::Windows.UI.Color.FromArgb(255, 168, 85, 247);
     private static readonly global::Windows.UI.Color ColorError =
@@ -485,9 +486,9 @@ public sealed partial class PillWindow : Window
     private static readonly global::Windows.UI.Color BgDark =
         global::Windows.UI.Color.FromArgb(255, 26, 26, 26);       // #FF1a1a1a
     private static readonly global::Windows.UI.Color BgGlassActive =
-        global::Windows.UI.Color.FromArgb(160, 210, 210, 218);    // #A0D2D2DA — more transparent, lighter glass
+        global::Windows.UI.Color.FromArgb(245, 248, 248, 250);    // #A0D2D2DA — more transparent, lighter glass
     private static readonly global::Windows.UI.Color BgGlassIdle =
-        global::Windows.UI.Color.FromArgb(140, 200, 200, 210);    // #8CC8C8D2 — idle, more transparent
+        global::Windows.UI.Color.FromArgb(235, 248, 248, 250);    // #8CC8C8D2 — idle, more transparent
 
     private SolidColorBrush GetPillBackground(bool idle = false) =>
         new(IsGlass ? (idle ? BgGlassIdle : BgGlassActive) : BgDark);
