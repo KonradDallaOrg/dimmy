@@ -346,13 +346,11 @@ struct PillView: View {
                         Capsule().fill(Color.black.opacity(0.82))
                     )
                     // Vertical: push the tip fully beside the pill, 6 pt off.
-                    .alignmentGuide(HorizontalAlignment.trailing) { (d: ViewDimensions) -> CGFloat in
-                        dock == "left" ? d[HorizontalAlignment.leading] - 6 : d[HorizontalAlignment.trailing]
-                    }
-                    .alignmentGuide(HorizontalAlignment.leading) { (d: ViewDimensions) -> CGFloat in
-                        dock == "right" ? d[HorizontalAlignment.trailing] + 6 : d[HorizontalAlignment.leading]
-                    }
-                    .offset(y: tipOffsetY)
+                    // Vertical: a zero-width frame pinned to the pill's inner
+                    // edge, so the tip grows toward the screen, not off it.
+                    // (Alignment guides here were ignored: the tip landed outside.)
+                    .frame(width: isVertical ? 0 : nil, alignment: dock == "left" ? .leading : .trailing)
+                    .offset(x: isVertical ? (dock == "left" ? 6 : -6) : 0, y: tipOffsetY)
                     .transition(.opacity)
                     .allowsHitTesting(false)
             }
