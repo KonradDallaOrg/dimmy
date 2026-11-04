@@ -1,4 +1,4 @@
-using Microsoft.UI.Xaml;
+﻿using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.Win32;
 
@@ -66,6 +66,14 @@ public static class ThemeHelper
     /// across multiple visual elements. NOT live-tracking — if you need
     /// the brush to update on theme change, re-call this and re-assign.
     /// </summary>
+    /// <summary>Page background for the resolved theme. Application resources
+    /// resolve against the APP theme, so a window whose RequestedTheme
+    /// differs got a dark page under light-theme text.</summary>
+    public static SolidColorBrush ResolvedPageBackground() =>
+        new(ResolvedIsDark()
+            ? global::Windows.UI.Color.FromArgb(0xFF, 0x20, 0x20, 0x20)
+            : global::Windows.UI.Color.FromArgb(0xFF, 0xF3, 0xF3, 0xF3));
+
     public static SolidColorBrush ResolvedAccentBrush()
     {
         try

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Dimmy.Windows.Helpers;
@@ -60,10 +60,11 @@ public sealed class TermsWindow : Window
         panel.Children.Add(check);
         panel.Children.Add(accept);
 
-        var root = new Grid { RequestedTheme = ThemeHelper.ResolvedElementTheme() };
-        if (Application.Current.Resources.TryGetValue("ApplicationPageBackgroundThemeBrush", out var bg)
-            && bg is Microsoft.UI.Xaml.Media.Brush brush)
-            root.Background = brush;
+        var root = new Grid
+        {
+            RequestedTheme = ThemeHelper.ResolvedElementTheme(),
+            Background = ThemeHelper.ResolvedPageBackground(),
+        };
         root.Children.Add(panel);
         Content = root;
 
