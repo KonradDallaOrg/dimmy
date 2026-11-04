@@ -577,14 +577,19 @@ public sealed partial class PillWindow : Window
         var h = ColorBorder.ActualHeight;
         if (w <= 0 || h <= 0) return;
 
-        // Inset by border thickness so the body sits inside the border ring
-        const float inset = 1.5f; // matches BorderThickness
+        // The body runs under half the 1 px ring so no seam shows between them.
+        const float inset = 0.5f;
+        // A ShapeVisual clips to its Size: a geometry exactly that big loses
+        // its anti-aliased extremes, which read as flat cuts at top, bottom,
+        // left and right. Pad the visual and keep the geometry inside it.
+        const float pad = 2f;
         var innerW = (float)w - inset * 2;
         var innerH = (float)h - inset * 2;
         var cr = Math.Max(0f, (float)ColorBorder.CornerRadius.TopLeft - inset);
 
-        _pillBodyVisual.Size = new Vector2(innerW, innerH);
-        _pillBodyVisual.Offset = new Vector3(inset, inset, 0);
+        _pillBodyVisual.Size = new Vector2(innerW + pad * 2, innerH + pad * 2);
+        _pillBodyVisual.Offset = new Vector3(inset - pad, inset - pad, 0);
+        _pillBodyGeometry.Offset = new Vector2(pad, pad);
         _pillBodyGeometry.Size = new Vector2(innerW, innerH);
         _pillBodyGeometry.CornerRadius = new Vector2(cr, cr);
         PillBodyHost.Width = w;
