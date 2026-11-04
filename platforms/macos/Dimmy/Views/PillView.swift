@@ -167,7 +167,16 @@ struct PillView: View {
     /// pill body to the matching corner pulls it flush against the edge.
     /// Tooltip flips above the pill when the user parked it at the bottom
     /// of the screen — otherwise the bubble would render off-screen.
+    private var dock: String { appState.pillDock }
+    /// Docked on the left/right middle: the pill stands vertical.
+    private var isVertical: Bool { dock == "left" || dock == "right" }
+    private var stackLayout: (CGFloat) -> AnyLayout {
+        { spacing in isVertical ? AnyLayout(VStackLayout(spacing: spacing)) : AnyLayout(HStackLayout(spacing: spacing)) }
+    }
+
     private var tooltipBelowPill: Bool {
+        if dock.hasPrefix("top") { return true }
+        if dock.hasPrefix("bottom") { return false }
         switch appState.overlayPosition {
         case "Bottom Left", "Bottom Center", "Bottom Right": return false
         default: return true
@@ -177,6 +186,10 @@ struct PillView: View {
     /// The tip lines up with the side the pill is parked on, so a long tip
     /// (a microphone name) grows into the screen, not off the panel edge.
     private var tooltipEdge: HorizontalAlignment {
+        // Vertical: the tip goes beside the pill, on the screen-interior side.
+        if dock == "left" || dock.hasSuffix("Left") { return isVertical ? .trailing : .leading }
+        if dock == "right" || dock.hasSuffix("Right") { return isVertical ? .leading : .trailing }
+        if dock == "top" || dock == "bottom" { return .center }
         switch appState.overlayPosition {
         case "Top Left", "Bottom Left": return .leading
         case "Top Center", "Bottom Center": return .center
@@ -185,6 +198,17 @@ struct PillView: View {
     }
 
     private var pillAlignment: Alignment {
+        switch dock {
+        case "left": return .leading
+        case "right": return .trailing
+        case "top": return .top
+        case "bottom": return .bottom
+        case "topLeft": return .topLeading
+        case "topRight": return .topTrailing
+        case "bottomLeft": return .bottomLeading
+        case "bottomRight": return .bottomTrailing
+        default: break
+        }
         switch appState.overlayPosition {
         case "Top Left":      return .topLeading
         case "Top Center":    return .top
@@ -240,7 +264,7 @@ struct PillView: View {
     // MARK: - Idle State
 
     private var idleView: some View {
-        HStack(spacing: isHovering ? 4 : 0) {
+        stackLayout(isHovering ? 4 : 0) {
             micIcon
             // Always present in the layout, but width-collapsed and
             // hidden when not hovered — keeps the HStack rect free of
@@ -250,7 +274,8 @@ struct PillView: View {
                 styleIcon
                 shortcutIcon
             }
-            .frame(width: isHovering ? nil : 0)
+            .frame(width: isVertical || isHovering ? nil : 0,
+                   height: !isVertical || isHovering ? nil : 0)
             .opacity(isHovering ? 1 : 0)
             .clipped()
         }
@@ -261,10 +286,10 @@ struct PillView: View {
         // recording / transcribing / completing states keep their
         // own shapes, untouched.
         .frame(
-            width: isHovering ? nil : pillHeight,
-            height: pillHeight
+            width: isVertical ? pillHeight : (isHovering ? nil : pillHeight),
+            height: isVertical ? (isHovering ? nil : pillHeight) : pillHeight
         )
-        .padding(.horizontal, isHovering ? 5 : 0)
+        .padding(isVertical ? .vertical : .horizontal, isHovering ? 5 : 0)
         // Warning badge sits on the pill itself (not on the larger panel),
         // so it follows the pill wherever the position grid moves it.
         // Borderless: just the orange triangle, no black backdrop.
@@ -292,7 +317,8 @@ struct PillView: View {
         // stays close regardless of where the position grid puts the pill.
         // Flips above the pill when the user has parked it at the bottom
         // of the screen so the bubble stays on-screen.
-        .overlay(alignment: Alignment(horizontal: tooltipEdge, vertical: tooltipBelowPill ? .bottom : .top)) {
+        .overlay(alignment: Alignment(horizontal: tooltipEdge,
+                                      vertical: isVertical ? .center : (tooltipBelowPill ? .bottom : .top))) {
             if let text = scrollTooltip ?? hoverItem.map(tipText) {
                 Text(text)
                     .font(.system(size: 11, weight: .medium))
@@ -304,7 +330,10 @@ struct PillView: View {
                     .background(
                         Capsule().fill(Color.black.opacity(0.82))
                     )
-                    .offset(y: tooltipBelowPill ? 26 : -26)
+                    // Vertical: push the tip fully beside the pill, 6 pt off.
+                    .alignmentGuide(.trailing) { d in dock == "left" ? d[.leading] - 6 : d[.trailing] }
+                    .alignmentGuide(.leading) { d in dock == "right" ? d[.trailing] + 6 : d[.leading] }
+                    .offset(y: isVertical ? 0 : (tooltipBelowPill ? 26 : -26))
                     .transition(.opacity)
                     .allowsHitTesting(false)
             }
@@ -574,7 +603,7 @@ struct PillView: View {
     private var recordingCompact: Bool { !isHovering }
 
     private func recordingView(mode: RecordingMode) -> some View {
-        HStack(spacing: 12) {
+        stackLayout(12) {
             // When the pill is mirroring a paused meeting, replace the
             // dictation waveform (which is dictation-only data) with a
             // pause glyph so the user sees at a glance that audio is
@@ -585,7 +614,7 @@ struct PillView: View {
                     Image(systemName: "pause.circle.fill")
                         .font(.system(size: 13))
                         .foregroundStyle(Color.orange)
-                    if !recordingCompact {
+                    if !recordingCompact && !isVertical {
                         Text("Meeting paused")
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(Color.orange)
@@ -593,8 +622,17 @@ struct PillView: View {
                 }
                 .accessibilityLabel("Meeting paused")
             } else {
-                WaveformView(levels: appState.waveformLevels, style: activeWaveformStyle,
-                             compact: recordingCompact)
+                // Bars run along the capsule, so on the sides they turn with it.
+                if isVertical {
+                    WaveformView(levels: appState.waveformLevels, style: activeWaveformStyle,
+                                 compact: recordingCompact)
+                        .fixedSize()
+                        .rotationEffect(.degrees(90))
+                        .frame(width: 18, height: recordingCompact ? 20 : 40)
+                } else {
+                    WaveformView(levels: appState.waveformLevels, style: activeWaveformStyle,
+                                 compact: recordingCompact)
+                }
             }
 
             if mode == .toggle && !recordingCompact {
@@ -619,8 +657,9 @@ struct PillView: View {
                 .contentShape(Rectangle())
             }
         }
-        .frame(width: recordingCompact ? pillHeight : nil, height: pillHeight)
-        .padding(.horizontal, recordingCompact ? 0 : 14)
+        .frame(width: isVertical ? pillHeight : (recordingCompact ? pillHeight : nil),
+               height: isVertical ? (recordingCompact ? pillHeight : nil) : pillHeight)
+        .padding(isVertical ? .vertical : .horizontal, recordingCompact ? 0 : 14)
         .background(
             Capsule()
                 .fill(.ultraThickMaterial)
@@ -689,14 +728,16 @@ struct PillView: View {
                 .controlSize(.small)
                 .scaleEffect(0.7)
                 .tint(Self.sky)
-            Text("Transcribing...")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(.secondary)
-                .lineLimit(1)
-                .fixedSize()
+            if !isVertical {
+                Text("Transcribing...")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
         }
-        .frame(height: pillHeight)
-        .padding(.horizontal, 14)
+        .frame(width: isVertical ? pillHeight : nil, height: pillHeight)
+        .padding(.horizontal, isVertical ? 0 : 14)
         .background(
             Capsule()
                 .fill(.ultraThickMaterial)
@@ -715,16 +756,18 @@ struct PillView: View {
             Image(systemName: "sparkle")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundColor(Self.sparkle)
-            Text(llmLabel.isEmpty ? "Processing..." : llmLabel)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: 160)
-                .fixedSize()
+            if !isVertical {
+                Text(llmLabel.isEmpty ? "Processing..." : llmLabel)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: 160)
+                    .fixedSize()
+            }
         }
-        .frame(height: pillHeight)
-        .padding(.horizontal, 14)
+        .frame(width: isVertical ? pillHeight : nil, height: pillHeight)
+        .padding(.horizontal, isVertical ? 0 : 14)
         .background(
             Capsule()
                 .fill(.ultraThickMaterial)
@@ -755,14 +798,16 @@ struct PillView: View {
             ProgressView()
                 .controlSize(.small)
                 .scaleEffect(0.7)
-            Text("Recap...")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(.secondary)
-                .lineLimit(1)
-                .fixedSize()
+            if !isVertical {
+                Text("Recap...")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
         }
-        .frame(height: pillHeight)
-        .padding(.horizontal, 14)
+        .frame(width: isVertical ? pillHeight : nil, height: pillHeight)
+        .padding(.horizontal, isVertical ? 0 : 14)
         .background(
             Capsule()
                 .fill(.ultraThickMaterial)

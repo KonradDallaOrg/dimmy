@@ -1100,6 +1100,10 @@ final class AppState: ObservableObject {
         }
     }
     @Published var showPillIntro: Bool = false
+    /// Where a drag left the pill: "" (free), "left", "right", "top",
+    /// "bottom", "topLeft", "topRight", "bottomLeft", "bottomRight".
+    /// Set by PillWindowController on drag end; "left"/"right" = vertical pill.
+    @Published var pillDock: String = ""
 
     // MARK: - Permissions
 

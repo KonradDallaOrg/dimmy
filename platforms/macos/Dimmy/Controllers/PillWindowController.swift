@@ -36,6 +36,11 @@ final class PillWindowController {
     static let glowPadding: CGFloat = 32
     private let panelWidth: CGFloat = 280 + glowPadding * 2
     private let panelHeight: CGFloat = 56 + glowPadding * 2
+    // Vertical pill on the left/right middle: tall, and wide enough for the
+    // tip to sit beside the pill on the inner side.
+    private let verticalPanelWidth: CGFloat = 220 + glowPadding * 2
+    private let verticalPanelHeight: CGFloat = 280 + glowPadding * 2
+    private var dragEndCheck: DispatchWorkItem?
 
     init(appState: AppState) {
         self.appState = appState
@@ -81,6 +86,7 @@ final class PillWindowController {
         positionPanel(panel, at: appState.pillPosition)
 
         self.panel = panel
+        if appState.pillPosition != nil { snapToDock(animated: false) }
     }
 
     /// Show the pill, but only if the user hasn't hidden it via the
@@ -159,8 +165,94 @@ final class PillWindowController {
     private func resetToDefaultPosition() {
         guard let panel else { return }
         isRepositioning = true
+        appState.pillDock = ""
         positionPanel(panel, at: nil)
         isRepositioning = false
+    }
+
+    // MARK: - Snap to corners / edge middles (mirror of Win PillWindow.SnapToEdgeMiddle)
+
+    /// AppKit has no "drag ended" for isMovableByWindowBackground: wait for
+    /// the mouse button to come up after the last move.
+    private func scheduleDragEndCheck() {
+        dragEndCheck?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            if NSEvent.pressedMouseButtons & 1 != 0 {
+                self.scheduleDragEndCheck()
+            } else {
+                self.snapToDock(animated: true)
+            }
+        }
+        dragEndCheck = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: item)
+    }
+
+    private func snapToDock(animated: Bool) {
+        guard let panel, let screen = panel.screen ?? NSScreen.main else { return }
+        let vf = screen.visibleFrame
+        // The pill sits under the cursor while it is dragged; at launch use the panel centre.
+        let c = animated ? NSEvent.mouseLocation : NSPoint(x: panel.frame.midX, y: panel.frame.midY)
+        let dl = c.x - vf.minX, dr = vf.maxX - c.x, db = c.y - vf.minY, dt = vf.maxY - c.y
+        let reach: CGFloat = 200
+
+        var dock = ""
+        if min(dl, dr) < reach && min(dt, db) < reach {
+            dock = (dt < db ? "top" : "bottom") + (dl < dr ? "Left" : "Right")
+        } else {
+            var best = CGFloat.greatestFiniteMagnitude
+            func consider(_ d: String, _ perp: CGFloat, _ along: CGFloat, _ alongMax: CGFloat) {
+                if perp < reach && along < alongMax && perp < best { best = perp; dock = d }
+            }
+            consider("left", dl, abs(c.y - vf.midY), vf.height * 0.2)
+            consider("right", dr, abs(c.y - vf.midY), vf.height * 0.2)
+            consider("top", dt, abs(c.x - vf.midX), vf.width * 0.15)
+            consider("bottom", db, abs(c.x - vf.midX), vf.width * 0.15)
+        }
+
+        let vertical = dock == "left" || dock == "right"
+        let w = vertical ? verticalPanelWidth : panelWidth
+        let h = vertical ? verticalPanelHeight : panelHeight
+        let glow = Self.glowPadding
+        let m: CGFloat = 8
+        let left = vf.minX + m - glow, right = vf.maxX - w - m + glow
+        let bottom = vf.minY + m - glow, top = vf.maxY - h - m + glow
+        let midX = vf.midX - w / 2, midY = vf.midY - h / 2
+
+        let origin: NSPoint
+        switch dock {
+        case "left": origin = NSPoint(x: left, y: midY)
+        case "right": origin = NSPoint(x: right, y: midY)
+        case "top": origin = NSPoint(x: midX, y: top)
+        case "bottom": origin = NSPoint(x: midX, y: bottom)
+        case "topLeft": origin = NSPoint(x: left, y: top)
+        case "topRight": origin = NSPoint(x: right, y: top)
+        case "bottomLeft": origin = NSPoint(x: left, y: bottom)
+        case "bottomRight": origin = NSPoint(x: right, y: bottom)
+        default:
+            let f = panel.frame
+            origin = (f.width == w && f.height == h) ? f.origin : NSPoint(x: f.midX - w / 2, y: f.midY - h / 2)
+        }
+        let target = NSRect(origin: origin, size: NSSize(width: w, height: h))
+
+        appState.pillDock = dock
+        guard target != panel.frame else { return }
+        isRepositioning = true
+        let finish = { [weak self] in
+            guard let self else { return }
+            self.isRepositioning = false
+            self.appState.pillPosition = panel.frame.origin
+        }
+        if animated {
+            NSAnimationContext.runAnimationGroup({ ctx in
+                ctx.duration = 0.22
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                panel.animator().setFrame(target, display: true)
+            }, completionHandler: { Task { @MainActor in finish() } })
+        } else {
+            panel.setFrame(target, display: true)
+            finish()
+        }
     }
 
     // MARK: - Context menu (NSMenu, works on NSPanel)
@@ -424,6 +516,7 @@ final class PillWindowController {
             .sink { [weak self] origin in
                 guard let self, !self.isRepositioning else { return }
                 self.appState.pillPosition = origin
+                self.scheduleDragEndCheck()
             }
             .store(in: &cancellables)
 
