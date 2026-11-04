@@ -191,8 +191,9 @@ final class PillWindowController {
     private func snapToDock(animated: Bool) {
         guard let panel, let screen = panel.screen ?? NSScreen.main else { return }
         let vf = screen.visibleFrame
-        // The pill sits under the cursor while it is dragged; at launch use the panel centre.
-        let c = animated ? NSEvent.mouseLocation : NSPoint(x: panel.frame.midX, y: panel.frame.midY)
+        // Panel centre, not the cursor: over a remote session the cursor
+        // position read at mouse-up was unreliable and every drop landed top-left.
+        let c = NSPoint(x: panel.frame.midX, y: panel.frame.midY)
         let dl = c.x - vf.minX, dr = vf.maxX - c.x, db = c.y - vf.minY, dt = vf.maxY - c.y
         let reach: CGFloat = 200
 
@@ -235,6 +236,7 @@ final class PillWindowController {
         }
         let target = NSRect(origin: origin, size: NSSize(width: w, height: h))
 
+        hkLog("[PillWindow] snap centre=\(Int(c.x)),\(Int(c.y)) visible=\(vf) dock=\(dock.isEmpty ? "none" : dock)")
         appState.pillDock = dock
         guard target != panel.frame else { return }
         isRepositioning = true
@@ -516,7 +518,8 @@ final class PillWindowController {
             .sink { [weak self] origin in
                 guard let self, !self.isRepositioning else { return }
                 self.appState.pillPosition = origin
-                self.scheduleDragEndCheck()
+                // Only a user drag (button held) ends in a snap.
+                if NSEvent.pressedMouseButtons & 1 != 0 { self.scheduleDragEndCheck() }
             }
             .store(in: &cancellables)
 
