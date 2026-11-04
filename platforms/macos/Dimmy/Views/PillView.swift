@@ -170,9 +170,23 @@ struct PillView: View {
     private var dock: String { appState.pillDock }
     /// Docked on the left/right middle: the pill stands vertical.
     private var isVertical: Bool { dock == "left" || dock == "right" }
-    private var stackLayout: (CGFloat) -> AnyLayout {
-        { spacing in isVertical ? AnyLayout(VStackLayout(spacing: spacing)) : AnyLayout(HStackLayout(spacing: spacing)) }
+    private func stackLayout(_ spacing: CGFloat) -> AnyLayout {
+        isVertical ? AnyLayout(VStackLayout(spacing: spacing)) : AnyLayout(HStackLayout(spacing: spacing))
     }
+
+    // Split out of the view expressions: inline, the ternaries pushed the
+    // type checker past its time limit.
+    private var idleWidth: CGFloat? { isVertical ? pillHeight : (isHovering ? nil : pillHeight) }
+    private var idleHeight: CGFloat? { isVertical ? (isHovering ? nil : pillHeight) : pillHeight }
+    private var idleExtraWidth: CGFloat? { isVertical || isHovering ? nil : 0 }
+    private var idleExtraHeight: CGFloat? { !isVertical || isHovering ? nil : 0 }
+    private var stackEdge: Edge.Set { isVertical ? .vertical : .horizontal }
+    private var tipAlignment: Alignment {
+        Alignment(horizontal: tooltipEdge, vertical: isVertical ? .center : (tooltipBelowPill ? .bottom : .top))
+    }
+    private var tipOffsetY: CGFloat { isVertical ? 0 : (tooltipBelowPill ? 26 : -26) }
+    private var recordingWidth: CGFloat? { isVertical ? pillHeight : (recordingCompact ? pillHeight : nil) }
+    private var recordingHeight: CGFloat? { isVertical ? (recordingCompact ? pillHeight : nil) : pillHeight }
 
     private var tooltipBelowPill: Bool {
         if dock.hasPrefix("top") { return true }
@@ -264,7 +278,8 @@ struct PillView: View {
     // MARK: - Idle State
 
     private var idleView: some View {
-        stackLayout(isHovering ? 4 : 0) {
+        let layout = stackLayout(isHovering ? 4 : 0)
+        return layout {
             micIcon
             // Always present in the layout, but width-collapsed and
             // hidden when not hovered — keeps the HStack rect free of
@@ -274,8 +289,7 @@ struct PillView: View {
                 styleIcon
                 shortcutIcon
             }
-            .frame(width: isVertical || isHovering ? nil : 0,
-                   height: !isVertical || isHovering ? nil : 0)
+            .frame(width: idleExtraWidth, height: idleExtraHeight)
             .opacity(isHovering ? 1 : 0)
             .clipped()
         }
@@ -285,11 +299,8 @@ struct PillView: View {
         // smooths the transition. This is purely cosmetic — the
         // recording / transcribing / completing states keep their
         // own shapes, untouched.
-        .frame(
-            width: isVertical ? pillHeight : (isHovering ? nil : pillHeight),
-            height: isVertical ? (isHovering ? nil : pillHeight) : pillHeight
-        )
-        .padding(isVertical ? .vertical : .horizontal, isHovering ? 5 : 0)
+        .frame(width: idleWidth, height: idleHeight)
+        .padding(stackEdge, isHovering ? 5 : 0)
         // Warning badge sits on the pill itself (not on the larger panel),
         // so it follows the pill wherever the position grid moves it.
         // Borderless: just the orange triangle, no black backdrop.
@@ -317,8 +328,7 @@ struct PillView: View {
         // stays close regardless of where the position grid puts the pill.
         // Flips above the pill when the user has parked it at the bottom
         // of the screen so the bubble stays on-screen.
-        .overlay(alignment: Alignment(horizontal: tooltipEdge,
-                                      vertical: isVertical ? .center : (tooltipBelowPill ? .bottom : .top))) {
+        .overlay(alignment: tipAlignment) {
             if let text = scrollTooltip ?? hoverItem.map(tipText) {
                 Text(text)
                     .font(.system(size: 11, weight: .medium))
@@ -331,9 +341,13 @@ struct PillView: View {
                         Capsule().fill(Color.black.opacity(0.82))
                     )
                     // Vertical: push the tip fully beside the pill, 6 pt off.
-                    .alignmentGuide(.trailing) { d in dock == "left" ? d[.leading] - 6 : d[.trailing] }
-                    .alignmentGuide(.leading) { d in dock == "right" ? d[.trailing] + 6 : d[.leading] }
-                    .offset(y: isVertical ? 0 : (tooltipBelowPill ? 26 : -26))
+                    .alignmentGuide(HorizontalAlignment.trailing) { (d: ViewDimensions) -> CGFloat in
+                        dock == "left" ? d[HorizontalAlignment.leading] - 6 : d[HorizontalAlignment.trailing]
+                    }
+                    .alignmentGuide(HorizontalAlignment.leading) { (d: ViewDimensions) -> CGFloat in
+                        dock == "right" ? d[HorizontalAlignment.trailing] + 6 : d[HorizontalAlignment.leading]
+                    }
+                    .offset(y: tipOffsetY)
                     .transition(.opacity)
                     .allowsHitTesting(false)
             }
@@ -603,7 +617,8 @@ struct PillView: View {
     private var recordingCompact: Bool { !isHovering }
 
     private func recordingView(mode: RecordingMode) -> some View {
-        stackLayout(12) {
+        let layout = stackLayout(12)
+        return layout {
             // When the pill is mirroring a paused meeting, replace the
             // dictation waveform (which is dictation-only data) with a
             // pause glyph so the user sees at a glance that audio is
@@ -657,9 +672,8 @@ struct PillView: View {
                 .contentShape(Rectangle())
             }
         }
-        .frame(width: isVertical ? pillHeight : (recordingCompact ? pillHeight : nil),
-               height: isVertical ? (recordingCompact ? pillHeight : nil) : pillHeight)
-        .padding(isVertical ? .vertical : .horizontal, recordingCompact ? 0 : 14)
+        .frame(width: recordingWidth, height: recordingHeight)
+        .padding(stackEdge, recordingCompact ? 0 : 14)
         .background(
             Capsule()
                 .fill(.ultraThickMaterial)
