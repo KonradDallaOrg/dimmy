@@ -2325,6 +2325,7 @@ public partial class App : Application
     public void RepositionPill()
     {
         if (_pillWindow == null) return;
+        _pillWindow.ResetDock();
         WindowHelper.PositionByPreset(_pillWindow, _appViewModel.OverlayPosition, 240, 56);
     }
 
