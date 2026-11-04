@@ -333,6 +333,7 @@ final class PillWindowController {
     }
 
     @objc private func hidePillAction() {
+        hkLog("[PillWindow] context menu: Hide pill")
         appState.pillVisible = false
     }
 
