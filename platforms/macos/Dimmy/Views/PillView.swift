@@ -184,7 +184,12 @@ struct PillView: View {
     private var tipAlignment: Alignment {
         Alignment(horizontal: tooltipEdge, vertical: isVertical ? .center : (tooltipBelowPill ? .bottom : .top))
     }
-    private var tipOffsetY: CGFloat { isVertical ? 0 : (tooltipBelowPill ? 26 : -26) }
+    private var tipOffsetY: CGFloat {
+        guard isVertical else { return tooltipBelowPill ? 26 : -26 }
+        // Level with the hovered item: 22 pt items, 4 pt apart, centred on the pill.
+        guard let item = hoverItem, let i = Self.idleItems.firstIndex(of: item) else { return 0 }
+        return CGFloat(i) * 26 - CGFloat(Self.idleItems.count - 1) * 13
+    }
     private var recordingWidth: CGFloat? { isVertical ? pillHeight : (recordingCompact ? pillHeight : nil) }
     private var recordingHeight: CGFloat? { isVertical ? (recordingCompact ? pillHeight : nil) : pillHeight }
 
@@ -423,7 +428,8 @@ struct PillView: View {
         case .active(let p):
             pillHover(true)
             guard isHovering else { hoverItem = nil; return }
-            let x = p.x - 5
+            // Items run along the pill: down it when vertical.
+            let x = (isVertical ? p.y : p.x) - 5
             let slot = Int(floor(x / 26))
             let inside = x >= 0 && x.truncatingRemainder(dividingBy: 26) < 22
             hoverItem = inside && slot < Self.idleItems.count ? Self.idleItems[slot] : nil

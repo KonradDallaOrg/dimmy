@@ -1421,34 +1421,54 @@ public sealed partial class PillWindow : Window
 
     /// <summary>Same tip as the scroll one, but it stays while the pointer
     /// is on the item; leaving the item hides it.</summary>
-    private void ShowHoverTip(string text)
+    private void ShowHoverTip(string text, object? item = null)
     {
         ShowScrollTooltip(text);
         _tooltipTimer!.Stop();
+        PlaceTipBeside(item as FrameworkElement);
+    }
+
+    /// Vertical pill: the tip sits level with the item it describes,
+    /// not at the middle of the pill.
+    private void PlaceTipBeside(FrameworkElement? item)
+    {
+        if (!IsVertical) return;
+        var m = ScrollTooltip.Margin;
+        if (item == null || Content is not UIElement root)
+        {
+            ScrollTooltip.VerticalAlignment = VerticalAlignment.Center;
+            ScrollTooltip.Margin = new Thickness(m.Left, 0, m.Right, 0);
+            return;
+        }
+        var y = item.TransformToVisual(root).TransformPoint(
+            new global::Windows.Foundation.Point(0, item.ActualHeight / 2)).Y;
+        ScrollTooltip.Measure(new global::Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
+        ScrollTooltip.VerticalAlignment = VerticalAlignment.Top;
+        ScrollTooltip.Margin = new Thickness(m.Left, Math.Max(0, y - ScrollTooltip.DesiredSize.Height / 2), m.Right, 0);
     }
 
     private void LanguageLabel_PointerEntered(object sender, PointerRoutedEventArgs e)
     {
         HighlightItem(sender, true);
-        ShowHoverTip(TranslateTip());
+        ShowHoverTip(TranslateTip(), sender);
     }
 
     private void Mic_PointerEntered(object sender, PointerRoutedEventArgs e)
     {
         HighlightItem(sender, true);
-        ShowHoverTip(Helpers.InputDeviceChoice.ForDisplay(ConfigString("selected_device")));
+        ShowHoverTip(Helpers.InputDeviceChoice.ForDisplay(ConfigString("selected_device")), sender);
     }
 
     private void Shortcut_PointerEntered(object sender, PointerRoutedEventArgs e)
     {
         HighlightItem(sender, true);
-        ShowHoverTip(string.IsNullOrEmpty(_vm.Shortcut) ? "No shortcut" : _vm.Shortcut);
+        ShowHoverTip(string.IsNullOrEmpty(_vm.Shortcut) ? "No shortcut" : _vm.Shortcut, sender);
     }
 
     private void StyleIcon_PointerEntered(object sender, PointerRoutedEventArgs e)
     {
         HighlightItem(sender, true);
-        ShowHoverTip(StyleTip());
+        ShowHoverTip(StyleTip(), sender);
     }
 
     private void HoverTip_PointerExited(object sender, PointerRoutedEventArgs e)
@@ -1479,7 +1499,7 @@ public sealed partial class PillWindow : Window
         idx = (idx + (delta > 0 ? -1 : 1) + LlmStyles.Length) % LlmStyles.Length;
         _vm.LlmStyle = LlmStyles[idx];
         RefreshStyleDot();
-        ShowHoverTip(StyleTip());
+        ShowHoverTip(StyleTip(), sender);
         // Single writer: only FFI, Rust saves to disk
         DimmyNative.dimmy_set_config_json(System.Text.Json.JsonSerializer.Serialize(
             new System.Collections.Generic.Dictionary<string, object>
@@ -1509,7 +1529,7 @@ public sealed partial class PillWindow : Window
         LanguageLabel.Text = string.IsNullOrEmpty(_vm.LlmTranslateTo)
             ? "—"
             : _vm.LlmTranslateTo.ToUpperInvariant();
-        ShowHoverTip(TranslateTip());
+        ShowHoverTip(TranslateTip(), sender);
         // Single writer: only FFI, Rust saves to disk
         DimmyNative.dimmy_set_config_json(System.Text.Json.JsonSerializer.Serialize(
             new System.Collections.Generic.Dictionary<string, string> { ["llm_translate_to"] = _vm.LlmTranslateTo }));
