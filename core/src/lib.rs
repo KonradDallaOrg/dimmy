@@ -3303,6 +3303,9 @@ mod tests {
     }
 
     #[test]
+    // A meeting test that records stops by updating the usage stats, which
+    // saves the config file this test reads back.
+    #[serial_test::serial]
     fn save_load_roundtrip_preserves_new_fields() {
         // Save a config with custom input_gain and UI fields, then load and verify
         // Combined into one test to avoid race conditions with parallel tests

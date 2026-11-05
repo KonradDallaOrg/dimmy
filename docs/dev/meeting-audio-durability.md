@@ -203,6 +203,48 @@ about what a 30 s one does, and Mix mode runs two calls per window. On a
 machine where each call takes ~16 s, the worker is already at ~2× realtime
 deficit and only survives on the silence gaps.
 
+## A slow mic must not slow the call (2026-11-05)
+
+The writer advances on the MIC buffer: every cursor, the system track
+included, moves only as far as the mic has delivered. That is right while
+the mic runs at real time, and `align_secondary` covers the case where the
+loopback is the late one. The opposite case had no cover.
+
+```
+meta.json duration_secs = 3917   (65 min)
+audio_*.ogg             =  950   (16 min)   capture ratio 24%
+[Meeting/diag] secondary_len=131,730,891    the call, still in RAM at stop
+[Audio] mic "Cuffia auricolare (HD 350BT)" has delivered only digital
+        zeros for 4.0s ... restarting streams      581 times, every 4 s
+```
+
+The user muted a Bluetooth headset mic from the keyboard during a call
+they were only listening to. The muted mic kept calling back but delivered
+about a quarter of real time, so the system track, the call itself,
+arriving perfectly through the loopback, was written at a quarter of real
+time. The live transcript crawled ("it froze after 15 minutes"), and at stop
+the 50 minutes the writer never reached were dropped with the buffer.
+
+Two fixes:
+
+- `mic_lag_padding`: when the mic trails the system track by more than
+  `MIC_LAG_TOLERANCE_SECS` (2 s, the same grace the no-mic latch gives), the
+  mic buffer is filled with silence up to the system track. At stop the
+  tolerance is zero, so no captured system sample stays in RAM. Mic samples
+  are never dropped: what arrives late lands after the silence. A healthy
+  mic trails by milliseconds and is never touched.
+- The digital-silence reopen backoff (5 s doubling to 60 s) never engaged.
+  Each rebuild seeds "signal just now" so the fresh stream gets its full
+  grace, and the next check took the seed for the mic coming back and reset
+  the backoff. Only signal the device produces a second or more after the
+  open resets it now (`audio.rs::mic_came_back`). Every reopen also rebuilds
+  the loopback, so 581 reopens were 581 small holes in the call.
+
+Guards: `meeting.rs` `mod a_slow_mic_never_throttles_the_recording` (the
+real worker and sinks fed at hardware pace: a mic at 25% of real time wrote
+1.27 s of a 5 s call before the fix) and `audio.rs`
+`the_reopen_seed_is_not_the_mic_coming_back`.
+
 ## FREEZE invariants
 
 - `worker_loop` may **not** call a model, the network, or
@@ -219,6 +261,10 @@ deficit and only survives on the silence gaps.
   `last_processed - overlap`. Raising it past the writer drops audio that is
   not on disk yet; raising it past the overlap hands whisper a window that
   starts mid-word. Both directions are pinned by `mod buffer_reclaim`.
+- Neither track may hold the other back. A mic that falls behind is padded
+  up to the system track (`mic_lag_padding`); a loopback that falls behind
+  is padded up to the mic (`align_secondary`). Remove either and one dead
+  device throttles the whole recording.
 - `total_written` is the only absolute count left. Anything reporting "how
   much audio did we capture" must read it, never `samples_written`.
 
