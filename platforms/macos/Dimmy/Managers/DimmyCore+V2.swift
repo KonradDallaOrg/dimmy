@@ -56,6 +56,8 @@ extension DimmyCore {
         let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
         defer { buffer.deallocate() }
         buffer[0] = 0
+        trackTranscribe()
+        defer { untrackTranscribe() }
         let rc = path.withCString { p in dimmy_transcribe_file(p, buffer, bufLen) }
         if rc < 0 {
             switch rc {
@@ -92,6 +94,8 @@ extension DimmyCore {
         let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
         defer { buffer.deallocate() }
         buffer[0] = 0
+        trackTranscribe()
+        defer { untrackTranscribe() }
         let rc = dir.withCString { p in dimmy_meeting_retranscribe(p, buffer, bufLen) }
         if rc < 0 {
             switch rc {
@@ -105,6 +109,23 @@ extension DimmyCore {
         }
         if rc == 0 { return .success("") }
         return .success(String(cString: buffer))
+    }
+
+    /// Main queue, FIFO, for the same reason as `recapsRunning` in
+    /// MeetingPostProcessService: the decrement can never land before its
+    /// increment.
+    private func trackTranscribe() {
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated { AppState.shared.transcribesRunning += 1 }
+        }
+    }
+
+    private func untrackTranscribe() {
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                AppState.shared.transcribesRunning = max(0, AppState.shared.transcribesRunning - 1)
+            }
+        }
     }
 
     enum FileTranscribeError: Error, CustomStringConvertible {

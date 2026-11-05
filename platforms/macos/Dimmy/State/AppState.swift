@@ -1249,6 +1249,12 @@ final class AppState: ObservableObject {
     /// through, so the pill reflects all of them.
     @Published var recapsRunning: Int = 0
 
+    /// Transcriptions from a file running right now (Regenerate transcript,
+    /// the speaker relabel, a loaded file, a Telegram audio). Counted like
+    /// `recapsRunning`, only by the two `DimmyCore` file wrappers, so the
+    /// menu bar icon is not at rest while one runs.
+    @Published var transcribesRunning: Int = 0
+
     // MARK: - Call detection
 
     /// Toggle for the 1 Hz CoreAudio poll that detects VoIP calls and
@@ -1916,7 +1922,10 @@ final class AppState: ObservableObject {
         // Appearance
         if let bs = config["border_style"] as? String { borderStyle = bs }
         if let ws = config["waveform_style"] as? String { waveformStyle = ws }
-        if let op = config["overlay_position"] as? String { overlayPosition = op }
+        // Only on a real change: every assignment fires $overlayPosition, and
+        // the pill answers that by going back to its corner, so the config
+        // re-read after each dictation undid the user's drag.
+        if let op = config["overlay_position"] as? String, op != overlayPosition { overlayPosition = op }
         if let kc = config["keep_in_clipboard"] as? Bool { keepInClipboard = kc }
 
         // Stats

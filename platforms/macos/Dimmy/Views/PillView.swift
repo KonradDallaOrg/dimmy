@@ -109,6 +109,8 @@ struct PillView: View {
     @ObservedObject var appState: AppState
     @State private var isHovering = false
     @State private var borderPhase: Double = 0
+    /// Set when the recording view appears, like Win `_recordingStartTime`.
+    @State private var recordingStart = Date()
     @StateObject private var rotation = PillRotationDriver()
     @State private var showCheckmark = false
     @State private var introPhase: Double = 0
@@ -654,6 +656,18 @@ struct PillView: View {
                 }
             }
 
+            // Win parity: the open capsule shows mm:ss; on the sides the
+            // minutes sit above the seconds.
+            if !recordingCompact {
+                TimelineView(.periodic(from: recordingStart, by: 1)) { ctx in
+                    Text(Self.clock(from: recordingStart, to: ctx.date, vertical: isVertical))
+                        .font(.system(size: isVertical ? 10 : 11, weight: .semibold))
+                        .monospacedDigit()
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(Color.primary.opacity(0.93))
+                }
+            }
+
             if mode == .toggle && !recordingCompact {
                 Button(action: {
                     // Mirror of Win PillWindow.Stop_Click: when a
@@ -688,6 +702,7 @@ struct PillView: View {
         .onHover(perform: pillHover)
         .onAppear {
             borderPhase = 0
+            recordingStart = Date()
             // The rainbow border rotates at a voice-driven speed (see
             // PillRotationDriver); every other style keeps the fixed 2.5 s
             // pulse it has always had. Exactly one of the two runs, so the
@@ -802,6 +817,11 @@ struct PillView: View {
     /// Whether the pill should say a meeting recap is running. Only when it
     /// is otherwise idle: a dictation started during a recap takes the pill,
     /// and the recap comes back when the dictation ends.
+    static func clock(from start: Date, to now: Date, vertical: Bool) -> String {
+        let secs = max(0, Int(now.timeIntervalSince(start)))
+        return String(format: "%02d", secs / 60) + (vertical ? "\n" : ":") + String(format: "%02d", secs % 60)
+    }
+
     static func showsRecap(state: RecordingState, recapsRunning: Int) -> Bool {
         guard case .idle = state else { return false }
         return recapsRunning > 0
