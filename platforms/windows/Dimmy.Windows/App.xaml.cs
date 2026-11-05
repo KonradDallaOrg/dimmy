@@ -255,8 +255,7 @@ public partial class App : Application
         var host = new Microsoft.UI.Xaml.Window { Title = "Recording notice" };
         host.Content = new Microsoft.UI.Xaml.Controls.Grid
         {
-            Background = (Microsoft.UI.Xaml.Media.Brush?)
-                Application.Current.Resources["ApplicationPageBackgroundThemeBrush"],
+            Background = Dimmy.Windows.Helpers.ThemeHelper.ResolvedPageBackground(),
             RequestedTheme = Dimmy.Windows.Helpers.ThemeHelper.ResolvedElementTheme(),
         };
         try
@@ -2326,6 +2325,7 @@ public partial class App : Application
     public void RepositionPill()
     {
         if (_pillWindow == null) return;
+        _pillWindow.ResetDock();
         WindowHelper.PositionByPreset(_pillWindow, _appViewModel.OverlayPosition, 240, 56);
     }
 

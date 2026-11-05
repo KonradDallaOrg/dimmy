@@ -1,4 +1,4 @@
-using Microsoft.UI.Xaml;
+﻿using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Dimmy.Windows.Helpers;
 using Dimmy.Windows.Services;
@@ -47,13 +47,15 @@ public sealed class StatsConsentWindow : Window
         panel.Children.Add(body);
         panel.Children.Add(buttons);
 
-        var root = new Grid { RequestedTheme = ThemeHelper.ResolvedElementTheme() };
-        if (Application.Current.Resources.TryGetValue("ApplicationPageBackgroundThemeBrush", out var bg)
-            && bg is Microsoft.UI.Xaml.Media.Brush brush)
-            root.Background = brush;
+        var root = new Grid
+        {
+            RequestedTheme = ThemeHelper.ResolvedElementTheme(),
+            Background = ThemeHelper.ResolvedPageBackground(),
+        };
         root.Children.Add(panel);
         Content = root;
 
         WindowHelper.ResizeLogical(this, 480, 260);
+        WindowHelper.SetDimmyIcon(this);
     }
 }

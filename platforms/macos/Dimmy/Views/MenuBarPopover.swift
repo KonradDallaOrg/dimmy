@@ -40,6 +40,7 @@ struct MenuBarPopover: View {
             // here flips AppState.pillVisible, which PillWindowController
             // observes.
             Button(appState.pillVisible ? "Hide pill" : "Show pill") {
+                hkLog("[MenuBarPopover] toggle pill (was=\(appState.pillVisible))")
                 appState.pillVisible.toggle()
             }
             .buttonStyle(.plain)

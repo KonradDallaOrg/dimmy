@@ -127,7 +127,7 @@ public sealed partial class PillWindow : Window
         this.SystemBackdrop = backdrop;
 
         var appWindow = WindowHelper.GetAppWindow(this);
-        appWindow?.Resize(new global::Windows.Graphics.SizeInt32(WindowWidth, WindowHeight));
+        appWindow?.Resize(new global::Windows.Graphics.SizeInt32(Px(WindowWidth), Px(WindowHeight)));
 
         if (appWindow?.Presenter is OverlappedPresenter presenter)
         {
@@ -137,7 +137,7 @@ public sealed partial class PillWindow : Window
         }
 
         WindowHelper.EnableTransparency(this);
-        WindowHelper.PositionBottomRight(this, WindowWidth, WindowHeight);
+        WindowHelper.PositionBottomRight(this, Px(WindowWidth), Px(WindowHeight));
     }
 
     private void Vm_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -270,9 +270,18 @@ public sealed partial class PillWindow : Window
 
     private void SetCapsuleShape()
     {
-        ColorBorder.Width = double.NaN; // auto
-        ColorBorder.Height = CapsuleHeight;
-        PillBodyHost.Height = CapsuleHeight;
+        if (IsVertical)
+        {
+            ColorBorder.Width = CapsuleHeight;
+            ColorBorder.Height = double.NaN;
+            PillBodyHost.Width = CapsuleHeight;
+        }
+        else
+        {
+            ColorBorder.Width = double.NaN; // auto
+            ColorBorder.Height = CapsuleHeight;
+            PillBodyHost.Height = CapsuleHeight;
+        }
         var r = CapsuleHeight / 2;
         ColorBorder.CornerRadius = new CornerRadius(r);
         PillInner.CornerRadius = new CornerRadius(r);
@@ -352,7 +361,7 @@ public sealed partial class PillWindow : Window
         // Size
         var w = _animStartW + (_animTargetW - _animStartW) * ease;
         var h = _animStartH + (_animTargetH - _animStartH) * ease;
-        var r = h / 2;
+        var r = Math.Min(w, h) / 2;
 
         ColorBorder.Width = w;
         ColorBorder.Height = h;
@@ -418,10 +427,11 @@ public sealed partial class PillWindow : Window
         var prevH = ColorBorder.Height;
 
         // Temporarily set auto to measure
-        ColorBorder.Width = double.NaN;
-        ColorBorder.Height = CapsuleHeight;
+        var vertical = IsVertical;
+        ColorBorder.Width = vertical ? CapsuleHeight : double.NaN;
+        ColorBorder.Height = vertical ? double.NaN : CapsuleHeight;
         ContentGrid.UpdateLayout();
-        var measuredW = ColorBorder.ActualWidth;
+        var measuredW = vertical ? ColorBorder.ActualHeight : ColorBorder.ActualWidth;
 
         // Restore — animation will start from current rendered size
         ColorBorder.Width = double.IsNaN(prevW) || prevW <= 0
@@ -431,6 +441,15 @@ public sealed partial class PillWindow : Window
 
         if (measuredW <= 0) measuredW = 120; // fallback
 
+        if (vertical)
+        {
+            AnimateTransition(CapsuleHeight, measuredW, borderColor, newPanel, oldPanel, () =>
+            {
+                ColorBorder.Height = double.NaN;
+                PillBodyHost.Width = CapsuleHeight;
+            }, skipBorderColor);
+            return;
+        }
         AnimateTransition(measuredW, CapsuleHeight, borderColor, newPanel, oldPanel, () =>
         {
             // After animation: switch to auto width for responsive content
@@ -558,14 +577,19 @@ public sealed partial class PillWindow : Window
         var h = ColorBorder.ActualHeight;
         if (w <= 0 || h <= 0) return;
 
-        // Inset by border thickness so the body sits inside the border ring
-        const float inset = 1.5f; // matches BorderThickness
+        // The body runs under half the 1 px ring so no seam shows between them.
+        const float inset = 0.5f;
+        // A ShapeVisual clips to its Size: a geometry exactly that big loses
+        // its anti-aliased extremes, which read as flat cuts at top, bottom,
+        // left and right. Pad the visual and keep the geometry inside it.
+        const float pad = 2f;
         var innerW = (float)w - inset * 2;
         var innerH = (float)h - inset * 2;
         var cr = Math.Max(0f, (float)ColorBorder.CornerRadius.TopLeft - inset);
 
-        _pillBodyVisual.Size = new Vector2(innerW, innerH);
-        _pillBodyVisual.Offset = new Vector3(inset, inset, 0);
+        _pillBodyVisual.Size = new Vector2(innerW + pad * 2, innerH + pad * 2);
+        _pillBodyVisual.Offset = new Vector3(inset - pad, inset - pad, 0);
+        _pillBodyGeometry.Offset = new Vector2(pad, pad);
         _pillBodyGeometry.Size = new Vector2(innerW, innerH);
         _pillBodyGeometry.CornerRadius = new Vector2(cr, cr);
         PillBodyHost.Width = w;
@@ -904,7 +928,7 @@ public sealed partial class PillWindow : Window
             _recordingTimer.Tick += (_, _) =>
             {
                 var elapsed = DateTime.Now - _recordingStartTime;
-                TimerText.Text = $"{(int)elapsed.TotalMinutes:D2}:{elapsed.Seconds:D2}";
+                TimerText.Text = ((int)elapsed.TotalMinutes).ToString("D2") + (IsVertical ? "\n" : ":") + elapsed.Seconds.ToString("D2");
             };
             _recordingHandlerAttached = true;
         }
@@ -1083,11 +1107,16 @@ public sealed partial class PillWindow : Window
         var shown = compact ? Visibility.Collapsed : Visibility.Visible;
         TimerText.Visibility = shown;
         StopButton.Visibility = shown;
-        RecordingPanel.Margin = compact ? new Thickness(0) : new Thickness(12, 0, 12, 0);
+        RecordingPanel.Margin = compact ? new Thickness(0)
+            : IsVertical ? new Thickness(0, 12, 0, 12) : new Thickness(12, 0, 12, 0);
         var compactWidth = Waveform.SetCompact(compact);
-        Waveform.Width = compact ? compactWidth : 34;
+        Waveform.Width = compact ? compactWidth : IsVertical ? 24 : 34;
         // 18 = the control's own height, so the bars sit on the circle's centre.
         Waveform.Height = compact ? 18 : 14;
+        // Rotated on the sides: reserve the length it now takes vertically.
+        Waveform.Margin = IsVertical && !compact
+            ? new Thickness(0, (Waveform.Width - Waveform.Height) / 2, 0, (Waveform.Width - Waveform.Height) / 2)
+            : new Thickness(0);
     }
 
     private void AnimateRecordingShape(FrameworkElement? newPanel = null, FrameworkElement? oldPanel = null)
@@ -1120,7 +1149,7 @@ public sealed partial class PillWindow : Window
             LanguageHost.Visibility = Visibility.Visible;
             StyleIconHost.Visibility = Visibility.Visible;
             ShortcutHost.Visibility = Visibility.Visible;
-            IdleContent.Margin = new Thickness(7, 0, 7, 0);
+            IdleContent.Margin = IsVertical ? new Thickness(0, 7, 0, 7) : new Thickness(7, 0, 7, 0);
             // Hover keeps same transparent border — just animate size
             AnimateToCapsule(IdleEdge);
             UpdateGlow(ParseColor(_vm.LlmStyleColor), subtle: true);
@@ -1147,6 +1176,7 @@ public sealed partial class PillWindow : Window
     // ── Drag ────────────────────────────────────────────────────────
     private void Pill_PointerPressed(object sender, PointerRoutedEventArgs e)
     {
+        _snapTimer?.Stop();
         _isDragging = true;
         GetCursorPos(out _dragStartScreen);
         var appWindow = WindowHelper.GetAppWindow(this);
@@ -1168,6 +1198,191 @@ public sealed partial class PillWindow : Window
     {
         _isDragging = false;
         ((UIElement)sender).ReleasePointerCapture(e.Pointer);
+        SnapToEdgeMiddle();
+    }
+
+    // ── Snap to corners / edge middles; vertical on the sides ───────
+    private enum PillDock { None, Left, Right, Top, Bottom, TopLeft, TopRight, BottomLeft, BottomRight }
+    private PillDock _dock = PillDock.None;
+    private bool IsVertical => _dock is PillDock.Left or PillDock.Right;
+    private bool DockTop => _dock is PillDock.Top or PillDock.TopLeft or PillDock.TopRight;
+    private const int VerticalWindowWidth = 260;
+
+    [DllImport("user32.dll")]
+    private static extern uint GetDpiForWindow(IntPtr hwnd);
+
+    /// Window sizes are DIP; AppWindow wants physical pixels. Unscaled, a
+    /// 125-150% monitor clipped the tip above the pill.
+    private int Px(int dip)
+    {
+        var dpi = GetDpiForWindow(WindowHelper.GetHwnd(this));
+        return (int)Math.Round(dip * (dpi == 0 ? 96 : dpi) / 96.0);
+    }
+    private const int VerticalWindowHeight = 240;
+    private const double PillInset = 10; // DIP between the pill and the window edge
+    private DispatcherTimer? _snapTimer;
+    private global::Windows.Graphics.PointInt32 _snapFrom, _snapTo;
+    private DateTime _snapStart;
+
+    /// Called by App before a preset reposition: presets are horizontal.
+    public void ResetDock()
+    {
+        if (_dock == PillDock.None) return;
+        SetDock(PillDock.None);
+        WindowHelper.GetAppWindow(this)?.Resize(new global::Windows.Graphics.SizeInt32(Px(WindowWidth), Px(WindowHeight)));
+    }
+
+    private void SnapToEdgeMiddle()
+    {
+        var aw = WindowHelper.GetAppWindow(this);
+        if (aw == null) return;
+        var wa = DisplayArea.GetFromWindowId(aw.Id, DisplayAreaFallback.Nearest).WorkArea;
+        var pos = aw.Position;
+        var size = aw.Size;
+        double cx = pos.X + size.Width / 2.0, cy = pos.Y + size.Height / 2.0;
+        double mx = wa.X + wa.Width / 2.0, my = wa.Y + wa.Height / 2.0;
+        double dl = cx - wa.X, dr = wa.X + wa.Width - cx, dt = cy - wa.Y, db = wa.Y + wa.Height - cy;
+        const double reach = 200; // px from an edge that still counts as "on" it
+
+        var dock = PillDock.None;
+        if (Math.Min(dl, dr) < reach && Math.Min(dt, db) < reach)
+            dock = (dt < db, dl < dr) switch
+            {
+                (true, true) => PillDock.TopLeft,
+                (true, false) => PillDock.TopRight,
+                (false, true) => PillDock.BottomLeft,
+                _ => PillDock.BottomRight,
+            };
+        else
+        {
+            double best = double.MaxValue;
+            void Try(PillDock d, double perp, double along, double alongMax)
+            {
+                if (perp < reach && along < alongMax && perp < best) { best = perp; dock = d; }
+            }
+            Try(PillDock.Left, dl, Math.Abs(cy - my), wa.Height * 0.2);
+            Try(PillDock.Right, dr, Math.Abs(cy - my), wa.Height * 0.2);
+            Try(PillDock.Top, dt, Math.Abs(cx - mx), wa.Width * 0.15);
+            Try(PillDock.Bottom, db, Math.Abs(cx - mx), wa.Width * 0.15);
+        }
+
+        bool vertical = dock is PillDock.Left or PillDock.Right;
+        int w = Px(vertical ? VerticalWindowWidth : WindowWidth);
+        int h = Px(vertical ? VerticalWindowHeight : WindowHeight);
+        if (w != size.Width || h != size.Height)
+        {
+            pos = new global::Windows.Graphics.PointInt32((int)(cx - w / 2.0), (int)(cy - h / 2.0));
+            aw.MoveAndResize(new global::Windows.Graphics.RectInt32(pos.X, pos.Y, w, h));
+        }
+        SetDock(dock);
+
+        int left = wa.X, right = wa.X + wa.Width - w, top = wa.Y, bottom = wa.Y + wa.Height - h;
+        int midX = (int)(mx - w / 2.0), midY = (int)(my - h / 2.0);
+        var target = dock switch
+        {
+            PillDock.Left => new global::Windows.Graphics.PointInt32(left, midY),
+            PillDock.Right => new global::Windows.Graphics.PointInt32(right, midY),
+            PillDock.Top => new global::Windows.Graphics.PointInt32(midX, top),
+            PillDock.Bottom => new global::Windows.Graphics.PointInt32(midX, bottom),
+            PillDock.TopLeft => new global::Windows.Graphics.PointInt32(left, top),
+            PillDock.TopRight => new global::Windows.Graphics.PointInt32(right, top),
+            PillDock.BottomLeft => new global::Windows.Graphics.PointInt32(left, bottom),
+            PillDock.BottomRight => new global::Windows.Graphics.PointInt32(right, bottom),
+            _ => pos,
+        };
+        if (target.X == pos.X && target.Y == pos.Y) return;
+        _snapFrom = pos;
+        _snapTo = target;
+        _snapStart = DateTime.Now;
+        if (_snapTimer == null)
+        {
+            _snapTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1000.0 / AnimationFps) };
+            _snapTimer.Tick += SnapTick;
+        }
+        _snapTimer.Start();
+    }
+
+    private void SnapTick(object? sender, object e)
+    {
+        var t = Math.Min(1.0, (DateTime.Now - _snapStart).TotalMilliseconds / 220.0);
+        var ease = 1.0 - Math.Pow(1.0 - t, 3);
+        WindowHelper.GetAppWindow(this)?.Move(new global::Windows.Graphics.PointInt32(
+            (int)Math.Round(_snapFrom.X + (_snapTo.X - _snapFrom.X) * ease),
+            (int)Math.Round(_snapFrom.Y + (_snapTo.Y - _snapFrom.Y) * ease)));
+        if (t >= 1.0) _snapTimer!.Stop();
+    }
+
+    private void SetDock(PillDock dock)
+    {
+        bool wasVertical = IsVertical;
+        _dock = dock;
+        bool v = IsVertical;
+        var o = v ? Orientation.Vertical : Orientation.Horizontal;
+        IdleContent.Orientation = o;
+        RecordingPanel.Orientation = o;
+        TranscribingPanel.Orientation = o;
+        ProcessingPanel.Orientation = o;
+        RecapPanel.Orientation = o;
+        ErrorPanel.Orientation = o;
+        var m7 = v ? new Thickness(0, 7, 0, 7) : new Thickness(7, 0, 7, 0);
+        TranscribingPanel.Margin = m7;
+        ProcessingPanel.Margin = m7;
+        RecapPanel.Margin = m7;
+        ErrorPanel.Margin = m7;
+        // Long labels can't stay upright inside a 36 px wide capsule.
+        var textVis = v ? Visibility.Collapsed : Visibility.Visible;
+        TranscribingText.Visibility = textVis;
+        ChunkText.Visibility = textVis;
+        ProcessingText.Visibility = textVis;
+        RecapText.Visibility = textVis;
+        ErrorText.Visibility = textVis;
+        TimerText.FontSize = v ? 10 : 11;
+        TimerText.TextAlignment = v ? TextAlignment.Center : TextAlignment.Left;
+        TimerText.Text = v ? TimerText.Text.Replace(":", "\n") : TimerText.Text.Replace("\n", ":");
+        var hc = v ? HorizontalAlignment.Center : HorizontalAlignment.Left;
+        TimerText.HorizontalAlignment = hc;
+        StopButton.HorizontalAlignment = hc;
+        Waveform.HorizontalAlignment = hc;
+        // Bars run along the capsule, so on the sides they turn with it.
+        Waveform.RenderTransformOrigin = new global::Windows.Foundation.Point(0.5, 0.5);
+        Waveform.RenderTransform = v ? new RotateTransform { Angle = 90 } : null;
+        if (IdleContent.Margin.Left > 0 || IdleContent.Margin.Top > 0)
+            IdleContent.Margin = v ? new Thickness(0, 7, 0, 7) : new Thickness(7, 0, 7, 0);
+        if (_vm.CurrentState == AppState.Recording) SetRecordingCompact(!_pointerOver);
+
+        bool leftSide = dock is PillDock.Left or PillDock.TopLeft or PillDock.BottomLeft;
+        bool rightSide = dock is PillDock.Right or PillDock.TopRight or PillDock.BottomRight;
+        var hAlign = leftSide ? HorizontalAlignment.Left : rightSide ? HorizontalAlignment.Right : HorizontalAlignment.Center;
+
+        // Pill hugs the edge(s) it is docked to; the tip sits on the inner side.
+        RootGrid.HorizontalAlignment = hAlign;
+        if (v)
+        {
+            RootGrid.VerticalAlignment = VerticalAlignment.Center;
+            RootGrid.Margin = leftSide ? new Thickness(PillInset, 0, 0, 0) : new Thickness(0, 0, PillInset, 0);
+            var beside = PillInset + CapsuleHeight + 6;
+            ScrollTooltip.HorizontalAlignment = hAlign;
+            ScrollTooltip.VerticalAlignment = VerticalAlignment.Center;
+            ScrollTooltip.Margin = leftSide ? new Thickness(beside, 0, 0, 0) : new Thickness(0, 0, beside, 0);
+        }
+        else
+        {
+            double side = hAlign == HorizontalAlignment.Center ? 0 : PillInset;
+            RootGrid.VerticalAlignment = DockTop ? VerticalAlignment.Top : VerticalAlignment.Bottom;
+            RootGrid.Margin = new Thickness(leftSide ? side : 0, DockTop ? PillInset : 0,
+                rightSide ? side : 0, DockTop ? 0 : PillInset);
+            ScrollTooltip.HorizontalAlignment = hAlign;
+            ScrollTooltip.VerticalAlignment = DockTop ? VerticalAlignment.Bottom : VerticalAlignment.Top;
+            ScrollTooltip.Margin = new Thickness(leftSide ? side : 0, DockTop ? 0 : 2,
+                rightSide ? side : 0, DockTop ? 2 : 0);
+        }
+
+        if (wasVertical != v)
+        {
+            bool isCircle = Math.Abs(_lastKnownW - CircleSize) < 0.5 && Math.Abs(_lastKnownH - CircleSize) < 0.5;
+            if (!isCircle)
+                AnimateToCapsule(global::Windows.UI.Color.FromArgb(0, 0, 0, 0), skipBorderColor: true);
+        }
     }
 
     // ── Scroll to cycle settings ────────────────────────────────────
@@ -1206,34 +1421,54 @@ public sealed partial class PillWindow : Window
 
     /// <summary>Same tip as the scroll one, but it stays while the pointer
     /// is on the item; leaving the item hides it.</summary>
-    private void ShowHoverTip(string text)
+    private void ShowHoverTip(string text, object? item = null)
     {
         ShowScrollTooltip(text);
         _tooltipTimer!.Stop();
+        PlaceTipBeside(item as FrameworkElement);
+    }
+
+    /// Vertical pill: the tip sits level with the item it describes,
+    /// not at the middle of the pill.
+    private void PlaceTipBeside(FrameworkElement? item)
+    {
+        if (!IsVertical) return;
+        var m = ScrollTooltip.Margin;
+        if (item == null || Content is not UIElement root)
+        {
+            ScrollTooltip.VerticalAlignment = VerticalAlignment.Center;
+            ScrollTooltip.Margin = new Thickness(m.Left, 0, m.Right, 0);
+            return;
+        }
+        var y = item.TransformToVisual(root).TransformPoint(
+            new global::Windows.Foundation.Point(0, item.ActualHeight / 2)).Y;
+        ScrollTooltip.Measure(new global::Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
+        ScrollTooltip.VerticalAlignment = VerticalAlignment.Top;
+        ScrollTooltip.Margin = new Thickness(m.Left, Math.Max(0, y - ScrollTooltip.DesiredSize.Height / 2), m.Right, 0);
     }
 
     private void LanguageLabel_PointerEntered(object sender, PointerRoutedEventArgs e)
     {
         HighlightItem(sender, true);
-        ShowHoverTip(TranslateTip());
+        ShowHoverTip(TranslateTip(), sender);
     }
 
     private void Mic_PointerEntered(object sender, PointerRoutedEventArgs e)
     {
         HighlightItem(sender, true);
-        ShowHoverTip(Helpers.InputDeviceChoice.ForDisplay(ConfigString("selected_device")));
+        ShowHoverTip(Helpers.InputDeviceChoice.ForDisplay(ConfigString("selected_device")), sender);
     }
 
     private void Shortcut_PointerEntered(object sender, PointerRoutedEventArgs e)
     {
         HighlightItem(sender, true);
-        ShowHoverTip(string.IsNullOrEmpty(_vm.Shortcut) ? "No shortcut" : _vm.Shortcut);
+        ShowHoverTip(string.IsNullOrEmpty(_vm.Shortcut) ? "No shortcut" : _vm.Shortcut, sender);
     }
 
     private void StyleIcon_PointerEntered(object sender, PointerRoutedEventArgs e)
     {
         HighlightItem(sender, true);
-        ShowHoverTip(StyleTip());
+        ShowHoverTip(StyleTip(), sender);
     }
 
     private void HoverTip_PointerExited(object sender, PointerRoutedEventArgs e)
@@ -1264,7 +1499,7 @@ public sealed partial class PillWindow : Window
         idx = (idx + (delta > 0 ? -1 : 1) + LlmStyles.Length) % LlmStyles.Length;
         _vm.LlmStyle = LlmStyles[idx];
         RefreshStyleDot();
-        ShowHoverTip(StyleTip());
+        ShowHoverTip(StyleTip(), sender);
         // Single writer: only FFI, Rust saves to disk
         DimmyNative.dimmy_set_config_json(System.Text.Json.JsonSerializer.Serialize(
             new System.Collections.Generic.Dictionary<string, object>
@@ -1294,7 +1529,7 @@ public sealed partial class PillWindow : Window
         LanguageLabel.Text = string.IsNullOrEmpty(_vm.LlmTranslateTo)
             ? "—"
             : _vm.LlmTranslateTo.ToUpperInvariant();
-        ShowHoverTip(TranslateTip());
+        ShowHoverTip(TranslateTip(), sender);
         // Single writer: only FFI, Rust saves to disk
         DimmyNative.dimmy_set_config_json(System.Text.Json.JsonSerializer.Serialize(
             new System.Collections.Generic.Dictionary<string, string> { ["llm_translate_to"] = _vm.LlmTranslateTo }));
