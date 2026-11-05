@@ -49,6 +49,7 @@ enum SelfTests {
         testBundleNameIsSet()
         testProviderTagSamples()
         testSameKeyGating()
+        testPillRecordingClock()
         print("[SelfTests] All \(testCount) tests passed.")
         #endif
     }
@@ -434,6 +435,17 @@ enum SelfTests {
                "empty URL → ''")
         assert(ProviderTagging.providerTag(forUrl: "https://some.random.host/api") == "",
                "random host → ''")
+    }
+
+    /// Win parity: mm:ss in the open capsule, minutes over seconds on the sides.
+    private static func testPillRecordingClock() {
+        let t0 = Date(timeIntervalSince1970: 0)
+        assert(PillView.clock(from: t0, to: t0.addingTimeInterval(65), vertical: false) == "01:05",
+               "pill clock reads mm:ss")
+        assert(PillView.clock(from: t0, to: t0.addingTimeInterval(65), vertical: true) == "01\n05",
+               "vertical pill clock puts minutes over seconds")
+        assert(PillView.clock(from: t0, to: t0.addingTimeInterval(-3), vertical: false) == "00:00",
+               "pill clock never goes negative")
     }
 
     private static func testSameKeyGating() {
