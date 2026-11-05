@@ -594,6 +594,33 @@ fn no_mic_detected(primary_len: usize, secondary_len: usize, mic_grace: usize) -
     primary_len == 0 && secondary_len >= mic_grace
 }
 
+/// How far the mic may trail the system track before the gap is filled with
+/// silence. The same 2 s the no-mic latch above allows a mic to show up in:
+/// far above callback jitter and a stream rebuild, far below "the meeting is
+/// not being written".
+const MIC_LAG_TOLERANCE_SECS: usize = 2;
+
+/// Zeros to append to the mic buffer so the system track does not wait for it.
+///
+/// The writer advances on the mic, so a mic that delivers less than real time
+/// throttles the SYSTEM track to its pace and leaves the rest in RAM, gone at
+/// stop. Seen 2026-11-05: a Bluetooth headset mic muted from the keyboard
+/// delivered about a quarter of real time for most of a 65-minute call while
+/// the call came through the loopback perfectly; 950 s of 3917 s reached the
+/// disk.
+/// `align_secondary` already covers the other direction (system late, mic
+/// on time). This is its mirror, with a tolerance so a healthy mic is never
+/// touched.
+fn mic_lag_padding(primary_len: usize, secondary_len: usize, tolerance: usize) -> usize {
+    let lag = secondary_len.saturating_sub(primary_len);
+    let pad = if lag > tolerance { lag } else { 0 };
+    assert!(
+        pad == 0 || primary_len + pad == secondary_len,
+        "mic_lag_padding: pad {pad} must bring mic {primary_len} level with system {secondary_len}"
+    );
+    pad
+}
+
 /// Soft-knee limiter: linear below ±KNEE, tanh-compressed above so a loud
 /// mic+system overlap rounds off smoothly instead of hard-clipping to ±1.0
 /// (which produces audible clicks / "distorted" peaks on music). Output is
@@ -2049,6 +2076,11 @@ fn worker_loop(
     let mic_grace_samples = (device_sample_rate as usize) * 2;
     let mut clock_decided = false;
     let mut clock_on_secondary = false;
+    // See `mic_lag_padding`. Counted so the log says how much of the mic
+    // track is silence we put there, not silence the mic delivered.
+    let mic_lag_tolerance = device_sample_rate as usize * MIC_LAG_TOLERANCE_SECS;
+    let mut mic_padded_samples: usize = 0;
+    let mut mic_pad_count: u32 = 0;
     // Effective synth-stream length up to which we can drain this tick:
     // the secondary (system) buffer once the no-mic latch flipped, the
     // primary (mic) buffer otherwise.
@@ -2201,6 +2233,41 @@ fn worker_loop(
                 elapsed_ms: started.elapsed().as_millis(),
                 dur_ms,
             });
+        }
+
+        // A mic that is muted, dead or rebuilding must not hold the system
+        // track back (see `mic_lag_padding`). Only on the mic clock: on the
+        // system clock `slice_or_zeros` already fills the mic. At stop the
+        // tolerance drops to zero so no captured system audio stays in RAM.
+        // Two short locks, never nested, the same as `align_secondary`.
+        if mix_active && clock_decided && !clock_on_secondary {
+            let tolerance = if cancelled { 0 } else { mic_lag_tolerance };
+            let s_len = audio_buffer_secondary.lock().map(|b| b.len()).unwrap_or(0);
+            let pad = match audio_buffer.lock() {
+                Ok(mut b) => {
+                    let pad = mic_lag_padding(b.len(), s_len, tolerance);
+                    if pad > 0 {
+                        let new_len = b.len() + pad;
+                        b.resize(new_len, 0.0);
+                    }
+                    pad
+                }
+                Err(_) => 0,
+            };
+            if pad > 0 {
+                mic_padded_samples += pad;
+                mic_pad_count += 1;
+                if mic_pad_count == 1 || mic_pad_count.is_multiple_of(100) {
+                    crate::log(&format!(
+                        "[Meeting] mic is behind the system audio (muted, dead or reopening) — \
+                         filled {:.1}s with silence so the recording keeps up \
+                         ({:.1}s in {} fill(s) so far)",
+                        pad as f64 / device_sample_rate as f64,
+                        mic_padded_samples as f64 / device_sample_rate as f64,
+                        mic_pad_count
+                    ));
+                }
+            }
         }
 
         // Take a snapshot of the SYNCED stream length up to which we'll
@@ -2526,6 +2593,14 @@ fn worker_loop(
             "[Meeting] {} window(s) never reached the transcriber (machine slower than realtime); \
              audio.ogg is complete — Regenerate transcript re-runs the whole recording",
             stt_dropped_chunks
+        ));
+    }
+    if mic_padded_samples > 0 {
+        crate::log(&format!(
+            "[Meeting] the mic fell behind {} time(s): {:.1}s of the mic track is silence \
+             Dimmy added so the system audio was written in full",
+            mic_pad_count,
+            mic_padded_samples as f64 / device_sample_rate as f64
         ));
     }
     let chunk_count = chunk_count_shared.load(std::sync::atomic::Ordering::Relaxed);
@@ -3342,6 +3417,166 @@ mod nemotron_track_fallback {
         });
         assert_eq!(opened, None);
         assert_eq!(attempts.get(), 1);
+    }
+}
+
+#[cfg(test)]
+mod a_slow_mic_never_throttles_the_recording {
+    //! 2026-11-05: the mic of a Bluetooth headset, muted from the keyboard,
+    //! delivered about a quarter of real time for most of a 65-minute call.
+    //! The writer advances on the mic, so the system track (the call itself,
+    //! arriving fine through the loopback) was written at the mic's pace:
+    //! 950 s of 3917 s reached the disk, the rest sat in RAM until stop.
+    use super::*;
+    use serial_test::serial;
+
+    const RATE: usize = 48_000;
+    const TOL: usize = RATE * MIC_LAG_TOLERANCE_SECS;
+
+    #[test]
+    fn a_mic_on_time_is_never_padded() {
+        let p = RATE * 60;
+        assert_eq!(mic_lag_padding(p, p, TOL), 0);
+        assert_eq!(mic_lag_padding(p, p + RATE / 10, TOL), 0, "callback jitter");
+        assert_eq!(
+            mic_lag_padding(p, p + TOL, TOL),
+            0,
+            "exactly at the tolerance"
+        );
+        assert_eq!(
+            mic_lag_padding(p + RATE, p, TOL),
+            0,
+            "a mic ahead is align_secondary's case, not this one"
+        );
+    }
+
+    #[test]
+    fn a_mic_past_the_tolerance_is_brought_level() {
+        let p = RATE * 10;
+        assert_eq!(mic_lag_padding(p, p + TOL + 1, TOL), TOL + 1);
+        assert_eq!(mic_lag_padding(0, RATE * 30, TOL), RATE * 30);
+    }
+
+    #[test]
+    fn at_stop_no_captured_system_sample_is_left_behind() {
+        assert_eq!(mic_lag_padding(100, 4_900, 0), 4_800);
+        assert_eq!(mic_lag_padding(100, 100, 0), 0);
+    }
+
+    /// Seconds of audio in a finished track, whichever sink wrote it.
+    fn track_secs(dir: &std::path::Path, base: &str) -> f64 {
+        for ext in ["ogg", "wav"] {
+            let p = dir.join(format!("{base}.{ext}"));
+            if p.is_file() {
+                let (pcm, rate) = crate::ffi::decode_via_symphonia(&p.to_string_lossy())
+                    .unwrap_or_else(|e| panic!("decode {}: {e}", p.display()));
+                return pcm.len() as f64 / rate as f64;
+            }
+        }
+        panic!("no {base} track in {}", dir.display());
+    }
+
+    /// Run the real worker for `secs` of wall clock. The system track gets a
+    /// 10 ms block every 10 ms, as a loopback does; the mic gets one full
+    /// block (so the meeting clocks on it, as it does with a real mic) and
+    /// then `mic_fraction` of each block. Returns (system s, mic s) on disk.
+    fn record(secs: f64, mic_fraction: f64) -> (f64, f64) {
+        // The transcription thread reads app state (the custom dictionary).
+        crate::ffi::tests::ensure_test_state();
+        let stt = SttSnapshot {
+            mode: "cloud".to_string(),
+            api_url: "https://test.invalid/".to_string(),
+            api_model: "x".to_string(),
+            api_key: Some("x".to_string()),
+            prompt: String::new(),
+            local_model: String::new(),
+            local_backend: "whisper".to_string(),
+            language: "en".to_string(),
+            chunk_secs: Some(60.0),
+            preprocessing_enabled: true,
+            speaker_labels: false,
+        };
+        let primary: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+        let secondary: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+        let session = MeetingSession::start(
+            primary.clone(),
+            secondary.clone(),
+            RATE as u32,
+            RATE as u32,
+            crate::audio::AudioSource::Mix,
+            stt,
+        )
+        .expect("meeting start");
+
+        let block = RATE / 100;
+        let mic_block = (block as f64 * mic_fraction) as usize;
+        let t0 = Instant::now();
+        let mut sent: u64 = 0;
+        let mut phase: usize = 0;
+        while t0.elapsed().as_secs_f64() < secs {
+            let due = Duration::from_millis(sent * 10);
+            let now = t0.elapsed();
+            if now < due {
+                thread::sleep(due - now);
+                continue;
+            }
+            let tone: Vec<f32> = (phase..phase + block)
+                .map(|i| (i as f32 * 0.0575).sin() * 0.3)
+                .collect();
+            phase += block;
+            secondary.lock().unwrap().extend_from_slice(&tone);
+            let n = if sent == 0 { block } else { mic_block };
+            primary
+                .lock()
+                .unwrap()
+                .extend(std::iter::repeat_n(0.0f32, n));
+            sent += 1;
+        }
+        let result = session.stop();
+        let out = (
+            track_secs(&result.dir, "audio_system"),
+            track_secs(&result.dir, "audio_mic"),
+        );
+        let _ = std::fs::remove_dir_all(&result.dir);
+        out
+    }
+
+    #[test]
+    #[serial]
+    fn a_muted_mic_at_a_quarter_of_real_time_still_records_the_whole_call() {
+        let secs = 5.0;
+        let (system, mic) = record(secs, 0.25);
+        assert!(
+            system >= secs * 0.9,
+            "system track {system:.2}s of a {secs}s call: the mic's pace throttled the recording"
+        );
+        assert!(
+            (mic - system).abs() < 0.1,
+            "tracks out of lockstep: mic {mic:.2}s, system {system:.2}s"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn a_mic_that_stops_delivering_still_records_the_whole_call() {
+        let secs = 5.0;
+        let (system, _) = record(secs, 0.0);
+        assert!(
+            system >= secs * 0.9,
+            "system track {system:.2}s of a {secs}s call after the mic went silent"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn a_healthy_mic_records_exactly_as_before() {
+        let secs = 5.0;
+        let (system, mic) = record(secs, 1.0);
+        assert!(system >= secs * 0.9, "system track {system:.2}s of {secs}s");
+        assert!(
+            (mic - system).abs() < 0.1,
+            "mic {mic:.2}s vs system {system:.2}s"
+        );
     }
 }
 

@@ -12014,7 +12014,7 @@ fn resolve_meeting_track(dir: &std::path::Path, base: &str) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use serial_test::serial;
     use std::ffi::c_char;
@@ -12689,7 +12689,7 @@ mod tests {
 
     /// Initialize GLOBAL_STATE with a minimal AppState for testing.
     /// Safe to call multiple times — OnceLock + Once ensure single init.
-    fn ensure_test_state() {
+    pub(crate) fn ensure_test_state() {
         INIT_TEST_STATE.call_once(|| {
             // Isolate every config-derived path (config.json, keys.enc, …)
             // into a per-process temp dir. Without this, tests that call

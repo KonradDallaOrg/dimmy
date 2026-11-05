@@ -33,6 +33,7 @@
 **Invariants (do NOT change).**
 - Meetings are ALWAYS `AudioSource::Mix`; legacy `audio_source` is ignored (ffi.rs:3634). Both streams run at 48kHz (audio.rs:24).
 - `align_secondary` enforces `secondary.len()==primary.len()` each 100ms tick (meeting.rs:778) — the only thing keeping mic and late-waking loopback wall-clock aligned.
+- Its mirror, `mic_lag_padding` (since 2026-11-05): when the mic trails the system track by more than 2 s (muted, dead, reopening), the mic buffer is filled with silence up to the system track, and at stop with no tolerance. The writer clocks on the mic, so without it a mic delivering a quarter of real time wrote the CALL at a quarter of real time (950 s of a 3917 s meeting). A healthy mic is never touched. Guard: `meeting.rs` `mod a_slow_mic_never_throttles_the_recording`.
 - AEC worker never blocks on an empty ref ring — it zero-pads the render frame (aec.rs:154) so mic always flows.
 - `join_bounded(120s)` (meeting.rs:447) guarantees `dimmy_meeting_stop` returns even if the worker/HAL wedges.
 - macOS: HAL destroy MUST run off-main (SystemAudioProcessTap.swift:595 `teardownQueue`, assert :614); aggregate uses `TapAutoStartKey=false` + explicit `AudioDeviceStart` (:188/:241) or Tahoe yields 0 samples; loopback rate MUST be the ASBD-read rate published before samples flow (SystemAudioCaptureService.swift:255/:160).
