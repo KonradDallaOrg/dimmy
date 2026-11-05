@@ -50,12 +50,19 @@ public static class DiarizationService
         }
         if (string.IsNullOrEmpty(dir) || !Enabled()) return liveTranscript;
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var labelled = await Task.Run(() =>
+        var vm = (Microsoft.UI.Xaml.Application.Current as App)?.AppViewModel;
+        if (vm != null) vm.TranscribesRunning++;
+        string? labelled;
+        try
         {
-            var buf = new byte[1 << 22];
-            int rc = DimmyNative.dimmy_meeting_retranscribe(dir, buf, buf.Length);
-            return rc > 0 ? System.Text.Encoding.UTF8.GetString(buf, 0, rc) : null;
-        });
+            labelled = await Task.Run(() =>
+            {
+                var buf = new byte[1 << 22];
+                int rc = DimmyNative.dimmy_meeting_retranscribe(dir, buf, buf.Length);
+                return rc > 0 ? System.Text.Encoding.UTF8.GetString(buf, 0, rc) : null;
+            });
+        }
+        finally { if (vm != null) vm.TranscribesRunning--; }
         App.Log($"diarized relabel {(labelled != null ? "ok" : "failed")} in {sw.Elapsed.TotalSeconds:F1}s", "Meeting");
         return string.IsNullOrWhiteSpace(labelled) ? liveTranscript : labelled!;
     }

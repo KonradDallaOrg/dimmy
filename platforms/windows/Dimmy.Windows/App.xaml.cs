@@ -1504,18 +1504,22 @@ public partial class App : Application
         if (name != nameof(AppViewModel.CurrentState)
             && name != nameof(AppViewModel.MeetingActive)
             && name != nameof(AppViewModel.MeetingPaused)
-            && name != nameof(AppViewModel.RecapsRunning)) return;
+            && name != nameof(AppViewModel.RecapsRunning)
+            && name != nameof(AppViewModel.TranscribesRunning)) return;
 
         var state = _appViewModel.CurrentState;
         var mActive = _appViewModel.MeetingActive;
         var mPaused = _appViewModel.MeetingPaused;
-        var recapRunning = _appViewModel.RecapsRunning > 0;
+        var recaps = _appViewModel.RecapsRunning;
+        var transcribes = _appViewModel.TranscribesRunning;
         _dispatcherQueue?.TryEnqueue(() =>
         {
-            if (name == nameof(AppViewModel.CurrentState)
-                || name == nameof(AppViewModel.RecapsRunning))
-                _taskbarService?.UpdateState(state, recapRunning);
-            _trayService?.UpdateState(state, mActive, mPaused, recapRunning);
+            if (name is nameof(AppViewModel.CurrentState)
+                or nameof(AppViewModel.RecapsRunning)
+                or nameof(AppViewModel.TranscribesRunning))
+                _taskbarService?.UpdateState(state, recaps, transcribes);
+            _trayService?.UpdateState(state, mActive, mPaused, recaps > 0,
+                transcribeRunning: transcribes > 0);
         });
     }
 

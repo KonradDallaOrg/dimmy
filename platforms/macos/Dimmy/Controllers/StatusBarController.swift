@@ -104,6 +104,11 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             .sink { [weak self] _ in self?.refreshIcon() }
             .store(in: &cancellables)
 
+        appState.$transcribesRunning
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.refreshIcon() }
+            .store(in: &cancellables)
+
         appState.$showInMenuBar
             .receive(on: DispatchQueue.main)
             .sink { [weak self] visible in
@@ -148,6 +153,14 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                                              accessibility: "Dimmy - Recap",
                                              paletteColor: .systemPurple)
             button.toolTip = "Generating recap"
+            return
+        }
+
+        if case .idle = state, appState.transcribesRunning > 0 {
+            button.image = Self.menuBarImage(symbolName: "ellipsis.circle.fill",
+                                             accessibility: "Dimmy - Transcribing",
+                                             paletteColor: .systemBlue)
+            button.toolTip = "Transcribing"
             return
         }
 

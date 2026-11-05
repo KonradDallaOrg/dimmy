@@ -3905,7 +3905,11 @@ public sealed partial class MeetingWindow : Window
                 ShowToast("A meeting is recording. Regenerate the transcript once it ends.");
                 return;
             }
-            var merged = await Task.Run(() => TranscribeMeetingDir(dir));
+            var vm = (Microsoft.UI.Xaml.Application.Current as App)?.AppViewModel;
+            if (vm != null) vm.TranscribesRunning++;
+            string merged;
+            try { merged = await Task.Run(() => TranscribeMeetingDir(dir)); }
+            finally { if (vm != null) vm.TranscribesRunning--; }
             if (string.IsNullOrWhiteSpace(merged))
             {
                 ShowToast("No audio found in meeting folder.");

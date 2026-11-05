@@ -123,17 +123,19 @@ public sealed class TaskbarService : IDisposable
     }
 
     /// <summary>Apply overlay icon + progress bar matching the given state.
-    /// <paramref name="recapRunning"/> keeps the taskbar busy while a recap
+    /// <paramref name="recapsRunning"/> keeps the taskbar busy while a recap
     /// runs with the dictation state back at idle - a meeting stopped from
     /// the pill, or a Telegram audio, which showed a clean idle icon for the
-    /// minutes the model was writing.</summary>
-    public void UpdateState(AppState state, bool recapRunning = false)
+    /// minutes the model was writing. <paramref name="transcribesRunning"/>
+    /// does the same for Regenerate transcript and a loaded file.</summary>
+    public void UpdateState(AppState state, int recapsRunning = 0, int transcribesRunning = 0)
     {
         if (_taskbar is null || _disposed) return;
 
-        // A recap borrows the Processing look: same "working, no percentage"
-        // meaning, and no new icon to bake.
-        if (AppViewModel.ShowsRecap(state, recapRunning ? 1 : 0)) state = AppState.Processing;
+        // A recap borrows the Processing look and a background transcription
+        // the Transcribing one: same meaning, and no new icon to bake.
+        var recapRunning = AppViewModel.ShowsRecap(state, recapsRunning);
+        state = AppViewModel.IndicatedState(state, recapsRunning, transcribesRunning);
 
         // Idle clears the overlay so the user gets the clean Dimmy icon
         // when nothing is happening.

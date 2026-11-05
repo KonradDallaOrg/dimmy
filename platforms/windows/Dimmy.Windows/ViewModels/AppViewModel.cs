@@ -235,6 +235,23 @@ public partial class AppViewModel : ObservableObject
     public static bool ShowsRecap(AppState state, int recapsRunning)
         => state == AppState.Idle && recapsRunning > 0;
 
+    /// <summary>Transcriptions that run with the dictation state at idle:
+    /// Regenerate transcript, the speaker relabel after a stop, a loaded
+    /// file. Counted like <see cref="RecapsRunning"/>, and unlike setting
+    /// Transcribing it does not make the app busy, so a dictation can still
+    /// start while a meeting re-transcribes.</summary>
+    [ObservableProperty] private int _transcribesRunning;
+
+    /// <summary>The state the taskbar and the tray show: the app's own,
+    /// or, while idle, the background work. A recap wins over a
+    /// transcription.</summary>
+    public static AppState IndicatedState(AppState state, int recapsRunning, int transcribesRunning)
+    {
+        if (state != AppState.Idle) return state;
+        if (recapsRunning > 0) return AppState.Processing;
+        return transcribesRunning > 0 ? AppState.Transcribing : AppState.Idle;
+    }
+
     /// <summary>True when the app is doing something (recording, transcribing, processing) and should not start a new recording.</summary>
     public bool IsBusy => CurrentState is AppState.Recording or AppState.Transcribing or AppState.Processing;
 

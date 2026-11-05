@@ -598,7 +598,7 @@ public class TrayService : IDisposable
     /// Meeting state takes precedence over dictation state because meetings can
     /// last for minutes/hours while the dictation state stays Idle the whole time.</summary>
     public void UpdateState(AppState state, bool meetingActive, bool meetingPaused,
-        bool recapRunning = false, string? tooltip = null)
+        bool recapRunning = false, string? tooltip = null, bool transcribeRunning = false)
     {
         if (!_iconAdded) return;
 
@@ -622,6 +622,8 @@ public class TrayService : IDisposable
         // away from being used again, and is a better fit somewhere with
         // room for it than in a 16-pixel slot.
         else if (recapRunning)              { stateSlug = "processing";  tip = "Dimmy — Writing the recap…"; }
+        else if (transcribeRunning && state == AppState.Idle)
+                                            { stateSlug = "transcribing"; tip = "Dimmy — Transcribing…"; }
         else
         {
             switch (state)

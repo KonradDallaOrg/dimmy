@@ -1033,8 +1033,15 @@ public sealed partial class SettingsWindow : Window
         {
             const int BufLen = 1 << 22;
             var buf = new byte[BufLen];
-            int rc = await System.Threading.Tasks.Task.Run(() =>
-                DimmyNative.dimmy_transcribe_file(path, buf, BufLen));
+            var vm = (Microsoft.UI.Xaml.Application.Current as App)?.AppViewModel;
+            if (vm != null) vm.TranscribesRunning++;
+            int rc;
+            try
+            {
+                rc = await System.Threading.Tasks.Task.Run(() =>
+                    DimmyNative.dimmy_transcribe_file(path, buf, BufLen));
+            }
+            finally { if (vm != null) vm.TranscribesRunning--; }
             if (rc < 0)
             {
                 FileLoadStatus.Text = rc switch
