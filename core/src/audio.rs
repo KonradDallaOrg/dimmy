@@ -657,7 +657,11 @@ pub fn spawn_audio_thread(
                                         && bound_input_rate.is_some();
                                     let now = mono_ms();
                                     let last_signal = MIC_LAST_SIGNAL_MS.load(Ordering::Relaxed);
-                                    if now.saturating_sub(last_signal) < 1_000 {
+                                    if mic_came_back(
+                                        now,
+                                        last_signal,
+                                        MIC_OPENED_MS.load(Ordering::Relaxed),
+                                    ) {
                                         silence_backoff_ms = SILENCE_FIRST_RETRY_MS;
                                         silence_retry_at_ms = 0;
                                     }
@@ -1073,7 +1077,7 @@ pub fn spawn_audio_thread(
                         let wake1 = wake.clone();
                         let wake2 = wake.clone();
                         let track_silence = !primary_is_loopback;
-                        note_mic_callback(true, &wake);
+                        note_mic_stream_opened(&wake);
                         let s = match config.sample_format() {
                             cpal::SampleFormat::F32 => {
                                 let pr = primary_resampler.clone();
@@ -1573,6 +1577,25 @@ fn note_mic_callback(has_signal: bool, wake: &crate::device_events::Wake) {
 fn mic_digitally_silent(now_ms: u64, last_signal_ms: u64, last_callback_ms: u64) -> bool {
     now_ms.saturating_sub(last_callback_ms) < 1_500
         && now_ms.saturating_sub(last_signal_ms) >= MIC_SILENCE_MS
+}
+
+/// `mono_ms()` of the last mic stream build.
+static MIC_OPENED_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// A fresh mic stream starts as if it had just heard signal, so it gets the
+/// full `MIC_SILENCE_MS` before it can be judged silent.
+fn note_mic_stream_opened(wake: &crate::device_events::Wake) {
+    MIC_OPENED_MS.store(mono_ms(), Ordering::Relaxed);
+    note_mic_callback(true, wake);
+}
+
+/// Fresh signal that the device produced at least a second after the stream
+/// opened. Only that resets the reopen backoff: the seed from
+/// `note_mic_stream_opened`, or a click as the device opens, is not the mic
+/// coming back, and treating it as such rebuilt a muted mic every 4 s.
+fn mic_came_back(now_ms: u64, last_signal_ms: u64, opened_ms: u64) -> bool {
+    now_ms.saturating_sub(last_signal_ms) < 1_000
+        && last_signal_ms.saturating_sub(opened_ms) >= 1_000
 }
 
 #[derive(Debug, PartialEq)]
@@ -2744,6 +2767,30 @@ mod tests {
         assert!(!mic_digitally_silent(10_000, 9_900, 9_990));
         // No callbacks at all is stream death, not silence.
         assert!(!mic_digitally_silent(10_000, 1_000, 7_000));
+    }
+
+    /// 2026-11-05: a headset mic muted from the keyboard was reopened every
+    /// 4 s (581 times in the 41 minutes the log still held) instead of
+    /// backing off to 60 s.
+    /// Every rebuild seeds "signal just now" so the fresh stream gets its
+    /// full grace, and the next check, under a second later, took that seed
+    /// for the mic coming back and reset the backoff.
+    #[test]
+    fn the_reopen_seed_is_not_the_mic_coming_back() {
+        let opened = 100_000;
+        // The seed itself, seen 300 ms after the rebuild.
+        assert!(!mic_came_back(opened + 300, opened, opened));
+        // A click as the device opens is not a mic either.
+        assert!(!mic_came_back(opened + 600, opened + 200, opened));
+    }
+
+    #[test]
+    fn a_mic_that_really_came_back_resets_the_backoff() {
+        let opened = 100_000;
+        // Teams let go of the device; signal keeps flowing after the rebuild.
+        assert!(mic_came_back(opened + 5_200, opened + 5_000, opened));
+        // But only while it is fresh.
+        assert!(!mic_came_back(opened + 9_000, opened + 5_000, opened));
     }
 
     const HFP: &str = "Cuffia auricolare (HD 350BT)";
