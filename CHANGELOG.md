@@ -22,9 +22,47 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   once-a-second check. A check every 5 s stays as a safety net. On a Mac
   that check had never run during a meeting at all: the system-audio
   stream kept the audio thread too busy for it.
+- Meetings were written at the microphone's pace. The meeting writer advanced
+  on the mic buffer, so a mic delivering about 25% of real time (a disabled
+  Bluetooth headset mic) wrote the system track at that pace; the rest stayed
+  in RAM and was dropped at stop (950 s of a 3917 s call). The mic track is now
+  padded with silence when it trails the system track by more than 2 s, with
+  zero tolerance at stop. No mic sample is dropped.
+- The digital-silence recovery reopened both streams every 4 s. Each reopen
+  seeded "signal just now" for its grace period, and the next check took the
+  seed for the mic coming back and reset the 5 s to 60 s backoff. Only signal
+  produced at least 1 s after the open resets it now.
+- Windows: a mic switch from the Teams menu ended an auto-recorded call. Teams
+  capture sessions go idle for 0.3 to 1.1 s and only Dimmy holds the mic, which
+  read as a hang-up. The verdict now also checks that the call app is still
+  playing audio.
+- Mac: a headset switch ended an auto-recorded meeting. A release of the call
+  app's audio read as a hang-up; the host now asks whether the call's media
+  stream is still connected, and waits 90 s when it cannot tell.
+- Taskbar, tray and menu bar showed idle during a regenerate, a speaker relabel
+  or a file transcription, because those run with the dictation state idle. A
+  running-transcriptions counter now drives the transcribing look.
+- Windows: the mic picker read the device snapshot taken at core init, so a
+  device plugged in later never appeared. It now enumerates on open.
+- Statistics and crash reports started on at every launch and the toggle was
+  never saved; panics reached Sentry with the switch off, because Sentry's
+  panic integration bypassed the scrubber. Both now start off and follow a
+  saved answer.
+- The Telegram session file held the auth key in plaintext. It is now sealed
+  with the machine key; a legacy file is converted once.
+- The 99 euro plan was labelled "Lifetime" while it lasts 1095 days.
+- Windows: pill window sizes were not scaled by monitor DPI, which clipped the
+  tip at 125 to 150%.
 
 ### Added
 
+- Terms of Service acceptance in onboarding, and a once-per-launch prompt for
+  installs that accepted an older version or none.
+- About: AGPL notice, versioned source link, licence and third-party notices.
+- Statistics and crash-report consent dialog, two equal answers.
+- Pill redesign on Windows and Mac, with snap to corners and edge middles and a
+  vertical layout on the sides.
+- Meeting notes visible and editable while recording.
 - Nemotron (NVIDIA Nemotron 3.5 ASR Streaming 0.6B) as a fifth local speech
   engine. Dictation types as you speak, whole words at a time, and corrects a
   word it just typed when it hears it better. The language is detected on its
@@ -41,6 +79,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the pause, instead of writing everything when the meeting stops. With a GPU
   the transcript and the speakers are ready the moment you stop.
 - Optional full-precision Nemotron model for machines with a GPU.
+
+### Changed
+
+- Meeting window layout: speaker names on the waveform lanes, collapsible
+  waveform and recap, a list you can hide.
+- Windows mic list starts with System default.
 
 ## [0.7.14] - 2026-10-23
 
