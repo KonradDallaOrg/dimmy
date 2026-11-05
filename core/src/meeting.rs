@@ -3468,7 +3468,8 @@ mod a_slow_mic_never_throttles_the_recording {
         for ext in ["ogg", "wav"] {
             let p = dir.join(format!("{base}.{ext}"));
             if p.is_file() {
-                let (pcm, rate) = crate::ffi::decode_via_symphonia(&p.to_string_lossy())
+                // Ogg on Windows/macOS, WAV on Linux: hound for the WAV.
+                let (pcm, rate) = crate::ffi::decode_audio_any(&p.to_string_lossy())
                     .unwrap_or_else(|e| panic!("decode {}: {e}", p.display()));
                 return pcm.len() as f64 / rate as f64;
             }
