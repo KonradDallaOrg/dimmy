@@ -3018,7 +3018,7 @@
                             HorizontalAlignment="Stretch">
                       <StackPanel Spacing="{StaticResource DimmySpaceXS}">
                         <TextBlock x:Name="LicenseBuyMonthlyLabel" Text="Monthly" FontWeight="SemiBold" />
-                        <TextBlock Text="recurring" Style="{StaticResource DimmyCaption}" />
+                        <TextBlock x:Name="LicenseBuyMonthlyCaption" Text="recurring" Style="{StaticResource DimmyCaption}" />
                       </StackPanel>
                     </Button>
                     <Button Grid.Column="1" x:Name="LicenseBuyAnnualButton"
@@ -3027,7 +3027,7 @@
                             Style="{ThemeResource AccentButtonStyle}">
                       <StackPanel Spacing="{StaticResource DimmySpaceXS}">
                         <TextBlock x:Name="LicenseBuyAnnualLabel" Text="Annual" FontWeight="SemiBold" />
-                        <TextBlock Text="best value" Style="{StaticResource DimmyLabel}" Opacity="0.85" />
+                        <TextBlock x:Name="LicenseBuyAnnualCaption" Text="best value" Style="{StaticResource DimmyLabel}" Opacity="0.85" />
                       </StackPanel>
                     </Button>
                     <Button Grid.Column="2" x:Name="LicenseBuyLifetimeButton"
@@ -3035,7 +3035,7 @@
                             HorizontalAlignment="Stretch">
                       <StackPanel Spacing="{StaticResource DimmySpaceXS}">
                         <TextBlock x:Name="LicenseBuyLifetimeLabel" Text="Supporter" FontWeight="SemiBold" />
-                        <TextBlock Text="once · 3 years" Style="{StaticResource DimmyCaption}" />
+                        <TextBlock x:Name="LicenseBuyLifetimeCaption" Text="once · 3 years" Style="{StaticResource DimmyCaption}" />
                       </StackPanel>
                     </Button>
                   </Grid>

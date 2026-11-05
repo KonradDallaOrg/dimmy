@@ -10820,9 +10820,10 @@ impl From<LicenseStatus> for LicenseStatusWire {
     }
 }
 
-/// Override the licensing server URL at runtime. **Debug-only** — gated
-/// behind `cfg(debug_assertions)` so release binaries simply do not
-/// export the symbol. Used only by scripted local tests that point a
+/// Override the licensing server URL at runtime. **Debug or `test-ffi`
+/// only** — release binaries simply do not export the symbol (the
+/// `test-ffi` release build that CI's FFI suites use never ships; the
+/// installer gate refuses a DLL built with it). Used only by scripted local tests that point a
 /// debug build at an alternative endpoint (e.g. a `wrangler dev` mock
 /// running on a different port). Release builds embed the URL via
 /// `DIMMY_LICENSE_SERVER_URL` at compile time and refuse to be
@@ -10834,7 +10835,7 @@ impl From<LicenseStatus> for LicenseStatusWire {
 ///
 /// # Safety
 /// `url_ptr` must be a valid null-terminated UTF-8 C string.
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, feature = "test-ffi"))]
 #[no_mangle]
 pub unsafe extern "C" fn dimmy_license_set_server_url(url_ptr: *const c_char) -> c_int {
     if url_ptr.is_null() {
@@ -11091,6 +11092,93 @@ pub unsafe extern "C" fn dimmy_license_checkout_url(
         email.as_deref(),
     )) {
         Ok(v) => v,
+        Err(e) => serde_json::json!({"ok": false, "error": format!("{}", e)}),
+    };
+    write_to_buf(&json.to_string(), buf, buf_len)
+}
+
+/// `GET /api/config` via FFI: are the paid plans on sale? Writes
+/// `{ok, sales_open}` or `{ok:false, error}`. The host reads it once when
+/// the licence page opens; closed shows "I'd buy this" instead of Buy.
+///
+/// # Safety
+/// `buf` must point to at least `buf_len` bytes of writable memory.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_license_sales_open(buf: *mut c_char, buf_len: c_int) -> c_int {
+    let server = licensing_server_url();
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(r) => r,
+        Err(e) => return write_license_err(buf, buf_len, &format!("runtime: {}", e)),
+    };
+    let json = match rt.block_on(license::fetch_sales_open(&server)) {
+        Ok(open) => serde_json::json!({"ok": true, "sales_open": open}),
+        Err(e) => serde_json::json!({"ok": false, "error": format!("{}", e)}),
+    };
+    write_to_buf(&json.to_string(), buf, buf_len)
+}
+
+/// `POST /api/lead` (source `app_interest`) via FFI: the user wants
+/// `tier` and asks to be written to when sales open. `contact_consent`
+/// is the state of the dialog's checkbox (1 = ticked); the server
+/// refuses the lead without it. Writes `{ok, error?}`.
+///
+/// # Safety
+/// `tier_ptr` and `email_ptr` must be valid null-terminated UTF-8 C strings.
+/// `buf` must point to at least `buf_len` bytes of writable memory.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_license_register_interest(
+    tier_ptr: *const c_char,
+    email_ptr: *const c_char,
+    contact_consent: c_int,
+    buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if tier_ptr.is_null() || email_ptr.is_null() {
+        return write_license_err(buf, buf_len, "tier and email required");
+    }
+    let tier = unsafe { CStr::from_ptr(tier_ptr) }
+        .to_string_lossy()
+        .into_owned();
+    let tier: &'static str = match tier.as_str() {
+        "monthly" => "monthly",
+        "annual" => "annual",
+        "lifetime" => "lifetime",
+        _ => return write_license_err(buf, buf_len, "tier must be monthly, annual, or lifetime"),
+    };
+    let email = unsafe { CStr::from_ptr(email_ptr) }
+        .to_string_lossy()
+        .trim()
+        .to_lowercase();
+    if !email.contains('@') {
+        return write_license_err(buf, buf_len, "valid email required");
+    }
+    // The dictation language is the best hint for which language to
+    // write in; the server keeps only the codes it knows (it, en).
+    let locale = if is_initialized() {
+        state()
+            .language
+            .lock()
+            .map(|l| l.chars().take(2).collect::<String>())
+            .ok()
+    } else {
+        None
+    };
+    let server = licensing_server_url();
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(r) => r,
+        Err(e) => return write_license_err(buf, buf_len, &format!("runtime: {}", e)),
+    };
+    let json = match rt.block_on(license::register_interest(
+        &server,
+        tier,
+        &email,
+        locale.as_deref(),
+        contact_consent == 1,
+    )) {
+        Ok(()) => {
+            track(Event::LicenseInterestRegistered { tier });
+            serde_json::json!({"ok": true})
+        }
         Err(e) => serde_json::json!({"ok": false, "error": format!("{}", e)}),
     };
     write_to_buf(&json.to_string(), buf, buf_len)

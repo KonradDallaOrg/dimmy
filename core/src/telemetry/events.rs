@@ -260,6 +260,12 @@ pub enum Event {
         /// it deactivated another device under the same license.
         is_self: bool,
     },
+    /// "I'd buy this" sent while sales are closed. The email goes to the
+    /// licensing server only, never here.
+    LicenseInterestRegistered {
+        /// "monthly" | "annual" | "lifetime"
+        tier: &'static str,
+    },
 
     // ── Meeting mode ────────────────────────────────────────────
     //
@@ -611,6 +617,7 @@ impl Event {
             Event::LicenseRefreshFailed { .. } => "license.refresh_failed",
             Event::LicenseScopeDenied { .. } => "license.scope_denied",
             Event::LicenseDeviceDeactivated { .. } => "license.device_deactivated",
+            Event::LicenseInterestRegistered { .. } => "license.interest_registered",
             Event::MeetingStarted => "meeting.started",
             Event::MeetingStopped { .. } => "meeting.stopped",
             Event::MeetingPaused => "meeting.paused",
@@ -832,6 +839,7 @@ mod tests {
                 scope: "managed_stt",
             },
             Event::LicenseDeviceDeactivated { is_self: true },
+            Event::LicenseInterestRegistered { tier: "annual" },
         ];
         let banned_keys = [
             "email",
@@ -963,6 +971,7 @@ mod tests {
             }
             .name(),
             Event::LicenseDeviceDeactivated { is_self: false }.name(),
+            Event::LicenseInterestRegistered { tier: "lifetime" }.name(),
         ];
         for n in names {
             assert!(

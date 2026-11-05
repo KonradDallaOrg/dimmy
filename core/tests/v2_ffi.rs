@@ -41,7 +41,8 @@ use dimmy_lib::ffi::{
     dimmy_get_config_json, dimmy_get_loopback_amplitude, dimmy_hardware_json, dimmy_history_save,
     dimmy_history_update_audio, dimmy_history_update_enhanced,
     dimmy_history_update_word_timestamps, dimmy_hotkey_combos_conflict, dimmy_hotkey_set_command,
-    dimmy_hotkey_take_command_event, dimmy_init, dimmy_license_text, dimmy_llm_call_raw,
+    dimmy_hotkey_take_command_event, dimmy_init, dimmy_license_register_interest,
+    dimmy_license_sales_open, dimmy_license_set_server_url, dimmy_license_text, dimmy_llm_call_raw,
     dimmy_meeting_is_active, dimmy_meeting_save_post_process, dimmy_model_catalog_json,
     dimmy_model_delete, dimmy_model_download_cancel, dimmy_model_download_enqueue,
     dimmy_model_download_snapshot_json, dimmy_push_loopback_audio, dimmy_set_app_context,
@@ -1758,4 +1759,73 @@ fn call_live_media_never_crashes() {
     assert_eq!(dimmy_call_live_media(-5), -1);
     let rc = dimmy_call_live_media(std::process::id() as c_int);
     assert!(rc >= -1, "rc {rc}");
+}
+
+// ── Licence: sales switch + interest list ──────────────────────────────
+
+fn ffi_json(f: impl FnOnce(*mut c_char, c_int) -> c_int) -> serde_json::Value {
+    let mut buf = vec![0u8; 1024];
+    let n = f(buf.as_mut_ptr() as *mut c_char, buf.len() as c_int);
+    assert!(n > 0, "ffi wrote nothing (rc {n})");
+    serde_json::from_slice(&buf[..n as usize]).expect("ffi json")
+}
+
+#[test]
+#[serial]
+fn license_sales_open_and_register_interest_round_trip() {
+    use wiremock::matchers::{body_partial_json, method, path};
+    ensure_init();
+    // The mock server lives on its own runtime; the FFI builds another.
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let server = rt.block_on(async {
+        let s = wiremock::MockServer::start().await;
+        wiremock::Mock::given(method("GET"))
+            .and(path("/api/config"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"sales_open": false})),
+            )
+            .mount(&s)
+            .await;
+        wiremock::Mock::given(method("POST"))
+            .and(path("/api/lead"))
+            .and(body_partial_json(serde_json::json!({
+                "email": "ada@example.com",
+                "tier": "lifetime",
+                "source": "app_interest",
+                "contact_consent": true,
+            })))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})),
+            )
+            .expect(1)
+            .mount(&s)
+            .await;
+        s
+    });
+    let url = CString::new(server.uri()).unwrap();
+    assert_eq!(unsafe { dimmy_license_set_server_url(url.as_ptr()) }, 0);
+
+    let j = ffi_json(|b, n| unsafe { dimmy_license_sales_open(b, n) });
+    assert_eq!(j["ok"], true);
+    assert_eq!(j["sales_open"], false);
+
+    let tier = CString::new("lifetime").unwrap();
+    let email = CString::new("  Ada@Example.com ").unwrap();
+    let j = ffi_json(|b, n| unsafe {
+        dimmy_license_register_interest(tier.as_ptr(), email.as_ptr(), 1, b, n)
+    });
+    assert_eq!(j["ok"], true, "{j}");
+
+    // Guards before the network: bad tier, no email.
+    let bad = CString::new("platinum").unwrap();
+    let j = ffi_json(|b, n| unsafe {
+        dimmy_license_register_interest(bad.as_ptr(), email.as_ptr(), 1, b, n)
+    });
+    assert_eq!(j["ok"], false);
+    let j = ffi_json(|b, n| unsafe {
+        dimmy_license_register_interest(tier.as_ptr(), std::ptr::null(), 1, b, n)
+    });
+    assert_eq!(j["ok"], false);
+    drop(rt);
 }

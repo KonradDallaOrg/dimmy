@@ -462,6 +462,18 @@ int32_t dimmy_license_checkout_url(const char * _Nonnull tier,
 /// Only valid for paid licenses.
 int32_t dimmy_license_billing_portal_url(char * _Nonnull out_buf, int32_t buf_len);
 
+/// GET /api/config — writes {ok, sales_open}. Closed shows "I'd buy this".
+int32_t dimmy_license_sales_open(char * _Nonnull out_buf, int32_t buf_len);
+
+/// POST /api/lead (source app_interest) — "I'd buy this" while sales are
+/// closed. `contact_consent` is the dialog's checkbox (1 = ticked); the
+/// server refuses the lead without it. Writes {ok, error?}.
+int32_t dimmy_license_register_interest(const char * _Nonnull tier,
+                                        const char * _Nonnull email,
+                                        int32_t contact_consent,
+                                        char * _Nonnull out_buf,
+                                        int32_t buf_len);
+
 /// POST /api/plan-change — switch monthly⇄annual via Stripe subscription
 /// update API (proration handled server-side). Reject path: lifetime tier
 /// or first-purchase. After success, callers should call dimmy_license_refresh

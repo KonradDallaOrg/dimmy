@@ -114,7 +114,9 @@ dimmy_license_has_scope
 dimmy_license_plan_change
 dimmy_license_redeem
 dimmy_license_refresh
+dimmy_license_register_interest
 dimmy_license_request_trial
+dimmy_license_sales_open
 dimmy_license_status_json
 dimmy_license_text
 dimmy_list_devices_json

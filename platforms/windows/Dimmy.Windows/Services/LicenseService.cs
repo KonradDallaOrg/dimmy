@@ -201,6 +201,31 @@ public static class LicenseService
             return ParseOp(buf, n);
         });
 
+    /// GET /api/config — are the paid plans on sale? null when the server
+    /// could not be reached; the caller keeps sales closed in that case.
+    public static Task<bool?> SalesOpenAsync() =>
+        Task.Run<bool?>(() =>
+        {
+            var buf = new byte[Buf];
+            int n = DimmyNative.dimmy_license_sales_open(buf, buf.Length);
+            if (n < 0) return null;
+            var w = JsonSerializer.Deserialize<SalesWire>(
+                Encoding.UTF8.GetString(buf, 0, n), JsonOpts);
+            return w is { Ok: true } ? w.SalesOpen : null;
+        });
+
+    /// POST /api/lead (source app_interest) — "I'd buy this" while sales are
+    /// closed. contactConsent is the dialog's checkbox; the server refuses
+    /// the lead without it.
+    public static Task<OpResult> RegisterInterestAsync(string tier, string email, bool contactConsent) =>
+        Task.Run(() =>
+        {
+            var buf = new byte[Buf];
+            int n = DimmyNative.dimmy_license_register_interest(
+                tier, email, contactConsent ? 1 : 0, buf, buf.Length);
+            return ParseOp(buf, n);
+        });
+
     /// POST /api/billing-portal — returns Stripe Customer Portal URL.
     /// Only valid for licenses with stripe_customer_id (paid).
     public static Task<UrlResult> BillingPortalUrlAsync() =>
@@ -256,6 +281,12 @@ public static class LicenseService
         [JsonPropertyName("updates_enabled")] public bool UpdatesEnabled { get; set; }
         [JsonPropertyName("scopes")]         public List<string>? Scopes { get; set; }
         [JsonPropertyName("cancels_at")]     public long? CancelsAt { get; set; }
+    }
+
+    private sealed class SalesWire
+    {
+        [JsonPropertyName("ok")]         public bool Ok { get; set; }
+        [JsonPropertyName("sales_open")] public bool SalesOpen { get; set; }
     }
 
     private sealed class OpWire
