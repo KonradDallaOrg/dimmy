@@ -1829,14 +1829,18 @@ jobs:
   # built for macOS 26 and the app died at launch on Sonoma, which no check
   # on a macOS 26 runner can see. This opens the DMG that users download on
   # older macOS, with Homebrew moved away, and requires it to stay up 8 s.
-  # It gates publish: a release that cannot start on 14 must not go public.
+  # It gates publish: a release that cannot start there must not go public.
+  # macos-14 was dropped 2026-11-05: GitHub retired the image ("configuration
+  # 'macos-14-arm64-us-default' is not supported"), the leg came back
+  # cancelled and held every release as a draft. The app still targets 14.0,
+  # so Sonoma launches are no longer checked by CI.
   launch-macos-older:
     name: Launch on ${{ matrix.os }}
     needs: build-macos
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, macos-15]
+        os: [macos-15]
     runs-on: ${{ matrix.os }}
     steps:
       - name: Download the DMG from the draft release
