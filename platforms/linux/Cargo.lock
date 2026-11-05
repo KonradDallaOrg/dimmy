@@ -1021,6 +1021,7 @@ dependencies = [
  "base64 0.22.1",
  "biquad",
  "chrono",
+ "coreaudio-sys",
  "cpal",
  "dagc",
  "dirs 5.0.1",
@@ -1046,6 +1047,7 @@ dependencies = [
  "vorbis_rs",
  "whisper-rs",
  "windows 0.62.2",
+ "windows-core 0.62.2",
  "zip",
 ]
 
