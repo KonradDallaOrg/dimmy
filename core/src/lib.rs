@@ -48,6 +48,7 @@ pub mod gtcrn;
 pub mod hardware;
 pub mod history;
 mod hotkey;
+mod hotkey_recorder;
 pub mod keystore;
 pub mod lang_detect;
 /// Licensing — local-server PoC for the v2 architecture (see

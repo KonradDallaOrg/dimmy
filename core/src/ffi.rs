@@ -8505,8 +8505,8 @@ pub extern "C" fn dimmy_history_delete(id: c_int) -> c_int {
 
 // ── Hotkey (low-level keyboard hook) ─────────────────────────────
 
-/// Install the global keyboard hook. Call once at startup.
-/// The hook runs on a background thread with its own message pump.
+/// Install the global keyboard hook. The hook runs on a background thread
+/// with its own message pump. Later calls are no-ops.
 #[no_mangle]
 pub extern "C" fn dimmy_hotkey_install() {
     crate::hotkey::install(|msg| crate::log(&format!("[Hotkey] {}", msg)));
@@ -10143,35 +10143,73 @@ pub unsafe extern "C" fn dimmy_track_meeting_action(source_ptr: *const c_char) {
     crate::telemetry::track(crate::telemetry::Event::FeatureMeetingShortcut { source });
 }
 
-/// Start recording mode for shortcut capture.
+/// Open the shortcut recorder behind a settings dialog. From now until
+/// `dimmy_hotkey_recorder_stop`, the keys the user presses build a new
+/// shortcut instead of triggering the current ones, and every change is
+/// published as one `hotkey_recorder` event:
+///
+/// `{"target":"command","keys":["Ctrl","Shift","D"],"combo":"ctrl+shift+d",
+///   "can_save":true,"error":"","warnings":[],
+///   "mods":{"win":false,"ctrl":true,"alt":false,"shift":true,"fn":false},
+///   "native_key":68}`
+///
+/// `target` is `dictation` | `command` | `meeting` | `dictionary`.
+/// `current_json` holds the shortcuts configured now, keyed the same way, so
+/// the verdict can name a conflict. Returns 0, -1 for a null or unknown
+/// target, -2 when `current_json` is not a JSON object.
+///
+/// # Safety
+/// Both arguments must be null or valid null-terminated UTF-8 C strings.
 #[no_mangle]
-pub extern "C" fn dimmy_hotkey_start_recording() {
-    crate::hotkey::start_recording();
+pub unsafe extern "C" fn dimmy_hotkey_recorder_start(
+    target: *const c_char,
+    current_json: *const c_char,
+) -> c_int {
+    if target.is_null() || current_json.is_null() {
+        return -1;
+    }
+    let Some(t) = crate::hotkey_recorder::Target::parse(&CStr::from_ptr(target).to_string_lossy())
+    else {
+        return -1;
+    };
+    let Some(current) =
+        crate::hotkey_recorder::Current::from_json(&CStr::from_ptr(current_json).to_string_lossy())
+    else {
+        return -2;
+    };
+    crate::hotkey_recorder::start(t, current);
+    crate::log(&format!("[Hotkey] recorder opened for {}", t.id()));
+    0
 }
 
-/// Poll recording: scans for pressed key combo via GetAsyncKeyState.
-/// Call this every ~100ms while recording a new shortcut.
+/// Close the shortcut recorder: the configured shortcuts work again.
+/// Harmless when none is open.
 #[no_mangle]
-pub extern "C" fn dimmy_hotkey_poll_recording() {
-    crate::hotkey::poll_recording_keys();
-}
-
-/// Take the recorded shortcut. Returns bytes written to buf, or 0 if not ready.
-/// Format: JSON `{"label":"Ctrl+Shift+X","combo":"Ctrl+Shift+X"}`.
-#[no_mangle]
-pub extern "C" fn dimmy_hotkey_take_recorded(buf: *mut c_char, buf_len: c_int) -> c_int {
-    if let Some((label, combo)) = crate::hotkey::take_recorded() {
-        let json = serde_json::json!({"label": label, "combo": combo});
-        write_to_buf(&json.to_string(), buf, buf_len)
-    } else {
-        0
+pub extern "C" fn dimmy_hotkey_recorder_stop() {
+    if crate::hotkey_recorder::stop() {
+        crate::log("[Hotkey] recorder closed");
     }
 }
 
-/// Stop recording mode.
+/// 1 while a shortcut dialog is recording, else 0. The macOS event taps
+/// (HotkeyManager, DictHotkeyManager) check it on every key and step aside,
+/// so pressing the current shortcut in the dialog doesn't fire it.
 #[no_mangle]
-pub extern "C" fn dimmy_hotkey_stop_recording() {
-    crate::hotkey::stop_recording();
+pub extern "C" fn dimmy_hotkey_recorder_is_active() -> c_int {
+    crate::hotkey_recorder::is_active() as c_int
+}
+
+/// macOS host: hand one key event from the sheet's event monitors to the
+/// recorder (`native_code` = the keycode). Windows doesn't call this, its
+/// keyboard hook feeds the recorder directly. Returns 1 when the key belongs
+/// to the shortcut (consume it), 0 when it must reach the sheet (Tab, Enter,
+/// Esc on their own) or no recorder is open.
+#[no_mangle]
+pub extern "C" fn dimmy_hotkey_recorder_key(native_code: u32, is_down: c_int) -> c_int {
+    match crate::hotkey_recorder::feed(native_code, is_down != 0, false) {
+        crate::hotkey_recorder::Decision::Pass => 0,
+        _ => 1,
+    }
 }
 
 // ── Telemetry ─────────────────────────────────────────────────────────
@@ -12767,6 +12805,130 @@ pub(crate) mod tests {
         if let Ok(mut guard) = EVENT_CALLBACK.lock() {
             *guard = None;
         }
+    }
+
+    // ── shortcut recorder ────────────────────────────────────────
+
+    static RECORDER_EVENTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    extern "C" fn recorder_callback(ptr: *const c_char) {
+        let json = unsafe { CStr::from_ptr(ptr) }
+            .to_string_lossy()
+            .into_owned();
+        if json.contains(r#""event":"hotkey_recorder""#) {
+            RECORDER_EVENTS.lock().unwrap().push(json);
+        }
+    }
+
+    fn wait_for_recorder_events(n: usize) -> Vec<serde_json::Value> {
+        for _ in 0..200 {
+            let got = RECORDER_EVENTS.lock().unwrap().clone();
+            if got.len() >= n {
+                return got
+                    .iter()
+                    .map(|j| {
+                        serde_json::from_str::<serde_json::Value>(j).unwrap()["payload"].clone()
+                    })
+                    .collect();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("expected {n} hotkey_recorder events");
+    }
+
+    // Native key codes as each host feeds them: Windows VKs, macOS keycodes.
+    #[cfg(target_os = "macos")]
+    const REC_KEYS: (u32, u32, u32, u32) = (0x35, 0x3B, 0x38, 0x02);
+    #[cfg(not(target_os = "macos"))]
+    const REC_KEYS: (u32, u32, u32, u32) = (0x1B, 0xA2, 0xA0, 0x44);
+    #[cfg(target_os = "macos")]
+    const REC_LABELS: (&str, &str) = ("⌃", "⇧");
+    #[cfg(not(target_os = "macos"))]
+    const REC_LABELS: (&str, &str) = ("Ctrl", "Shift");
+
+    #[test]
+    #[serial]
+    fn recorder_session_publishes_each_key_down_with_its_verdict() {
+        let (esc, ctrl, shift, d) = REC_KEYS;
+        let (l_ctrl, l_shift) = REC_LABELS;
+        RECORDER_EVENTS.lock().unwrap().clear();
+        if let Ok(mut guard) = EVENT_CALLBACK.lock() {
+            *guard = Some(recorder_callback);
+        }
+        let target = CString::new("command").unwrap();
+        let current =
+            CString::new(r#"{"dictation":"win+alt","dictionary":"ctrl+shift+d"}"#).unwrap();
+
+        assert_eq!(
+            dimmy_hotkey_recorder_key(ctrl, 1),
+            0,
+            "no session: keys pass"
+        );
+        assert_eq!(
+            unsafe { dimmy_hotkey_recorder_start(target.as_ptr(), current.as_ptr()) },
+            0
+        );
+        assert_eq!(dimmy_hotkey_recorder_is_active(), 1);
+        assert_eq!(
+            dimmy_hotkey_recorder_key(esc, 1),
+            0,
+            "Esc alone is for the dialog"
+        );
+        assert_eq!(dimmy_hotkey_recorder_key(ctrl, 1), 1, "Ctrl is recorded");
+        assert_eq!(dimmy_hotkey_recorder_key(shift, 1), 1, "Shift is recorded");
+        assert_eq!(dimmy_hotkey_recorder_key(d, 1), 1, "D is recorded");
+
+        let events = wait_for_recorder_events(3);
+        dimmy_hotkey_recorder_stop();
+        if let Ok(mut guard) = EVENT_CALLBACK.lock() {
+            *guard = None;
+        }
+
+        assert_eq!(events[0]["keys"], serde_json::json!([l_ctrl]));
+        assert_eq!(events[0]["can_save"], false);
+        assert_eq!(events[1]["keys"], serde_json::json!([l_ctrl, l_shift]));
+        let last = &events[2];
+        assert_eq!(last["target"], "command");
+        assert_eq!(last["keys"], serde_json::json!([l_ctrl, l_shift, "D"]));
+        assert_eq!(last["combo"], "ctrl+shift+d");
+        assert_eq!(last["can_save"], false);
+        assert_eq!(
+            last["error"],
+            "Already used by the add-to-dictionary shortcut."
+        );
+        assert_eq!(last["key"], "d");
+        assert_eq!(last["mods"]["shift"], true);
+        assert_eq!(dimmy_hotkey_recorder_is_active(), 0);
+        assert_eq!(
+            dimmy_hotkey_recorder_key(ctrl, 1),
+            0,
+            "closed: keys pass again"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn recorder_start_rejects_bad_arguments() {
+        dimmy_hotkey_recorder_stop();
+        let bad_target = CString::new("pill").unwrap();
+        let ok_target = CString::new("meeting").unwrap();
+        let current = CString::new("{}").unwrap();
+        let garbage = CString::new("not json").unwrap();
+        unsafe {
+            assert_eq!(
+                dimmy_hotkey_recorder_start(std::ptr::null(), current.as_ptr()),
+                -1
+            );
+            assert_eq!(
+                dimmy_hotkey_recorder_start(bad_target.as_ptr(), current.as_ptr()),
+                -1
+            );
+            assert_eq!(
+                dimmy_hotkey_recorder_start(ok_target.as_ptr(), garbage.as_ptr()),
+                -2
+            );
+        }
+        assert!(!crate::hotkey_recorder::is_active());
     }
 
     // ── Test helper: minimal AppState for unit tests ────────────────
