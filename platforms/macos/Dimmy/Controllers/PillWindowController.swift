@@ -33,7 +33,7 @@ final class PillWindowController {
     // Extra padding around the pill so glow/shadow isn't clipped — and so
     // the scroll-cycle popover (renders below the pill) has room to breathe
     // without being clipped by the panel bounds.
-    static let glowPadding: CGFloat = 32
+    nonisolated static let glowPadding: CGFloat = 32
     private let panelWidth: CGFloat = 280 + glowPadding * 2
     private let panelHeight: CGFloat = 56 + glowPadding * 2
     // Vertical pill on the left/right middle: tall, and wide enough for the
@@ -188,28 +188,42 @@ final class PillWindowController {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: item)
     }
 
+    /// Points between the visible pill's centre and an edge that still counts
+    /// as "against" it. Same rule and numbers as Windows' PillDockMath (DIP).
+    nonisolated static let edgeReach: CGFloat = 64
+    /// Points either side of an edge's middle that dock to that middle.
+    nonisolated static let middleBand: CGFloat = 120
+
+    /// Where a dropped pill docks: a corner, the middle of an edge, or ""
+    /// (it stays where it was dropped).
+    nonisolated static func dock(pillCentre c: NSPoint, visible vf: NSRect) -> String {
+        let dl = c.x - vf.minX, dr = vf.maxX - c.x, db = c.y - vf.minY, dt = vf.maxY - c.y
+        let nearX = min(dl, dr) < edgeReach, nearY = min(dt, db) < edgeReach
+        if nearX && nearY { return (dt < db ? "top" : "bottom") + (dl < dr ? "Left" : "Right") }
+        if nearY && abs(c.x - vf.midX) < middleBand { return dt < db ? "top" : "bottom" }
+        if nearX && abs(c.y - vf.midY) < middleBand { return dl < dr ? "left" : "right" }
+        return ""
+    }
+
+    /// The pill's centre inside a panel frame, from the alignment PillView uses.
+    nonisolated static func pillCentre(in f: NSRect, alignment a: Alignment) -> NSPoint {
+        let inset = glowPadding + PillView.pillHeight / 2
+        let x = a.horizontal == .leading ? f.minX + inset : a.horizontal == .trailing ? f.maxX - inset : f.midX
+        let y = a.vertical == .top ? f.maxY - inset : a.vertical == .bottom ? f.minY + inset : f.midY
+        return NSPoint(x: x, y: y)
+    }
+
     private func snapToDock(animated: Bool) {
         guard let panel, let screen = panel.screen ?? NSScreen.main else { return }
         let vf = screen.visibleFrame
-        // Panel centre, not the cursor: over a remote session the cursor
-        // position read at mouse-up was unreliable and every drop landed top-left.
-        let c = NSPoint(x: panel.frame.midX, y: panel.frame.midY)
-        let dl = c.x - vf.minX, dr = vf.maxX - c.x, db = c.y - vf.minY, dt = vf.maxY - c.y
-        let reach: CGFloat = 200
-
-        var dock = ""
-        if min(dl, dr) < reach && min(dt, db) < reach {
-            dock = (dt < db ? "top" : "bottom") + (dl < dr ? "Left" : "Right")
-        } else {
-            var best = CGFloat.greatestFiniteMagnitude
-            func consider(_ d: String, _ perp: CGFloat, _ along: CGFloat, _ alongMax: CGFloat) {
-                if perp < reach && along < alongMax && perp < best { best = perp; dock = d }
-            }
-            consider("left", dl, abs(c.y - vf.midY), vf.height * 0.2)
-            consider("right", dr, abs(c.y - vf.midY), vf.height * 0.2)
-            consider("top", dt, abs(c.x - vf.midX), vf.width * 0.15)
-            consider("bottom", db, abs(c.x - vf.midX), vf.width * 0.15)
-        }
+        // The pill the user sees, not the panel's centre (nor the cursor: over
+        // a remote session the cursor read at mouse-up was unreliable). The
+        // panel is several times larger and, docked, the pill sits against
+        // one of its sides.
+        let c = Self.pillCentre(in: panel.frame,
+                                alignment: PillView.alignment(dock: appState.pillDock,
+                                                              overlayPosition: appState.overlayPosition))
+        let dock = Self.dock(pillCentre: c, visible: vf)
 
         let vertical = dock == "left" || dock == "right"
         let w = vertical ? verticalPanelWidth : panelWidth
@@ -236,7 +250,7 @@ final class PillWindowController {
         }
         let target = NSRect(origin: origin, size: NSSize(width: w, height: h))
 
-        hkLog("[PillWindow] snap centre=\(Int(c.x)),\(Int(c.y)) visible=\(vf) dock=\(dock.isEmpty ? "none" : dock)")
+        hkLog("[PillWindow] snap pill=\(Int(c.x)),\(Int(c.y)) visible=\(vf) dock=\(dock.isEmpty ? "none" : dock)")
         appState.pillDock = dock
         guard target != panel.frame else { return }
         isRepositioning = true

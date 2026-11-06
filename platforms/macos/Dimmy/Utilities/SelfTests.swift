@@ -41,6 +41,7 @@ enum SelfTests {
         testRecordingStateAnimationIds()
         testSttProviderFromUrl()
         testHotkeyStatusCases()
+        testPillDockRule()
         testOnboardingStepCount()
         testPillCycleStyleWrap()
         testPillCycleLanguageWrap()
@@ -64,6 +65,18 @@ enum SelfTests {
     }
 
     // MARK: - Language mapping
+
+    /// Mirror of Windows' PillDockMathTests: a 1920x1040 visible frame.
+    private static func testPillDockRule() {
+        let vf = NSRect(x: 0, y: 0, width: 1920, height: 1040)
+        func d(_ x: CGFloat, _ y: CGFloat) -> String { PillWindowController.dock(pillCentre: NSPoint(x: x, y: y), visible: vf) }
+        assert(d(1890, 30) == "bottomRight", "Dropped against a corner docks to it")
+        assert(d(30, 1010) == "topLeft", "Dropped against a corner docks to it")
+        assert(d(1040, 30) == "bottom", "Dropped against an edge's middle docks to it")
+        assert(d(30, 420) == "left", "Dropped against an edge's middle docks to it")
+        assert(d(960, 150) == "", "A hand away from the edge stays where it was dropped")
+        assert(d(560, 30) == "", "Along an edge, away from its middle and corners, stays put")
+    }
 
     private static func testLanguageMappingRoundtrip() {
         for item in AppState.languageMap {

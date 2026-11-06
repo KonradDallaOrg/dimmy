@@ -1202,7 +1202,6 @@ public sealed partial class PillWindow : Window
     }
 
     // ── Snap to corners / edge middles; vertical on the sides ───────
-    private enum PillDock { None, Left, Right, Top, Bottom, TopLeft, TopRight, BottomLeft, BottomRight }
     private PillDock _dock = PillDock.None;
     private bool IsVertical => _dock is PillDock.Left or PillDock.Right;
     private bool DockTop => _dock is PillDock.Top or PillDock.TopLeft or PillDock.TopRight;
@@ -1241,30 +1240,17 @@ public sealed partial class PillWindow : Window
         var size = aw.Size;
         double cx = pos.X + size.Width / 2.0, cy = pos.Y + size.Height / 2.0;
         double mx = wa.X + wa.Width / 2.0, my = wa.Y + wa.Height / 2.0;
-        double dl = cx - wa.X, dr = wa.X + wa.Width - cx, dt = cy - wa.Y, db = wa.Y + wa.Height - cy;
-        const double reach = 200; // px from an edge that still counts as "on" it
 
-        var dock = PillDock.None;
-        if (Math.Min(dl, dr) < reach && Math.Min(dt, db) < reach)
-            dock = (dt < db, dl < dr) switch
-            {
-                (true, true) => PillDock.TopLeft,
-                (true, false) => PillDock.TopRight,
-                (false, true) => PillDock.BottomLeft,
-                _ => PillDock.BottomRight,
-            };
-        else
-        {
-            double best = double.MaxValue;
-            void Try(PillDock d, double perp, double along, double alongMax)
-            {
-                if (perp < reach && along < alongMax && perp < best) { best = perp; dock = d; }
-            }
-            Try(PillDock.Left, dl, Math.Abs(cy - my), wa.Height * 0.2);
-            Try(PillDock.Right, dr, Math.Abs(cy - my), wa.Height * 0.2);
-            Try(PillDock.Top, dt, Math.Abs(cx - mx), wa.Width * 0.15);
-            Try(PillDock.Bottom, db, Math.Abs(cx - mx), wa.Width * 0.15);
-        }
+        // Measure from the pill the user sees, not from the window: the window
+        // is several times larger and, once docked, the pill sits against one
+        // of its sides.
+        var scale = GetDpiForWindow(WindowHelper.GetHwnd(this)) / 96.0;
+        if (scale <= 0) scale = 1.0;
+        var pill = ColorBorder.TransformToVisual(null).TransformBounds(
+            new global::Windows.Foundation.Rect(0, 0, ColorBorder.ActualWidth, ColorBorder.ActualHeight));
+        double pcx = pos.X + (pill.X + pill.Width / 2) * scale;
+        double pcy = pos.Y + (pill.Y + pill.Height / 2) * scale;
+        var dock = PillDockMath.Pick(pcx, pcy, wa.X, wa.Y, wa.Width, wa.Height, scale);
 
         bool vertical = dock is PillDock.Left or PillDock.Right;
         int w = Px(vertical ? VerticalWindowWidth : WindowWidth);
