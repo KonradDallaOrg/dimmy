@@ -1185,6 +1185,7 @@ public sealed partial class PillWindow : Window
     {
         _snapTimer?.Stop();
         _isDragging = true;
+        _zonesShown = false;
         GetCursorPos(out _dragStartScreen);
         var appWindow = WindowHelper.GetAppWindow(this);
         if (appWindow != null) _windowStartPos = appWindow.Position;
@@ -1196,15 +1197,69 @@ public sealed partial class PillWindow : Window
         if (!_isDragging) return;
         GetCursorPos(out var current);
         var appWindow = WindowHelper.GetAppWindow(this);
-        appWindow?.Move(new global::Windows.Graphics.PointInt32(
+        if (appWindow == null) return;
+        var pos = new global::Windows.Graphics.PointInt32(
             _windowStartPos.X + current.X - _dragStartScreen.X,
-            _windowStartPos.Y + current.Y - _dragStartScreen.Y));
+            _windowStartPos.Y + current.Y - _dragStartScreen.Y);
+        appWindow.Move(pos);
+        ShowDockZones(appWindow, pos);
+    }
+
+    // ── Dock zones drawn while dragging ─────────────────────────────
+    private DockZoneOverlay? _dockZones;
+    private global::Windows.Graphics.RectInt32 _dockZonesArea;
+    private bool _zonesShown;
+
+    /// Faint outlines of the zones the pill is near, the one it would dock to
+    /// if dropped now drawn stronger. A press without a move shows nothing.
+    private void ShowDockZones(AppWindow aw, global::Windows.Graphics.PointInt32 pos)
+    {
+        try
+        {
+            var wa = DisplayArea.GetFromWindowId(aw.Id, DisplayAreaFallback.Nearest).WorkArea;
+            var scale = WindowScale();
+            _dockZones ??= new DockZoneOverlay();
+            if (!_zonesShown || !wa.Equals(_dockZonesArea))
+            {
+                _dockZonesArea = wa;
+                _dockZones.Layout(PillDockMath.Zones(wa.X, wa.Y, wa.Width, wa.Height, scale), scale);
+                _zonesShown = true;
+            }
+            var (cx, cy) = PillCentrePx(pos, scale);
+            _dockZones.Show(
+                PillDockMath.Near(cx, cy, wa.X, wa.Y, wa.Width, wa.Height, scale),
+                PillDockMath.Pick(cx, cy, wa.X, wa.Y, wa.Width, wa.Height, scale),
+                WindowHelper.GetHwnd(this));
+        }
+        catch (Exception ex)
+        {
+            // Decoration only: a failure here must never stop the drag.
+            System.Diagnostics.Debug.WriteLine($"[PillWindow] dock zones: {ex.Message}");
+        }
+    }
+
+    private double WindowScale()
+    {
+        var scale = GetDpiForWindow(WindowHelper.GetHwnd(this)) / 96.0;
+        return scale > 0 ? scale : 1.0;
+    }
+
+    /// The visible pill's centre on screen, in physical pixels, for the
+    /// window at <paramref name="pos"/>. The window is several times larger
+    /// than the pill and, docked, the pill sits against one of its sides.
+    private (double X, double Y) PillCentrePx(global::Windows.Graphics.PointInt32 pos, double scale)
+    {
+        var pill = ColorBorder.TransformToVisual(null).TransformBounds(
+            new global::Windows.Foundation.Rect(0, 0, ColorBorder.ActualWidth, ColorBorder.ActualHeight));
+        return (pos.X + (pill.X + pill.Width / 2) * scale, pos.Y + (pill.Y + pill.Height / 2) * scale);
     }
 
     private void Pill_PointerReleased(object sender, PointerRoutedEventArgs e)
     {
         _isDragging = false;
         ((UIElement)sender).ReleasePointerCapture(e.Pointer);
+        _dockZones?.HideAll();
+        _zonesShown = false;
         SnapToEdgeMiddle();
     }
 
@@ -1307,15 +1362,9 @@ public sealed partial class PillWindow : Window
         double cx = pos.X + size.Width / 2.0, cy = pos.Y + size.Height / 2.0;
         double mx = wa.X + wa.Width / 2.0, my = wa.Y + wa.Height / 2.0;
 
-        // Measure from the pill the user sees, not from the window: the window
-        // is several times larger and, once docked, the pill sits against one
-        // of its sides.
-        var scale = GetDpiForWindow(WindowHelper.GetHwnd(this)) / 96.0;
-        if (scale <= 0) scale = 1.0;
-        var pill = ColorBorder.TransformToVisual(null).TransformBounds(
-            new global::Windows.Foundation.Rect(0, 0, ColorBorder.ActualWidth, ColorBorder.ActualHeight));
-        double pcx = pos.X + (pill.X + pill.Width / 2) * scale;
-        double pcy = pos.Y + (pill.Y + pill.Height / 2) * scale;
+        // Measure from the pill the user sees, not from the window.
+        var scale = WindowScale();
+        var (pcx, pcy) = PillCentrePx(pos, scale);
         var dock = PillDockMath.Pick(pcx, pcy, wa.X, wa.Y, wa.Width, wa.Height, scale);
 
         bool vertical = dock is PillDock.Left or PillDock.Right;
