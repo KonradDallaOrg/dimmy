@@ -737,7 +737,7 @@ public partial class App : Application
         if (!_appViewModel.PillShowOnStartup)
             HidePill();
 
-        _hotkeyService = new HotkeyService(_dispatcherQueue!);
+        _hotkeyService = new HotkeyService();
         _hotkeyService.HotkeyPressed += OnHotkeyPressed;
         _hotkeyService.HotkeyReleased += OnHotkeyReleased;
         _hotkeyService.CommandHotkeyPressed += OnCommandHotkeyPressed;

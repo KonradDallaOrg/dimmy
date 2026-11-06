@@ -750,6 +750,11 @@ public partial class AppViewModel : ObservableObject
                 case "hotkey_recorder":
                     Services.HotkeyRecorderEvents.Publish(payload);
                     break;
+                case "hotkey":
+                    Services.HotkeyEvents.Publish(
+                        payload.GetProperty("binding").GetString() ?? "",
+                        payload.GetProperty("edge").GetString() ?? "");
+                    break;
                 case "meeting_state":
                     // Replaces the 500 ms _meetingStatePollTimer on
                     // PillWindow. Rust emits this exactly once per state

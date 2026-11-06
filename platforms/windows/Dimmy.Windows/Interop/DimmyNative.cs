@@ -754,9 +754,6 @@ public static class DimmyNative
     public static extern void dimmy_hotkey_set(
         [MarshalAs(UnmanagedType.LPUTF8Str)] string combo);
 
-    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
-    public static extern int dimmy_hotkey_take_event();
-
     // Optional dedicated command-mode hotkey — runs on the SAME Rust hook,
     // so it inherits toggle/PTT + every combo (incl. modifier-only like
     // Win+Alt). Empty combo disables it.
@@ -764,17 +761,11 @@ public static class DimmyNative
     public static extern void dimmy_hotkey_set_command(
         [MarshalAs(UnmanagedType.LPUTF8Str)] string combo);
 
-    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
-    public static extern int dimmy_hotkey_take_command_event();
-
     // Optional meeting start/stop hotkey on the same Rust hook. Empty combo
     // disables it. Its event is a TOGGLE (pressed = start/stop).
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern void dimmy_hotkey_set_meeting(
         [MarshalAs(UnmanagedType.LPUTF8Str)] string combo);
-
-    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
-    public static extern int dimmy_hotkey_take_meeting_event();
 
     // Telemetry: a meeting was started/stopped from a shortcut or menu.
     // source = "hotkey" | "menu" | "jumplist" (categorical, no content).

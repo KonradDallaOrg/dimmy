@@ -10,15 +10,13 @@
 
 #![allow(dead_code)]
 
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
-
-const EVENT_NONE: u8 = 0;
-const EVENT_PRESSED: u8 = 1;
-const EVENT_RELEASED: u8 = 2;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::mpsc::{channel, Sender};
+use std::sync::OnceLock;
 
 /// Result of feeding one physical key event to a binding's state machine.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum Transition {
+pub(crate) enum Transition {
     None,
     Pressed,
     Released,
@@ -42,8 +40,6 @@ struct Binding {
     key2_down: AtomicBool,
     key3_down: AtomicBool,
     combo_active: AtomicBool,
-    /// Latest unread event: 0=none, 1=pressed, 2=released.
-    event: AtomicU8,
 }
 
 impl Binding {
@@ -56,7 +52,6 @@ impl Binding {
             key2_down: AtomicBool::new(false),
             key3_down: AtomicBool::new(false),
             combo_active: AtomicBool::new(false),
-            event: AtomicU8::new(EVENT_NONE),
         }
     }
 
@@ -76,7 +71,6 @@ impl Binding {
     /// it). Also drains any pending event.
     fn clear(&self) {
         self.set_codes(0, 0, 0);
-        self.event.store(EVENT_NONE, Ordering::SeqCst);
     }
 
     fn matches_key(&self, vk: u32) -> bool {
@@ -91,10 +85,6 @@ impl Binding {
         !self.key1_down.load(Ordering::SeqCst)
             && !self.key2_down.load(Ordering::SeqCst)
             && !self.key3_down.load(Ordering::SeqCst)
-    }
-
-    fn take_event(&self) -> u8 {
-        self.event.swap(EVENT_NONE, Ordering::SeqCst)
     }
 
     /// Clear the down-flag of every key the OS reports as up. The hook never
@@ -152,13 +142,11 @@ impl Binding {
                     if self.key2_down.load(Ordering::SeqCst)
                         && !self.combo_active.swap(true, Ordering::SeqCst)
                     {
-                        self.event.store(EVENT_PRESSED, Ordering::SeqCst);
                         return Transition::Pressed;
                     }
                 } else if is_up {
                     self.key1_down.store(false, Ordering::SeqCst);
                     if self.combo_active.swap(false, Ordering::SeqCst) {
-                        self.event.store(EVENT_RELEASED, Ordering::SeqCst);
                         return Transition::Released;
                     }
                 }
@@ -168,13 +156,11 @@ impl Binding {
                     if self.key1_down.load(Ordering::SeqCst)
                         && !self.combo_active.swap(true, Ordering::SeqCst)
                     {
-                        self.event.store(EVENT_PRESSED, Ordering::SeqCst);
                         return Transition::Pressed;
                     }
                 } else if is_up {
                     self.key2_down.store(false, Ordering::SeqCst);
                     if self.combo_active.swap(false, Ordering::SeqCst) {
-                        self.event.store(EVENT_RELEASED, Ordering::SeqCst);
                         return Transition::Released;
                     }
                 }
@@ -211,10 +197,8 @@ impl Binding {
                     && (k2 == 0 || self.key2_down.load(Ordering::SeqCst))
                     && self.key3_down.load(Ordering::SeqCst);
                 if all && !self.combo_active.swap(true, Ordering::SeqCst) {
-                    self.event.store(EVENT_PRESSED, Ordering::SeqCst);
                     return Transition::Pressed;
                 } else if !all && self.combo_active.swap(false, Ordering::SeqCst) {
-                    self.event.store(EVENT_RELEASED, Ordering::SeqCst);
                     return Transition::Released;
                 }
             }
@@ -595,22 +579,76 @@ pub fn current_label() -> String {
     }
 }
 
-/// Take the latest dictation hotkey event: 0=none, 1=pressed, 2=released.
-pub fn take_event() -> u8 {
-    DICT.take_event()
+// ── Edges to the host ────────────────────────────────────────────────
+//
+// Every press and release of a binding becomes one `hotkey` event:
+// `{"binding":"dictation","edge":"pressed"}`. The hook only pushes the edge
+// onto a queue and returns to Windows; a thread of its own hands it to the
+// host. The hook never waits on host code: Windows silently removes a
+// low-level hook that answers late, and every shortcut would die with it.
+// PowerToys keeps the same rule: its hook only calls SetEvent.
+//
+// The queue is unbounded on purpose: a dropped "released" would leave a
+// push-to-talk recording running. It only grows if the dispatcher thread
+// stops, and that thread does nothing but forward.
+
+/// Which binding an edge belongs to, named as the host names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Which {
+    Dictation,
+    Command,
+    Meeting,
 }
 
-/// Take the latest command hotkey event: 0=none, 1=pressed, 2=released.
-/// Returns 0 forever while the command hotkey is unconfigured.
-pub fn take_command_event() -> u8 {
-    CMD.take_event()
+impl Which {
+    fn id(self) -> &'static str {
+        match self {
+            Which::Dictation => "dictation",
+            Which::Command => "command",
+            Which::Meeting => "meeting",
+        }
+    }
 }
 
-/// Take the latest meeting hotkey event: 0=none, 1=pressed, 2=released.
-/// Returns 0 forever while the meeting hotkey is unconfigured. The host
-/// treats `pressed` as a toggle (start/stop) and ignores `released`.
-pub fn take_meeting_event() -> u8 {
-    MTNG.take_event()
+static EDGES: OnceLock<Sender<(Which, Transition)>> = OnceLock::new();
+
+/// Start the thread that turns queued edges into `hotkey` events. Idempotent.
+pub(crate) fn start_edge_dispatcher() {
+    EDGES.get_or_init(|| {
+        let (tx, rx) = channel::<(Which, Transition)>();
+        std::thread::Builder::new()
+            .name("dimmy-hotkey-edges".into())
+            .spawn(move || {
+                for (which, t) in rx {
+                    let edge = match t {
+                        Transition::Pressed => "pressed",
+                        Transition::Released => "released",
+                        Transition::None => continue,
+                    };
+                    if which == Which::Dictation && t == Transition::Pressed {
+                        // Hotkey-vs-button ratio on the dashboards: the in-app
+                        // button calls dimmy_start_recording and never gets here.
+                        crate::telemetry::track(crate::telemetry::Event::FeatureHotkeyTriggered);
+                    }
+                    crate::ffi::emit_event(
+                        "hotkey",
+                        &format!(r#"{{"binding":"{}","edge":"{}"}}"#, which.id(), edge),
+                    );
+                }
+            })
+            .expect("spawn the hotkey edge thread");
+        tx
+    });
+}
+
+/// Queue one edge. Never blocks: it runs inside the keyboard hook.
+pub(crate) fn deliver_edge(which: Which, t: Transition) {
+    if t == Transition::None {
+        return;
+    }
+    if let Some(tx) = EDGES.get() {
+        let _ = tx.send((which, t));
+    }
 }
 
 /// macOS virtual keycode → the VK code the shared tables use (0 = unknown).
@@ -628,6 +666,7 @@ pub fn install(log_fn: fn(&str)) {
     if INSTALLED.swap(true, Ordering::SeqCst) {
         return;
     }
+    start_edge_dispatcher();
     platform::install_hook(log_fn);
 }
 
@@ -925,17 +964,17 @@ mod platform {
         for b in [&DICT, &CMD, &MTNG] {
             b.forget_released_keys(vk, is_key_pressed);
         }
-        if DICT.process(vk, is_down, is_up) == Transition::Pressed {
-            MODIFIER_SUPPRESS.store(true, Ordering::SeqCst);
-            emit_synthetic_combo_release(&DICT);
-        }
-        if CMD.process(vk, is_down, is_up) == Transition::Pressed {
-            MODIFIER_SUPPRESS.store(true, Ordering::SeqCst);
-            emit_synthetic_combo_release(&CMD);
-        }
-        if MTNG.process(vk, is_down, is_up) == Transition::Pressed {
-            MODIFIER_SUPPRESS.store(true, Ordering::SeqCst);
-            emit_synthetic_combo_release(&MTNG);
+        for (which, binding) in [
+            (Which::Dictation, &DICT),
+            (Which::Command, &CMD),
+            (Which::Meeting, &MTNG),
+        ] {
+            let t = binding.process(vk, is_down, is_up);
+            if t == Transition::Pressed {
+                MODIFIER_SUPPRESS.store(true, Ordering::SeqCst);
+                emit_synthetic_combo_release(binding);
+            }
+            deliver_edge(which, t);
         }
 
         // Clear suppression only once NO combo is active AND every shortcut key
@@ -1251,8 +1290,8 @@ mod platform {
         // tap → just update both bindings' state + event mailboxes (no
         // suppression; macOS can't consume the event here).
         if !crate::hotkey_recorder::is_active() {
-            DICT.process(vk, is_down, is_up);
-            CMD.process(vk, is_down, is_up);
+            deliver_edge(Which::Dictation, DICT.process(vk, is_down, is_up));
+            deliver_edge(Which::Command, CMD.process(vk, is_down, is_up));
         }
 
         event
@@ -1443,14 +1482,6 @@ mod tests {
 
     #[test]
     #[serial]
-    fn take_event_returns_none_by_default() {
-        // Clear any pending event
-        take_event();
-        assert_eq!(take_event(), EVENT_NONE);
-    }
-
-    #[test]
-    #[serial]
     fn current_label_reflects_set_shortcut() {
         set_shortcut("Ctrl+Shift+X");
         let label = current_label();
@@ -1471,10 +1502,8 @@ mod tests {
         // Ctrl down → not yet; Shift down → PRESSED.
         assert_eq!(b.process(VK_LCONTROL, true, false), Transition::None);
         assert_eq!(b.process(VK_LSHIFT, true, false), Transition::Pressed);
-        assert_eq!(b.take_event(), EVENT_PRESSED);
         // Shift up → RELEASED; Ctrl up → nothing more.
         assert_eq!(b.process(VK_LSHIFT, false, true), Transition::Released);
-        assert_eq!(b.take_event(), EVENT_RELEASED);
         assert_eq!(b.process(VK_LCONTROL, false, true), Transition::None);
         assert!(b.all_released());
     }
@@ -1646,15 +1675,13 @@ mod tests {
             group_to_packed(GROUP_SHIFT)
         );
         assert_eq!(MTNG.key3_code.load(Ordering::SeqCst), name_to_vk("o"));
-        // Empty disables it + the event mailbox stays silent.
+        // Empty disables it: a disabled binding never fires.
         set_meeting_shortcut("");
         assert_eq!(MTNG.key1_codes.load(Ordering::SeqCst), 0);
         assert_eq!(MTNG.key3_code.load(Ordering::SeqCst), 0);
-        assert_eq!(
-            take_meeting_event(),
-            0,
-            "disabled meeting hotkey never fires"
-        );
+        assert_eq!(MTNG.process(VK_LCONTROL, true, false), Transition::None);
+        assert_eq!(MTNG.process(VK_LSHIFT, true, false), Transition::None);
+        assert_eq!(MTNG.process(name_to_vk("o"), true, false), Transition::None);
     }
 
     #[test]

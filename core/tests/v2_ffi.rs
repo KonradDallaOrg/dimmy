@@ -41,14 +41,14 @@ use dimmy_lib::ffi::{
     dimmy_get_config_json, dimmy_get_loopback_amplitude, dimmy_hardware_json, dimmy_history_save,
     dimmy_history_update_audio, dimmy_history_update_enhanced,
     dimmy_history_update_word_timestamps, dimmy_hotkey_combos_conflict, dimmy_hotkey_set_command,
-    dimmy_hotkey_take_command_event, dimmy_init, dimmy_license_register_interest,
-    dimmy_license_sales_open, dimmy_license_set_server_url, dimmy_license_text, dimmy_llm_call_raw,
-    dimmy_meeting_is_active, dimmy_meeting_save_post_process, dimmy_model_catalog_json,
-    dimmy_model_delete, dimmy_model_download_cancel, dimmy_model_download_enqueue,
-    dimmy_model_download_snapshot_json, dimmy_push_loopback_audio, dimmy_set_app_context,
-    dimmy_set_config_json, dimmy_set_loopback_sample_rate, dimmy_terms_version,
-    dimmy_third_party_notices, dimmy_transcribe_file, dimmy_user_dict_add,
-    dimmy_user_dict_list_json, dimmy_user_dict_remove, dimmy_whistle_size_mb, dimmy_whistle_status,
+    dimmy_init, dimmy_license_register_interest, dimmy_license_sales_open,
+    dimmy_license_set_server_url, dimmy_license_text, dimmy_llm_call_raw, dimmy_meeting_is_active,
+    dimmy_meeting_save_post_process, dimmy_model_catalog_json, dimmy_model_delete,
+    dimmy_model_download_cancel, dimmy_model_download_enqueue, dimmy_model_download_snapshot_json,
+    dimmy_push_loopback_audio, dimmy_set_app_context, dimmy_set_config_json,
+    dimmy_set_loopback_sample_rate, dimmy_terms_version, dimmy_third_party_notices,
+    dimmy_transcribe_file, dimmy_user_dict_add, dimmy_user_dict_list_json, dimmy_user_dict_remove,
+    dimmy_whistle_size_mb, dimmy_whistle_status,
 };
 
 // ── Fixture wiring (lifted from ffi_e2e to stay self-contained) ──────
@@ -1544,21 +1544,18 @@ fn legal_texts_and_terms_version_round_trip() {
 
 #[test]
 #[serial]
-fn hotkey_command_set_take_and_conflict_round_trip() {
+fn hotkey_command_set_and_conflict_round_trip() {
     ensure_init();
 
     // Configure a modifier-only command combo (RegisterHotKey could never
     // bind this; the Rust hook can).
     let combo = CString::new("win+alt").unwrap();
     unsafe { dimmy_hotkey_set_command(combo.as_ptr()) };
-    // No physical key events in this harness → mailbox stays empty.
-    assert_eq!(dimmy_hotkey_take_command_event(), 0);
 
     // Empty / null disables it (never panics).
     let empty = CString::new("").unwrap();
     unsafe { dimmy_hotkey_set_command(empty.as_ptr()) };
     unsafe { dimmy_hotkey_set_command(std::ptr::null()) };
-    assert_eq!(dimmy_hotkey_take_command_event(), 0);
 
     // Conflict helper: subset / equal → 1, distinct → 0, disabled → 0.
     let ctrl_space = CString::new("ctrl+space").unwrap();

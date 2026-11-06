@@ -8550,7 +8550,7 @@ pub unsafe extern "C" fn dimmy_hotkey_set_command(combo_ptr: *const c_char) {
 
 /// Set (or clear) the optional meeting start/stop shortcut. Mirrors
 /// `dimmy_hotkey_set_command`: a null/empty/unparseable combo DISABLES it.
-/// The host treats its event (via `dimmy_hotkey_take_meeting_event`) as a
+/// The host treats its `hotkey` event (`binding: "meeting"`) as a
 /// TOGGLE — start the meeting if idle, stop it if a meeting is recording.
 ///
 /// # Safety
@@ -10081,43 +10081,6 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
         out.len()
     ));
     write_to_buf(&out, out_buf, buf_len)
-}
-
-/// Poll for hotkey events. Returns:
-/// - 0 = no event
-/// - 1 = pressed (all keys in combo are down)
-/// - 2 = released (any key in combo released after price)
-#[no_mangle]
-pub extern "C" fn dimmy_hotkey_take_event() -> c_int {
-    let ev = crate::hotkey::take_event();
-    // Emit telemetry on EVENT_PRESSED (=1). The C# host polls this
-    // every ~50ms; a non-zero return at the press edge means the
-    // user actually triggered a recording via the global hotkey
-    // (vs the in-app button, which calls `dimmy_start_recording`
-    // directly and never goes through the hotkey path). Combined
-    // with `transcription.completed` totals, dashboards derive the
-    // hotkey-vs-button ratio.
-    if ev == 1 {
-        crate::telemetry::track(crate::telemetry::Event::FeatureHotkeyTriggered);
-    }
-    ev as c_int
-}
-
-/// Poll for command-mode hotkey events (the optional dedicated shortcut).
-/// Returns 0=none, 1=pressed, 2=released — same edges as
-/// `dimmy_hotkey_take_event`, but for the command binding. Returns 0 forever
-/// while the command hotkey is unconfigured.
-#[no_mangle]
-pub extern "C" fn dimmy_hotkey_take_command_event() -> c_int {
-    crate::hotkey::take_command_event() as c_int
-}
-
-/// Take the latest meeting hotkey event: 0=none, 1=pressed, 2=released.
-/// Returns 0 forever while the meeting hotkey is unconfigured. The host
-/// treats `1` (pressed) as a toggle and ignores `2` (released).
-#[no_mangle]
-pub extern "C" fn dimmy_hotkey_take_meeting_event() -> c_int {
-    crate::hotkey::take_meeting_event() as c_int
 }
 
 /// Track that a meeting recording was started/stopped from one of the new
@@ -12805,6 +12768,83 @@ pub(crate) mod tests {
         if let Ok(mut guard) = EVENT_CALLBACK.lock() {
             *guard = None;
         }
+    }
+
+    // ── hotkey edges ─────────────────────────────────────────────
+
+    static HOTKEY_EVENTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    extern "C" fn hotkey_callback(ptr: *const c_char) {
+        let json = unsafe { CStr::from_ptr(ptr) }
+            .to_string_lossy()
+            .into_owned();
+        if json.contains(r#""event":"hotkey""#) {
+            HOTKEY_EVENTS.lock().unwrap().push(json);
+        }
+    }
+
+    fn wait_for_hotkey_events(n: usize) -> Vec<serde_json::Value> {
+        for _ in 0..200 {
+            let got = HOTKEY_EVENTS.lock().unwrap().clone();
+            if got.len() >= n {
+                return got
+                    .iter()
+                    .map(|j| {
+                        serde_json::from_str::<serde_json::Value>(j).unwrap()["payload"].clone()
+                    })
+                    .collect();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("expected {n} hotkey events");
+    }
+
+    /// The host used to read each binding's edges from a one-slot mailbox
+    /// every 10 ms: a press and its release inside one poll left only
+    /// "released", and in toggle mode that press was lost. Every edge is an
+    /// event now, delivered in order.
+    #[test]
+    #[serial]
+    fn every_hotkey_edge_arrives_in_order_even_back_to_back() {
+        use crate::hotkey::{deliver_edge, start_edge_dispatcher, Which};
+        HOTKEY_EVENTS.lock().unwrap().clear();
+        if let Ok(mut guard) = EVENT_CALLBACK.lock() {
+            *guard = Some(hotkey_callback);
+        }
+        start_edge_dispatcher();
+
+        deliver_edge(Which::Dictation, crate::hotkey::Transition::Pressed);
+        deliver_edge(Which::Dictation, crate::hotkey::Transition::Released);
+        deliver_edge(Which::Meeting, crate::hotkey::Transition::Pressed);
+        deliver_edge(Which::Command, crate::hotkey::Transition::None);
+        deliver_edge(Which::Command, crate::hotkey::Transition::Released);
+
+        let events = wait_for_hotkey_events(4);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let all = HOTKEY_EVENTS.lock().unwrap().len();
+        if let Ok(mut guard) = EVENT_CALLBACK.lock() {
+            *guard = None;
+        }
+
+        let pairs: Vec<(String, String)> = events
+            .iter()
+            .map(|p| {
+                (
+                    p["binding"].as_str().unwrap().to_string(),
+                    p["edge"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            pairs,
+            [
+                ("dictation".to_string(), "pressed".to_string()),
+                ("dictation".to_string(), "released".to_string()),
+                ("meeting".to_string(), "pressed".to_string()),
+                ("command".to_string(), "released".to_string()),
+            ]
+        );
+        assert_eq!(all, 4, "Transition::None is not an edge");
     }
 
     // ── shortcut recorder ────────────────────────────────────────
