@@ -181,6 +181,7 @@ final class PillWindowController {
             if NSEvent.pressedMouseButtons & 1 != 0 {
                 self.scheduleDragEndCheck()
             } else {
+                self.zoneOverlay.hideAll()
                 self.snapToDock(animated: true)
             }
         }
@@ -205,12 +206,63 @@ final class PillWindowController {
         return ""
     }
 
+    /// Points from a dock zone at which its outline appears during a drag.
+    nonisolated static let approachReach: CGFloat = 3 * edgeReach
+
+    /// Where the pill's CENTRE has to be for each dock: exactly where
+    /// `dock(pillCentre:visible:)` answers that dock.
+    nonisolated static func centreZones(visible vf: NSRect) -> [(dock: String, rect: NSRect)] {
+        let r = edgeReach, b = middleBand
+        return [
+            ("topLeft", NSRect(x: vf.minX, y: vf.maxY - r, width: r, height: r)),
+            ("topRight", NSRect(x: vf.maxX - r, y: vf.maxY - r, width: r, height: r)),
+            ("bottomLeft", NSRect(x: vf.minX, y: vf.minY, width: r, height: r)),
+            ("bottomRight", NSRect(x: vf.maxX - r, y: vf.minY, width: r, height: r)),
+            ("top", NSRect(x: vf.midX - b, y: vf.maxY - r, width: 2 * b, height: r)),
+            ("bottom", NSRect(x: vf.midX - b, y: vf.minY, width: 2 * b, height: r)),
+            ("left", NSRect(x: vf.minX, y: vf.midY - b, width: r, height: 2 * b)),
+            ("right", NSRect(x: vf.maxX - r, y: vf.midY - b, width: r, height: 2 * b)),
+        ]
+    }
+
+    /// The zones drawn while dragging: each centre zone grown by the pill's
+    /// radius (the area the docked pill covers), kept on screen.
+    nonisolated static func dockZones(visible vf: NSRect) -> [(dock: String, rect: NSRect)] {
+        let g = PillView.pillHeight / 2
+        return centreZones(visible: vf).map { ($0.dock, $0.rect.insetBy(dx: -g, dy: -g).intersection(vf)) }
+    }
+
+    /// The docks whose zone the pill is close enough to for its outline to show.
+    nonisolated static func nearDocks(pillCentre c: NSPoint, visible vf: NSRect) -> [String] {
+        centreZones(visible: vf).filter { z in
+            let dx = max(0, max(z.rect.minX - c.x, c.x - z.rect.maxX))
+            let dy = max(0, max(z.rect.minY - c.y, c.y - z.rect.maxY))
+            return (dx * dx + dy * dy).squareRoot() < approachReach
+        }.map(\.dock)
+    }
+
     /// The pill's centre inside a panel frame, from the alignment PillView uses.
     nonisolated static func pillCentre(in f: NSRect, alignment a: Alignment) -> NSPoint {
         let inset = glowPadding + PillView.pillHeight / 2
         let x = a.horizontal == .leading ? f.minX + inset : a.horizontal == .trailing ? f.maxX - inset : f.midX
         let y = a.vertical == .top ? f.maxY - inset : a.vertical == .bottom ? f.minY + inset : f.midY
         return NSPoint(x: x, y: y)
+    }
+
+    private let zoneOverlay = DockZoneOverlay()
+
+    /// Faint outlines of the zones the pill is near, the one it would dock
+    /// to if dropped now drawn stronger. Same rule as Windows.
+    private func showDockZones() {
+        guard let panel, let screen = panel.screen ?? NSScreen.main else { return }
+        let vf = screen.visibleFrame
+        let c = Self.pillCentre(in: panel.frame,
+                                alignment: PillView.alignment(dock: appState.pillDock,
+                                                              overlayPosition: appState.overlayPosition))
+        zoneOverlay.show(zones: Self.dockZones(visible: vf),
+                       near: Self.nearDocks(pillCentre: c, visible: vf),
+                       active: Self.dock(pillCentre: c, visible: vf),
+                       below: panel)
     }
 
     private func snapToDock(animated: Bool) {
@@ -534,7 +586,10 @@ final class PillWindowController {
                 guard let self, !self.isRepositioning else { return }
                 self.appState.pillPosition = origin
                 // Only a user drag (button held) ends in a snap.
-                if NSEvent.pressedMouseButtons & 1 != 0 { self.scheduleDragEndCheck() }
+                if NSEvent.pressedMouseButtons & 1 != 0 {
+                    self.showDockZones()
+                    self.scheduleDragEndCheck()
+                }
             }
             .store(in: &cancellables)
 
@@ -591,5 +646,57 @@ final class PillWindowController {
                 }
             }
             .store(in: &cancellables)
+    }
+}
+
+/// The dock zones drawn while the pill is dragged (mirror of Windows'
+/// DockZoneOverlay): one click-through panel per zone, translucent sky blue
+/// with rounded corners, kept just below the pill. Only touched when a
+/// zone's state or place changes.
+@MainActor
+final class DockZoneOverlay {
+    private enum ZoneState { case hidden, near, active }
+    private var panels: [String: NSPanel] = [:]
+    private var states: [String: ZoneState] = [:]
+    private static let color = NSColor(srgbRed: 0x38 / 255.0, green: 0xBD / 255.0, blue: 0xF8 / 255.0, alpha: 1)
+
+    func show(zones: [(dock: String, rect: NSRect)], near: [String], active: String, below pill: NSWindow) {
+        for z in zones {
+            let want: ZoneState = z.dock == active ? .active : (near.contains(z.dock) ? .near : .hidden)
+            let panel = panels[z.dock] ?? makePanel(for: z.dock)
+            if panel.frame != z.rect { panel.setFrame(z.rect, display: false) }
+            guard states[z.dock] != want else { continue }
+            states[z.dock] = want
+            switch want {
+            case .hidden:
+                panel.orderOut(nil)
+            case .near, .active:
+                panel.backgroundColor = Self.color.withAlphaComponent(want == .active ? 0.5 : 0.24)
+                panel.order(.below, relativeTo: pill.windowNumber)
+            }
+        }
+    }
+
+    func hideAll() {
+        for (dock, panel) in panels where states[dock] != .hidden {
+            panel.orderOut(nil)
+            states[dock] = .hidden
+        }
+    }
+
+    private func makePanel(for dock: String) -> NSPanel {
+        let p = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
+                        backing: .buffered, defer: true)
+        p.isOpaque = false
+        p.hasShadow = false
+        p.ignoresMouseEvents = true
+        p.level = .floating
+        p.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        p.contentView?.wantsLayer = true
+        p.contentView?.layer?.cornerRadius = 12
+        p.contentView?.layer?.masksToBounds = true
+        panels[dock] = p
+        states[dock] = .hidden
+        return p
     }
 }

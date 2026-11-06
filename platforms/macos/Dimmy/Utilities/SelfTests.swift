@@ -76,6 +76,15 @@ enum SelfTests {
         assert(d(30, 420) == "left", "Dropped against an edge's middle docks to it")
         assert(d(960, 150) == "", "A hand away from the edge stays where it was dropped")
         assert(d(560, 30) == "", "Along an edge, away from its middle and corners, stays put")
+        // The zones drawn while dragging are where the pill docks.
+        for z in PillWindowController.dockZones(visible: vf) {
+            assert(d(z.rect.midX, z.rect.midY) == z.dock, "The centre of the \(z.dock) zone docks to it")
+            assert(vf.contains(z.rect), "The \(z.dock) zone stays on screen")
+        }
+        assert(PillWindowController.nearDocks(pillCentre: NSPoint(x: 960, y: 520), visible: vf).isEmpty,
+               "No zone shows in the middle of the screen")
+        assert(PillWindowController.nearDocks(pillCentre: NSPoint(x: 960, y: 150), visible: vf).contains("bottom"),
+               "The bottom zone shows as the pill comes close")
     }
 
     private static func testLanguageMappingRoundtrip() {
