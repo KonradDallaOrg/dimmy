@@ -353,6 +353,21 @@ final class DimmyCore {
         }
     }
 
+    // MARK: - Dictation session
+
+    /// What the core's session machine answers to an input.
+    enum SessionAction: Int32 { case none = 0, start = 1, finish = 2, discard = 3, busy = 4 }
+
+    enum SessionInput: Int32 { case press = 1, release = 2, stop = 3, startFailed = 4, delivered = 5, cancel = 6 }
+
+    /// Feed the dictation session one input (core/src/dictation_session.rs).
+    @discardableResult
+    func dictationInput(_ input: SessionInput, command: Bool = false, hold: Bool = false) -> SessionAction {
+        let rc = dimmy_dictation_input(input.rawValue, command ? 1 : 0, hold ? 1 : 0)
+        precondition(rc >= 0, "dictation session refused input \(input)")
+        return SessionAction(rawValue: rc) ?? .none
+    }
+
     // MARK: - Shortcut recorder
 
     /// Open the core recorder for one shortcut. `current` = the four

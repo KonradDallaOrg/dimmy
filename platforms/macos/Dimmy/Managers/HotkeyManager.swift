@@ -45,14 +45,6 @@ final class HotkeyManager {
     // Re-install the tap after sleep/wake (macOS disables taps during sleep).
     private var wakeObserver: NSObjectProtocol?
 
-    // Double-tap detection for toggle mode
-    private var lastReleaseTime: Date?
-    private var lastPressTime: Date?
-    private let doubleTapInterval: TimeInterval = 0.4
-
-    // Minimum hold to avoid accidental triggers
-    private let minimumHoldDuration: TimeInterval = 0.15
-
     // Amplitude polling timer for waveform animation
     private var amplitudeTimer: Timer?
 
@@ -68,7 +60,6 @@ final class HotkeyManager {
     // Rust low-level keyboard hook. Carbon `RegisterEventHotKey` had the
     // same limitations on Mac; this replaces it with a Swift state
     // machine that honours `appState.preferredMode` (toggle vs PTT).
-    private var commandLastPressTime: Date?
 
     // What the tap decides with: the dictation chord and the three combo
     // machines (dictation-with-a-key, command, meeting). It lives on the tap
@@ -145,6 +136,21 @@ final class HotkeyManager {
                 hkLog("[HotkeyManager] dictation state machine rebound to \(newValue.displayString) (key=\(newValue.isModifierOnly ? "no" : "yes"))")
             }
             .store(in: &cancellables)
+
+        // The core's dictation session follows this state: completing (the
+        // checkmark, after the paste) or idle means nothing is recording or
+        // being delivered, whichever path got here (delivery, error,
+        // cancel). Synchronous on purpose: delivered on the next run-loop
+        // turn it could land after a press that already started the next
+        // session.
+        appState.$recordingState
+            .sink { state in
+                switch state {
+                case .idle, .completing: DimmyCore.shared.dictationInput(.cancel)
+                default: break
+                }
+            }
+            .store(in: &cancellables)
     }
 
     private var cancellables = Set<AnyCancellable>()
@@ -175,51 +181,14 @@ final class HotkeyManager {
     /// cpal buffer (same gate as the dictation hotkey).
     @MainActor
     private func handleCommandPress(at pressed: Date) {
-        guard let appState else { return }
-        if DimmyCore.shared.meetingIsActive {
-            hkLog("[CmdHotkey] suppressed — meeting active")
-            return
-        }
-        commandLastPressTime = pressed
-
-        // Already-recording press → finish + command-transform regardless
-        // of which mode started the recording. The one-shot flag drives
-        // stopRecordingIfNeeded down the command branch even if
-        // `commandMode` (sticky) is off.
-        if case .recording = appState.recordingState {
-            appState.oneShotCommandPending = true
-            stopRecordingIfNeeded()
-            return
-        }
-
-        // Idle press → start a fresh recording in one-shot command mode.
-        // Mode comes from `preferredMode`: Push-to-Talk records while the
-        // chord is held; Toggle keeps it on until the next press.
-        appState.oneShotCommandPending = true
-        let mode: RecordingMode = appState.preferredMode == .toggle ? .toggle : .pushToTalk
-        startRecording(mode: mode)
+        sessionInput(.press, command: true)
     }
 
-    /// Release handler for the dedicated Command-Mode hotkey. Only
-    /// meaningful in Push-to-Talk: stops the recording when the chord
-    /// is released, with a minimum-hold guard so a stray tap doesn't
-    /// transcribe accidental noise. Mirror of dictation `handleRelease`.
+    /// Release of the dedicated Command-Mode hotkey: ends a push-to-talk
+    /// command recording (the session discards a tap too short to speak).
     @MainActor
     private func handleCommandRelease(at released: Date) {
-        guard let appState else { return }
-        guard case .recording(.pushToTalk) = appState.recordingState else { return }
-        if let pressTime = commandLastPressTime,
-           released.timeIntervalSince(pressTime) < minimumHoldDuration {
-            // Too short — cancel, don't transcribe (and don't fire the
-            // command-transform path either: oneShotCommandPending was
-            // set on press; cancelRecording clears it via stopRecording
-            // → idle, but we need to clear it explicitly to keep state
-            // tidy when the user releases too fast).
-            appState.oneShotCommandPending = false
-            cancelRecording()
-            return
-        }
-        stopRecordingIfNeeded()
+        sessionInput(.release, command: true)
     }
 
     private func startAccessibilityPolling() {
@@ -349,7 +318,6 @@ final class HotkeyManager {
             switch action {
             case .dictationPressed(let at):
                 hkLog("[HotkeyManager] dictation shortcut pressed")
-                lastPressTime = at
                 handlePress()
             case .dictationReleased(let at):
                 hkLog("[HotkeyManager] dictation shortcut released")
@@ -376,45 +344,69 @@ final class HotkeyManager {
     }
 
     private func handlePress() {
-        guard let appState else { return }
-
-        // If already recording in toggle mode, stop it
-        if case .recording(.toggle) = appState.recordingState {
-            stopRecordingIfNeeded()
-            lastReleaseTime = nil
-            return
-        }
-
-        // Use the user's preferred mode
-        if appState.preferredMode == .toggle {
-            // Toggle mode: press starts, press again stops
-            startRecording(mode: .toggle)
-        } else {
-            // Push-to-talk: press starts, release stops
-            startRecording(mode: .pushToTalk)
-        }
+        sessionInput(.press, command: false)
     }
 
     private func handleRelease(at released: Date) {
-        guard let appState else { return }
+        sessionInput(.release, command: false)
+    }
 
-        // Only stop push-to-talk on release (toggle stays active until next press)
-        if case .recording(.pushToTalk) = appState.recordingState {
-            // Check minimum hold duration to avoid accidental triggers
-            if let pressTime = lastPressTime, released.timeIntervalSince(pressTime) < minimumHoldDuration {
-                // Too short — cancel, don't transcribe
-                cancelRecording()
+    private static var lastBusyHint = Date.distantPast
+
+    /// Every way a dictation or command recording starts, stops or is thrown
+    /// away goes through here: the core's session machine decides (same
+    /// table as Windows), this does what it answers. `fromUI` = the pill,
+    /// menu bar or Dock: no key to hold, so always a toggle.
+    @MainActor
+    private func sessionInput(_ input: DimmyCore.SessionInput, command: Bool, fromUI: Bool = false) {
+        guard let appState else { return }
+        if input == .press && DimmyCore.shared.meetingIsActive {
+            // A meeting recording owns the cpal buffer.
+            hkLog("[Session] \(command ? "command" : "dictation") press ignored — meeting active")
+            return
+        }
+        let hold = !fromUI && appState.preferredMode != .toggle
+        let action = DimmyCore.shared.dictationInput(input, command: command, hold: hold)
+        hkLog("[Session] \(command ? "command" : "dictation") \(input)\(input == .press ? (hold ? " (hold)" : " (toggle)") : "") -> \(action)")
+        switch action {
+        case .start:
+            if command { appState.oneShotCommandPending = true }
+            if !startRecording(mode: hold ? .pushToTalk : .toggle) {
+                appState.oneShotCommandPending = false
+                DimmyCore.shared.dictationInput(.startFailed)
+            }
+        case .finish:
+            guard appState.isRecording else {
+                // Out of step with the core: nothing records here. Reset it
+                // rather than leave the session finishing forever.
+                DimmyCore.shared.dictationInput(.cancel)
                 return
             }
+            // macOS: the command hotkey pressed during a dictation turns it
+            // into a command on the selection.
+            if command && input == .press { appState.oneShotCommandPending = true }
             stopRecordingIfNeeded()
+        case .discard:
+            if command { appState.oneShotCommandPending = false }
+            cancelRecording()
+        case .busy:
+            let now = Date()
+            guard now.timeIntervalSince(Self.lastBusyHint) >= 5 else { return }
+            Self.lastBusyHint = now
+            DictToastWindow.show(kind: .workflowHint, title: "Still transcribing",
+                                 body: "Your last dictation is on its way. Press again once it has been pasted.")
+        case .none:
+            break
         }
     }
 
     // MARK: - Recording via Rust FFI
 
-    private func startRecording(mode: RecordingMode) {
-        guard let appState else { return }
-        guard case .idle = appState.recordingState else { return }
+    /// Returns whether a recording is now running.
+    @discardableResult
+    private func startRecording(mode: RecordingMode) -> Bool {
+        guard let appState else { return false }
+        guard case .idle = appState.recordingState else { return false }
 
         // Phase 4 hotkey gate: a meeting recording owns the cpal buffer.
         // Starting a parallel dictation here would corrupt both sessions
@@ -422,7 +414,7 @@ final class HotkeyManager {
         // MeetingWindow.OnHotkey on the Win side.
         if DimmyCore.shared.meetingIsActive {
             hkLog("[HotkeyManager] dictation hotkey ignored — meeting active")
-            return
+            return false
         }
 
         // Capture the foreground app BEFORE start_recording so the
@@ -444,6 +436,7 @@ final class HotkeyManager {
         if result == 0 {
             appState.recordingState = .recording(mode)
             startAmplitudePolling()
+            return true
         } else if result == -1 {
             appState.lastError = "No API key configured"
             print("[HotkeyManager] startRecording failed: no API key")
@@ -472,6 +465,7 @@ final class HotkeyManager {
             recordingTargetApp = nil
             appState.oneShotCommandPending = false
         }
+        return false
     }
 
     /// Bundle ID captured at hotkey-down. Held until the post-LLM update
@@ -841,7 +835,7 @@ final class HotkeyManager {
     }
 
     func stopToggleRecording() {
-        stopRecordingIfNeeded()
+        sessionInput(.stop, command: false, fromUI: true)
     }
 
     /// UI-driven recording toggle, independent of the global hotkey.
@@ -850,11 +844,7 @@ final class HotkeyManager {
     /// still needs Mic — that prompt fires once cpal opens the input.
     func toggleRecordingFromUI() {
         guard let appState else { return }
-        if appState.isRecording {
-            stopRecordingIfNeeded()
-        } else if case .idle = appState.recordingState {
-            startRecording(mode: .toggle)
-        }
+        sessionInput(appState.isRecording ? .stop : .press, command: false, fromUI: true)
     }
 
     // MARK: - Amplitude Polling (drives waveform animation)

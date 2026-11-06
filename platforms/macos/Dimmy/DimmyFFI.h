@@ -1041,6 +1041,14 @@ int32_t dimmy_hotkey_recorder_is_active(void);
 /// to the shortcut (consume it), 0 = let the sheet have it.
 int32_t dimmy_hotkey_recorder_key(uint32_t native_code, int32_t is_down);
 
+/// The dictation session state machine (core/src/dictation_session.rs).
+/// input 1 press | 2 release | 3 stop | 4 start failed | 5 delivered |
+/// 6 cancel; kind 0 dictation | 1 command; mode 0 toggle | 1 hold.
+/// Returns 0 nothing | 1 start | 2 finish | 3 discard | 4 busy | -1 bad.
+int32_t dimmy_dictation_input(int32_t input, int32_t kind, int32_t mode);
+/// 0 idle | 1 recording | 2 finishing.
+int32_t dimmy_dictation_phase(void);
+
 // ── Telegram inbox source ───────────────────────────────────────────
 // Rust core/src/telegram.rs — the "Saved Messages audio inbox". Every
 // entry exists regardless of the `telegram` cargo feature (stable C ABI)
