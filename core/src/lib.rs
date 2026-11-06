@@ -52,6 +52,7 @@ mod hotkey;
 mod hotkey_recorder;
 pub mod keystore;
 pub mod lang_detect;
+pub mod legal_doc;
 /// Licensing — local-server PoC for the v2 architecture (see
 /// `docs/dev/licensing-poc.md`). Always-available types + file I/O +
 /// HTTP client; Ed25519 verify is gated behind `license-client`.

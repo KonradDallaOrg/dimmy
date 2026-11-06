@@ -7021,6 +7021,20 @@ pub extern "C" fn dimmy_third_party_notices(out_buf: *mut c_char, buf_len: c_int
     write_static_text(crate::THIRD_PARTY_NOTICES, out_buf, buf_len)
 }
 
+/// The licence (`kind` 0) or the open source notices (`kind` 1) as JSON
+/// blocks to draw natively: `[{"t":"heading","level":1,"text":..},
+/// {"t":"paragraph","text":..}, {"t":"table","header":[..],"rows":[[..]]},
+/// {"t":"code","text":..}]`. Length-query contract, see
+/// [`write_static_text`]; -1 for an unknown kind.
+#[no_mangle]
+pub extern "C" fn dimmy_legal_document(kind: c_int, out_buf: *mut c_char, buf_len: c_int) -> c_int {
+    match kind {
+        0 => write_static_text(crate::legal_doc::json(false), out_buf, buf_len),
+        1 => write_static_text(crate::legal_doc::json(true), out_buf, buf_len),
+        _ => -1,
+    }
+}
+
 /// Version of the Terms of Service / EULA the app asks the user to accept.
 /// Hosts store it in `terms_accepted_version` when the user ticks the box.
 /// Returns bytes written, or -1 on a null buffer.
@@ -12822,6 +12836,20 @@ pub(crate) mod tests {
         if let Ok(mut guard) = EVENT_CALLBACK.lock() {
             *guard = None;
         }
+    }
+
+    #[test]
+    fn legal_documents_are_json_blocks_with_the_length_contract() {
+        for kind in [0, 1] {
+            let len = dimmy_legal_document(kind, std::ptr::null_mut(), 0);
+            assert!(len > 1000, "kind {kind}: {len}");
+            let mut buf = vec![0u8; len as usize + 1];
+            dimmy_legal_document(kind, buf.as_mut_ptr() as *mut c_char, buf.len() as c_int);
+            let text = std::str::from_utf8(&buf[..len as usize]).unwrap();
+            let v: serde_json::Value = serde_json::from_str(text).unwrap();
+            assert_eq!(v[0]["t"], "heading", "kind {kind} opens with its title");
+        }
+        assert_eq!(dimmy_legal_document(7, std::ptr::null_mut(), 0), -1);
     }
 
     // ── dictation session FFI ────────────────────────────────────

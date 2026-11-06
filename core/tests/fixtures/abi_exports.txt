@@ -117,6 +117,7 @@ dimmy_license_register_interest
 dimmy_license_request_trial
 dimmy_license_sales_open
 dimmy_license_status_json
+dimmy_legal_document
 dimmy_license_text
 dimmy_list_devices_json
 dimmy_list_llm_models
