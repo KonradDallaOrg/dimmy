@@ -128,6 +128,7 @@ final class DictHotkeyManager {
             }
 
             guard type == .keyDown,
+                  dimmy_hotkey_recorder_is_active() == 0,
                   let combo = state.combo,
                   combo.matches(flags: NSEvent.ModifierFlags(cgFlags: event.flags),
                                 keyCode: UInt16(event.getIntegerValueField(.keyboardEventKeycode)))
@@ -274,6 +275,7 @@ final class DictHotkeyManager {
     /// they THINK they selected).
     @MainActor
     private func handleCarbonHotKey() async {
+        if dimmy_hotkey_recorder_is_active() != 0 { return }
         let pb = NSPasteboard.general
         let currentChangeCount = pb.changeCount
 

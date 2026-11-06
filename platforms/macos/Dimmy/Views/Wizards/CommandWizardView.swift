@@ -117,7 +117,7 @@ struct CommandWizardView: View {
         // the NSEvent monitor dance: the conflict checks against the other
         // hotkeys already live in there.
         .sheet(isPresented: $recording) {
-            CommandHotkeyRecorderSheet(appState: appState, isPresented: $recording)
+            ShortcutRecorderSheet(appState: appState, target: .command, isPresented: $recording)
         }
     }
 

@@ -353,6 +353,28 @@ final class DimmyCore {
         }
     }
 
+    // MARK: - Shortcut recorder
+
+    /// Open the core recorder for one shortcut. `current` = the four
+    /// configured combos in the core grammar, for the conflict check.
+    @discardableResult
+    func recorderStart(target: String, current: [String: String]) -> Int32 {
+        let data = (try? JSONSerialization.data(withJSONObject: current)) ?? Data("{}".utf8)
+        let json = String(data: data, encoding: .utf8) ?? "{}"
+        return target.withCString { t in
+            json.withCString { j in dimmy_hotkey_recorder_start(t, j) }
+        }
+    }
+
+    func recorderStop() {
+        dimmy_hotkey_recorder_stop()
+    }
+
+    /// Feed one key; true = it belongs to the shortcut, consume it.
+    func recorderKey(code: UInt16, down: Bool) -> Bool {
+        dimmy_hotkey_recorder_key(UInt32(code), down ? 1 : 0) != 0
+    }
+
     // MARK: - Stats
 
     /// Update cumulative stats.
@@ -1428,6 +1450,10 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
             appState.lastError = "Dictation stopped at 10 min. Dimmy transcribed what you said. For long recordings, use Meeting mode."
         }
 
+    case "hotkey_recorder":
+        // The open ShortcutRecorderSheet filters by target.
+        NotificationCenter.default.post(name: .dimmyHotkeyRecorder, object: nil, userInfo: payload)
+
     case "meeting_state":
         // Replaces the 0.5 s `meetingStatePollTimer` on PillWindowController.
         // Rust emits this exactly once per state transition (start /
@@ -1749,4 +1775,9 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
     default:
         print("[DimmyCore] unhandled event: \(event)")
     }
+}
+
+extension Notification.Name {
+    /// One `hotkey_recorder` event from the core; userInfo = its payload.
+    static let dimmyHotkeyRecorder = Notification.Name("dimmyHotkeyRecorder")
 }

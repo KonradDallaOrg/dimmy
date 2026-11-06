@@ -1,16 +1,12 @@
 import SwiftUI
 
-// Shortcut, hotkey display + push-to-talk vs toggle behaviour. Capture
-// of new shortcuts reuses the legacy ShortcutSettingsView's recorder via
-// a sheet because rebuilding the modifier-flag capture from scratch is
-// orthogonal to the visual redesign.
+// Shortcut page: each shortcut as keys plus "Change...", and push-to-talk vs
+// toggle. Recording a new shortcut happens in `ShortcutRecorderSheet`, the one
+// sheet every place uses (this page, the legacy page, onboarding, wizards).
 
 struct MacShortcutPage: View {
     @ObservedObject var appState: AppState
-    @State private var showRecorder = false
-    @State private var showDictRecorder = false
-    @State private var showCommandRecorder = false
-    @State private var showMeetingRecorder = false
+    @State private var editing: ShortcutTarget?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -26,40 +22,31 @@ struct MacShortcutPage: View {
             }
             behaviorGroup
         }
-        .sheet(isPresented: $showDictRecorder) {
-            DictHotkeyRecorderSheet(appState: appState, isPresented: $showDictRecorder)
-                .frame(minWidth: 420, minHeight: 220)
+        .sheet(item: $editing) { target in
+            ShortcutRecorderSheet(
+                appState: appState,
+                target: target,
+                isPresented: Binding(get: { editing != nil }, set: { if !$0 { editing = nil } })
+            )
         }
-        .sheet(isPresented: $showCommandRecorder) {
-            CommandHotkeyRecorderSheet(appState: appState, isPresented: $showCommandRecorder)
-                .frame(minWidth: 460, minHeight: 260)
-        }
-        .sheet(isPresented: $showMeetingRecorder) {
-            MeetingHotkeyRecorderSheet(appState: appState, isPresented: $showMeetingRecorder)
-                .frame(minWidth: 460, minHeight: 260)
-        }
-        .sheet(isPresented: $showRecorder) {
-            // Phase 4: dedicated capture sheet. For now jump back to the
-            // legacy ShortcutSettingsView in a sheet so users can still
-            // record a new combo without leaving the Tahoe Settings.
-            // The legacy view has no Close button of its own, wrap it
-            // with a header so the sheet is dismissible.
-            VStack(alignment: .leading, spacing: 0) {
-                HStack {
-                    Text("Change shortcut")
-                        .font(.system(size: 15, weight: .semibold))
-                    Spacer()
-                    Button("Done") { showRecorder = false }
-                        .keyboardShortcut(.defaultAction)
+    }
+
+    /// Keys, or "Not set", then the button that opens the sheet.
+    @ViewBuilder
+    private func shortcutControl(_ parts: [String], target: ShortcutTarget) -> some View {
+        if parts.isEmpty {
+            Text("Not set")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+        } else {
+            HStack(spacing: 4) {
+                ForEach(parts, id: \.self) { glyph in
+                    MacKeycap(glyph: glyph)
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                Divider()
-                ShortcutSettingsView(appState: appState)
-                    .padding(16)
             }
-            .frame(minWidth: 480, minHeight: 360)
         }
+        Button(parts.isEmpty ? "Set..." : "Change...") { editing = target }
+            .controlSize(.small)
     }
 
     private var hotkeyGroup: some View {
@@ -68,19 +55,13 @@ struct MacShortcutPage: View {
             MacTile {
                 MacRow(
                     "Activation hotkey",
-                    description: "Press Change... to capture a new combo.",
-                    hint: "Press the keys you want, then release to confirm. This is the shortcut you press to dictate.",
+                    description: "Press Change... to record a new combo.",
+                    hint: "Click Change..., press the keys you want, then Save. This is the shortcut you press to dictate.",
                     hintURL: URL(string: "https://dimmy.app/help/hotkey-change"),
                     icon: "keyboard.fill",
                     iconBackground: Color(red: 0.04, green: 0.52, blue: 1.00)
                 ) {
-                    HStack(spacing: 4) {
-                        ForEach(appState.shortcut.displayParts, id: \.self) { glyph in
-                            MacKeycap(glyph: glyph)
-                        }
-                    }
-                    Button("Change...") { showRecorder = true }
-                        .controlSize(.small)
+                    shortcutControl(appState.shortcut.displayParts, target: .dictation)
                 }
 
                 MacRow(
@@ -114,19 +95,13 @@ struct MacShortcutPage: View {
                 MacRow(
                     "Add to dictionary",
                     description: "Select text in any app, then press the combo.",
-                    hint: "Select text in any app and press these keys to add it to your custom dictionary. Press the keys here, then release to confirm.",
+                    hint: "Select text in any app and press these keys to add it to your custom dictionary.",
                     hintURL: URL(string: "https://dimmy.app/help/hotkey-change"),
                     icon: "text.badge.plus",
                     iconBackground: Color(red: 0.40, green: 0.73, blue: 0.42),
                     showsDivider: false
                 ) {
-                    HStack(spacing: 4) {
-                        ForEach(appState.dictHotkey.displayParts, id: \.self) { glyph in
-                            MacKeycap(glyph: glyph)
-                        }
-                    }
-                    Button("Change...") { showDictRecorder = true }
-                        .controlSize(.small)
+                    shortcutControl(appState.dictHotkey.displayParts, target: .dictionary)
                 }
             }
         }
@@ -147,27 +122,7 @@ struct MacShortcutPage: View {
                     iconBackground: Color(red: 1.0, green: 0.62, blue: 0.04),
                     showsDivider: false
                 ) {
-                    if let combo = appState.commandHotkey {
-                        HStack(spacing: 4) {
-                            ForEach(combo.displayParts, id: \.self) { glyph in
-                                MacKeycap(glyph: glyph)
-                            }
-                        }
-                    } else {
-                        Text("Not set")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                    }
-                    Button(appState.commandHotkey == nil ? "Set..." : "Change...") {
-                        showCommandRecorder = true
-                    }
-                    .controlSize(.small)
-                    if appState.commandHotkey != nil {
-                        Button("Remove") {
-                            appState.commandHotkey = nil
-                        }
-                        .controlSize(.small)
-                    }
+                    shortcutControl(appState.commandHotkey?.displayParts ?? [], target: .command)
                 }
             }
         }
@@ -182,33 +137,13 @@ struct MacShortcutPage: View {
                     description: appState.meetingHotkey == nil
                         ? "Press to start a meeting recording; press again to stop and generate the recap. No combo set."
                         : "Press to start a meeting recording; press again to stop and generate the recap.",
-                    hint: "Toggle-only (a meeting can't be push-to-talk). On start it shows the recording-consent prompt, then records in the background — the Meeting window does not open. Leave empty to avoid clashing with app shortcuts used during calls (⌘⇧M is Teams mute).",
+                    hint: "Toggle-only (a meeting can't be push-to-talk). On start it shows the recording-consent prompt, then records in the background. The Meeting window does not open. Leave empty to avoid clashing with app shortcuts used during calls (⌘⇧M is Teams mute).",
                     hintURL: URL(string: "https://dimmy.app/help/meetings"),
                     icon: "person.2.wave.2.fill",
                     iconBackground: Color(red: 0.18, green: 0.81, blue: 0.56),
                     showsDivider: false
                 ) {
-                    if let combo = appState.meetingHotkey {
-                        HStack(spacing: 4) {
-                            ForEach(combo.displayParts, id: \.self) { glyph in
-                                MacKeycap(glyph: glyph)
-                            }
-                        }
-                    } else {
-                        Text("Not set")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                    }
-                    Button(appState.meetingHotkey == nil ? "Set..." : "Change...") {
-                        showMeetingRecorder = true
-                    }
-                    .controlSize(.small)
-                    if appState.meetingHotkey != nil {
-                        Button("Remove") {
-                            appState.meetingHotkey = nil
-                        }
-                        .controlSize(.small)
-                    }
+                    shortcutControl(appState.meetingHotkey?.displayParts ?? [], target: .meeting)
                 }
             }
         }
@@ -252,520 +187,301 @@ struct MacShortcutPage: View {
     }
 }
 
-/// Capture sheet for the "add to dictionary" hotkey. Press any
-/// modifier+letter combo to bind. Mirrors the Win
-/// `DictHotkeyCaptureDialog` semantics: at least one modifier required,
-/// letter must be A-Z. The sheet uses `NSEvent.addLocalMonitorForEvents`
-/// while shown so we don't fight with the global CGEventTap; closes
-/// itself after a valid bind. The persistence side (UserDefaults +
-/// DictHotkeyManager refresh) is driven by `AppState.dictHotkey.didSet`.
-private struct DictHotkeyRecorderSheet: View {
+/// Which shortcut a recorder sheet edits. The raw value is the core's target id.
+enum ShortcutTarget: String, Identifiable {
+    case dictation, command, meeting, dictionary
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .dictation: return "Dictation shortcut"
+        case .command: return "Command shortcut"
+        case .meeting: return "Meeting shortcut"
+        case .dictionary: return "Add-to-dictionary shortcut"
+        }
+    }
+
+    var hint: String {
+        switch self {
+        case .dictionary:
+            return "Press the keys you want to use: a modifier and a key, like ⌘⇧D."
+        case .dictation:
+            return "Press the keys you want to use: a modifier and a key, two modifiers together like ⌃⌥, or fn."
+        case .command, .meeting:
+            return "Press the keys you want to use: a modifier and a key, or two modifiers together like ⌃⌥."
+        }
+    }
+}
+
+/// The one sheet that records a shortcut, for all four of them. The rules
+/// (what is allowed, conflicts with the other shortcuts, shortcuts macOS
+/// already uses) live in the core recorder, shared with Windows: this view
+/// feeds it the keys and draws what comes back, one `hotkey_recorder` event
+/// per key-down. The event taps step aside while it's open
+/// (`dimmy_hotkey_recorder_is_active`), so the current shortcut can't fire.
+struct ShortcutRecorderSheet: View {
     @ObservedObject var appState: AppState
+    let target: ShortcutTarget
     @Binding var isPresented: Bool
-    @State private var monitor: Any?
-    @State private var lastError: String?
+
+    @State private var keys: [String] = []
+    @State private var error = ""
+    @State private var warnings: [String] = []
+    @State private var canSave = false
+    @State private var last: [String: Any] = [:]
+    @State private var keyMonitor: Any?
+    @State private var flagsMonitor: Any?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text("Capture dictionary hotkey")
-                    .font(.system(size: 15, weight: .semibold))
-                Spacer()
-                Button("Cancel") { isPresented = false }
-                    .keyboardShortcut(.cancelAction)
-            }
-
-            Text("Press a combination, at least one modifier plus a letter. Cmd+Shift+D is the default.")
+        VStack(alignment: .leading, spacing: 14) {
+            Text(target.title)
+                .font(.system(size: 15, weight: .semibold))
+            Text(target.hint)
                 .font(.system(size: 12))
                 .foregroundStyle(Color.macTextSecondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            HStack(spacing: 6) {
-                ForEach(appState.dictHotkey.displayParts, id: \.self) { glyph in
-                    MacKeycap(glyph: glyph)
+            keyArea
+
+            HStack(spacing: 18) {
+                if let label = resetLabel {
+                    Button(action: reset) {
+                        Label(label, systemImage: "arrow.counterclockwise")
+                    }
+                    .buttonStyle(.link)
+                }
+                if canRemove {
+                    Button(action: remove) {
+                        Label("Remove shortcut", systemImage: "trash")
+                    }
+                    .buttonStyle(.link)
                 }
             }
-            .frame(maxWidth: .infinity, minHeight: 56)
-            .padding(.vertical, 12)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color(nsColor: .controlBackgroundColor))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(Color.macControlStroke, lineWidth: 0.5)
-            )
+            .font(.system(size: 12))
+            .frame(maxWidth: .infinity)
 
-            if let err = lastError {
-                Label(err, systemImage: "exclamationmark.triangle.fill")
-                    .font(.system(size: 11))
+            if !error.isEmpty {
+                Label(error, systemImage: "xmark.octagon.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            ForEach(warnings, id: \.self) { warning in
+                Label(warning, systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 12))
                     .foregroundStyle(.orange)
-            } else {
-                Text("Listening...")
-                    .font(.system(size: 11))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Text("Tab, Return and Esc on their own still work in this window.")
+                .font(.system(size: 11))
+                .foregroundStyle(Color.macTextSecondary)
+
+            Spacer(minLength: 0)
+
+            HStack {
+                Spacer()
+                Button("Cancel") { isPresented = false }
+                    .keyboardShortcut(.cancelAction)
+                Button("Save", action: save)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!canSave)
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 480, minHeight: 320)
+        .onAppear(perform: begin)
+        .onDisappear(perform: end)
+        .onReceive(NotificationCenter.default.publisher(for: .dimmyHotkeyRecorder)) { note in
+            apply(note.userInfo)
+        }
+    }
+
+    /// The keys pop in as they go down.
+    private var keyArea: some View {
+        HStack(spacing: 8) {
+            if keys.isEmpty {
+                Text("Press a shortcut")
+                    .font(.system(size: 12))
                     .foregroundStyle(Color.macTextSecondary)
             }
-
-            Spacer()
-
-            HStack {
-                Button("Restore default") {
-                    appState.dictHotkey = .defaultDictHotkey
-                }
-                .controlSize(.small)
-                Spacer()
-                Button("Done") { isPresented = false }
-                    .keyboardShortcut(.defaultAction)
+            ForEach(keys, id: \.self) { glyph in
+                RecorderKeycap(glyph: glyph, isError: !error.isEmpty)
+                    .transition(.scale(scale: 0.6).combined(with: .opacity))
             }
         }
-        .padding(20)
-        .onAppear { installMonitor() }
-        .onDisappear { removeMonitor() }
+        .animation(.spring(response: 0.28, dampingFraction: 0.72), value: keys)
+        .animation(.easeInOut(duration: 0.15), value: error)
+        .frame(maxWidth: .infinity, minHeight: 88)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.macControlStroke, lineWidth: 0.5)
+        )
     }
 
-    private func installMonitor() {
-        // Local key monitor, fires for keys delivered to this window.
-        // We must consume the event (return nil) so the standard "key
-        // beep on unhandled keyDown" doesn't fire for every press.
-        // Explicit `-> NSEvent?` annotation, without it the compiler
-        // sometimes infers `-> NSEvent` from a non-optional code path
-        // (depending on Swift version) and refuses the `return nil`s.
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { (event: NSEvent) -> NSEvent? in
-            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            let modCount = [
-                flags.contains(.control), flags.contains(.option),
-                flags.contains(.command), flags.contains(.shift),
-            ].filter { $0 }.count
-            if modCount == 0 {
-                lastError = "Add at least one modifier"
-                return nil
-            }
-            guard let chars = event.charactersIgnoringModifiers?.uppercased(),
-                  let letter = chars.first, letter.isLetter else {
-                lastError = "Use a letter (A-Z)"
-                return nil
-            }
-            appState.dictHotkey = HotkeyCombo(
-                control: flags.contains(.control),
-                option: flags.contains(.option),
-                command: flags.contains(.command),
-                shift: flags.contains(.shift),
-                keyCode: event.keyCode,
-                keyChar: String(letter)
-            )
-            lastError = nil
-            return nil
+    // MARK: - Current values
+
+    private var currentParts: [String] {
+        switch target {
+        case .dictation: return appState.shortcut.displayParts
+        case .command: return appState.commandHotkey?.displayParts ?? []
+        case .meeting: return appState.meetingHotkey?.displayParts ?? []
+        case .dictionary: return appState.dictHotkey.displayParts
         }
     }
 
-    private func removeMonitor() {
-        if let m = monitor { NSEvent.removeMonitor(m) }
-        monitor = nil
+    private var currentShortcuts: [String: String] {
+        [
+            "dictation": appState.shortcut.rustGrammar,
+            "command": appState.commandHotkey?.rustGrammar ?? "",
+            "meeting": appState.meetingHotkey?.rustGrammar ?? "",
+            "dictionary": appState.dictHotkey.rustGrammar,
+        ]
     }
-}
 
-/// Capture sheet for the dedicated one-shot Command-Mode hotkey. The
-/// command hotkey runs on the same CGEventTap as the dictation chord
-/// (post-PR), so it accepts the same grammar Win does:
-///   - modifier-only (e.g. ⌃⌥)         → fires on `.flagsChanged`
-///   - modifier + key (e.g. ⌃⇧X)       → fires on `.keyDown`
-///
-/// Two-mod combos like ⌃⌥ are now valid (they couldn't be on the old
-/// Carbon path because Carbon requires a non-modifier key). Conflict
-/// detection goes through the Rust `dimmy_hotkey_combos_conflict` FFI —
-/// shared subset-rule with Win so e.g. a `cmd+space` command hotkey is
-/// rejected when the dictation shortcut is `cmd+space+x`.
-/// Reachable from the setup wizards too: they present this rather than
-/// adding a fifth and sixth copy of the NSEvent monitor dance, and the
-/// conflict checks against the other hotkeys already live here.
-struct CommandHotkeyRecorderSheet: View {
-    @ObservedObject var appState: AppState
-    @Binding var isPresented: Bool
-    @State private var keyDownMonitor: Any?
-    @State private var flagsMonitor: Any?
-    @State private var lastError: String?
-    @State private var captured: HotkeyCombo?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text("Capture command hotkey")
-                    .font(.system(size: 15, weight: .semibold))
-                Spacer()
-                Button("Cancel") { isPresented = false }
-                    .keyboardShortcut(.cancelAction)
-            }
-
-            Text("Press a combination: a letter with at least one modifier, or two modifiers (e.g. ⌃⌥). This hotkey triggers Command Mode for the NEXT dictation only. It follows the Push-to-talk vs Toggle behaviour you set above.")
-                .font(.system(size: 12))
-                .foregroundStyle(Color.macTextSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            HStack(spacing: 6) {
-                let parts = captured?.displayParts ?? appState.commandHotkey?.displayParts ?? []
-                if parts.isEmpty {
-                    Text("Listening...")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Color.macTextSecondary)
-                } else {
-                    ForEach(parts, id: \.self) { glyph in
-                        MacKeycap(glyph: glyph)
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, minHeight: 56)
-            .padding(.vertical, 12)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color(nsColor: .controlBackgroundColor))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(Color.macControlStroke, lineWidth: 0.5)
-            )
-
-            if let err = lastError {
-                Label(err, systemImage: "exclamationmark.triangle.fill")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.orange)
-            } else if captured != nil {
-                Label("Looks good. Press Done to confirm.", systemImage: "checkmark.circle.fill")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.green)
-            }
-
-            Spacer()
-
-            HStack {
-                Spacer()
-                Button("Done") {
-                    if let combo = captured {
-                        appState.commandHotkey = combo
-                    }
-                    isPresented = false
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(captured == nil && appState.commandHotkey == nil)
-            }
-        }
-        .padding(20)
-        .onAppear {
-            installKeyDownMonitor()
-            installFlagsMonitor()
-        }
-        .onDisappear {
-            removeMonitors()
+    private var resetLabel: String? {
+        switch target {
+        case .dictation: return "Reset to \(ModifierShortcut.default.displayString)"
+        case .dictionary: return "Reset to \(HotkeyCombo.defaultDictHotkey.displayString)"
+        case .command, .meeting: return nil
         }
     }
 
-    private func installKeyDownMonitor() {
-        keyDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { (event: NSEvent) -> NSEvent? in
-            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            let modCount = [
-                flags.contains(.control), flags.contains(.option),
-                flags.contains(.command), flags.contains(.shift),
-            ].filter { $0 }.count
-            if modCount == 0 {
-                lastError = "Add at least one modifier or two modifiers"
-                captured = nil
-                return nil
-            }
-            // The mod+key path requires a recognised non-modifier key.
-            // Letters / digits / function keys / common specials are all
-            // valid (the Rust grammar covers them). We use the kVK→name
-            // helper to validate — anything `macKeyCodeRustName` doesn't
-            // know is rejected so the persisted combo can be passed to
-            // the Rust conflict check without surprises.
-            guard let rustName = HotkeyCombo.macKeyCodeRustName(event.keyCode) else {
-                lastError = "Unsupported key. Try a letter, number, or function key."
-                captured = nil
-                return nil
-            }
-            // Display glyph: prefer the keyChar from charactersIgnoringModifiers
-            // for letters / digits / punctuation; fall back to the rust grammar
-            // name (uppercased) for specials like Space / Enter.
-            let display: String
-            if let chars = event.charactersIgnoringModifiers, !chars.isEmpty,
-               chars.unicodeScalars.first.map({ $0.value < 0x80 }) ?? false,
-               chars.first?.isLetter == true || chars.first?.isNumber == true {
-                display = chars.uppercased()
-            } else {
-                display = rustName.uppercased()
-            }
-            let combo = HotkeyCombo(
-                control: flags.contains(.control),
-                option: flags.contains(.option),
-                command: flags.contains(.command),
-                shift: flags.contains(.shift),
-                keyCode: event.keyCode,
-                keyChar: display
-            )
-            tryCommit(combo)
-            return nil
+    private var canRemove: Bool {
+        switch target {
+        case .command: return appState.commandHotkey != nil
+        case .meeting: return appState.meetingHotkey != nil
+        case .dictation, .dictionary: return false
         }
     }
 
-    /// Watch the modifier-only path: while the user holds 2+ modifiers
-    /// (and nothing else), preview that combo as "captured". The user
-    /// confirms with Done; pressing a non-modifier key promotes it to
-    /// the mod+key path via `installKeyDownMonitor` above.
-    private func installFlagsMonitor() {
+    // MARK: - Recorder
+
+    private func begin() {
+        keys = currentParts
+        let rc = DimmyCore.shared.recorderStart(target: target.rawValue, current: currentShortcuts)
+        if rc != 0 { NSLog("[Shortcut] recorder_start(\(target.rawValue)) rc=\(rc)") }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { (event: NSEvent) -> NSEvent? in
+            DimmyCore.shared.recorderKey(code: event.keyCode, down: event.type == .keyDown) ? nil : event
+        }
+        // Modifiers arrive as flag changes; the sheet still gets them.
         flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { (event: NSEvent) -> NSEvent? in
-            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            let modCount = [
-                flags.contains(.control), flags.contains(.option),
-                flags.contains(.command), flags.contains(.shift),
-            ].filter { $0 }.count
-            // A single modifier alone is too easy to fire by accident.
-            // Two modifiers held simultaneously is the documented Win
-            // grammar (e.g. Win+Alt), so accept ≥2. Single mod with a
-            // key is handled by the keyDown path above.
-            if modCount >= 2 {
-                let combo = HotkeyCombo(
-                    control: flags.contains(.control),
-                    option: flags.contains(.option),
-                    command: flags.contains(.command),
-                    shift: flags.contains(.shift),
-                    keyCode: nil,
-                    keyChar: ""
-                )
-                tryCommit(combo)
+            if let down = Self.modifierIsDown(event) {
+                _ = DimmyCore.shared.recorderKey(code: event.keyCode, down: down)
             }
             return event
         }
     }
 
-    /// Run the cross-platform conflict check against the dictation chord
-    /// and dictionary hotkey via the Rust FFI. Translates each combo to
-    /// the Rust grammar (`cmd+shift+d`, `cmd+opt`, …). Stays in the
-    /// sheet on conflict so the user can pick again without dismissing.
-    private func tryCommit(_ combo: HotkeyCombo) {
-        let cmdGrammar = combo.rustGrammar
-        // Defensive: the recorder above should already guarantee a
-        // non-empty rustGrammar (we reject 0-mod and unknown keys).
-        guard !cmdGrammar.isEmpty else {
-            lastError = "Combo is empty"
-            captured = nil
-            return
-        }
-
-        let dictGrammar = appState.dictHotkey.rustGrammar
-        if !dictGrammar.isEmpty,
-           DimmyCore.shared.hotkeyCombosConflict(cmdGrammar, dictGrammar) {
-            lastError = "This combo overlaps the Add-to-dictionary hotkey. Pick another."
-            captured = nil
-            return
-        }
-        // Main dictation chord is the modifier-only shortcut managed by
-        // `appState.shortcut`. It's also a HotkeyCombo grammar candidate
-        // — translate via the ModifierShortcut helper.
-        let mainGrammar = appState.shortcut.rustGrammar
-        if !mainGrammar.isEmpty,
-           DimmyCore.shared.hotkeyCombosConflict(cmdGrammar, mainGrammar) {
-            lastError = "This combo overlaps the dictation hotkey. Pick another."
-            captured = nil
-            return
-        }
-
-        lastError = nil
-        captured = combo
+    private func end() {
+        DimmyCore.shared.recorderStop()
+        if let m = keyMonitor { NSEvent.removeMonitor(m) }
+        if let m = flagsMonitor { NSEvent.removeMonitor(m) }
+        keyMonitor = nil
+        flagsMonitor = nil
     }
 
-    private func removeMonitors() {
-        if let m = keyDownMonitor { NSEvent.removeMonitor(m) }
-        if let m = flagsMonitor { NSEvent.removeMonitor(m) }
-        keyDownMonitor = nil
-        flagsMonitor = nil
+    /// Whether the modifier this flagsChanged is about is now down.
+    private static func modifierIsDown(_ event: NSEvent) -> Bool? {
+        let flags = event.modifierFlags
+        switch event.keyCode {
+        case 0x37, 0x36: return flags.contains(.command)
+        case 0x3A, 0x3D: return flags.contains(.option)
+        case 0x3B, 0x3E: return flags.contains(.control)
+        case 0x38, 0x3C: return flags.contains(.shift)
+        case 0x3F: return flags.contains(.function)
+        default: return nil
+        }
+    }
+
+    private func apply(_ info: [AnyHashable: Any]?) {
+        guard let payload = info as? [String: Any],
+              payload["target"] as? String == target.rawValue else { return }
+        keys = payload["keys"] as? [String] ?? []
+        error = payload["error"] as? String ?? ""
+        warnings = payload["warnings"] as? [String] ?? []
+        canSave = payload["can_save"] as? Bool ?? false
+        last = payload
+    }
+
+    // MARK: - Actions
+
+    private func save() {
+        guard canSave, let mods = last["mods"] as? [String: Bool] else { return }
+        let keyName = last["key"] as? String ?? ""
+        let native = (last["native_key"] as? Int).map { UInt16(truncatingIfNeeded: $0) } ?? 0
+        let keyCode: UInt16? = keyName.isEmpty ? nil : native
+        let keyChar = keyName.uppercased()
+        let control = mods["ctrl"] ?? false
+        let option = mods["alt"] ?? false
+        let command = mods["win"] ?? false
+        let shift = mods["shift"] ?? false
+        let combo = HotkeyCombo(control: control, option: option, command: command, shift: shift,
+                                keyCode: keyCode, keyChar: keyChar)
+        switch target {
+        case .dictation:
+            appState.shortcut = ModifierShortcut(
+                fn: mods["fn"] ?? false, control: control, option: option,
+                command: command, shift: shift, keyCode: keyCode, keyChar: keyChar)
+            DimmyCore.shared.setConfig(appState.toRustConfig())
+        case .dictionary:
+            guard keyCode != nil else { return }
+            appState.dictHotkey = combo
+        case .command:
+            appState.commandHotkey = combo
+        case .meeting:
+            appState.meetingHotkey = combo
+        }
+        isPresented = false
+    }
+
+    private func reset() {
+        switch target {
+        case .dictation:
+            appState.shortcut = .default
+            DimmyCore.shared.setConfig(appState.toRustConfig())
+        case .dictionary:
+            appState.dictHotkey = .defaultDictHotkey
+        case .command, .meeting:
+            return
+        }
+        isPresented = false
+    }
+
+    private func remove() {
+        switch target {
+        case .command: appState.commandHotkey = nil
+        case .meeting: appState.meetingHotkey = nil
+        case .dictation, .dictionary: return
+        }
+        isPresented = false
     }
 }
 
-/// Capture sheet for the meeting start/stop hotkey. Same capture mechanics as
-/// `CommandHotkeyRecorderSheet`; the only difference is the persistence target
-/// (`appState.meetingHotkey`) and that the conflict check runs against the
-/// dictation chord, the dictionary hotkey AND the command hotkey (3-way).
-/// Reachable from the setup wizards too: they present this rather than
-/// adding a fifth and sixth copy of the NSEvent monitor dance, and the
-/// conflict checks against the other hotkeys already live here.
-struct MeetingHotkeyRecorderSheet: View {
-    @ObservedObject var appState: AppState
-    @Binding var isPresented: Bool
-    @State private var keyDownMonitor: Any?
-    @State private var flagsMonitor: Any?
-    @State private var lastError: String?
-    @State private var captured: HotkeyCombo?
+/// One key in the recorder sheet: accent when fine, red when the combination
+/// can't be used. Accent fill with white text reads in both themes.
+private struct RecorderKeycap: View {
+    let glyph: String
+    let isError: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text("Capture meeting hotkey")
-                    .font(.system(size: 15, weight: .semibold))
-                Spacer()
-                Button("Cancel") { isPresented = false }
-                    .keyboardShortcut(.cancelAction)
-            }
-
-            Text("Press a combination: a letter with at least one modifier, or two modifiers (e.g. ⌃⌥). This hotkey TOGGLES a meeting recording — press to start (with consent), press again to stop and generate the recap.")
-                .font(.system(size: 12))
-                .foregroundStyle(Color.macTextSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            HStack(spacing: 6) {
-                let parts = captured?.displayParts ?? appState.meetingHotkey?.displayParts ?? []
-                if parts.isEmpty {
-                    Text("Listening...")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Color.macTextSecondary)
-                } else {
-                    ForEach(parts, id: \.self) { glyph in
-                        MacKeycap(glyph: glyph)
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, minHeight: 56)
-            .padding(.vertical, 12)
+        Text(glyph)
+            .font(.system(size: 18, weight: .semibold, design: .rounded))
+            .foregroundStyle(isError ? Color.red : Color.white)
+            .frame(minWidth: 44, minHeight: 44)
+            .padding(.horizontal, 10)
             .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color(nsColor: .controlBackgroundColor))
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(isError ? Color.red.opacity(0.15) : Color.accentColor)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(Color.macControlStroke, lineWidth: 0.5)
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .stroke(isError ? Color.red : Color.black.opacity(0.12), lineWidth: isError ? 1 : 0.5)
             )
-
-            if let err = lastError {
-                Label(err, systemImage: "exclamationmark.triangle.fill")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.orange)
-            } else if captured != nil {
-                Label("Looks good. Press Done to confirm.", systemImage: "checkmark.circle.fill")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.green)
-            }
-
-            Spacer()
-
-            HStack {
-                Spacer()
-                Button("Done") {
-                    if let combo = captured {
-                        appState.meetingHotkey = combo
-                    }
-                    isPresented = false
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(captured == nil && appState.meetingHotkey == nil)
-            }
-        }
-        .padding(20)
-        .onAppear {
-            installKeyDownMonitor()
-            installFlagsMonitor()
-        }
-        .onDisappear {
-            removeMonitors()
-        }
-    }
-
-    private func installKeyDownMonitor() {
-        keyDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { (event: NSEvent) -> NSEvent? in
-            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            let modCount = [
-                flags.contains(.control), flags.contains(.option),
-                flags.contains(.command), flags.contains(.shift),
-            ].filter { $0 }.count
-            if modCount == 0 {
-                lastError = "Add at least one modifier or two modifiers"
-                captured = nil
-                return nil
-            }
-            guard let rustName = HotkeyCombo.macKeyCodeRustName(event.keyCode) else {
-                lastError = "Unsupported key. Try a letter, number, or function key."
-                captured = nil
-                return nil
-            }
-            let display: String
-            if let chars = event.charactersIgnoringModifiers, !chars.isEmpty,
-               chars.unicodeScalars.first.map({ $0.value < 0x80 }) ?? false,
-               chars.first?.isLetter == true || chars.first?.isNumber == true {
-                display = chars.uppercased()
-            } else {
-                display = rustName.uppercased()
-            }
-            let combo = HotkeyCombo(
-                control: flags.contains(.control),
-                option: flags.contains(.option),
-                command: flags.contains(.command),
-                shift: flags.contains(.shift),
-                keyCode: event.keyCode,
-                keyChar: display
-            )
-            tryCommit(combo)
-            return nil
-        }
-    }
-
-    private func installFlagsMonitor() {
-        flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { (event: NSEvent) -> NSEvent? in
-            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            let modCount = [
-                flags.contains(.control), flags.contains(.option),
-                flags.contains(.command), flags.contains(.shift),
-            ].filter { $0 }.count
-            if modCount >= 2 {
-                let combo = HotkeyCombo(
-                    control: flags.contains(.control),
-                    option: flags.contains(.option),
-                    command: flags.contains(.command),
-                    shift: flags.contains(.shift),
-                    keyCode: nil,
-                    keyChar: ""
-                )
-                tryCommit(combo)
-            }
-            return event
-        }
-    }
-
-    /// 3-way conflict check: the meeting combo must not collide with the
-    /// dictation chord, the dictionary hotkey, OR the command hotkey.
-    private func tryCommit(_ combo: HotkeyCombo) {
-        let mtgGrammar = combo.rustGrammar
-        guard !mtgGrammar.isEmpty else {
-            lastError = "Combo is empty"
-            captured = nil
-            return
-        }
-        let mainGrammar = appState.shortcut.rustGrammar
-        if !mainGrammar.isEmpty,
-           DimmyCore.shared.hotkeyCombosConflict(mtgGrammar, mainGrammar) {
-            lastError = "This combo overlaps the dictation hotkey. Pick another."
-            captured = nil
-            return
-        }
-        let dictGrammar = appState.dictHotkey.rustGrammar
-        if !dictGrammar.isEmpty,
-           DimmyCore.shared.hotkeyCombosConflict(mtgGrammar, dictGrammar) {
-            lastError = "This combo overlaps the Add-to-dictionary hotkey. Pick another."
-            captured = nil
-            return
-        }
-        if let cmd = appState.commandHotkey {
-            let cmdGrammar = cmd.rustGrammar
-            if !cmdGrammar.isEmpty,
-               DimmyCore.shared.hotkeyCombosConflict(mtgGrammar, cmdGrammar) {
-                lastError = "This combo overlaps the Command-mode hotkey. Pick another."
-                captured = nil
-                return
-            }
-        }
-        lastError = nil
-        captured = combo
-    }
-
-    private func removeMonitors() {
-        if let m = keyDownMonitor { NSEvent.removeMonitor(m) }
-        if let m = flagsMonitor { NSEvent.removeMonitor(m) }
-        keyDownMonitor = nil
-        flagsMonitor = nil
     }
 }

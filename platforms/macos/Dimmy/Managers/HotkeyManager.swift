@@ -279,6 +279,12 @@ final class HotkeyManager {
                 return Unmanaged.passUnretained(event)
             }
 
+            // A shortcut sheet is recording: the keys are for it, and the
+            // current shortcuts must not fire while the user re-records them.
+            if dimmy_hotkey_recorder_is_active() != 0 {
+                return Unmanaged.passUnretained(event)
+            }
+
             let decision: HotkeyTapState.Decision
             switch type {
             case .flagsChanged:

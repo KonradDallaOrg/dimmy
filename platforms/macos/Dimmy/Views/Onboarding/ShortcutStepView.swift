@@ -2,11 +2,7 @@ import SwiftUI
 
 struct ShortcutStepView: View {
     @ObservedObject var appState: AppState
-    @State private var isRecording = false
-    @State private var localMonitor: Any?
-    @State private var globalMonitor: Any?
-    @State private var keyMonitor: Any?
-    @State private var pendingWork: DispatchWorkItem?
+    @State private var showRecorder = false
 
     private var activeShortcut: ModifierShortcut {
         appState.shortcut
@@ -53,7 +49,9 @@ struct ShortcutStepView: View {
             .padding(.horizontal, 32)
             .padding(.vertical, 18)
         }
-        .onDisappear { stopRecording() }
+        .sheet(isPresented: $showRecorder) {
+            ShortcutRecorderSheet(appState: appState, target: .dictation, isPresented: $showRecorder)
+        }
     }
 
     private var modeBlurb: String {
@@ -88,13 +86,11 @@ struct ShortcutStepView: View {
         .padding(.top, 4)
     }
 
+    /// The keys are the button: click them to record different ones, the
+    /// same sheet Settings uses.
     private var currentShortcutDisplay: some View {
-        HStack(spacing: 8) {
-            if isRecording {
-                Text("Press two modifiers, or modifiers plus a key...")
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundColor(.orange)
-            } else {
+        Button(action: { showRecorder = true }) {
+            HStack(spacing: 8) {
                 ForEach(Array(activeShortcut.displayParts.enumerated()), id: \.offset) { index, part in
                     if index > 0 {
                         Text("+")
@@ -114,15 +110,18 @@ struct ShortcutStepView: View {
                                 .stroke(Color.primary.opacity(0.12), lineWidth: 1)
                         )
                 }
+                Image(systemName: "pencil")
+                    .foregroundColor(.secondary)
             }
         }
+        .buttonStyle(.plain)
+        .help("Click to record a different shortcut")
         .frame(height: 52)
     }
 
     private func presetButton(label: String, shortcut: ModifierShortcut) -> some View {
         let isSelected = activeShortcut == shortcut
         return Button(action: {
-            stopRecording()
             withAnimation(.easeInOut(duration: 0.2)) {
                 appState.shortcut = shortcut
             }
@@ -148,16 +147,9 @@ struct ShortcutStepView: View {
 
     private var customButton: some View {
         // "Custom" is selected whenever the active shortcut isn't one of the presets.
-        let isCustomActive = !presets.contains(where: { $0.shortcut == activeShortcut })
-        let isSelected = isRecording || isCustomActive
-        return Button(action: {
-            if isRecording {
-                stopRecording()
-            } else {
-                startRecording()
-            }
-        }) {
-            Text(isRecording ? "..." : "Custom")
+        let isSelected = !presets.contains(where: { $0.shortcut == activeShortcut })
+        return Button(action: { showRecorder = true }) {
+            Text("Custom")
                 .font(.system(size: 13, weight: .medium))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 10)
@@ -205,87 +197,5 @@ struct ShortcutStepView: View {
             RoundedRectangle(cornerRadius: 10)
                 .stroke(Color.orange.opacity(0.3), lineWidth: 1)
         )
-    }
-
-    private func startRecording() {
-        isRecording = true
-        localMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
-            handleFlags(event.modifierFlags)
-            return event
-        }
-        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { event in
-            Task { @MainActor in
-                handleFlags(event.modifierFlags)
-            }
-        }
-        // Same two-shapes capture as the Settings recorder: the keyDown
-        // decides between ⌃⇧ and ⌃⇧D.
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            handleKeyDown(event)
-            return nil
-        }
-    }
-
-    private func handleFlags(_ modifierFlags: NSEvent.ModifierFlags) {
-        let flags = modifierFlags.intersection(.deviceIndependentFlagsMask)
-        let candidate = ModifierShortcut(
-            fn: flags.contains(.function),
-            control: flags.contains(.control),
-            option: flags.contains(.option),
-            command: flags.contains(.command),
-            shift: flags.contains(.shift)
-        )
-        pendingWork?.cancel()
-        guard candidate.isValid else { return }
-        // Deferred so a key pressed right after the modifiers still wins.
-        let work = DispatchWorkItem {
-            withAnimation(.easeInOut(duration: 0.2)) {
-                appState.shortcut = candidate
-            }
-            stopRecording()
-        }
-        pendingWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
-    }
-
-    private func handleKeyDown(_ event: NSEvent) {
-        pendingWork?.cancel()
-        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        let modCount = [
-            flags.contains(.control), flags.contains(.option),
-            flags.contains(.command), flags.contains(.shift),
-        ].filter { $0 }.count
-        guard modCount >= 1, let rustName = HotkeyCombo.macKeyCodeRustName(event.keyCode) else {
-            return
-        }
-        let display: String
-        if let chars = event.charactersIgnoringModifiers, !chars.isEmpty,
-           chars.first?.isLetter == true || chars.first?.isNumber == true {
-            display = chars.uppercased()
-        } else {
-            display = rustName.uppercased()
-        }
-        let candidate = ModifierShortcut(
-            fn: flags.contains(.function),
-            control: flags.contains(.control),
-            option: flags.contains(.option),
-            command: flags.contains(.command),
-            shift: flags.contains(.shift),
-            keyCode: event.keyCode,
-            keyChar: display
-        )
-        withAnimation(.easeInOut(duration: 0.2)) {
-            appState.shortcut = candidate
-        }
-        stopRecording()
-    }
-
-    private func stopRecording() {
-        isRecording = false
-        pendingWork?.cancel()
-        pendingWork = nil
-        if let m = localMonitor { NSEvent.removeMonitor(m); localMonitor = nil }
-        if let m = globalMonitor { NSEvent.removeMonitor(m); globalMonitor = nil }
-        if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil }
     }
 }
