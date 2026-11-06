@@ -1,4 +1,6 @@
 ﻿using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -78,6 +80,10 @@ public sealed partial class PillWindow : Window
         _vm.PropertyChanged += Vm_PropertyChanged;
         Waveform.StyleMode = _vm.WaveformStyle;
         ColorBorder.SizeChanged += ColorBorder_SizeChanged;
+        // Every change of the pill's shape or place goes through layout
+        // (the capsule animates Width/Height, docking moves alignment and
+        // margins, the tip toggles Visibility), so this tracks them all.
+        RootGrid.LayoutUpdated += (_, _) => UpdateHitRegion();
         UpdateVisualState();
         // Initial sync: one shot in case a meeting is already active when
         // the pill is opened (e.g. the user closed and reopened the pill
@@ -703,6 +709,7 @@ public sealed partial class PillWindow : Window
         _glowColor = color;
         _glowSubtle = subtle;
         ApplyGlow();
+        UpdateHitRegion(); // the blur radius may have changed with no layout pass
     }
 
     private void HideGlow()
@@ -1199,6 +1206,65 @@ public sealed partial class PillWindow : Window
         _isDragging = false;
         ((UIElement)sender).ReleasePointerCapture(e.Pointer);
         SnapToEdgeMiddle();
+    }
+
+    // ── Hit region: clicks outside the pill reach the app underneath ──
+    [DllImport("user32.dll")]
+    private static extern int SetWindowRgn(IntPtr hWnd, IntPtr hRgn, bool bRedraw);
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr CreateRoundRectRgn(int x1, int y1, int x2, int y2, int w, int h);
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr CreateRectRgn(int x1, int y1, int x2, int y2);
+    [DllImport("gdi32.dll")]
+    private static extern int CombineRgn(IntPtr dest, IntPtr src1, IntPtr src2, int mode);
+    [DllImport("gdi32.dll")]
+    private static extern bool DeleteObject(IntPtr obj);
+    private const int RGN_OR = 2;
+
+    private List<RegionShape>? _hitShapes;
+
+    /// The window is several times larger than the pill and a transparent
+    /// pixel of it still takes the click, so the window region is cut to the
+    /// pill plus its glow (and the tip while it shows). Outside it, Windows
+    /// hands the click to the window underneath. Only re-applied when the
+    /// shapes actually change.
+    private void UpdateHitRegion()
+    {
+        if (ColorBorder.ActualWidth <= 0 || RootGrid.XamlRoot == null) return;
+        var hwnd = WindowHelper.GetHwnd(this);
+        var scale = GetDpiForWindow(hwnd) / 96.0;
+        if (scale <= 0) scale = 1.0;
+        var pill = ColorBorder.TransformToVisual(null).TransformBounds(
+            new global::Windows.Foundation.Rect(0, 0, ColorBorder.ActualWidth, ColorBorder.ActualHeight));
+        DipRect? tip = null;
+        if (ScrollTooltip.Visibility == Visibility.Visible && ScrollTooltip.ActualWidth > 0)
+        {
+            var t = ScrollTooltip.TransformToVisual(null).TransformBounds(
+                new global::Windows.Foundation.Rect(0, 0, ScrollTooltip.ActualWidth, ScrollTooltip.ActualHeight));
+            tip = new DipRect(t.X, t.Y, t.Width, t.Height);
+        }
+        var glow = _glowShadow?.BlurRadius ?? GlowPad;
+        var shapes = PillHitRegion.Compute(new DipRect(pill.X, pill.Y, pill.Width, pill.Height), glow, tip, scale);
+        if (shapes.Count == 0) return;
+        if (_hitShapes != null && _hitShapes.SequenceEqual(shapes)) return;
+
+        IntPtr region = IntPtr.Zero;
+        foreach (var sh in shapes)
+        {
+            var part = sh.Round > 0
+                ? CreateRoundRectRgn(sh.Left, sh.Top, sh.Right, sh.Bottom, sh.Round, sh.Round)
+                : CreateRectRgn(sh.Left, sh.Top, sh.Right, sh.Bottom);
+            if (region == IntPtr.Zero) { region = part; continue; }
+            CombineRgn(region, region, part, RGN_OR);
+            DeleteObject(part);
+        }
+        // On success the system owns the region; on failure it is ours to free.
+        if (SetWindowRgn(hwnd, region, true) == 0)
+        {
+            DeleteObject(region);
+            return;
+        }
+        _hitShapes = shapes;
     }
 
     // ── Snap to corners / edge middles; vertical on the sides ───────
