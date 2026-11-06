@@ -789,17 +789,18 @@ public static class DimmyNative
         [MarshalAs(UnmanagedType.LPUTF8Str)] string a,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string b);
 
+    // Shortcut recorder behind the "set shortcut" dialog. While it is open
+    // the Rust hook hands every key to it (the current shortcuts can't fire)
+    // and each change arrives as a `hotkey_recorder` event. target =
+    // dictation | command | meeting | dictionary; current = JSON of the four
+    // configured combos. 0 ok, -1 bad target, -2 bad JSON.
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
-    public static extern void dimmy_hotkey_start_recording();
+    public static extern int dimmy_hotkey_recorder_start(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string target,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string currentJson);
 
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
-    public static extern void dimmy_hotkey_poll_recording();
-
-    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
-    public static extern int dimmy_hotkey_take_recorded(byte[] buf, int len);
-
-    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
-    public static extern void dimmy_hotkey_stop_recording();
+    public static extern void dimmy_hotkey_recorder_stop();
 
     // ── Utility ──────────────────────────────────────────────────────
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]

@@ -79,6 +79,38 @@
         <Setter Property="Height" Value="1" />
         <Setter Property="Background" Value="{ThemeResource DividerStrokeColorDefaultBrush}" />
     </Style>
+    <!-- Keycaps: one key of a shortcut, drawn as a key. Small in a settings
+         row, large in the dialog that records a new shortcut. -->
+    <Style x:Key="DimmyKeycap" TargetType="Border">
+        <Setter Property="Background" Value="{ThemeResource AccentFillColorDefaultBrush}" />
+        <Setter Property="BorderBrush" Value="{ThemeResource AccentControlElevationBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="{ThemeResource ControlCornerRadius}" />
+        <Setter Property="MinWidth" Value="32" />
+        <Setter Property="Padding" Value="8,4,8,4" />
+    </Style>
+    <Style x:Key="DimmyKeycapLarge" TargetType="Border" BasedOn="{StaticResource DimmyKeycap}">
+        <Setter Property="CornerRadius" Value="{ThemeResource OverlayCornerRadius}" />
+        <Setter Property="MinWidth" Value="56" />
+        <Setter Property="Padding" Value="20,14,20,14" />
+    </Style>
+    <Style x:Key="DimmyKeycapError" TargetType="Border" BasedOn="{StaticResource DimmyKeycapLarge}">
+        <Setter Property="Background" Value="{ThemeResource SystemFillColorCriticalBackgroundBrush}" />
+        <Setter Property="BorderBrush" Value="{ThemeResource SystemFillColorCriticalBrush}" />
+    </Style>
+    <Style x:Key="DimmyKeycapText" TargetType="TextBlock" BasedOn="{StaticResource BodyStrongTextBlockStyle}">
+        <Setter Property="Foreground" Value="{ThemeResource TextOnAccentFillColorPrimaryBrush}" />
+        <Setter Property="HorizontalAlignment" Value="Center" />
+        <Setter Property="TextWrapping" Value="NoWrap" />
+    </Style>
+    <Style x:Key="DimmyKeycapTextLarge" TargetType="TextBlock" BasedOn="{StaticResource DimmyKeycapText}">
+        <Setter Property="FontSize" Value="18" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style x:Key="DimmyKeycapTextError" TargetType="TextBlock" BasedOn="{StaticResource DimmyKeycapTextLarge}">
+        <Setter Property="Foreground" Value="{ThemeResource SystemFillColorCriticalBrush}" />
+    </Style>
+
     <Style x:Key="DimmyStatusButton" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderThickness" Value="0" />

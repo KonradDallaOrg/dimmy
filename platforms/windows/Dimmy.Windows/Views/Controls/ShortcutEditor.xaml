@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="Dimmy.Windows.Views.Controls.ShortcutEditor"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <UserControl.Resources>
+    <DataTemplate x:Key="SmallKeyTemplate" x:DataType="x:String">
+      <Border Style="{StaticResource DimmyKeycap}">
+        <TextBlock Text="{x:Bind}" Style="{StaticResource DimmyKeycapText}" />
+      </Border>
+    </DataTemplate>
+    <DataTemplate x:Key="LargeKeyTemplate" x:DataType="x:String">
+      <Border Style="{StaticResource DimmyKeycapLarge}">
+        <TextBlock Text="{x:Bind}" Style="{StaticResource DimmyKeycapTextLarge}" />
+      </Border>
+    </DataTemplate>
+  </UserControl.Resources>
+
+  <!-- A subtle button: the keys ARE the control, the pencil says "click to
+       change", hover shows the usual button highlight. -->
+  <Button x:Name="EditButton" Click="Edit_Click" Padding="{StaticResource DimmySpaceXS}"
+          Background="Transparent" BorderBrush="Transparent"
+          HorizontalAlignment="Right">
+    <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+      <ItemsControl x:Name="PreviewKeys" IsTabStop="False" VerticalAlignment="Center"
+                    ItemTemplate="{StaticResource SmallKeyTemplate}">
+        <ItemsControl.ItemsPanel>
+          <ItemsPanelTemplate>
+            <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceXS}" />
+          </ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+      </ItemsControl>
+      <Border x:Name="Placeholder" Padding="8,4,8,4"
+              CornerRadius="{ThemeResource ControlCornerRadius}"
+              BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}" BorderThickness="1">
+        <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+          <FontIcon Glyph="&#xE710;" FontSize="{StaticResource DimmyIconS}" />
+          <TextBlock Text="Set shortcut" Style="{StaticResource DimmyBody}"
+                     Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+        </StackPanel>
+      </Border>
+      <FontIcon x:Name="EditIcon" Glyph="&#xE70F;" FontSize="{StaticResource DimmyIconS}"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
+    </StackPanel>
+  </Button>
+</UserControl>

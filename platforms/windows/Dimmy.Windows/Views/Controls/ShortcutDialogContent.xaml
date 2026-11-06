@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="Dimmy.Windows.Views.Controls.ShortcutDialogContent"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <UserControl.Resources>
+    <DataTemplate x:Key="KeyTemplate" x:DataType="x:String">
+      <Border Style="{StaticResource DimmyKeycapLarge}">
+        <TextBlock Text="{x:Bind}" Style="{StaticResource DimmyKeycapTextLarge}" />
+      </Border>
+    </DataTemplate>
+    <DataTemplate x:Key="ErrorKeyTemplate" x:DataType="x:String">
+      <Border Style="{StaticResource DimmyKeycapError}">
+        <TextBlock Text="{x:Bind}" Style="{StaticResource DimmyKeycapTextError}" />
+      </Border>
+    </DataTemplate>
+  </UserControl.Resources>
+
+  <StackPanel Spacing="{StaticResource DimmySpaceM}" MinWidth="440">
+    <TextBlock x:Name="HintText" Style="{StaticResource DimmySecondary}" TextWrapping="Wrap" />
+
+    <Grid MinHeight="104" Padding="{StaticResource DimmyCardPaddingCompact}"
+          CornerRadius="{StaticResource DimmyCardRadius}"
+          Background="{ThemeResource SolidBackgroundFillColorTertiaryBrush}"
+          BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+      <ItemsControl x:Name="KeysControl" IsTabStop="False"
+                    HorizontalAlignment="Center" VerticalAlignment="Center"
+                    ItemTemplate="{StaticResource KeyTemplate}">
+        <ItemsControl.ItemsPanel>
+          <ItemsPanelTemplate>
+            <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" />
+          </ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+        <ItemsControl.ItemContainerTransitions>
+          <TransitionCollection>
+            <EntranceThemeTransition FromHorizontalOffset="0" FromVerticalOffset="16"
+                                     IsStaggeringEnabled="False" />
+            <RepositionThemeTransition />
+          </TransitionCollection>
+        </ItemsControl.ItemContainerTransitions>
+      </ItemsControl>
+      <TextBlock x:Name="EmptyText" Text="Press a shortcut"
+                 Style="{StaticResource DimmyCaption}"
+                 Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                 HorizontalAlignment="Center" VerticalAlignment="Center" />
+    </Grid>
+
+    <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}" HorizontalAlignment="Center">
+      <HyperlinkButton x:Name="ResetLink" Click="Reset_Click">
+        <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceXS}">
+          <FontIcon Glyph="&#xE777;" FontSize="{StaticResource DimmyIconS}" />
+          <TextBlock x:Name="ResetText" Style="{StaticResource DimmyCaption}" />
+        </StackPanel>
+      </HyperlinkButton>
+      <HyperlinkButton x:Name="ClearLink" Click="Clear_Click">
+        <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceXS}">
+          <FontIcon Glyph="&#xE894;" FontSize="{StaticResource DimmyIconS}" />
+          <TextBlock Text="Remove shortcut" Style="{StaticResource DimmyCaption}" />
+        </StackPanel>
+      </HyperlinkButton>
+    </StackPanel>
+
+    <InfoBar x:Name="ErrorBar" Severity="Error" IsClosable="False" IsOpen="False" />
+    <StackPanel x:Name="WarningsPanel" Spacing="{StaticResource DimmySpaceS}" />
+
+    <TextBlock Text="Tab, Enter and Esc on their own still work in this window."
+               Style="{StaticResource DimmyCaption}"
+               Foreground="{ThemeResource TextFillColorTertiaryBrush}" TextWrapping="Wrap" />
+  </StackPanel>
+</UserControl>

@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Window
     x:Class="Dimmy.Windows.Views.CommandWizardWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -23,12 +23,12 @@
 
         <!-- ── Step 0: the shortcut ─────────────────────────────────── -->
         <StackPanel x:Name="Step0" Grid.Row="1" Spacing="{StaticResource DimmySpaceL}" Visibility="Visible">
-            <controls:ShortcutRecorder x:Name="Recorder" RequireKey="True"
-                                       HorizontalAlignment="Left" />
+            <controls:ShortcutEditor x:Name="Recorder" Target="command" IsLarge="True"
+                                     HorizontalAlignment="Left" />
             <InfoBar x:Name="ShortcutWarn" IsOpen="False" IsClosable="False"
                      Severity="Warning" />
             <TextBlock Opacity="0.6" TextWrapping="Wrap" Style="{StaticResource DimmyLabel}"
-                       Text="Command mode needs a real key with its modifiers (for example Ctrl+Alt+C). Combinations of modifiers alone are reserved for dictation." />
+                       Text="Click the keys to change them. A modifier and a key works best, for example Ctrl+Alt+C." />
         </StackPanel>
 
         <!-- ── Step 1: the model ────────────────────────────────────── -->
