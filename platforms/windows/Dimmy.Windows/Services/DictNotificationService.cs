@@ -116,6 +116,20 @@ public static class DictNotificationService
                  : "The last run stopped while starting the GPU, so this session uses the CPU (much slower). Restart Dimmy to try the GPU again.");
     }
 
+    private static DateTime _lastStillTranscribing = DateTime.MinValue;
+
+    /// <summary>A shortcut was pressed while the last dictation is still
+    /// being transcribed: say so instead of doing nothing visible. At most
+    /// once every few seconds, so mashing the key doesn't stack toasts.</summary>
+    public static void ShowStillTranscribing()
+    {
+        var now = DateTime.UtcNow;
+        if ((now - _lastStillTranscribing).TotalSeconds < 5) return;
+        _lastStillTranscribing = now;
+        Show("Still transcribing",
+             "Your last dictation is on its way. Press again once it has been pasted.");
+    }
+
     public static void ShowLongDictationWarning()
     {
         Show("Long dictation",

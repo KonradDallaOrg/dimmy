@@ -61,6 +61,8 @@ dimmy_cycle_llm_style
 dimmy_cycle_llm_tone
 dimmy_decode_audio_to_wav
 dimmy_detect_audio_language
+dimmy_dictation_input
+dimmy_dictation_phase
 dimmy_diarization_download
 dimmy_diarization_model_present
 dimmy_download_llm_model

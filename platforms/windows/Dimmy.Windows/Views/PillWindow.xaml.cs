@@ -1828,24 +1828,13 @@ public sealed partial class PillWindow : Window
                 return;
             }
 
-            // Flip out of the red Recording dot IMMEDIATELY (before the
-            // seconds-long STT round-trip) so the user sees the stop landed
-            // and doesn't re-press → a still-"recording" pill is exactly what
-            // made the user click Stop twice. StopAndProcess below drives
-            // Completing→Idle, so this can't stick in Transcribing.
-            if (_vm.CurrentState == AppState.Recording)
-                _vm.SetState(AppState.Transcribing);
-
-            // Delegate to the SINGLE App pipeline instead of duplicating
-            // stop→transcribe→paste here. Critically this gives the pill the
-            // _targetContext foreground-restore: clicking the pill Stop steals
-            // focus from the app the user was dictating into, so a naive paste
-            // would land in the pill (or wherever focus drifted). App.StopAndProcess
-            // restores the recorded target before Ctrl+V — same as the hotkey path.
-            // It also shares the _stopInProgress guard + the rc -9 concurrent-stop
-            // no-op, so a mashed Stop / hotkey+pill race resolves cleanly.
+            // The session machine decides (a second Stop, or one while the
+            // last dictation is still transcribing, does nothing) and, when it
+            // finishes, flips the pill to Transcribing at once and runs the
+            // single stop pipeline: that restores the app the user was
+            // dictating into before Ctrl+V, since clicking the pill stole focus.
             if (App.Instance is { } app)
-                await app.StopAndProcess();
+                await app.StopDictationAsync();
         }
         catch (Exception ex) { _vm.SetError(ex.Message); }
     }

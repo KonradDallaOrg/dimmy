@@ -10154,6 +10154,60 @@ pub extern "C" fn dimmy_hotkey_recorder_stop() {
     }
 }
 
+/// Feed the dictation session one input and get back what to do. One state
+/// machine for every way a dictation starts, stops or is thrown away (see
+/// `dictation_session.rs` for the table).
+///
+/// `input`: 1 press, 2 release, 3 stop (pill, menu, length cap),
+/// 4 start failed, 5 delivered, 6 cancel. `kind` (press, release):
+/// 0 dictation, 1 command. `mode` (press): 0 toggle, 1 hold.
+/// Returns 0 nothing, 1 start, 2 finish (stop, transcribe, deliver, then
+/// send 5), 3 discard (cancel the recording), 4 busy (the last dictation
+/// is still being transcribed: tell the user); -1 for an unknown code.
+#[no_mangle]
+pub extern "C" fn dimmy_dictation_input(input: c_int, kind: c_int, mode: c_int) -> c_int {
+    use crate::dictation_session::{Action, Input, Kind, Mode};
+    let kind = match kind {
+        0 => Kind::Dictation,
+        1 => Kind::Command,
+        _ => return -1,
+    };
+    let mode = match mode {
+        0 => Mode::Toggle,
+        1 => Mode::Hold,
+        _ => return -1,
+    };
+    let i = match input {
+        1 => Input::Press(kind, mode),
+        2 => Input::Release(kind),
+        3 => Input::Stop,
+        4 => Input::StartFailed,
+        5 => Input::Delivered,
+        6 => Input::Cancel,
+        _ => return -1,
+    };
+    match crate::dictation_session::input(i) {
+        Action::None => 0,
+        Action::Start(_) => 1,
+        Action::Finish => 2,
+        Action::Discard => 3,
+        Action::Busy => 4,
+    }
+}
+
+/// The session's phase right now: 0 idle, 1 recording, 2 finishing
+/// (transcribing and delivering). A read for the decisions hosts already
+/// take at a moment in time ("is a dictation in progress?"), not a poll.
+#[no_mangle]
+pub extern "C" fn dimmy_dictation_phase() -> c_int {
+    use crate::dictation_session::Phase;
+    match crate::dictation_session::phase() {
+        Phase::Idle => 0,
+        Phase::Recording { .. } => 1,
+        Phase::Finishing => 2,
+    }
+}
+
 /// 1 while a shortcut dialog is recording, else 0. The macOS event taps
 /// (HotkeyManager, DictHotkeyManager) check it on every key and step aside,
 /// so pressing the current shortcut in the dialog doesn't fire it.
@@ -12768,6 +12822,36 @@ pub(crate) mod tests {
         if let Ok(mut guard) = EVENT_CALLBACK.lock() {
             *guard = None;
         }
+    }
+
+    // ── dictation session FFI ────────────────────────────────────
+
+    #[test]
+    #[serial]
+    fn dictation_session_ffi_codes_round_trip() {
+        dimmy_dictation_input(6, 0, 0); // cancel: start from idle
+        assert_eq!(dimmy_dictation_phase(), 0);
+        assert_eq!(dimmy_dictation_input(1, 0, 0), 1, "toggle press starts");
+        assert_eq!(dimmy_dictation_phase(), 1);
+        assert_eq!(dimmy_dictation_input(3, 0, 0), 2, "stop finishes");
+        assert_eq!(dimmy_dictation_phase(), 2);
+        assert_eq!(
+            dimmy_dictation_input(1, 1, 1),
+            4,
+            "press while finishing: busy"
+        );
+        assert_eq!(dimmy_dictation_input(5, 0, 0), 0, "delivered");
+        assert_eq!(dimmy_dictation_phase(), 0);
+        assert_eq!(dimmy_dictation_input(1, 0, 1), 1, "hold press starts");
+        assert_eq!(
+            dimmy_dictation_input(2, 0, 0),
+            3,
+            "an instant release discards"
+        );
+        assert_eq!(dimmy_dictation_input(9, 0, 0), -1);
+        assert_eq!(dimmy_dictation_input(1, 7, 0), -1);
+        assert_eq!(dimmy_dictation_input(1, 0, 7), -1);
+        assert_eq!(dimmy_dictation_phase(), 0);
     }
 
     // ── hotkey edges ─────────────────────────────────────────────

@@ -31,6 +31,7 @@ pub mod dfn;
 #[cfg(feature = "local-dfn")]
 pub mod dfn3;
 pub mod diarize;
+pub mod dictation_session;
 pub mod download;
 pub mod download_center;
 pub mod error;

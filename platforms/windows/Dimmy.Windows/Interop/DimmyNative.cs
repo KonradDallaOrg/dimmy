@@ -793,6 +793,17 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern void dimmy_hotkey_recorder_stop();
 
+    // The dictation session state machine (core/src/dictation_session.rs).
+    // input 1 press | 2 release | 3 stop | 4 start failed | 5 delivered |
+    // 6 cancel; kind 0 dictation | 1 command; mode 0 toggle | 1 hold.
+    // Returns 0 nothing | 1 start | 2 finish | 3 discard | 4 busy | -1 bad.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_dictation_input(int input, int kind, int mode);
+
+    // 0 idle | 1 recording | 2 finishing.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_dictation_phase();
+
     // ── Utility ──────────────────────────────────────────────────────
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_has_api_key();
