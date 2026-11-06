@@ -21,7 +21,7 @@ public class HotkeyService : IDisposable
     public event Action? HotkeyReleased;
 
     /// <summary>Dedicated command-mode hotkey edges (optional, opt-in). Same
-    /// Rust hook as the dictation hotkey, so it honours <see cref="PttMode"/>
+    /// Rust hook as the dictation hotkey, so it follows the same mode
     /// identically: in toggle mode only Pressed fires (press=start,
     /// press=stop); in PTT mode Pressed starts and Released stops.</summary>
     public event Action? CommandHotkeyPressed;
@@ -29,13 +29,14 @@ public class HotkeyService : IDisposable
 
     /// <summary>Dedicated meeting start/stop hotkey. TOGGLE-only by design — a
     /// meeting can't be push-to-talk (you can't hold a key for an hour), so
-    /// only the pressed edge fires regardless of <see cref="PttMode"/>; the
+    /// only the pressed edge fires whatever the mode; the
     /// handler decides start-vs-stop from the live meeting state.</summary>
     public event Action? MeetingHotkeyPressed;
 
-    /// <summary>Whether PTT mode is active. Set by the caller before Register.
-    /// Drives BOTH the dictation and the command hotkey release semantics.</summary>
-    public bool PttMode { get; set; }
+    /// <summary>The live <c>shortcut_mode</c> ("hold" | "toggle"), read on
+    /// every release. Never a copy: a copy is what Settings' auto-save left
+    /// stale, so toggle behaved like push-to-talk.</summary>
+    private readonly Func<string> _shortcutMode;
 
     private static readonly string LogPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "dimmy", "ptt.log");
@@ -46,6 +47,11 @@ public class HotkeyService : IDisposable
         Console.WriteLine(line);
         Console.Out.Flush();
         try { File.AppendAllText(LogPath, line + Environment.NewLine); } catch { }
+    }
+
+    public HotkeyService(Func<string> shortcutMode)
+    {
+        _shortcutMode = shortcutMode;
     }
 
     public void Register(string shortcut)
@@ -93,41 +99,27 @@ public class HotkeyService : IDisposable
     /// (AppViewModel.HandleEvent), so handlers are invoked directly.</summary>
     private void OnEdge(string binding, bool pressed)
     {
+        if (pressed)
+        {
+            if (IgnoredOnLockScreen(binding)) return;
+            Log($"{binding} EVENT: pressed");
+            switch (binding)
+            {
+                case "dictation": HotkeyPressed?.Invoke(); break;
+                case "command": CommandHotkeyPressed?.Invoke(); break;
+                case "meeting": MeetingHotkeyPressed?.Invoke(); break;
+            }
+            return;
+        }
+
+        var mode = _shortcutMode();
+        var deliver = HotkeyEdgePolicy.DeliverRelease(binding, mode);
+        Log($"{binding} EVENT: released (mode={mode}{(deliver ? "" : ", ignored")})");
+        if (!deliver) return;
         switch (binding)
         {
-            case "dictation":
-                if (pressed && !IgnoredOnLockScreen("dictation"))
-                {
-                    Log($"EVENT: pressed (PttMode={PttMode})");
-                    HotkeyPressed?.Invoke();
-                }
-                else if (!pressed)
-                {
-                    Log($"EVENT: released (PttMode={PttMode})");
-                    if (PttMode) HotkeyReleased?.Invoke();
-                }
-                break;
-            case "command":
-                if (pressed && !IgnoredOnLockScreen("command"))
-                {
-                    Log($"CMD EVENT: pressed (PttMode={PttMode})");
-                    CommandHotkeyPressed?.Invoke();
-                }
-                else if (!pressed)
-                {
-                    Log($"CMD EVENT: released (PttMode={PttMode})");
-                    if (PttMode) CommandHotkeyReleased?.Invoke();
-                }
-                break;
-            case "meeting":
-                // TOGGLE-only: fire on pressed, ignore released regardless of
-                // PttMode (a meeting can't be push-to-talk).
-                if (pressed && !IgnoredOnLockScreen("meeting"))
-                {
-                    Log("MTNG EVENT: pressed (toggle)");
-                    MeetingHotkeyPressed?.Invoke();
-                }
-                break;
+            case "dictation": HotkeyReleased?.Invoke(); break;
+            case "command": CommandHotkeyReleased?.Invoke(); break;
         }
     }
 

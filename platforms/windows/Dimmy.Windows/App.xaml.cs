@@ -438,8 +438,6 @@ public partial class App : Application
         _appViewModel.KeepInClipboard = settings.KeepInClipboard;
 
         _appViewModel.ShortcutMode = settings.ShortcutMode;
-        if (_hotkeyService != null)
-            _hotkeyService.PttMode = settings.ShortcutMode == "hold";
 
         // Always re-register hotkey — ReloadConfig() may have already updated
         // _appViewModel.Shortcut, so comparing would miss the change.
@@ -709,11 +707,7 @@ public partial class App : Application
             _appViewModel.Shortcut = shortcut;
         if (!string.IsNullOrWhiteSpace(mode))
             _appViewModel.ShortcutMode = mode;
-        if (_hotkeyService != null)
-        {
-            _hotkeyService.PttMode = _appViewModel.ShortcutMode == "hold";
-            _hotkeyService.Register(_appViewModel.Shortcut);
-        }
+        _hotkeyService?.Register(_appViewModel.Shortcut);
     }
 
     /// <summary>Show pill + register hotkey. Safe to call multiple times.</summary>
@@ -737,13 +731,12 @@ public partial class App : Application
         if (!_appViewModel.PillShowOnStartup)
             HidePill();
 
-        _hotkeyService = new HotkeyService();
+        _hotkeyService = new HotkeyService(() => _appViewModel.ShortcutMode);
         _hotkeyService.HotkeyPressed += OnHotkeyPressed;
         _hotkeyService.HotkeyReleased += OnHotkeyReleased;
         _hotkeyService.CommandHotkeyPressed += OnCommandHotkeyPressed;
         _hotkeyService.CommandHotkeyReleased += OnCommandHotkeyReleased;
         _hotkeyService.MeetingHotkeyPressed += OnMeetingHotkeyPressed;
-        _hotkeyService.PttMode = _appViewModel.ShortcutMode == "hold";
         _hotkeyService.Register(_appViewModel.Shortcut);
         // Optional dedicated command-mode hotkey (empty = disabled). Runs on
         // the same hook, so it inherits toggle/PTT + every combo.
@@ -1103,7 +1096,7 @@ public partial class App : Application
     }
 
     /// <summary>Command-mode hotkey RELEASE — only delivered in PTT mode
-    /// (HotkeyService gates Released on PttMode). Mirror of
+    /// (HotkeyService asks HotkeyEdgePolicy with the live mode). Mirror of
     /// <see cref="OnHotkeyReleased"/>: ends the held command recording and
     /// routes the stop to the transform/generate path via the still-set
     /// CommandOneShot flag.</summary>
@@ -1640,8 +1633,6 @@ public partial class App : Application
         {
             ReloadConfig();
             _hotkeyService?.Register(_appViewModel.Shortcut);
-            if (_hotkeyService != null)
-                _hotkeyService.PttMode = _appViewModel.ShortcutMode == "hold";
         }
         catch (Exception ex)
         {

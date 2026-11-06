@@ -74,7 +74,7 @@
 - PRESSED/RELEASED fire only on the `combo_active` edge via swap (:119/:126/:179/:182) — makes auto-repeat idempotent.
 - `MODIFIER_SUPPRESS` clears ONLY when no binding is combo_active AND all three all_released (:1025–1033); injected events (`LLKHF_INJECTED`) MUST bypass the state machine (:985); suppression is scoped to combo keys so Win+E/Win+L still reach the OS.
 - `VK_NONAME` chord-buster is required specifically when WIN is a modifier (:735/:846–850) — Alt/Ctrl/Shift don't count.
-- Toggle-vs-hold is a HOST decision (core only emits edges): Windows `PttMode`/`shortcut_mode`, macOS `preferredMode`. Meeting hotkey is TOGGLE-ONLY on every surface — host acts on pressed, ignores released (HotkeyService.cs:138–143, HotkeyManager.swift:400–409).
+- Toggle-vs-hold is a HOST decision (core only emits edges): Windows `shortcut_mode`, read live on every release via `HotkeyEdgePolicy` (a copied `PttMode` went stale after Settings' auto-save, fixed 2026-11-06), macOS `preferredMode`. Meeting hotkey is TOGGLE-ONLY on every surface — host acts on pressed, ignores released (HotkeyService.cs:138–143, HotkeyManager.swift:400–409).
 - Dictation binding NEVER disables (falls back to default); command & meeting DO disable on empty combo. macOS correctness depends on `dimmy_hotkey_install` NOT being called there.
 - Command/meeting combos live in host-local prefs (ui_prefs.json / UserDefaults), NOT AppConfig — `lib.rs` has no command/meeting field.
 

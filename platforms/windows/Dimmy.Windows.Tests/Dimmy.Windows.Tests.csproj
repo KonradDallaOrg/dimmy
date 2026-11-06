@@ -20,6 +20,7 @@
     <Compile Include="..\Dimmy.Windows\Services\CallOriginVerdict.cs" Link="Services\CallOriginVerdict.cs" />
     <Compile Include="..\Dimmy.Windows\Services\HotkeyRecorderEvents.cs" Link="Services\HotkeyRecorderEvents.cs" />
     <Compile Include="..\Dimmy.Windows\Services\HotkeyEvents.cs" Link="Services\HotkeyEvents.cs" />
+    <Compile Include="..\Dimmy.Windows\Services\HotkeyEdgePolicy.cs" Link="Services\HotkeyEdgePolicy.cs" />
     <Compile Include="..\Dimmy.Windows\Services\ShortcutLabels.cs" Link="Services\ShortcutLabels.cs" />
     <Compile Include="..\Dimmy.Windows\Services\CallMediaSockets.cs" Link="Services\CallMediaSockets.cs" />
     <Compile Include="..\Dimmy.Windows\Services\ToastDuration.cs" Link="Services\ToastDuration.cs" />
