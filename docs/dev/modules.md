@@ -181,6 +181,14 @@ Full reference: [`audio-pipeline.md`](audio-pipeline.md). Headline:
 - **macOS symbol gotchas:** `objc_msgSend` must NOT be declared variadic — stack-based args on ARM64 crash with PAC failure at runtime (CI cross-compile doesn't catch it). Declare as `fn objc_msgSend()` and `transmute` to typed pointers. `kCFTypeDictionaryKeyCallBacks` must be `static ... : [u8; 0]`. See `known-bugs.md` MACOS-001/002.
 - **macOS framework links** must be explicit in `hotkey.rs`: CoreGraphics + CoreFoundation.
 
+## `hotkey_recorder.rs` — recording a new shortcut
+
+- Behind the "set shortcut" dialog (Win `ShortcutEditor` / Mac `ShortcutRecorderSheet`), used by Settings, the setup wizards and onboarding alike. FFI: `dimmy_hotkey_recorder_start(target, current_json)` / `_stop` / `_is_active` / `_key`. Each key-down that changes the held keys emits ONE `hotkey_recorder` event: keys to draw, combo in the core grammar, `can_save`, `error`, `warnings`.
+- **Who feeds it:** Windows, the keyboard hook in `hotkey.rs`, which swallows the keys while the recorder is open AND a Dimmy window is in front (so Win+... never reaches the shell and the current shortcuts can't fire; a dialog left behind another app never eats typing). macOS, the sheet's `NSEvent` local monitors via `dimmy_hotkey_recorder_key`; the Swift event taps step aside while `dimmy_hotkey_recorder_is_active() == 1`.
+- **The rules live here, once:** target-aware validity (the dictionary hotkey needs a real key; two modifiers alone are fine on the hook; Windows binds at most two modifier groups; Fn only for macOS dictation, without a key), conflicts against the other three shortcuts (`combos_conflict`, subset rule), and warnings: taken by the system (Windows: a `RegisterHotKey` probe; macOS: `CopySymbolicHotKeys`), Ctrl+Alt = AltGr (Windows) / Option+key types characters (macOS).
+- Tab, Enter and Esc on their own pass through to the dialog. The verdict is computed on a worker thread, never inside the hook: Windows silently removes a slow low-level hook.
+- `hotkey::install` is idempotent: the Windows dialog calls it, because during onboarding it opens before the hotkey service exists.
+
 ## `ffi.rs` — the C surface
 
 - ~76 functions, snapshotted in `core/tests/fixtures/abi_exports.txt`
