@@ -752,6 +752,62 @@ pub async fn create_checkout(
     }
 }
 
+/// `GET /api/config` — whether the paid plans are on sale (admin switch
+/// `sales_open`). A missing field reads as closed, the server's default.
+pub async fn fetch_sales_open(server: &str) -> Result<bool, reqwest::Error> {
+    assert!(!server.is_empty(), "server URL required");
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+    let url = format!("{}/api/config", server.trim_end_matches('/'));
+    let body: serde_json::Value = client
+        .get(&url)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    Ok(body
+        .get("sales_open")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false))
+}
+
+/// `POST /api/lead` with source `app_interest` — the "I'd buy this" list
+/// while sales are closed. The server keeps the clear email only when
+/// `contact_consent` is true, and refuses the lead otherwise.
+pub async fn register_interest(
+    server: &str,
+    tier: &str,
+    email: &str,
+    locale: Option<&str>,
+    contact_consent: bool,
+) -> Result<(), reqwest::Error> {
+    assert!(!server.is_empty(), "server URL required");
+    assert!(
+        matches!(tier, "monthly" | "annual" | "lifetime"),
+        "tier must be a paid tier"
+    );
+    assert!(email.contains('@'), "email required");
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+    let url = format!("{}/api/lead", server.trim_end_matches('/'));
+    client
+        .post(&url)
+        .json(&serde_json::json!({
+            "email": email,
+            "tier": tier,
+            "locale": locale,
+            "source": "app_interest",
+            "contact_consent": contact_consent,
+        }))
+        .send()
+        .await?
+        .error_for_status()?;
+    Ok(())
+}
+
 /// `POST /api/plan-change { token, new_tier }` — switch an existing
 /// monthly⇄annual subscription to the other sub tier via the
 /// Stripe-side subscription update API. Server handles proration.
@@ -1184,5 +1240,73 @@ mod tests {
         assert_eq!(back.schema_version, 1);
         assert_eq!(back.token, "a.b.c");
         std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    // ── Sales switch + interest list ───────────────────────────────
+
+    async fn config_server(body: serde_json::Value) -> wiremock::MockServer {
+        use wiremock::matchers::{method, path};
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(method("GET"))
+            .and(path("/api/config"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+        server
+    }
+
+    #[tokio::test]
+    async fn sales_open_reads_the_server_flag() {
+        let open = config_server(serde_json::json!({"sales_open": true})).await;
+        assert!(fetch_sales_open(&open.uri()).await.unwrap());
+        let closed = config_server(serde_json::json!({"sales_open": false})).await;
+        assert!(!fetch_sales_open(&closed.uri()).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn sales_open_missing_field_reads_as_closed() {
+        // Same default as the server: no flag, no sales.
+        let server = config_server(serde_json::json!({"lifetime_enabled": true})).await;
+        assert!(!fetch_sales_open(&server.uri()).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn register_interest_posts_an_app_interest_lead() {
+        use wiremock::matchers::{body_json, method, path};
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(method("POST"))
+            .and(path("/api/lead"))
+            .and(body_json(serde_json::json!({
+                "email": "ada@example.com",
+                "tier": "annual",
+                "locale": "it",
+                "source": "app_interest",
+                "contact_consent": true,
+            })))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        register_interest(&server.uri(), "annual", "ada@example.com", Some("it"), true)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn register_interest_surfaces_a_server_refusal() {
+        use wiremock::matchers::{method, path};
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(method("POST"))
+            .and(path("/api/lead"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(400)
+                    .set_body_json(serde_json::json!({"error": "contact consent required"})),
+            )
+            .mount(&server)
+            .await;
+        let r = register_interest(&server.uri(), "monthly", "ada@example.com", None, false).await;
+        assert!(r.is_err());
     }
 }

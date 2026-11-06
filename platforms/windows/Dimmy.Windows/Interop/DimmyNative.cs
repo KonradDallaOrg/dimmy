@@ -1516,6 +1516,16 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_license_billing_portal_url(byte[] outBuf, int bufLen);
 
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_license_sales_open(byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_license_register_interest(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string tier,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string email,
+        int contactConsent,
+        byte[] outBuf, int bufLen);
+
     // ── Telegram inbox source ────────────────────────────────────────
     // Record on phone -> share to Saved Messages -> Dimmy transcribes.
     // See core/src/telegram.rs. All entries exist regardless of the Rust

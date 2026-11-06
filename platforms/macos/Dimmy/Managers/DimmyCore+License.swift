@@ -305,6 +305,40 @@ extension DimmyCore {
         }.value
     }
 
+    /// GET /api/config — are the paid plans on sale? nil when the server
+    /// could not be reached; the caller keeps sales closed in that case.
+    public func licenseSalesOpen() async -> Bool? {
+        await Task.detached(priority: .userInitiated) {
+            let buf = UnsafeMutablePointer<CChar>.allocate(capacity: 1024)
+            defer { buf.deallocate() }
+            buf[0] = 0
+            let n = dimmy_license_sales_open(buf, 1024)
+            guard n > 0,
+                  let data = String(cString: buf).data(using: .utf8),
+                  let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  dict["ok"] as? Bool == true
+            else { return nil }
+            return dict["sales_open"] as? Bool
+        }.value
+    }
+
+    /// POST /api/lead (source app_interest) — "I'd buy this" while sales
+    /// are closed. contactConsent is the dialog's checkbox; the server
+    /// refuses the lead without it.
+    public func licenseRegisterInterest(tier: String, email: String, contactConsent: Bool) async -> LicenseOpResult {
+        await Task.detached(priority: .userInitiated) { [self] in
+            let buf = UnsafeMutablePointer<CChar>.allocate(capacity: 1024)
+            defer { buf.deallocate() }
+            buf[0] = 0
+            let n = tier.withCString { tierPtr in
+                email.withCString { emailPtr in
+                    dimmy_license_register_interest(tierPtr, emailPtr, contactConsent ? 1 : 0, buf, 1024)
+                }
+            }
+            return parseLicenseOp(buf: buf, n: n)
+        }.value
+    }
+
     // MARK: - Private
 
     private func parseLicenseOp(buf: UnsafePointer<CChar>, n: Int32) -> LicenseOpResult {

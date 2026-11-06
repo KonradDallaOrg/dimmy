@@ -282,7 +282,7 @@ Perf/GPU       PerfGpuStatus  ErrorGpuCrash
 Feature        FeatureHotkeyTriggered  FeatureApiKeySet  FeatureMeetingShortcut
 Capture health DictationCaptureRatio  MeetingCaptureRatio  MeetingTranscriptionBehind  LoopbackRateMismatch
 Licensing      LicenseActivated  LicenseActivationFailed  LicenseRefreshed  LicenseRefreshFailed
-               LicenseScopeDenied  LicenseDeviceDeactivated
+               LicenseScopeDenied  LicenseDeviceDeactivated  LicenseInterestRegistered
 Meeting        MeetingStarted  MeetingStopped  MeetingPaused  MeetingResumed
                MeetingRecapCompleted  MeetingImportedFromFile  MeetingStopTimeout
 File load      FileLoadStarted  FileLoadCompleted
@@ -331,6 +331,7 @@ delete them. They must stay in `RESERVED` in `core/tests/telemetry_coverage.rs`.
 | Command mode (generate/transform) | new `CommandInvoked{kind, success}` | nice | TODO |
 | Call detection + nudge | new `CallDetected` / `CallNudge{outcome}` | nice | TODO |
 | Checkout initiated | new `LicenseCheckoutStarted{tier}` (purchase funnel) | nice | TODO |
+| "I'd buy this" while sales are closed | `LicenseInterestRegistered{tier}` from `dimmy_license_register_interest`; the email goes only to the licensing server | must | DONE 2026-11-06 |
 
 Deliberately skipped: per-chunk caption events (high cardinality), audio
 device-change recovery (Sentry/log only), `config.shortcut_changed` (usage is

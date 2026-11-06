@@ -3729,6 +3729,7 @@ public sealed partial class SettingsWindow : Window
                     ? Visibility.Visible
                     : Visibility.Collapsed;
             ApplyBuyCardForStatus(s);
+            _ = RefreshSalesOpenAsync();
             PopulateScopeGrid(s);
             // Devices are server-side data — refresh asynchronously, only when
             // we actually have a license to query against.
@@ -4264,6 +4265,97 @@ public sealed partial class SettingsWindow : Window
         LicenseBuyAnnualLabel.Text = annualLabel;
         LicenseBuyLifetimeLabel.Text = lifetimeLabel;
         LicenseBuyPortalHint.Visibility = showPortalHint ? Visibility.Visible : Visibility.Collapsed;
+
+        if (_salesOpen)
+        {
+            LicenseBuyMonthlyCaption.Text = "recurring";
+            LicenseBuyAnnualCaption.Text = "best value";
+            LicenseBuyLifetimeCaption.Text = "once · 3 years";
+            return;
+        }
+        LicenseBuyHeadline.Text = "Not on sale yet";
+        LicenseBuyDetail.Text =
+            "Dimmy is not on sale yet. Tell us which plan you'd pick, and we'll write to you when it opens.";
+        LicenseBuyMonthlyCaption.Text = "I'd buy this";
+        LicenseBuyAnnualCaption.Text = "I'd buy this";
+        LicenseBuyLifetimeCaption.Text = "I want to support Dimmy";
+        LicenseBuyPortalHint.Visibility = Visibility.Collapsed;
+    }
+
+    // Closed until the server says otherwise: the server's own default, and
+    // nothing can be bought offline anyway.
+    private bool _salesOpen;
+
+    /// One read of the server's sales switch per licence-page refresh.
+    private async Task RefreshSalesOpenAsync()
+    {
+        var open = await LicenseService.SalesOpenAsync();
+        if (open is not bool o || o == _salesOpen) return;
+        _salesOpen = o;
+        ApplyBuyCardForStatus(LicenseService.GetStatus());
+    }
+
+    private static string PlanName(string tier) => tier switch
+    {
+        "monthly" => "Monthly",
+        "annual" => "Annual",
+        "lifetime" => "Supporter (3 years)",
+        _ => tier,
+    };
+
+    /// "I'd buy this": email + an explicit consent box, then the lead goes to
+    /// the licensing server. Send stays disabled until both are given.
+    private async Task RegisterInterestFlowAsync(string tier)
+    {
+        var prefs = Services.UiPreferences.Load();
+        var emailBox = new TextBox
+        {
+            Header = "Email",
+            PlaceholderText = "you@example.com",
+            Text = prefs.BuyerEmail ?? string.Empty,
+            MinWidth = 300,
+        };
+        var consent = new CheckBox
+        {
+            Content = new TextBlock
+            {
+                Text = "Write to me when Dimmy is on sale. Only for this, never shared.",
+                TextWrapping = TextWrapping.Wrap,
+            },
+        };
+        var stack = new StackPanel { Spacing = 12 };
+        stack.Children.Add(new TextBlock { Text = $"Plan: {PlanName(tier)}" });
+        stack.Children.Add(emailBox);
+        stack.Children.Add(consent);
+
+        var dlg = new ContentDialog
+        {
+            RequestedTheme = Dimmy.Windows.Helpers.ThemeHelper.ResolvedElementTheme(),
+            Title = "Thanks for your interest",
+            Content = stack,
+            PrimaryButtonText = "Send",
+            SecondaryButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = this.Content?.XamlRoot,
+        };
+        void Gate() => dlg.IsPrimaryButtonEnabled =
+            LooksLikeEmail(emailBox.Text) && consent.IsChecked == true;
+        Gate();
+        emailBox.TextChanged += (_, _) => Gate();
+        consent.Checked += (_, _) => Gate();
+        consent.Unchecked += (_, _) => Gate();
+
+        if ((await dlg.ShowAsync()) != ContentDialogResult.Primary) return;
+        var email = (emailBox.Text ?? string.Empty).Trim().ToLowerInvariant();
+        prefs.BuyerEmail = email;
+        prefs.Save();
+
+        var r = await LicenseService.RegisterInterestAsync(tier, email, contactConsent: true);
+        ShowInfoBar(LicenseBuyInfoBar,
+            r.Ok ? InfoBarSeverity.Success : InfoBarSeverity.Error,
+            r.Ok
+                ? $"Thank you! We'll write to you at {email} when Dimmy is on sale."
+                : "Could not send. Check your connection and try again.");
     }
 
     private void License_BuyMonthly_Click(object sender, RoutedEventArgs e) => _ = BuyTierAsync("monthly");
@@ -4343,6 +4435,11 @@ public sealed partial class SettingsWindow : Window
         try
         {
             DisableBuyButtons(true);
+            if (!_salesOpen)
+            {
+                await RegisterInterestFlowAsync(tier);
+                return;
+            }
             var status = LicenseService.GetStatus();
             bool isPlanChange =
                 status.Kind == "Active" &&
@@ -4431,6 +4528,14 @@ public sealed partial class SettingsWindow : Window
             var c = await LicenseService.CreateCheckoutAsync(tier, promptedEmail);
             if (!c.Ok || string.IsNullOrEmpty(c.Url))
             {
+                if (c.StatusCode == 403 && c.Error == "sales_closed")
+                {
+                    _salesOpen = false;
+                    ApplyBuyCardForStatus(status);
+                    LicenseBuyInfoBar.IsOpen = false;
+                    await RegisterInterestFlowAsync(tier);
+                    return;
+                }
                 // 409 path → license already exists for this email. Offer
                 // 'Send magic link instead' fallback (re-issues activation
                 // email for the existing license via /api/trial/start).

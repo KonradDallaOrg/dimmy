@@ -61,6 +61,7 @@ We do **not** track changes to: prompt text, custom LLM prompt, microphone devic
 - `feature.hotkey_triggered` — when the global hotkey starts a recording (helps us understand whether users prefer hotkey or button).
 - `feature.api_key_set` — when you save an API key, we log which scope (`stt` / `llm`) and which provider (categorical). **The key value never leaves your computer.**
 - `model.download_completed` — when a local model finishes downloading: which kind (`whisper` / `llm` / `parakeet` — categorical) and whether it succeeded (boolean). Never the model path or filename.
+- `license.interest_registered` — when you press "I'd buy this" while Dimmy is not on sale: which plan (`monthly` / `annual` / `lifetime` — categorical). Never your email.
 - `consent.logged` — when the meeting recording-consent gate fires: which kind of consent moment (`shown` / `accepted` / `cancelled` / `announced` / `announce_muted` / `declined` — categorical). Never the participant names, the spoken announcement, or any meeting content.
 
 ### Claude Code subscription backend
@@ -105,6 +106,9 @@ The **Settings → Send feedback** form goes to Sentry as a tagged message. The 
 
 Sending feedback requires telemetry to be enabled (it shares the same Sentry channel). If you have telemetry turned off, the form tells you so and offers an **Enable & send** button — one click turns sending on and submits your message. Nothing is transmitted until you click. The app never shows a fake "sent" confirmation: if a build can't send (e.g. a dev build with no Sentry endpoint compiled in), it says so explicitly.
 
+### "I'd buy this" list
+While Dimmy is not on sale, the Licence page shows **I'd buy this** instead of **Buy**. If you press it, type your email and tick **Write to me when Dimmy is on sale**, the app sends your email, the plan you chose and your dictation language to Dimmy's licensing server (`license.dimmy.app`). This is not telemetry, and it is sent even with telemetry off, because you asked for it. The email is kept only to write to you when sales open; it is never shared or used for anything else. Nothing is sent if the box is not ticked. Deleting your account removes it; to remove it without an account, write to the address at the end of this page.
+
 ---
 
 ## What we never collect
@@ -119,7 +123,7 @@ Sending feedback requires telemetry to be enabled (it shares the same Sentry cha
 - API keys (they live in `~/.config/dimmy/keys.enc`, encrypted with AES-256-CTR + HMAC-SHA256 under a key derived from your user name and computer name, so the file is unreadable on another computer but not protected from malware running under your own account; never sent anywhere except to the provider you configured).
 - Anthropic OAuth tokens. If you use the Claude-Code subscription provider, the token lives in `~/.claude/credentials.json` and is managed exclusively by Anthropic's official `claude` CLI. Dimmy never reads or transmits that file.
 - IP addresses (Sentry EU drops them server-side; PostHog explicitly skipped via `$ip: null` in every event).
-- Username / hostname / email (except the explicit feedback-form email if you choose to type one).
+- Username / hostname / email (except the explicit feedback-form email if you choose to type one, and the "I'd buy this" email, which goes to the licensing server and never into telemetry).
 
 ---
 

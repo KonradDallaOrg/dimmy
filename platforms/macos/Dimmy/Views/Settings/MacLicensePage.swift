@@ -40,6 +40,9 @@ struct MacLicensePage: View {
     @State private var buyBusy: Bool = false
     @State private var buyStatus: String? = nil
     @State private var buyIsError: Bool = false
+    // Closed until the server says otherwise: the server's own default,
+    // and nothing can be bought offline anyway.
+    @State private var salesOpen: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -53,10 +56,12 @@ struct MacLicensePage: View {
         .onAppear {
             refreshStatus()
             Task { await refreshDevices() }
+            Task { await refreshSalesOpen() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .dimmyLicenseChanged)) { _ in
             refreshStatus()
             Task { await refreshDevices() }
+            Task { await refreshSalesOpen() }
         }
     }
 
@@ -277,8 +282,10 @@ struct MacLicensePage: View {
             MacTile {
                 MacRow(
                     buyDetail,
-                    description: "Stripe handles payment.",
-                    hint: "Stripe processes payment + tax. The moment payment clears we email you a magic link that activates this Mac in one click, no manual code copy.",
+                    description: salesOpen ? "Stripe handles payment." : "We'll write to you when it opens.",
+                    hint: salesOpen
+                        ? "Stripe processes payment + tax. The moment payment clears we email you a magic link that activates this Mac in one click, no manual code copy."
+                        : "Pick the plan you'd buy. We keep your email only to tell you when Dimmy is on sale.",
                     showsDivider: false
                 ) {
                     HStack(spacing: 8) {
@@ -286,7 +293,7 @@ struct MacLicensePage: View {
                             Button { Task { await buy(tier: "monthly") } } label: {
                                 VStack(spacing: 1) {
                                     Text(monthlyLabel).bold()
-                                    Text("recurring").font(.system(size: 9))
+                                    Text(salesOpen ? "recurring" : "I'd buy this").font(.system(size: 9))
                                         .foregroundStyle(Color.macTextSecondary)
                                 }.frame(minWidth: 64)
                             }
@@ -296,7 +303,7 @@ struct MacLicensePage: View {
                             Button { Task { await buy(tier: "annual") } } label: {
                                 VStack(spacing: 1) {
                                     Text(annualLabel).bold()
-                                    Text("best value").font(.system(size: 9))
+                                    Text(salesOpen ? "best value" : "I'd buy this").font(.system(size: 9))
                                         .foregroundStyle(.white.opacity(0.85))
                                 }.frame(minWidth: 64)
                             }
@@ -308,7 +315,7 @@ struct MacLicensePage: View {
                             Button { Task { await buy(tier: "lifetime") } } label: {
                                 VStack(spacing: 1) {
                                     Text(lifetimeLabel).bold()
-                                    Text("once · 3 years").font(.system(size: 9))
+                                    Text(salesOpen ? "once · 3 years" : "I want to support Dimmy").font(.system(size: 9))
                                         .foregroundStyle(Color.macTextSecondary)
                                 }.frame(minWidth: 64)
                             }
@@ -379,7 +386,7 @@ struct MacLicensePage: View {
     private var showPortalHint: Bool {
         // Visible only on Active monthly/annual where downgrade/cancel
         // path lives in the Stripe Customer Portal.
-        status.kind == "Active"
+        salesOpen && status.kind == "Active"
             && (status.tier?.lowercased() == "monthly"
                 || status.tier?.lowercased() == "annual")
     }
@@ -399,6 +406,7 @@ struct MacLicensePage: View {
     }
 
     private var buyHeadline: String {
+        if !salesOpen { return "Not on sale yet" }
         switch status.kind {
         case "NotFound":     return "Buy a license"
         case "TrialActive":  return "Upgrade to Pro"
@@ -416,6 +424,9 @@ struct MacLicensePage: View {
     }
 
     private var buyDetail: String {
+        if !salesOpen {
+            return "Dimmy is not on sale yet. Tell us which plan you'd pick, and we'll write to you when it opens."
+        }
         switch status.kind {
         case "TrialActive":
             return "Skip the trial and unlock cloud features without interruption."
@@ -441,6 +452,11 @@ struct MacLicensePage: View {
         buyBusy = true
         defer { buyBusy = false }
         buyIsError = false
+
+        if !salesOpen {
+            await registerInterest(tier: tier)
+            return
+        }
 
         // monthly⇄annual on an Active sub is a Stripe subscription update
         // (proration, no second charge for the period), NOT a new checkout.
@@ -539,6 +555,13 @@ struct MacLicensePage: View {
         buyStatus = "Opening Stripe checkout for \(tier)..."
         let r = await DimmyCore.shared.licenseCheckoutUrl(tier: tier, email: email)
         if !r.ok {
+            // Sales closed after the page opened: switch to "I'd buy this".
+            if r.statusCode == 403, r.error == "sales_closed" {
+                salesOpen = false
+                buyStatus = nil
+                await registerInterest(tier: tier)
+                return
+            }
             // 409 path → license already exists. Offer "send magic link"
             // fallback (re-issue activation email instead of charging).
             if r.statusCode == 409, let curTier = r.currentTier {
@@ -582,6 +605,63 @@ struct MacLicensePage: View {
         NSWorkspace.shared.open(url)
         buyIsError = false
         buyStatus = "Checkout opened. After payment, check your email for the magic link."
+    }
+
+    // MARK: "I'd buy this" (sales closed)
+
+    /// One read of the server's sales switch per page appearance.
+    private func refreshSalesOpen() async {
+        guard let open = await DimmyCore.shared.licenseSalesOpen() else { return }
+        await MainActor.run { salesOpen = open }
+    }
+
+    private static func planName(_ tier: String) -> String {
+        switch tier {
+        case "monthly":  return "Monthly"
+        case "annual":   return "Annual"
+        case "lifetime": return "Supporter (3 years)"
+        default:         return tier
+        }
+    }
+
+    /// Email + an explicit consent box, then the lead goes to the licensing
+    /// server. Send stays disabled until both are given (same as Windows).
+    private func registerInterest(tier: String) async {
+        let prefilled = appState.buyerEmail ?? ""
+        let email: String? = await MainActor.run { () -> String? in
+            let alert = NSAlert()
+            alert.messageText = "Thanks for your interest"
+            alert.informativeText = "Plan: \(Self.planName(tier))"
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "Send")
+            alert.addButton(withTitle: "Cancel")
+            let input = NSTextField(frame: NSRect(x: 0, y: 32, width: 300, height: 24))
+            input.placeholderString = "you@example.com"
+            input.stringValue = prefilled
+            let consent = NSButton(
+                checkboxWithTitle: "Write to me when Dimmy is on sale. Only for this, never shared.",
+                target: nil, action: nil)
+            consent.frame = NSRect(x: 0, y: 0, width: 300, height: 24)
+            let box = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 56))
+            box.addSubview(input)
+            box.addSubview(consent)
+            alert.accessoryView = box
+            alert.window.initialFirstResponder = input
+            let gate = InterestAlertGate(send: alert.buttons[0], email: input, consent: consent)
+            let res = withExtendedLifetime(gate) { alert.runModal() }
+            guard res == .alertFirstButtonReturn, consent.state == .on else { return nil }
+            let trimmed = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            return InterestAlertGate.looksLikeEmail(trimmed) ? trimmed : nil
+        }
+        guard let email else { return }
+        await MainActor.run { appState.buyerEmail = email }
+        let r = await DimmyCore.shared.licenseRegisterInterest(tier: tier, email: email, contactConsent: true)
+        await MainActor.run {
+            buyIsError = !r.ok
+            buyStatus = r.ok
+                ? "Thank you! We'll write to you at \(email) when Dimmy is on sale."
+                : "Could not send. Check your connection and try again."
+        }
     }
 
     // MARK: Activate
@@ -884,5 +964,35 @@ struct MacLicensePage: View {
         fmt.dateStyle = .short
         fmt.timeStyle = .short
         return fmt.string(from: d)
+    }
+}
+
+/// Keeps the "I'd buy this" alert's Send button disabled until the email
+/// looks valid and the consent box is ticked.
+private final class InterestAlertGate: NSObject, NSTextFieldDelegate {
+    private let send: NSButton
+    private let email: NSTextField
+    private let consent: NSButton
+
+    init(send: NSButton, email: NSTextField, consent: NSButton) {
+        self.send = send
+        self.email = email
+        self.consent = consent
+        super.init()
+        email.delegate = self
+        consent.target = self
+        consent.action = #selector(changed)
+        changed()
+    }
+
+    static func looksLikeEmail(_ s: String) -> Bool {
+        s.contains("@") && s.contains(".") && s.count < 254
+    }
+
+    func controlTextDidChange(_ obj: Notification) { changed() }
+
+    @objc private func changed() {
+        let e = email.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        send.isEnabled = Self.looksLikeEmail(e) && consent.state == .on
     }
 }
