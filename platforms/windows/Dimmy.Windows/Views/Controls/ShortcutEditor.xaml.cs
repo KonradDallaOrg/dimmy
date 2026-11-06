@@ -75,7 +75,18 @@ public sealed partial class ShortcutEditor : UserControl
             : $"{TitleFor(Target)}: not set. Set shortcut");
     }
 
-    private async void Edit_Click(object sender, RoutedEventArgs e) => await EditAsync();
+    private async void Edit_Click(object sender, RoutedEventArgs e)
+    {
+        // async void: anything escaping here ends the app, so a broken dialog
+        // costs the edit, never Dimmy.
+        try { await EditAsync(); }
+        catch (Exception ex)
+        {
+            App.Log($"shortcut editor exc: {ex.Message}", "Hotkey");
+            DimmyNative.dimmy_hotkey_recorder_stop();
+            _dialogOpen = false;
+        }
+    }
 
     private async Task EditAsync()
     {
@@ -134,9 +145,20 @@ public sealed partial class ShortcutEditor : UserControl
             _dialogOpen = false;
         }
 
-        if (result == null || string.Equals(result, Shortcut, StringComparison.OrdinalIgnoreCase)) return;
-        Shortcut = result;
-        ShortcutChanged?.Invoke(this, result);
+        // The window may have closed under the dialog (the title bar X still
+        // works while it is open): nothing left to update. And this runs in an
+        // async void handler, where an escaping exception ends the app.
+        if (result == null || !IsLoaded) return;
+        try
+        {
+            if (string.Equals(result, Shortcut, StringComparison.OrdinalIgnoreCase)) return;
+            Shortcut = result;
+            ShortcutChanged?.Invoke(this, result);
+        }
+        catch (Exception ex)
+        {
+            App.Log($"shortcut save exc: {ex.Message}", "Hotkey");
+        }
     }
 
     private string CurrentJson()

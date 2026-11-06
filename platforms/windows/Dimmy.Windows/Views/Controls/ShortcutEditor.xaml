@@ -19,7 +19,7 @@
 
   <!-- A subtle button: the keys ARE the control, the pencil says "click to
        change", hover shows the usual button highlight. -->
-  <Button x:Name="EditButton" Click="Edit_Click" Padding="{StaticResource DimmySpaceXS}"
+  <Button x:Name="EditButton" Click="Edit_Click" Padding="4"
           Background="Transparent" BorderBrush="Transparent"
           HorizontalAlignment="Right">
     <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
