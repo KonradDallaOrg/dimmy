@@ -598,6 +598,24 @@ struct Obs {
 struct Shadow {
     started: std::time::Instant,
     obs: Vec<Obs>,
+    /// A live rule already ran the command: the stop must not run it again.
+    fired: bool,
+}
+
+/// Live execution is on unless DIMMY_PC_LIVE=0.
+fn live_enabled() -> bool {
+    std::env::var("DIMMY_PC_LIVE")
+        .map(|v| v != "0")
+        .unwrap_or(true)
+}
+
+/// True once a live partial ran the command in this session.
+pub fn live_fired() -> bool {
+    SHADOW
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .is_some_and(|s| s.fired)
 }
 
 static SHADOW: Mutex<Option<Shadow>> = Mutex::new(None);
@@ -606,6 +624,7 @@ pub fn shadow_begin() {
     *SHADOW.lock().unwrap_or_else(|e| e.into_inner()) = Some(Shadow {
         started: std::time::Instant::now(),
         obs: Vec::new(),
+        fired: false,
     });
 }
 
@@ -636,6 +655,7 @@ pub fn shadow_observe(cumulative: &str) {
         let (plan, margin, detail) = route_scored(&text, &crate::pc_control::known_names());
         let sure = plan.is_some() && margin >= LIVE_MARGIN;
         let mut stable = false;
+        let mut fire = false;
         if let Some(s) = SHADOW.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
             stable = sure
                 && s.obs.last().is_some_and(|prev| {
@@ -653,6 +673,34 @@ pub fn shadow_observe(cumulative: &str) {
                 margin,
             });
             s.obs.sort_by_key(|o| o.ms);
+            // Claimed under the lock: one live run per session, and the
+            // stop path sees it before it plans anything.
+            if stable
+                && !s.fired
+                && live_enabled()
+                && plan.as_ref().is_some_and(crate::pc_control::live_safe)
+            {
+                s.fired = true;
+                fire = true;
+            }
+        }
+        if fire {
+            let plan = plan.clone().expect("fire implies a plan");
+            let t = std::time::Instant::now();
+            let result = crate::pc_control::run(&plan);
+            crate::log(&format!(
+                "[PcLive] fired at {ms} ms on {text:?}: {:?} -> {:?} in {} ms",
+                plan.steps,
+                result.as_ref().map(|_| "ok"),
+                t.elapsed().as_millis()
+            ));
+            let fired = serde_json::json!({
+                "say": plan.say,
+                "text": text,
+                "ok": result.is_ok(),
+                "error": result.err(),
+            });
+            crate::ffi::emit_event("pc_live_fired", &fired.to_string());
         }
         // What the local model makes of the words so far, for the live view.
         let payload = serde_json::json!({

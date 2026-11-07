@@ -8727,6 +8727,18 @@ pub unsafe extern "C" fn dimmy_pc_execute(
         ..Default::default()
     };
     let t0 = std::time::Instant::now();
+    // A live partial already ran this command: running it again from the
+    // final transcript would undo or repeat it.
+    #[cfg(feature = "pc-router")]
+    if crate::pc_router::live_fired() {
+        crate::pc_router::shadow_finish(None);
+        out.ok = true;
+        out.engine = "live".into();
+        out.said = "Già fatto mentre parlavi".into();
+        log("[PcControl] engine=live: already run on a partial, the stop does nothing");
+        let json = serde_json::to_string(&out).unwrap_or_default();
+        return write_to_buf(&json, out_buf, buf_len);
+    }
     // DIMMY_PC_ENGINE: "auto" (default: local router, Claude when unsure),
     // "e5" (local only), "claude" (Claude only).
     let engine = std::env::var("DIMMY_PC_ENGINE").unwrap_or_else(|_| "auto".into());

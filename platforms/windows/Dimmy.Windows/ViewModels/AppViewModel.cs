@@ -365,6 +365,7 @@ public partial class AppViewModel : ObservableObject
     /// <summary>EXPERIMENT (exp/pc-actions): the local router's reading of a
     /// live partial during an execute session.</summary>
     public event Action<System.Text.Json.JsonElement>? PcLiveReceived;
+    public event Action<System.Text.Json.JsonElement>? PcLiveFired;
 
     /// Raised when a realtime streaming dictation session (Deepgram) emits
     /// a STABLE finalised segment that is safe to inject at the cursor.
@@ -635,6 +636,9 @@ public partial class AppViewModel : ObservableObject
                     break;
                 case "pc_live":
                     PcLiveReceived?.Invoke(payload.Clone());
+                    break;
+                case "pc_live_fired":
+                    PcLiveFired?.Invoke(payload.Clone());
                     break;
                 case "recording_started":
                     // New session — clear the streaming flag so a prior

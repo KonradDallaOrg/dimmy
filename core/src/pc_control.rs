@@ -92,6 +92,16 @@ pub struct Outcome {
     pub error: Option<String>,
 }
 
+/// Steps harmless enough to run on a live partial, before the user is done:
+/// each one is undone with a click. Writing text is not one of them.
+pub fn live_safe(plan: &Plan) -> bool {
+    !plan.steps.is_empty()
+        && plan
+            .steps
+            .iter()
+            .all(|s| !matches!(s, Step::TypeAtEnd { .. }))
+}
+
 /// Parse the model's answer: a JSON object, possibly wrapped in a code fence.
 pub fn parse_plan(raw: &str) -> Result<Plan, String> {
     let s = raw.trim();

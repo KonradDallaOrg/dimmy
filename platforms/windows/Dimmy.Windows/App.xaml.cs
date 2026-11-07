@@ -614,6 +614,7 @@ public partial class App : Application
             // shared AppViewModel.SttChunkReceived hook.
             _appViewModel.SttChunkReceived += OnSttChunkReceived;
             _appViewModel.PcLiveReceived += OnPcLive;
+            _appViewModel.PcLiveFired += OnPcLiveFired;
 
             // 2c. Realtime streaming dictation (Deepgram): each finalised
             // segment is typed at the cursor as the user speaks. The final
@@ -1617,6 +1618,41 @@ public partial class App : Application
         _captionWindow.SetLine(line);
         _captionWindow.PositionAtScreenBottom();
         _captionWindow.Show();
+    }
+
+    /// <summary>EXPERIMENT (exp/pc-actions): the core already ran the command
+    /// from a live partial. End the recording without transcribing (a stop
+    /// that raced it is skipped in the core) and say what was done.</summary>
+    private void OnPcLiveFired(System.Text.Json.JsonElement p)
+    {
+        string S(string n) => p.TryGetProperty(n, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String ? v.GetString() ?? "" : "";
+        var ok = p.TryGetProperty("ok", out var o) && o.ValueKind == System.Text.Json.JsonValueKind.True;
+        PttLog($"Execute LIVE: \"{S("text")}\" -> {S("say")} ok={ok} {S("error")}");
+        if (_appViewModel.ExecuteOneShot && Services.DictationSession.IsRecording)
+        {
+            _appViewModel.SuppressRecordingStarted = true;
+            DimmyNative.dimmy_cancel_recording();
+            Services.DictationSession.Cancel();
+            _appViewModel.ExecuteOneShot = false;
+            _targetContext = null;
+        }
+        _captionWindow?.SetLine($"\"{S("text")}\"   →   {S("say")}   ·   FATTO DAL VIVO");
+        if (ok)
+        {
+            Services.DictNotificationService.ShowPcAction(S("say"), "Fatto mentre parlavi");
+            _appViewModel.SetState(AppState.Completing);
+        }
+        else
+        {
+            _appViewModel.SetError(S("error"));
+        }
+        var dq = _dispatcherQueue;
+        _ = Task.Delay(2500).ContinueWith(_ => dq?.TryEnqueue(() =>
+        {
+            if (_appViewModel.ExecuteOneShot) return;
+            _captionWindow?.Hide();
+            _captionWindow?.Reset();
+        }));
     }
 
     /// <summary>Type one finalised streaming-dictation segment at the
