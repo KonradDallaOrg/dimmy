@@ -5,7 +5,7 @@ struct OverlaySettingsView: View {
 
     private let positions = ["Top Right", "Top Left", "Bottom Right", "Bottom Left", "Bottom Center", "Top Center"]
     // Match Windows border styles exactly
-    private let borderStyles = ["Rainbow", "Blue", "Green", "Purple", "Orange", "None"]
+    private let borderStyles = ["Rainbow", "Blue", "Green", "Purple", "Orange", "Accent", "None"]
     // Match Windows waveform styles exactly
     private let waveformStyles = ["Bars", "Bars Center", "Bars Round", "Line", "Dots"]
 

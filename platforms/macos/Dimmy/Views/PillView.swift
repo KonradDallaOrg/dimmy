@@ -3,7 +3,7 @@ import SwiftUI
 // MARK: - Border style helpers
 
 enum BorderStyle {
-    case rainbow, blue, green, purple, orange, none
+    case rainbow, blue, green, purple, orange, accent, none
 
     static func from(_ string: String) -> BorderStyle {
         switch string.lowercased() {
@@ -12,6 +12,9 @@ enum BorderStyle {
         case "green": return .green
         case "purple": return .purple
         case "orange": return .orange
+        // The macOS accent colour (System Settings > Appearance); Windows
+        // uses its own accent for the same value.
+        case "accent": return .accent
         case "none": return .none
         default: return .rainbow
         }
@@ -29,6 +32,7 @@ enum BorderStyle {
         case .green: return .green
         case .purple: return .purple
         case .orange: return .orange
+        case .accent: return Color(nsColor: .controlAccentColor)
         case .none: return .clear
         }
     }
@@ -40,6 +44,7 @@ enum BorderStyle {
         case .green: return .green
         case .purple: return .purple
         case .orange: return .orange
+        case .accent: return Color(nsColor: .controlAccentColor)
         case .none: return .clear
         }
     }

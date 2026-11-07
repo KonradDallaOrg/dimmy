@@ -64,6 +64,19 @@ impl BorderColor {
     }
 }
 
+/// The theme's accent colour (libadwaita `accent_bg_color`), the Linux
+/// counterpart of the Windows and macOS accent behind the "Accent" border
+/// style. Blue, the Adwaita default, when the theme names none.
+fn accent_color(widget: &impl IsA<gtk4::Widget>) -> (f64, f64, f64) {
+    // StyleContext::lookup_color is deprecated since GTK 4.10 with no
+    // replacement for named theme colours short of libadwaita 1.6, which
+    // the v1_4 feature set predates.
+    #[allow(deprecated)]
+    let c = widget.style_context().lookup_color("accent_bg_color");
+    c.map(|c| (c.red() as f64, c.green() as f64, c.blue() as f64))
+        .unwrap_or((0.208, 0.518, 0.894)) // #3584e4
+}
+
 // ── LLM style colors (for dot indicator) ───────────────────
 
 pub fn llm_style_color(style: &str) -> (f64, f64, f64) {
@@ -164,7 +177,7 @@ pub fn create_pill_window(
     let style_clone = border_style.clone();
     let state_clone = pill_state.clone();
 
-    border_area.set_draw_func(move |_area, cr, w, h| {
+    border_area.set_draw_func(move |area, cr, w, h| {
         let radius = (h as f64).min(w as f64) / 2.0;
         let state = state_clone.get();
         let w = w as f64;
@@ -177,7 +190,9 @@ pub fn create_pill_window(
             PillState::Completing => (0.290, 0.855, 0.498),   // green
             PillState::Error => (0.937, 0.267, 0.267),        // red
             _ => {
-                if let Some(bc) = BorderColor::from_style(&style_clone) {
+                if style_clone == "Accent" {
+                    accent_color(area)
+                } else if let Some(bc) = BorderColor::from_style(&style_clone) {
                     (bc.r, bc.g, bc.b)
                 } else {
                     // Rainbow: use rotating hue

@@ -205,6 +205,7 @@ struct MacPillPage: View {
         case "green":  return AnyShapeStyle(Color(red: 0.29, green: 0.87, blue: 0.50))
         case "purple": return AnyShapeStyle(Color(red: 0.66, green: 0.47, blue: 0.96))
         case "orange": return AnyShapeStyle(Color(red: 0.98, green: 0.75, blue: 0.14))
+        case "accent": return AnyShapeStyle(Color(nsColor: .controlAccentColor))
         case "none":   return AnyShapeStyle(Color.gray.opacity(0.4))
         default:       return AnyShapeStyle(Color.gray.opacity(0.4))
         }
@@ -286,7 +287,7 @@ struct MacPillPage: View {
             MacTile {
                 MacRow(
                     "Border style",
-                    hint: "Color of the pill outline when idle. Recording, transcribing, done and error states use fixed status colors.",
+                    hint: "Color of the pill outline when idle. Accent follows the accent color in System Settings. Recording, transcribing, done and error states use fixed status colors.",
                     hintURL: URL(string: "https://dimmy.app/help/pill-overview")
                 ) {
                     Picker("", selection: Binding(
@@ -301,6 +302,7 @@ struct MacPillPage: View {
                         Text("Green").tag("Green")
                         Text("Purple").tag("Purple")
                         Text("Orange").tag("Orange")
+                        Text("Accent").tag("Accent")
                         Text("None").tag("None")
                     }
                     .labelsHidden()

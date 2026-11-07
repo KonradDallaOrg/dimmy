@@ -1371,7 +1371,7 @@
                          Style="{StaticResource DimmySection}" />
               <controls:SettingCard Glyph="&#xE790;"
                                     Label="Border style"
-                                    InfoTip="Pick the rainbow glow or a solid color. None hides the outline."
+                                    InfoTip="Pick the rainbow glow or a solid color. Accent follows the accent color in Windows Settings. None hides the outline."
                                     HelpUrl="https://dimmy.app/help/pill-overview">
                 <ComboBox MinWidth="{StaticResource SettingFieldWidth}"
                           SelectedItem="{Binding BorderStyle, Mode=TwoWay}"
@@ -1381,6 +1381,7 @@
                   <x:String>Green</x:String>
                   <x:String>Purple</x:String>
                   <x:String>Orange</x:String>
+                  <x:String>Accent</x:String>
                   <x:String>None</x:String>
                 </ComboBox>
               </controls:SettingCard>

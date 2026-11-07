@@ -78,6 +78,12 @@ public sealed partial class PillWindow : Window
         BuildRainbowBrush();
         SetupWindow();
         _vm.PropertyChanged += Vm_PropertyChanged;
+        // "Accent" follows the Windows accent colour, also when the user
+        // changes it while Dimmy runs. Raised off the UI thread.
+        _uiSettings.ColorValuesChanged += (_, _) =>
+        {
+            if (_vm.BorderStyle == "Accent") DispatcherQueue.TryEnqueue(UpdateVisualState);
+        };
         Waveform.StyleMode = _vm.WaveformStyle;
         ColorBorder.SizeChanged += ColorBorder_SizeChanged;
         // Every change of the pill's shape or place goes through layout
@@ -480,6 +486,15 @@ public sealed partial class PillWindow : Window
     private static readonly global::Windows.UI.Color ColorError =
         global::Windows.UI.Color.FromArgb(255, 239, 68, 68);
 
+    private readonly global::Windows.UI.ViewManagement.UISettings _uiSettings = new();
+
+    /// <summary>The Windows accent colour (Settings > Personalization >
+    /// Colors), in the shade that reads on the pill: lighter on the dark
+    /// pill, the deeper one on the light glass, as Windows itself does.</summary>
+    private global::Windows.UI.Color AccentBorder => _uiSettings.GetColorValue(IsGlass
+        ? global::Windows.UI.ViewManagement.UIColorType.AccentDark1
+        : global::Windows.UI.ViewManagement.UIColorType.AccentLight1);
+
     // Border style solid colors
     private static readonly global::Windows.UI.Color BorderBlue =
         global::Windows.UI.Color.FromArgb(255, 56, 189, 248);
@@ -499,6 +514,7 @@ public sealed partial class PillWindow : Window
             "Green" => new SolidColorBrush(BorderGreen),
             "Purple" => new SolidColorBrush(BorderPurple),
             "Orange" => new SolidColorBrush(BorderOrange),
+            "Accent" => new SolidColorBrush(AccentBorder),
             "None" => new SolidColorBrush(global::Windows.UI.Color.FromArgb(255, 60, 60, 60)),
             _ => _rainbowBrush!, // Rainbow default
         };
@@ -742,6 +758,7 @@ public sealed partial class PillWindow : Window
     {
         "Blue" => BorderBlue, "Green" => BorderGreen,
         "Purple" => BorderPurple, "Orange" => BorderOrange,
+        "Accent" => AccentBorder,
         _ => BorderBlue,
     };
 

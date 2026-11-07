@@ -228,6 +228,7 @@ enum SelfTests {
         assert(BorderStyle.from("Green") == .green, "Green")
         assert(BorderStyle.from("Purple") == .purple, "Purple")
         assert(BorderStyle.from("Orange") == .orange, "Orange")
+        assert(BorderStyle.from("Accent") == .accent, "Accent")
         assert(BorderStyle.from("None") == .none, "None")
         assert(BorderStyle.from("???") == .rainbow, "Unknown → rainbow")
     }
