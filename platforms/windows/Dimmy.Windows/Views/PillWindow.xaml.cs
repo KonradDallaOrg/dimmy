@@ -455,6 +455,8 @@ public sealed partial class PillWindow : Window
 
         if (vertical)
         {
+            // Never shorter than wide: icon-only content stays a circle, not a squashed capsule.
+            measuredW = Math.Max(measuredW, CapsuleHeight);
             AnimateTransition(CapsuleHeight, measuredW, borderColor, newPanel, oldPanel, () =>
             {
                 ColorBorder.Height = double.NaN;
@@ -1446,7 +1448,8 @@ public sealed partial class PillWindow : Window
         TranscribingPanel.Margin = m7;
         ProcessingPanel.Margin = m7;
         RecapPanel.Margin = m7;
-        ErrorPanel.Margin = m7;
+        // On the sides the error is the icon alone: no padding, so it sits in a circle.
+        ErrorPanel.Margin = v ? new Thickness(0) : m7;
         // Long labels can't stay upright inside a 36 px wide capsule.
         var textVis = v ? Visibility.Collapsed : Visibility.Visible;
         TranscribingText.Visibility = textVis;
