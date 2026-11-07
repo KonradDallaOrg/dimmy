@@ -60,6 +60,20 @@ This is intentional and is a **privacy hard rule** (CLAUDE.md): touching the cre
 
 The URL scheme `claude-code://default` is **synthetic** — it never hits the network. The check in `llm.rs` short-circuits **before** `validate_url`, which would otherwise reject it as non-HTTPS.
 
+## Speed: what every call passes, and why (measured 2026-11-07)
+
+A dictation rewrite on Haiku 4.5 took 8-12 s. Three causes, three fixes:
+
+| Cause | Fix | Where |
+|---|---|---|
+| The CLI loaded the user's own setup (CLAUDE.md, plugins, hooks, MCP servers, tools) into every call: ~44k input tokens for one dictation against ~4k. It also saved each dictation in the user's `claude --resume` history. | `LEAN_ARGS`: `--tools "" --setting-sources "" --strict-mcp-config --disable-slash-commands --no-session-persistence`. **All or nothing**, gated on `--help`: `--tools ""` alone measured ~330k tokens. | `claude_code::lean_args` |
+| Claude Code turns extended thinking on by default: 12 of 13 saved dictations carried a thinking block, ~7 s before the first word. | `run_blocking(.., quick = true)` for dictation rewrites and pings: `MAX_THINKING_TOKENS=0` (turns thinking off where the model allows it, e.g. Haiku 4.5) and `--effort low` when `--help` lists it (the 5.5 models always reason adaptively; low effort trims it). Recap and command mode pass `false` and keep thinking. | `QUICK_ENV`, `quick_args` |
+| ~0.85 s of CLI startup and ~0.75 s of CLI shutdown after the answer was already out. | **Prewarm**: `dimmy_start_recording` starts `claude --input-format stream-json` when the dictation will end in a Claude CLI rewrite (`should_prewarm`); the rewrite hands it the prompt as one user message. One process per dictation, so no context carries over; a stale one (other model, >10 min, exited) is retired by closing its stdin, never killed (it may be writing `~/.claude.json`). **Early return**: the answer goes back on the `result` line, the CLI exits on a reaper thread. | `prewarm`, `take_warm`, `run_blocking_streaming` |
+
+Result on real dictations: 8-12 s → **~1.4 s** (model ~1.2 s). Codex and Gemini CLI are untouched: neither prewarm nor `quick` applies to them yet.
+
+Each streaming call logs one line with `warm_age_ms`, `first_line_ms`, `first_text_ms`, `result_ms`, `answered_ms`, the CLI's own `cli_ms` / `api_ms`, `tokens_in` and the 5-hour quota utilisation. In stream-json mode a refusal (usage limit, auth) comes only in the result line, stderr stays empty: it is logged as `[ClaudeCode] error result: …` (200 chars).
+
 ## The 3 states the UI surfaces
 
 | FFI return | `ClaudeCodeStatus` | UI label                                   | Sign-in button     |
