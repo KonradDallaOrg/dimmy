@@ -38,11 +38,12 @@ pub fn help_text(open_apps: &[String], front: Option<(&str, &[String])>) -> Stri
     }
     let (a, b) = (names[0], names[1]);
     let mut t = format!(
-        "• App e finestre: «apri {a}», «metti {a} a sinistra», «affianca {a} e {b}», «riduci a icona {b}»\n\
-         • Web: «cerca ricette su YouTube», «apri GitHub», «nuova scheda», «indietro»\n\
-         • Musica: «pausa», «prossima», «alza il volume»\n\
-         • Cartelle e file: «apri Download», «l'ultimo file scaricato», «trova i file di ieri»\n\
-         • Impostazioni: «impostazioni Bluetooth», «impostazioni Wi-Fi»"
+        "• Finestre: «apri {a}», «ingrandisci {a}», «metti {a} a sinistra», «affianca {a} e {b}», «riduci a icona {b}», «questa finestra a destra»\n\
+         • Browser: «nuova scheda», «chiudi scheda», «riapri scheda», «indietro», «ricarica»\n\
+         • Musica: «pausa», «prossima», «precedente», «alza il volume», «muto»\n\
+         • Cartelle: «apri Download», «apri Documenti», «l'ultimo file scaricato»\n\
+         • Impostazioni: «impostazioni Bluetooth», «impostazioni Wi-Fi», «impostazioni audio»\n\
+         • Web: «cerca ricette su YouTube», «trova i file di ieri»"
     );
     if let Some((app, cmds)) = front.filter(|(_, c)| !c.is_empty()) {
         let said: Vec<String> = cmds.iter().map(|c| format!("«{c}»")).collect();
@@ -98,9 +99,12 @@ mod tests {
     fn the_examples_use_the_apps_that_are_open() {
         let apps = vec!["Spotify".to_string(), "Google Chrome".to_string()];
         let t = help_text(&apps, None);
-        assert!(t.contains("apri Spotify"), "{t}");
+        assert!(
+            t.contains("apri Spotify") && t.contains("ingrandisci Spotify"),
+            "{t}"
+        );
         assert!(t.contains("affianca Spotify e Google Chrome"), "{t}");
-        for kind in ["Web", "Musica", "Cartelle", "Impostazioni"] {
+        for kind in ["Browser", "Web", "Musica", "Cartelle", "Impostazioni"] {
             assert!(t.contains(kind), "{kind} missing: {t}");
         }
     }

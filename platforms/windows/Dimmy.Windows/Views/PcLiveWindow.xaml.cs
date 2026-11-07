@@ -18,7 +18,7 @@ public sealed partial class PcLiveWindow : Window
 {
     private const int WidthDip = 380;
     private const int HeightDip = 210;
-    private const int HelpHeightDip = 330;
+    private const int HelpHeightDip = 420;
     private int _heightDip = HeightDip;
     private const int MarginDip = 12;
 

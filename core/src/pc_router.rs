@@ -221,7 +221,12 @@ fn browser_action_of(w: &[String]) -> Option<&'static str> {
 fn media_action_of(w: &[String]) -> Option<&'static str> {
     let has = |x: &str| w.iter().any(|t| t == x);
     let volume = has("volume");
-    if has("muto") || has("mute") || has("silenzia") || (has("togli") && has("audio")) {
+    if has("muto")
+        || has("muta")
+        || has("mute")
+        || has("silenzia")
+        || (has("togli") && has("audio"))
+    {
         Some("mute")
     } else if volume && (has("alza") || has("su") || has("up") || has("aumenta")) {
         Some("volume_up")
@@ -268,7 +273,7 @@ fn settings_of(w: &[String]) -> Option<&'static str> {
         Some("wifi")
     } else if has("audio") || has("suono") || has("sound") {
         Some("sound")
-    } else if has("schermo") || has("display") || has("luminosità") {
+    } else if has("schermo") || has("monitor") || has("display") || has("luminosità") {
         Some("display")
     } else if has("notifiche") || has("notifications") {
         Some("notifications")
@@ -1002,8 +1007,361 @@ pub fn route(command: &str, names: &[(String, String)]) -> (Option<Plan>, String
     (plan, detail)
 }
 
+// -- Basic commands: a clear keyword decides, not the classifier ----------
+//
+// "Ingrandisci Notepad" scored p=0.41 on BGE-M3 with "ingrandisci Chrome" in
+// its examples: short commands confuse the classifier. A basic command is
+// taken only when EVERY word is accounted for (the action's own words, filler,
+// the app's name), so "cerca come mettere Chrome a sinistra" still goes to the
+// classifier and to Claude.
+
+const FILLER: &[&str] = &[
+    "alle",
+    "agli",
+    "questa",
+    "questo",
+    "quella",
+    "quello",
+    "ehm",
+    "allora",
+    "tipo",
+    "puoi",
+    "che",
+    "ho",
+    "my",
+    "a",
+    "bit",
+    "one",
+    "folder",
+    "il",
+    "lo",
+    "la",
+    "i",
+    "gli",
+    "le",
+    "l",
+    "un",
+    "una",
+    "uno",
+    "e",
+    "ed",
+    "a",
+    "ad",
+    "al",
+    "alla",
+    "allo",
+    "all",
+    "ai",
+    "su",
+    "sul",
+    "sulla",
+    "sull",
+    "in",
+    "di",
+    "del",
+    "della",
+    "dello",
+    "dei",
+    "delle",
+    "da",
+    "per",
+    "favore",
+    "grazie",
+    "mi",
+    "me",
+    "ti",
+    "ci",
+    "po",
+    "pure",
+    "subito",
+    "adesso",
+    "ora",
+    "dai",
+    "please",
+    "the",
+    "to",
+    "on",
+    "of",
+    "and",
+    "my",
+    "app",
+    "finestra",
+    "programma",
+];
+
+const SIDE_WORDS: &[&str] = &[
+    "sinistra",
+    "destra",
+    "schermo",
+    "intero",
+    "tutto",
+    "altro",
+    "secondo",
+    "monitor",
+    "portatile",
+    "laptop",
+    "left",
+    "right",
+    "full",
+    "screen",
+    "other",
+    "second",
+    "questa",
+    "this",
+    "window",
+];
+
+const MOVE_WORDS: &[&str] = &[
+    "ingrandisci",
+    "ingrandiscimi",
+    "ingrandiscila",
+    "ingrandiscilo",
+    "massimizza",
+    "massimizzala",
+    "massimizzalo",
+    "metti",
+    "mettilo",
+    "mettila",
+    "mettimi",
+    "sposta",
+    "spostalo",
+    "spostala",
+    "spostami",
+    "porta",
+    "portalo",
+    "portala",
+    "portami",
+    "fammi",
+    "vedere",
+    "maximize",
+    "move",
+    "put",
+];
+
+const OPEN_WORDS: &[&str] = &[
+    "apri", "aprimi", "avvia", "lancia", "fai", "partire", "mettilo", "mettila", "open", "start",
+    "launch",
+];
+
+const MINIMIZE_WORDS: &[&str] = &[
+    "riduci",
+    "icona",
+    "minimizza",
+    "minimizzala",
+    "minimizzalo",
+    "nascondi",
+    "nascondila",
+    "nascondilo",
+    "minimize",
+    "hide",
+];
+
+const TILE_WORDS: &[&str] = &[
+    "affianca",
+    "affiancami",
+    "affiancate",
+    "affiancati",
+    "metti",
+    "mettimi",
+    "vicini",
+    "vicino",
+    "accanto",
+    "fianco",
+    "insieme",
+    "tile",
+    "side",
+    "by",
+];
+
+const MEDIA_WORDS: &[&str] = &[
+    "passa",
+    "torna",
+    "song",
+    "music",
+    "turn",
+    "muta",
+    "riproduzione",
+    "pausa",
+    "play",
+    "metti",
+    "riprendi",
+    "ferma",
+    "musica",
+    "canzone",
+    "brano",
+    "traccia",
+    "prossima",
+    "prossimo",
+    "successiva",
+    "successivo",
+    "next",
+    "skip",
+    "salta",
+    "precedente",
+    "previous",
+    "alza",
+    "abbassa",
+    "aumenta",
+    "diminuisci",
+    "volume",
+    "su",
+    "giù",
+    "up",
+    "down",
+    "muto",
+    "mute",
+    "silenzia",
+    "togli",
+    "audio",
+    "pause",
+];
+
+const BROWSER_WORDS: &[&str] = &[
+    "apri",
+    "aprimi",
+    "passa",
+    "chiusa",
+    "chiuso",
+    "this",
+    "page",
+    "nuova",
+    "scheda",
+    "tab",
+    "chiudi",
+    "riapri",
+    "successiva",
+    "prossima",
+    "precedente",
+    "indietro",
+    "avanti",
+    "torna",
+    "vai",
+    "ricarica",
+    "aggiorna",
+    "pagina",
+    "new",
+    "close",
+    "reopen",
+    "next",
+    "previous",
+    "back",
+    "forward",
+    "reload",
+    "refresh",
+    "go",
+];
+
+const SETTINGS_WORDS: &[&str] = &[
+    "mostra",
+    "mostrami",
+    "vai",
+    "notification",
+    "pagina",
+    "fammi",
+    "vedere",
+    "windows",
+    "apri",
+    "aprimi",
+    "impostazioni",
+    "settings",
+    "bluetooth",
+    "wifi",
+    "wi",
+    "fi",
+    "rete",
+    "audio",
+    "suono",
+    "sound",
+    "schermo",
+    "monitor",
+    "display",
+    "luminosità",
+    "notifiche",
+    "notifications",
+    "open",
+];
+
+const FOLDER_WORDS: &[&str] = &[
+    "aprirmi",
+    "esplora",
+    "folder",
+    "my",
+    "me",
+    "apri",
+    "aprimi",
+    "mostra",
+    "mostrami",
+    "fammi",
+    "vedere",
+    "cartella",
+    "download",
+    "downloads",
+    "scaricato",
+    "scaricati",
+    "ultimo",
+    "last",
+    "latest",
+    "file",
+    "documenti",
+    "documents",
+    "desktop",
+    "scrivania",
+    "immagini",
+    "foto",
+    "pictures",
+    "photos",
+    "musica",
+    "music",
+    "video",
+    "videos",
+    "open",
+    "show",
+];
+
+/// A basic command whose every word is accounted for, and its plan.
+fn basic_plan(command: &str, names: &[(String, String)]) -> Option<(Intent, Plan)> {
+    let w = words(command);
+    let app_words: Vec<String> = apps_in(&w, names).iter().flat_map(|g| words(g)).collect();
+    // Order matters only where two lists share a word: "scheda precedente"
+    // is not media (no "scheda" there), "apri download" is a folder, not an app.
+    let tries: [(Intent, &[&str]); 8] = [
+        (Intent::Move, MOVE_WORDS),
+        (Intent::Minimize, MINIMIZE_WORDS),
+        (Intent::Tile, TILE_WORDS),
+        (Intent::Media, MEDIA_WORDS),
+        (Intent::Browser, BROWSER_WORDS),
+        (Intent::Settings, SETTINGS_WORDS),
+        (Intent::Folder, FOLDER_WORDS),
+        (Intent::Open, OPEN_WORDS),
+    ];
+    for (intent, own) in tries {
+        let sides = matches!(intent, Intent::Move | Intent::Open);
+        let apps = matches!(
+            intent,
+            Intent::Move | Intent::Minimize | Intent::Tile | Intent::Open
+        );
+        let action =
+            |t: &String| own.contains(&t.as_str()) || (sides && SIDE_WORDS.contains(&t.as_str()));
+        let covered = w
+            .iter()
+            .all(|t| action(t) || FILLER.contains(&t.as_str()) || (apps && app_words.contains(t)));
+        if covered && w.iter().any(action) {
+            if let Some(p) = plan_for(intent, command, names) {
+                return Some((intent, p));
+            }
+        }
+    }
+    None
+}
+
+/// The detail of a basic command, so the live path can tell it apart.
+const BASIC: &str = "basic";
+
 /// The plan the slots allow (whatever the margin), the margin, and why.
 fn route_scored(command: &str, names: &[(String, String)]) -> (Option<Plan>, f32, String) {
+    if let Some((intent, plan)) = basic_plan(command, names) {
+        return (Some(plan), 1.0, format!("{BASIC} intent={intent:?}"));
+    }
     let mut g = ROUTER.lock().unwrap_or_else(|e| e.into_inner());
     // Never load on a command's path (~3 s): this one goes to Claude.
     let Some(r) = g.as_mut() else {
@@ -1035,12 +1393,17 @@ fn route_scored(command: &str, names: &[(String, String)]) -> (Option<Plan>, f32
 fn plan_for(intent: Intent, command: &str, names: &[(String, String)]) -> Option<Plan> {
     let w = words(command);
     let apps = apps_in(&w, names);
-    let open: Vec<(String, String)> = names
+    // Open: some window's process or title holds the name ("outlook" is
+    // the window "olk: Mail - Outlook", a title match the app list ranks lower).
+    let open_apps: Vec<String> = apps
         .iter()
-        .filter(|(_, title)| !title.is_empty())
+        .filter(|g| {
+            names
+                .iter()
+                .any(|(n, t)| !t.is_empty() && crate::pc_control::name_score(g, n, t) >= 0.7)
+        })
         .cloned()
         .collect();
-    let open_apps = apps_in(&w, &open);
     let this_window = w
         .windows(2)
         .any(|p| (p[0] == "questa" && p[1] == "finestra") || (p[0] == "this" && p[1] == "window"));
@@ -1309,7 +1672,10 @@ pub fn shadow_observe(cumulative: &str) {
         let sure = plan.is_some() && margin >= live_prob();
         let mut stable = false;
         if let Some(s) = SHADOW.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+            // A basic command is sure from its first words ("apri Chrome"
+            // before "e mettilo a destra"): it waits for the pause.
             stable = sure
+                && !detail.starts_with(BASIC)
                 && s.obs.last().is_some_and(|prev| {
                     prev.margin >= live_prob()
                         && prev
@@ -1446,6 +1812,7 @@ mod tests {
             ("ms-teams", "Chat | Microsoft Teams"),
             ("chrome", "Google Chrome"),
             ("Excel", ""),
+            ("Outlook", ""),
         ]
         .iter()
         .map(|(a, b)| (a.to_string(), b.to_string()))
@@ -1679,6 +2046,141 @@ mod tests {
             vec!["chrom"],
             "two spellings of one app are one app"
         );
+    }
+
+    /// The basic path on the labelled examples and this PC's app names:
+    /// `cargo test --lib --features pc-router basic_on_the_examples -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn basic_on_the_examples() {
+        let names = crate::pc_control::known_names();
+        let v: serde_json::Value =
+            serde_json::from_str(include_str!("../assets/pc-router-examples.json")).unwrap();
+        let (mut taken, mut wrong, mut total) = (0, 0, 0);
+        for (k, list) in v.as_object().unwrap() {
+            let Some(want) = Intent::from_key(k) else {
+                continue;
+            };
+            for ex in list.as_array().unwrap() {
+                let ex = ex.as_str().unwrap();
+                total += 1;
+                let hit = basic_plan(ex, &names);
+                if hit.is_none() && want != Intent::None {
+                    eprintln!("MISS {k}: {ex:?}");
+                }
+                if let Some((got, p)) = hit {
+                    taken += 1;
+                    if got != want {
+                        wrong += 1;
+                        eprintln!("WRONG {k}: {ex:?} -> {got:?} {:?}", p.steps);
+                    }
+                }
+            }
+        }
+        eprintln!("basic took {taken}/{total}, wrong {wrong}");
+        assert_eq!(wrong, 0);
+    }
+
+    #[test]
+    fn basic_commands_run_without_the_classifier() {
+        let n = names();
+        let plan = |c: &str| basic_plan(c, &n).map(|(_, p)| p.steps);
+        let place = |app: &str, side| {
+            Some(vec![Step::Place {
+                app: app.into(),
+                side,
+            }])
+        };
+        assert_eq!(
+            plan("Ingrandisci Notepad++"),
+            place("notepad++", Side::Full)
+        );
+        assert_eq!(
+            plan("metti chrome a tutto schermo, per favore"),
+            place("chrome", Side::Full)
+        );
+        assert_eq!(
+            plan("sposta Outlook a sinistra"),
+            place("outlook", Side::Left)
+        );
+        assert_eq!(plan("questa finestra a destra"), place("", Side::Right));
+        assert_eq!(
+            plan("riduci ad icona Chrome"),
+            Some(vec![Step::Minimize {
+                app: "chrome".into()
+            }])
+        );
+        assert_eq!(
+            plan("apri Excel"),
+            Some(vec![Step::Open {
+                app: "excel".into()
+            }])
+        );
+        assert_eq!(
+            plan("affianca Teams e Outlook"),
+            Some(vec![Step::Tile {
+                left: "teams".into(),
+                right: "outlook".into()
+            }])
+        );
+        let one = |s: Step| Some(vec![s]);
+        assert_eq!(
+            plan("metti in pausa"),
+            one(Step::Media {
+                action: "play_pause".into()
+            })
+        );
+        assert_eq!(
+            plan("alza il volume"),
+            one(Step::Media {
+                action: "volume_up".into()
+            })
+        );
+        assert_eq!(
+            plan("precedente"),
+            one(Step::Media {
+                action: "previous".into()
+            })
+        );
+        assert_eq!(
+            plan("scheda precedente"),
+            one(Step::Browser {
+                action: "previous_tab".into()
+            })
+        );
+        assert_eq!(
+            plan("nuova scheda"),
+            one(Step::Browser {
+                action: "new_tab".into()
+            })
+        );
+        assert_eq!(
+            plan("apri le impostazioni bluetooth"),
+            one(Step::Settings {
+                page: "bluetooth".into()
+            })
+        );
+        assert_eq!(
+            plan("apri la cartella download"),
+            one(Step::OpenFolder {
+                folder: "downloads".into()
+            })
+        );
+    }
+
+    #[test]
+    fn a_basic_command_needs_every_word_accounted_for() {
+        let n = names();
+        for c in [
+            "cerca come mettere chrome a sinistra",
+            "ingrandisci a tutto scher",
+            "metti Excel a destra",
+            "ferma la riunione su Teams",
+            "apri il file del preventivo",
+            "",
+        ] {
+            assert!(basic_plan(c, &n).is_none(), "{c}");
+        }
     }
 
     #[test]
