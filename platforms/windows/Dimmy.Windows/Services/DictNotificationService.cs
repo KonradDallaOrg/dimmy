@@ -293,8 +293,7 @@ public static class DictNotificationService
             {
                 try
                 {
-                    var w = new Views.DictToastWindow(title, body);
-                    w.Activate();
+                    Views.DictToastWindow.Present(title, body);
                 }
                 catch (Exception ex)
                 {
