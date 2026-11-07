@@ -1268,13 +1268,19 @@ mod tests {
         }
     }
 
-    /// The real model against the independent test set:
-    /// `DIMMY_PC_ROUTER_DIR=<model dir> DIMMY_PC_TESTSET=<pc_testset.jsonl>
+    /// The real model against the independent test set (tests/fixtures/pc_testset.jsonl):
+    /// `DIMMY_PC_ROUTER_DIR=<model dir>
     /// cargo test --release --lib --features pc-router independent -- --ignored --nocapture`
     #[test]
     #[ignore]
     fn the_independent_set_routes_like_the_offline_bench() {
-        let path = std::env::var("DIMMY_PC_TESTSET").expect("set DIMMY_PC_TESTSET");
+        let path = std::env::var("DIMMY_PC_TESTSET").unwrap_or_else(|_| {
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/pc_testset.jsonl"
+            )
+            .into()
+        });
         let trained: std::collections::HashSet<String> = examples()
             .into_iter()
             .map(|(_, t)| t.to_lowercase())

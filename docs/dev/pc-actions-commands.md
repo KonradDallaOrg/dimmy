@@ -8,6 +8,35 @@ while the user is still talking when it is "sure + stable" and harmless.
 Status: ✅ done (local router and Haiku) · 🟡 Haiku only · ⬜ to do · ⛔ excluded
 Live: ⚡ may run while you talk · ⏸ waits for the stop
 
+## How the local router decides (measured 2026-11-07)
+
+Test set: `core/tests/fixtures/pc_testset.jsonl`, 326 commands written
+independently of the training examples (69% Italian; plain, colloquial,
+speech-to-text errors, compound, and 68 out-of-scope lines). Bench:
+`scripts/dev/pc_router_bench.py`. "Sure wrong" = a wrong action at the chosen
+threshold; "out-of-scope run" = a non-command it would execute.
+
+| Method | Right | Sure wrong | Out-of-scope run | Decided surely | ms (CPU) |
+|---|---|---|---|---|---|
+| e5-small, nearest example, 83 examples | 56% | 3 | 2 | 25% | 12 |
+| Laya-multilingual (decision model), rich option descriptions | 34% | 3 | 2 | 6% | 337 |
+| e5 top 3 candidates, then Laya chooses | 44% | 1 | 1 | 3% | 154 |
+| **e5-small + softmax classifier, 405 examples incl. "none"** (shipped) | **81%** | **0 at p≥0.60** | **0** | 22% at 0.60, 42% at 0.50 | **3 (Rust, int8)** |
+| e5-base + softmax classifier | 83% | 0 at p≥0.55 | 0 | 35% at 0.55 | 25 |
+
+- Decision models (Laya) were the wrong tool here, with or without context.
+- What moved the numbers: more examples (8 → 30 per action) and an explicit
+  "none" class, read by a trained classifier instead of nearest example.
+- Thresholds: after the stop the local plan runs at p ≥ 0.50, else Claude
+  decides; live (while talking) at p ≥ 0.60 plus a 600 ms pause, and only
+  for actions a click undoes.
+- Other languages: 24 of 26 French/German/Spanish commands get the right
+  action without examples in those languages, but with low probability, and
+  the slots (left, yesterday, new tab) are read from Italian/English words:
+  they go to Claude.
+- Option: e5-base raises "decided surely" from 22% to ~35% at zero sure
+  mistakes, for ~25 ms per partial and a ~280 MB download.
+
 ## Our actions
 
 | Action | Example (it / en) | Status | Live |
