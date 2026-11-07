@@ -762,16 +762,15 @@ impl std::error::Error for ClaudeCodeError {}
 ///
 /// `prompt` is written to stdin and only stdin — never as a CLI
 /// arg. Anthropic's CLI accepts any length there.
-/// Does the installed CLI accept `--include-partial-messages`?
+/// The installed CLI's `--help`, probed once and cached.
 ///
-/// Probed once from `--help` and cached. An older `claude` rejects an
-/// unknown flag with a non-zero exit, which would turn every recap and
-/// rewrite for a subscription user into a hard failure — so streaming is
-/// opt-in on evidence, never assumed. When this is false the call takes the
-/// byte-for-byte path it took before streaming existed.
-fn cli_supports_partial_messages(binary: &Path) -> bool {
-    static SUPPORTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *SUPPORTED.get_or_init(|| {
+/// An older `claude` rejects an unknown flag with a non-zero exit, which
+/// would turn every recap and rewrite for a subscription user into a hard
+/// failure — so every optional flag is opt-in on evidence from here, never
+/// assumed.
+fn cli_help(binary: &Path) -> &'static str {
+    static HELP: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    HELP.get_or_init(|| {
         let mut cmd = Command::new(binary);
         cmd.arg("--help");
         cmd.stdout(Stdio::piped());
@@ -781,17 +780,58 @@ fn cli_supports_partial_messages(binary: &Path) -> bool {
             use std::os::windows::process::CommandExt;
             cmd.creation_flags(0x08000000);
         }
-        let supported = cmd
-            .output()
+        cmd.output()
             .ok()
-            .map(|o| String::from_utf8_lossy(&o.stdout).contains("--include-partial-messages"))
-            .unwrap_or(false);
-        crate::log(&format!(
-            "[ClaudeCode] --include-partial-messages supported: {}",
-            supported
-        ));
-        supported
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default()
     })
+}
+
+/// True when `flag` is one of the options `--help` lists, not merely a word
+/// in some other option's description ("… unless --tools names them").
+fn help_offers(help: &str, flag: &str) -> bool {
+    help.lines().any(|line| {
+        line.split_whitespace()
+            .take_while(|tok| tok.starts_with('-'))
+            .any(|tok| tok.trim_end_matches(',') == flag)
+    })
+}
+
+/// When false the call takes the byte-for-byte path it took before
+/// streaming existed.
+fn cli_supports_partial_messages(binary: &Path) -> bool {
+    help_offers(cli_help(binary), "--include-partial-messages")
+}
+
+/// Keeps the user's own Claude Code setup out of a Dimmy call.
+///
+/// Without these the CLI loads the user's CLAUDE.md, plugins, hooks, MCP
+/// servers and tool definitions into every rewrite: measured 2026-11-07 at
+/// ~44k input tokens for one dictation against ~4k with the set, 9.5 s →
+/// 3.5 s. It also saved every dictation and recap as a session in the
+/// user's `claude --resume` history.
+const LEAN_ARGS: [&str; 7] = [
+    "--tools",
+    "",
+    "--setting-sources",
+    "",
+    "--strict-mcp-config",
+    "--disable-slash-commands",
+    "--no-session-persistence",
+];
+
+/// All of [`LEAN_ARGS`] or none: `--tools ""` alone measured ~330k input
+/// tokens, worse than no flags at all.
+fn lean_args(help: &str) -> &'static [&'static str] {
+    let offered = LEAN_ARGS
+        .iter()
+        .filter(|a| a.starts_with("--"))
+        .all(|flag| help_offers(help, flag));
+    if offered {
+        &LEAN_ARGS
+    } else {
+        &[]
+    }
 }
 
 pub fn run_blocking(
@@ -811,10 +851,12 @@ pub fn run_blocking(
         return run_blocking_streaming(&binary, prompt, model, timeout);
     }
 
+    let lean = lean_args(cli_help(&binary));
     let mut cmd = Command::new(&binary);
     cmd.arg("--print");
     cmd.arg("--output-format");
     cmd.arg("text");
+    cmd.args(lean);
     if !model.is_empty() {
         cmd.arg("--model");
         cmd.arg(model);
@@ -836,10 +878,11 @@ pub fn run_blocking(
     }
 
     crate::log(&format!(
-        "[ClaudeCode] spawn binary={:?} model={:?} prompt_chars={}",
+        "[ClaudeCode] spawn binary={:?} model={:?} prompt_chars={} lean={}",
         binary,
         model,
-        prompt.len()
+        prompt.len(),
+        !lean.is_empty()
     ));
 
     let mut child = cmd
@@ -934,6 +977,7 @@ fn run_blocking_streaming(
 ) -> Result<String, ClaudeCodeError> {
     use std::io::{BufRead, BufReader};
 
+    let lean = lean_args(cli_help(binary));
     let mut cmd = Command::new(binary);
     cmd.arg("--print");
     cmd.arg("--output-format");
@@ -941,6 +985,7 @@ fn run_blocking_streaming(
     // stream-json refuses to emit without --verbose under --print.
     cmd.arg("--verbose");
     cmd.arg("--include-partial-messages");
+    cmd.args(lean);
     if !model.is_empty() {
         cmd.arg("--model");
         cmd.arg(model);
@@ -957,10 +1002,11 @@ fn run_blocking_streaming(
     }
 
     crate::log(&format!(
-        "[ClaudeCode] spawn (streaming) binary={:?} model={:?} prompt_chars={}",
+        "[ClaudeCode] spawn (streaming) binary={:?} model={:?} prompt_chars={} lean={}",
         binary,
         model,
-        prompt.len()
+        prompt.len(),
+        !lean.is_empty()
     ));
 
     let mut child = cmd
@@ -1224,6 +1270,76 @@ mod tests {
         assert!(!is_claude_code_url("https://api.anthropic.com/v1/messages"));
         assert!(!is_claude_code_url("http://claude-code/"));
         assert!(!is_claude_code_url(""));
+    }
+
+    const HELP_WITH_LEAN_FLAGS: &str = "\
+Options:
+  -p, --print                           Print response and exit
+  --disable-slash-commands              Disable all skills and commands
+  --include-partial-messages            Include partial message chunks
+  --no-session-persistence              Disable session persistence
+  --setting-sources <sources>           Comma-separated list of setting sources
+  --strict-mcp-config                   Only use MCP servers from --mcp-config
+  --tools <tools...>                    Specify the list of available tools
+";
+
+    #[test]
+    fn lean_args_are_used_when_the_cli_offers_every_one() {
+        assert_eq!(lean_args(HELP_WITH_LEAN_FLAGS), LEAN_ARGS);
+    }
+
+    #[test]
+    fn lean_args_are_all_or_nothing() {
+        // `--tools ""` on its own measured ~330k input tokens per dictation
+        // against ~44k for no flags at all: a partial set is worse than none.
+        let without_settings = HELP_WITH_LEAN_FLAGS.replace(
+            "  --setting-sources <sources>           Comma-separated list of setting sources\n",
+            "",
+        );
+        assert!(lean_args(&without_settings).is_empty());
+        assert!(lean_args("").is_empty());
+    }
+
+    #[test]
+    fn a_flag_named_only_in_prose_is_not_offered() {
+        let help = "  --allowed-tools <tools...>   Allowed tools, unless --tools names them\n";
+        assert!(!help_offers(help, "--tools"));
+        assert!(help_offers(HELP_WITH_LEAN_FLAGS, "--tools"));
+        assert!(help_offers(HELP_WITH_LEAN_FLAGS, "--print"));
+    }
+
+    /// Manual check after a CLI upgrade: needs an installed, logged-in `claude`.
+    /// `cargo test --lib claude_code::tests::real_cli -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn real_cli_takes_the_lean_set_and_still_answers() {
+        let binary = detect_binary().expect("claude not installed");
+        assert_eq!(lean_args(cli_help(&binary)), LEAN_ARGS);
+        let started = std::time::Instant::now();
+        let reply = run_blocking(
+            "Reply with the single word OK.",
+            "",
+            Duration::from_secs(60),
+        )
+        .expect("lean call failed");
+        println!("reply={:?} elapsed={:?}", reply, started.elapsed());
+        assert!(!reply.trim().is_empty());
+    }
+
+    #[test]
+    fn lean_args_pin_the_measured_set() {
+        assert_eq!(
+            LEAN_ARGS,
+            [
+                "--tools",
+                "",
+                "--setting-sources",
+                "",
+                "--strict-mcp-config",
+                "--disable-slash-commands",
+                "--no-session-persistence",
+            ]
+        );
     }
 
     #[test]
