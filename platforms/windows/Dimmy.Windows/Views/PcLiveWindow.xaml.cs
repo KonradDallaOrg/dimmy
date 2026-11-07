@@ -19,19 +19,20 @@ public sealed partial class PcLiveWindow : Window
     private const int WidthDip = 380;
     private const int HeightDip = 236;
     private const int MarginDip = 12;
-    /// The live rule acts at a margin of 0.05; the bar is full at twice that.
-    private const double FullBarMargin = 0.10;
 
     private static PcLiveWindow? _current;
     private readonly DispatcherTimer _closeTimer;
 
-    public static void Update(string heard, string intent, double margin, string plan, string state)
+    /// <summary>The bar is half full at the live threshold: past the middle,
+    /// the router is sure enough to act.</summary>
+    public static void Update(string heard, string intent, double margin, double threshold, string plan, string state)
     {
         var w = Ensure();
         w.HeardText.Text = string.IsNullOrEmpty(heard) ? "…" : $"\"{heard}\"";
         w.IntentText.Text = string.IsNullOrEmpty(intent) ? "…" : intent;
-        w.MarginBar.Value = Math.Clamp(margin / FullBarMargin * 100, 0, 100);
-        w.MarginText.Text = $"{margin:0.000} / 0,050";
+        var full = threshold > 0 ? threshold * 2 : 0.07;
+        w.MarginBar.Value = Math.Clamp(margin / full * 100, 0, 100);
+        w.MarginText.Text = $"{margin:0.000}  (soglia {threshold:0.000})";
         w.PlanText.Text = string.IsNullOrEmpty(plan) ? "non ancora" : plan;
         w.StateText.Text = state;
         w._closeTimer.Stop();

@@ -414,6 +414,17 @@ mod hands {
         fn QueryFullProcessImageNameW(h: isize, flags: u32, buf: *mut u16, len: *mut u32) -> i32;
         fn CloseHandle(h: isize) -> i32;
     }
+    #[link(name = "shell32")]
+    extern "system" {
+        fn ShellExecuteW(
+            hwnd: isize,
+            op: *const u16,
+            file: *const u16,
+            params: *const u16,
+            dir: *const u16,
+            show: i32,
+        ) -> isize;
+    }
     #[link(name = "dwmapi")]
     extern "system" {
         fn DwmGetWindowAttribute(h: Hwnd, attr: u32, out: *mut u32, size: u32) -> i32;
@@ -567,12 +578,32 @@ mod hands {
     }
 
     /// Hand a URL, a shell: folder or a ms-settings: page to Windows.
+    /// ShellExecute "open": the default browser for a URL, Explorer for a
+    /// shell: folder, Settings for ms-settings:. (explorer.exe with a URL
+    /// that has a query string opened Explorer instead of the browser.)
     fn shell_open(target: &str) -> Result<Option<String>, String> {
-        std::process::Command::new("explorer.exe")
-            .arg(target)
-            .spawn()
-            .map(|_| None)
-            .map_err(|e| e.to_string())
+        let wide = |s: &str| {
+            s.encode_utf16()
+                .chain(std::iter::once(0))
+                .collect::<Vec<u16>>()
+        };
+        let (verb, file) = (wide("open"), wide(target));
+        let rc = unsafe {
+            ShellExecuteW(
+                0,
+                verb.as_ptr(),
+                file.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                1,
+            )
+        };
+        // Per the docs, a value above 32 means success.
+        if rc > 32 {
+            Ok(None)
+        } else {
+            Err(format!("ShellExecute failed ({rc}) for {target}"))
+        }
     }
 
     fn bring_forward(h: Hwnd) {

@@ -785,8 +785,14 @@ fn route_scored(command: &str, names: &[(String, String)]) -> (Option<Plan>, f32
 // log says, per candidate rule, when it would have fired, on which words,
 // and whether its plan matches the one that ran.
 
-/// Stricter than `MIN_MARGIN`: acting before the user is done must be surer.
-const LIVE_MARGIN: f32 = 0.05;
+/// A little stricter than `MIN_MARGIN`: acting before the user is done.
+/// On the 42-command golden set no wrong command got past 0.03.
+const LIVE_MARGIN: f32 = 0.035;
+
+/// A sure plan runs once no new words have come for this long: Nemotron
+/// sends a partial only when the words change, so a pause is the only
+/// "done" signal there is (a second identical partial never arrives).
+const LIVE_QUIET_MS: u64 = 600;
 
 struct Obs {
     ms: u128,
@@ -828,17 +834,65 @@ pub fn shadow_begin() {
     });
 }
 
-/// A partial transcript arrived. Only an execute session that is still
-/// recording is observed; the routing runs off the caller thread.
-pub fn shadow_observe(cumulative: &str) {
+fn recording_execute() -> bool {
     use crate::dictation_session::{Kind, Phase};
-    if !matches!(
+    matches!(
         crate::dictation_session::phase(),
         Phase::Recording {
             kind: Kind::Execute,
             ..
         }
-    ) {
+    )
+}
+
+/// Run the plan of the partial observed at `ms` if it is still the newest
+/// one, sure, harmless, and nothing ran yet. The claim is taken under the
+/// lock, so the stop path (which checks `live_fired`) never runs it twice.
+fn try_fire(ms: u128, why: &str) {
+    if !live_enabled() || !recording_execute() {
+        return;
+    }
+    let claimed = {
+        let mut g = SHADOW.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(s) = g.as_mut() else { return };
+        let ready = !s.fired
+            && s.obs.last().is_some_and(|o| {
+                o.ms == ms
+                    && o.margin >= LIVE_MARGIN
+                    && o.plan.as_ref().is_some_and(crate::pc_control::live_safe)
+            });
+        if !ready {
+            return;
+        }
+        s.fired = true;
+        let o = s.obs.last().expect("ready implies an observation");
+        (
+            o.plan.clone().expect("ready implies a plan"),
+            o.text.clone(),
+        )
+    };
+    let (plan, text) = claimed;
+    let t = std::time::Instant::now();
+    let result = crate::pc_control::run(&plan);
+    crate::log(&format!(
+        "[PcLive] fired ({why}) at {ms} ms on {text:?}: {:?} -> {:?} in {} ms",
+        plan.steps,
+        result.as_ref().map(|_| "ok"),
+        t.elapsed().as_millis()
+    ));
+    let fired = serde_json::json!({
+        "say": plan.say,
+        "text": text,
+        "ok": result.is_ok(),
+        "error": result.err(),
+    });
+    crate::ffi::emit_event("pc_live_fired", &fired.to_string());
+}
+
+/// A partial transcript arrived. Only an execute session that is still
+/// recording is observed; the routing runs off the caller thread.
+pub fn shadow_observe(cumulative: &str) {
+    if !recording_execute() {
         return;
     }
     let text = cumulative.trim().to_string();
@@ -855,7 +909,6 @@ pub fn shadow_observe(cumulative: &str) {
         let (plan, margin, detail) = route_scored(&text, &crate::pc_control::known_names());
         let sure = plan.is_some() && margin >= LIVE_MARGIN;
         let mut stable = false;
-        let mut fire = false;
         if let Some(s) = SHADOW.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
             stable = sure
                 && s.obs.last().is_some_and(|prev| {
@@ -873,46 +926,27 @@ pub fn shadow_observe(cumulative: &str) {
                 margin,
             });
             s.obs.sort_by_key(|o| o.ms);
-            // Claimed under the lock: one live run per session, and the
-            // stop path sees it before it plans anything.
-            if stable
-                && !s.fired
-                && live_enabled()
-                && plan.as_ref().is_some_and(crate::pc_control::live_safe)
-            {
-                s.fired = true;
-                fire = true;
-            }
         }
-        if fire {
-            let plan = plan.clone().expect("fire implies a plan");
-            let t = std::time::Instant::now();
-            let result = crate::pc_control::run(&plan);
-            crate::log(&format!(
-                "[PcLive] fired at {ms} ms on {text:?}: {:?} -> {:?} in {} ms",
-                plan.steps,
-                result.as_ref().map(|_| "ok"),
-                t.elapsed().as_millis()
-            ));
-            let fired = serde_json::json!({
-                "say": plan.say,
-                "text": text,
-                "ok": result.is_ok(),
-                "error": result.err(),
-            });
-            crate::ffi::emit_event("pc_live_fired", &fired.to_string());
-        }
-        // What the local model makes of the words so far, for the live view.
+        // What the local model makes of the words so far, for the live card.
         let payload = serde_json::json!({
             "ms": ms as u64,
             "text": text,
             "detail": detail,
             "margin": margin,
+            "threshold": LIVE_MARGIN,
+            "quiet_ms": LIVE_QUIET_MS,
             "say": plan.as_ref().map(|p| p.say.clone()),
             "sure": sure,
             "stable": stable,
+            "live_safe": plan.as_ref().is_some_and(crate::pc_control::live_safe),
         });
         crate::ffi::emit_event("pc_live", &payload.to_string());
+        if stable {
+            try_fire(ms, "stable");
+        } else if sure {
+            std::thread::sleep(std::time::Duration::from_millis(LIVE_QUIET_MS));
+            try_fire(ms, "pause");
+        }
     });
 }
 

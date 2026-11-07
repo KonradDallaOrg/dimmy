@@ -1608,7 +1608,11 @@ public partial class App : Application
         var intent = detail.StartsWith("intent=") ? detail.Substring(7).Split(' ')[0] : "?";
         var margin = p.TryGetProperty("margin", out var m) && m.ValueKind == System.Text.Json.JsonValueKind.Number ? m.GetDouble() : 0;
         var say = S("say");
-        var state = B("stable") ? "PARTIREBBE ORA" : B("sure") ? "quasi sicuro" : "in ascolto";
+        var threshold = p.TryGetProperty("threshold", out var th) && th.ValueKind == System.Text.Json.JsonValueKind.Number ? th.GetDouble() : 0.035;
+        var state = !B("sure") ? "In ascolto"
+            : !B("live_safe") ? "Sicuro: questa aspetta lo Stop"
+            : B("stable") ? "PARTE ORA"
+            : "SICURO: parte appena fai una pausa";
         var action = intent switch
         {
             "Open" => "Apri app",
@@ -1616,9 +1620,14 @@ public partial class App : Application
             "Move" => "Sposta finestra",
             "FindFiles" => "Cerca file",
             "Minimize" => "Riduci a icona",
+            "Web" => "Apri o cerca un sito",
+            "Browser" => "Comando browser",
+            "Media" => "Musica e volume",
+            "Folder" => "Apri cartella",
+            "Settings" => "Impostazioni",
             _ => intent,
         };
-        Views.PcLiveWindow.Update(S("text"), action, margin, say, state);
+        Views.PcLiveWindow.Update(S("text"), action, margin, threshold, say, state);
     }
 
     /// <summary>EXPERIMENT (exp/pc-actions): the core already ran the command
