@@ -1009,7 +1009,7 @@ fn login(action: &str, cli: &str) -> CmdResult {
             let started = std::time::Instant::now();
             let r: Result<(), (&'static str, String)> = match cli {
                 "claude" => {
-                    crate::claude_code::run_blocking(PING_PROMPT, "", Duration::from_secs(30))
+                    crate::claude_code::run_blocking(PING_PROMPT, "", Duration::from_secs(30), true)
                         .map(|_| ())
                         .map_err(|e| (crate::claude_code::error_category(&e), e.to_string()))
                 }

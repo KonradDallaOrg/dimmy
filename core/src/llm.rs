@@ -714,6 +714,7 @@ Process the following transcription. Output ONLY the transformed text, nothing e
                 &combined,
                 &model_owned,
                 std::time::Duration::from_secs(60),
+                true,
             )
         })
         .await
@@ -1216,6 +1217,7 @@ pub async fn process_raw_prompt(
                 &prompt_owned,
                 &model_owned,
                 std::time::Duration::from_secs(600),
+                false,
             )
         })
         .await

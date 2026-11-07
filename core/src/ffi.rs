@@ -5131,6 +5131,7 @@ pub extern "C" fn dimmy_claude_code_ping() -> c_int {
         "reply with the single word: pong",
         "",
         std::time::Duration::from_secs(15),
+        true,
     );
     let elapsed_ms = started.elapsed().as_millis() as u64;
     let (success, category) = match &result {

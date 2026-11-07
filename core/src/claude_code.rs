@@ -820,6 +820,22 @@ const LEAN_ARGS: [&str; 7] = [
     "--no-session-persistence",
 ];
 
+/// A quick call (a dictation rewrite, a ping) wants the answer, not the
+/// model's deliberation. Claude Code thinks by default: the env var turns
+/// extended thinking off where the model allows it (Haiku 4.5), and low
+/// effort trims the adaptive reasoning of models that always think
+/// (Haiku/Sonnet/Opus 5.5). An unknown env var is ignored by an old CLI;
+/// an unknown flag is not, hence the `--help` gate on `--effort`.
+const QUICK_ENV: (&str, &str) = ("MAX_THINKING_TOKENS", "0");
+
+fn quick_args(help: &str) -> &'static [&'static str] {
+    if help_offers(help, "--effort") {
+        &["--effort", "low"]
+    } else {
+        &[]
+    }
+}
+
 /// All of [`LEAN_ARGS`] or none: `--tools ""` alone measured ~330k input
 /// tokens, worse than no flags at all.
 fn lean_args(help: &str) -> &'static [&'static str] {
@@ -838,6 +854,7 @@ pub fn run_blocking(
     prompt: &str,
     model: &str,
     timeout: Duration,
+    quick: bool,
 ) -> Result<String, ClaudeCodeError> {
     let binary = match detect_binary() {
         Some(p) => p,
@@ -848,7 +865,7 @@ pub fn run_blocking(
     }
 
     if cli_supports_partial_messages(&binary) {
-        return run_blocking_streaming(&binary, prompt, model, timeout);
+        return run_blocking_streaming(&binary, prompt, model, timeout, quick);
     }
 
     let lean = lean_args(cli_help(&binary));
@@ -857,6 +874,10 @@ pub fn run_blocking(
     cmd.arg("--output-format");
     cmd.arg("text");
     cmd.args(lean);
+    if quick {
+        cmd.args(quick_args(cli_help(&binary)));
+        cmd.env(QUICK_ENV.0, QUICK_ENV.1);
+    }
     if !model.is_empty() {
         cmd.arg("--model");
         cmd.arg(model);
@@ -878,11 +899,12 @@ pub fn run_blocking(
     }
 
     crate::log(&format!(
-        "[ClaudeCode] spawn binary={:?} model={:?} prompt_chars={} lean={}",
+        "[ClaudeCode] spawn binary={:?} model={:?} prompt_chars={} lean={} quick={}",
         binary,
         model,
         prompt.len(),
-        !lean.is_empty()
+        !lean.is_empty(),
+        quick
     ));
 
     let mut child = cmd
@@ -974,6 +996,7 @@ fn run_blocking_streaming(
     prompt: &str,
     model: &str,
     timeout: Duration,
+    quick: bool,
 ) -> Result<String, ClaudeCodeError> {
     use std::io::{BufRead, BufReader};
 
@@ -986,6 +1009,10 @@ fn run_blocking_streaming(
     cmd.arg("--verbose");
     cmd.arg("--include-partial-messages");
     cmd.args(lean);
+    if quick {
+        cmd.args(quick_args(cli_help(binary)));
+        cmd.env(QUICK_ENV.0, QUICK_ENV.1);
+    }
     if !model.is_empty() {
         cmd.arg("--model");
         cmd.arg(model);
@@ -1002,11 +1029,12 @@ fn run_blocking_streaming(
     }
 
     crate::log(&format!(
-        "[ClaudeCode] spawn (streaming) binary={:?} model={:?} prompt_chars={} lean={}",
+        "[ClaudeCode] spawn (streaming) binary={:?} model={:?} prompt_chars={} lean={} quick={}",
         binary,
         model,
         prompt.len(),
-        !lean.is_empty()
+        !lean.is_empty(),
+        quick
     ));
 
     let spawned_at = std::time::Instant::now();
@@ -1381,10 +1409,28 @@ Options:
             "Reply with the single word OK.",
             "",
             Duration::from_secs(60),
+            true,
         )
         .expect("lean call failed");
         println!("reply={:?} elapsed={:?}", reply, started.elapsed());
         assert!(!reply.trim().is_empty());
+    }
+
+    #[test]
+    fn a_quick_call_asks_for_low_effort_only_when_the_cli_offers_it() {
+        let with_effort = format!(
+            "{}  --effort <level>                      Effort level for the current session\n",
+            HELP_WITH_LEAN_FLAGS
+        );
+        assert_eq!(quick_args(&with_effort), ["--effort", "low"]);
+        assert!(quick_args(HELP_WITH_LEAN_FLAGS).is_empty());
+    }
+
+    #[test]
+    fn a_quick_call_turns_extended_thinking_off() {
+        // 12 of 13 saved dictations carried a thinking block: a 117-char
+        // answer cost 614 output tokens and ~7 s before the first word.
+        assert_eq!(QUICK_ENV, ("MAX_THINKING_TOKENS", "0"));
     }
 
     #[test]
@@ -1767,7 +1813,7 @@ Options:
         // without Claude Code installed. On a dev machine WITH
         // claude installed, this test is skipped because the
         // contract still holds (just via a different branch).
-        let _ = run_blocking("ping", "", Duration::from_secs(1));
+        let _ = run_blocking("ping", "", Duration::from_secs(1), true);
         // No assertion — either NotInstalled error or an actual
         // claude invocation. Both are acceptable; we only check
         // that the call doesn't panic.
