@@ -1009,6 +1009,7 @@ fn run_blocking_streaming(
         !lean.is_empty()
     ));
 
+    let spawned_at = std::time::Instant::now();
     let mut child = cmd
         .spawn()
         .map_err(|e| ClaudeCodeError::Spawn(format!("{}", e)))?;
@@ -1035,13 +1036,31 @@ fn run_blocking_streaming(
     };
     let collected = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
     let collected_writer = std::sync::Arc::clone(&collected);
+    let timing = std::sync::Arc::new(std::sync::Mutex::new(StreamTiming::default()));
+    let timing_writer = std::sync::Arc::clone(&timing);
     let reader = std::thread::spawn(move || {
         let mut started = false;
+        let mark = |f: fn(&mut StreamTiming) -> &mut Option<u128>| {
+            if let Ok(mut t) = timing_writer.lock() {
+                let slot = f(&mut t);
+                if slot.is_none() {
+                    *slot = Some(spawned_at.elapsed().as_millis());
+                }
+            }
+        };
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            mark(|t| &mut t.first_line_ms);
             let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
                 continue; // a non-JSON line is not fatal, just not ours
             };
             match v["type"].as_str().unwrap_or("") {
+                "rate_limit_event" => {
+                    if let Ok(mut t) = timing_writer.lock() {
+                        t.five_hour = v["rate_limit_info"]["unifiedWindows"]["five_hour"]
+                            ["utilization"]
+                            .as_f64();
+                    }
+                }
                 "stream_event" => {
                     let ev = &v["event"];
                     if ev["type"].as_str() == Some("content_block_delta") {
@@ -1051,6 +1070,7 @@ fn run_blocking_streaming(
                                     if !d.is_empty() {
                                         if !started {
                                             started = true;
+                                            mark(|t| &mut t.first_text_ms);
                                             crate::llm::emit_recap_stream_event("start", "");
                                         }
                                         crate::llm::emit_recap_stream_event("delta", d);
@@ -1069,6 +1089,22 @@ fn run_blocking_streaming(
                     }
                 }
                 "result" => {
+                    mark(|t| &mut t.result_ms);
+                    if let Ok(mut t) = timing_writer.lock() {
+                        t.cli_ms = v["duration_ms"].as_u64();
+                        t.api_ms = v["duration_api_ms"].as_u64();
+                        let u = &v["usage"];
+                        t.tokens_in = Some(
+                            [
+                                "input_tokens",
+                                "cache_creation_input_tokens",
+                                "cache_read_input_tokens",
+                            ]
+                            .iter()
+                            .filter_map(|k| u[*k].as_u64())
+                            .sum(),
+                        );
+                    }
                     // The authoritative answer. `is_error` marks a CLI-level
                     // failure whose `result` is a message, not an answer.
                     if v["is_error"].as_bool() == Some(true) {
@@ -1140,12 +1176,37 @@ fn run_blocking_streaming(
             stderr_excerpt: "stream-json produced no result line".into(),
         });
     }
+    let exit_ms = spawned_at.elapsed().as_millis();
+    let t = timing.lock().map(|t| t.clone()).unwrap_or_default();
     crate::log(&format!(
-        "[ClaudeCode] success (streaming) prompt_chars={} response_chars={}",
+        "[ClaudeCode] success (streaming) prompt_chars={} response_chars={} \
+         first_line_ms={:?} first_text_ms={:?} result_ms={:?} exit_ms={} \
+         cli_ms={:?} api_ms={:?} tokens_in={:?} five_hour={:?}",
         prompt.len(),
-        text.len()
+        text.len(),
+        t.first_line_ms,
+        t.first_text_ms,
+        t.result_ms,
+        exit_ms,
+        t.cli_ms,
+        t.api_ms,
+        t.tokens_in,
+        t.five_hour
     ));
     Ok(text)
+}
+
+/// Where a streaming call spends its time, all in ms since the spawn
+/// except `cli_ms` / `api_ms`, which the CLI reports about itself.
+#[derive(Default, Clone)]
+struct StreamTiming {
+    first_line_ms: Option<u128>,
+    first_text_ms: Option<u128>,
+    result_ms: Option<u128>,
+    cli_ms: Option<u64>,
+    api_ms: Option<u64>,
+    tokens_in: Option<u64>,
+    five_hour: Option<f64>,
 }
 
 /// Spawn `claude /login` as a detached subprocess. Returns once the
