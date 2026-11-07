@@ -34,6 +34,12 @@ pub enum Step {
         #[serde(default)]
         when: When,
     },
+    /// Send a window to the taskbar.
+    Minimize { app: String },
+    /// Bring a minimised window back, as it was.
+    Restore { app: String },
+    /// Minimise everything (Win+D).
+    ShowDesktop,
     /// Put the cursor at the end of the app's document and paste `text` there.
     TypeAtEnd {
         #[serde(default)]
@@ -157,10 +163,12 @@ pub fn name_score(spoken: &str, name: &str, title: &str) -> f32 {
     if n == s {
         return 1.0;
     }
-    if n.starts_with(&s) || s.starts_with(&n) && n.len() >= 4 {
+    // A prefix or substring needs 4 letters: on a live partial, "Apri no"
+    // must not already mean Notepad.
+    if s.len() >= 4 && n.starts_with(&s) || n.len() >= 4 && s.starts_with(&n) {
         return 0.9;
     }
-    if n.contains(&s) {
+    if s.len() >= 4 && n.contains(&s) {
         return 0.8;
     }
     if !t.is_empty() && s.len() >= 4 && t.contains(&s) {
@@ -196,6 +204,9 @@ fn planner_prompt(command: &str, windows: &[String]) -> String {
          {{\"do\":\"focus\",\"app\":\"<app>\"}}  bring an open window to the front\n\
          {{\"do\":\"place\",\"app\":\"<app>\",\"side\":\"left|right|full|other_monitor\"}}\n\
          {{\"do\":\"tile\",\"left\":\"<app>\",\"right\":\"<app>\"}}  two windows side by side\n\
+         {{\"do\":\"minimize\",\"app\":\"<app>\"}}  send it to the taskbar (also: hide, lower, abbassa, nascondi)\n\
+         {{\"do\":\"restore\",\"app\":\"<app>\"}}  bring a minimised window back\n\
+         {{\"do\":\"show_desktop\"}}  minimise everything\n\
          {{\"do\":\"find_files\",\"query\":\"<words, may be empty>\",\"when\":\"any|today|yesterday|this_week|last_week\"}}\n\
          {{\"do\":\"type_at_end\",\"app\":\"<app>\",\"text\":\"<text to write>\"}}  cursor to the end of the document, write the text\n\
          Rules: only these actions. Use the app names as the user said them, or the name from the open windows list. \
@@ -610,6 +621,22 @@ mod hands {
                 Ok(None)
             }
             Step::FindFiles { query, when } => find_files(query, *when).map(|_| None),
+            Step::Minimize { app } => need(app).map(|w| {
+                unsafe { ShowWindow(w.hwnd, 6) }; // SW_MINIMIZE
+                None
+            }),
+            Step::Restore { app } => need(app).map(|w| {
+                unsafe { ShowWindow(w.hwnd, 9) }; // SW_RESTORE
+                bring_forward(w.hwnd);
+                None
+            }),
+            Step::ShowDesktop => {
+                tap(0x5B, false); // Win
+                tap(0x44, false); // D
+                tap(0x44, true);
+                tap(0x5B, true);
+                Ok(None)
+            }
             Step::TypeAtEnd { app, text } => {
                 let w = need(app)?;
                 bring_forward(w.hwnd);
@@ -701,5 +728,8 @@ mod tests {
             "a close mishearing still matches"
         );
         assert_eq!(name_score("excel", "notepad++", "nuovo 2"), 0.0);
+        // A live partial cut mid-word ("Apri no…") must not name an app yet.
+        assert_eq!(name_score("no", "notepad++", "nuovo 2 - Notepad++"), 0.0);
+        assert_eq!(name_score("not", "notepad++", ""), 0.0);
     }
 }

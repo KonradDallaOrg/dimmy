@@ -362,6 +362,10 @@ public partial class AppViewModel : ObservableObject
     /// hide the CaptionWindow and to keep its text in sync.
     public event Action<string, bool>? SttChunkReceived;
 
+    /// <summary>EXPERIMENT (exp/pc-actions): the local router's reading of a
+    /// live partial during an execute session.</summary>
+    public event Action<System.Text.Json.JsonElement>? PcLiveReceived;
+
     /// Raised when a realtime streaming dictation session (Deepgram) emits
     /// a STABLE finalised segment that is safe to inject at the cursor.
     /// Args: (segmentText). Only fires for `engine == "deepgram"` chunks
@@ -628,6 +632,9 @@ public partial class AppViewModel : ObservableObject
                         if (payload.TryGetProperty("stage", out var st) && st.GetString() is { } stage)
                             MeetingRetranscribeProgress?.Invoke(percent, stage);
                     }
+                    break;
+                case "pc_live":
+                    PcLiveReceived?.Invoke(payload.Clone());
                     break;
                 case "recording_started":
                     // New session — clear the streaming flag so a prior

@@ -83,6 +83,16 @@ public sealed partial class CaptionWindow : Window
         ShadowText2.Text = text;
     }
 
+    /// <summary>EXPERIMENT (exp/pc-actions): one whole line instead of the
+    /// chunk FIFO, for the live view of what the PC-command router understood.</summary>
+    public void SetLine(string text)
+    {
+        _chunks.Clear();
+        MainText.Text = text;
+        ShadowText.Text = text;
+        ShadowText2.Text = text;
+    }
+
     public void Reset()
     {
         _chunks.Clear();

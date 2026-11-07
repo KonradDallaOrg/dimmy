@@ -24,6 +24,7 @@ enum Intent {
     Tile,
     Move,
     FindFiles,
+    Minimize,
 }
 
 const EXAMPLES: &[(Intent, &str)] = &[
@@ -64,6 +65,13 @@ const EXAMPLES: &[(Intent, &str)] = &[
     (Intent::FindFiles, "mostrami i documenti recenti"),
     (Intent::FindFiles, "search my files for the invoice"),
     (Intent::FindFiles, "find the report I saved this morning"),
+    (Intent::Minimize, "riduci a icona Word"),
+    (Intent::Minimize, "abbassa Outlook"),
+    (Intent::Minimize, "nascondi Chrome"),
+    (Intent::Minimize, "manda Teams nella barra"),
+    (Intent::Minimize, "togli di mezzo Excel"),
+    (Intent::Minimize, "minimize Slack"),
+    (Intent::Minimize, "hide the browser"),
 ];
 
 /// Words that carry the action, place or time, never an app name or a query.
@@ -185,6 +193,23 @@ const STOP: &[&str] = &[
     "next",
     "each",
     "me",
+    "riduci",
+    "icona",
+    "abbassa",
+    "abbassala",
+    "abbassalo",
+    "nascondi",
+    "nascondila",
+    "nascondilo",
+    "togli",
+    "mezzo",
+    "barra",
+    "minimize",
+    "hide",
+    "puoi",
+    "aprirmi",
+    "can",
+    "you",
 ];
 
 const DATE_WORDS: &[&str] = &[
@@ -520,6 +545,12 @@ fn route_scored(command: &str, names: &[(String, String)]) -> (Option<Plan>, f32
             }),
             _ => None,
         },
+        Intent::Minimize if apps.len() == 1 => Some(Plan {
+            say: format!("{} ridotto a icona", apps[0]),
+            steps: vec![Step::Minimize {
+                app: apps[0].clone(),
+            }],
+        }),
         Intent::FindFiles => {
             let when = when_of(&w);
             let query: Vec<&str> = w
@@ -602,16 +633,38 @@ pub fn shadow_observe(cumulative: &str) {
         }
     };
     std::thread::spawn(move || {
-        let (plan, margin, _) = route_scored(&text, &crate::pc_control::known_names());
+        let (plan, margin, detail) = route_scored(&text, &crate::pc_control::known_names());
+        let sure = plan.is_some() && margin >= LIVE_MARGIN;
+        let mut stable = false;
         if let Some(s) = SHADOW.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+            stable = sure
+                && s.obs.last().is_some_and(|prev| {
+                    prev.margin >= LIVE_MARGIN
+                        && prev
+                            .plan
+                            .as_ref()
+                            .zip(plan.as_ref())
+                            .is_some_and(|(a, b)| same_plan(a, b))
+                });
             s.obs.push(Obs {
                 ms,
-                text,
-                plan,
+                text: text.clone(),
+                plan: plan.clone(),
                 margin,
             });
             s.obs.sort_by_key(|o| o.ms);
         }
+        // What the local model makes of the words so far, for the live view.
+        let payload = serde_json::json!({
+            "ms": ms as u64,
+            "text": text,
+            "detail": detail,
+            "margin": margin,
+            "say": plan.as_ref().map(|p| p.say.clone()),
+            "sure": sure,
+            "stable": stable,
+        });
+        crate::ffi::emit_event("pc_live", &payload.to_string());
     });
 }
 
@@ -638,6 +691,9 @@ fn same_plan(a: &Plan, b: &Plan) -> bool {
             ) => app(l1, l2) && app(r1, r2),
             (Step::FindFiles { when: w1, .. }, Step::FindFiles { when: w2, .. }) => w1 == w2,
             (Step::TypeAtEnd { .. }, Step::TypeAtEnd { .. }) => true,
+            (Step::Minimize { app: p }, Step::Minimize { app: q }) => app(p, q),
+            (Step::Restore { app: p }, Step::Restore { app: q }) => app(p, q),
+            (Step::ShowDesktop, Step::ShowDesktop) => true,
             _ => false,
         })
 }

@@ -613,6 +613,7 @@ public partial class App : Application
             // events from the Rust core; we route them through the
             // shared AppViewModel.SttChunkReceived hook.
             _appViewModel.SttChunkReceived += OnSttChunkReceived;
+            _appViewModel.PcLiveReceived += OnPcLive;
 
             // 2c. Realtime streaming dictation (Deepgram): each finalised
             // segment is typed at the cursor as the user speaks. The final
@@ -1594,6 +1595,30 @@ public partial class App : Application
         }
     }
 
+    /// <summary>EXPERIMENT (exp/pc-actions): show, at the bottom of the screen,
+    /// what the local router makes of the words so far and whether a live
+    /// rule would act now. Nothing is executed from here.</summary>
+    private void OnPcLive(System.Text.Json.JsonElement p)
+    {
+        if (!_appViewModel.ExecuteOneShot) return;
+        string S(string n) => p.TryGetProperty(n, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String ? v.GetString() ?? "" : "";
+        bool B(string n) => p.TryGetProperty(n, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.True;
+        var detail = S("detail");
+        var intent = detail.StartsWith("intent=") ? detail.Substring(7).Split(' ')[0] : "?";
+        var margin = p.TryGetProperty("margin", out var m) && m.ValueKind == System.Text.Json.JsonValueKind.Number ? m.GetDouble() : 0;
+        var say = S("say");
+        var state = B("stable") ? "PARTIREBBE ORA" : B("sure") ? "quasi sicuro" : "in ascolto";
+        var line = $"\"{S("text")}\"   →   {(string.IsNullOrEmpty(say) ? "non ancora" : say)}   ·   {intent} {margin:0.000}   ·   {state}";
+        if (_captionWindow == null)
+        {
+            _captionWindow = new CaptionWindow();
+            Helpers.WindowHelper.ShowWithoutActivating(_captionWindow);
+        }
+        _captionWindow.SetLine(line);
+        _captionWindow.PositionAtScreenBottom();
+        _captionWindow.Show();
+    }
+
     /// <summary>Type one finalised streaming-dictation segment at the
     /// cursor. Runs on the UI thread (HandleEvent is dispatched there).
     /// Uses Unicode SendInput rather than clipboard paste so repeated
@@ -2197,6 +2222,13 @@ public partial class App : Application
         {
             _appViewModel.ExecuteOneShot = false;
             _targetContext = null;
+            var dq = _dispatcherQueue;
+            _ = Task.Delay(2500).ContinueWith(_ => dq?.TryEnqueue(() =>
+            {
+                if (_appViewModel.ExecuteOneShot) return;
+                _captionWindow?.Hide();
+                _captionWindow?.Reset();
+            }));
         }
     }
 
