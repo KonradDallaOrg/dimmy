@@ -649,9 +649,10 @@ pub fn select(id: &str) -> bool {
 
 pub fn model_present() -> bool {
     let spec = selected();
-    let Some(dir) = model_dir(spec) else {
-        return false;
-    };
+    model_dir(spec).is_some_and(|dir| files_present(&dir, spec))
+}
+
+fn files_present(dir: &std::path::Path, spec: &ModelSpec) -> bool {
     spec.files.iter().all(|(_, name, _)| {
         std::fs::metadata(dir.join(name))
             .map(|m| m.is_file() && m.len() > 0)
@@ -693,7 +694,12 @@ pub async fn download(progress: impl Fn(u64, u64)) -> Result<(), String> {
         base += std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
         progress(base, total);
     }
-    assert!(model_present(), "both files must exist after a download");
+    // The model this call downloaded, not the one selected now: the user can
+    // pick another encoder while this download runs.
+    assert!(
+        files_present(&dir, spec),
+        "both files must exist after a download"
+    );
     Ok(())
 }
 
@@ -1400,6 +1406,22 @@ mod tests {
         .iter()
         .map(|(a, b)| (a.to_string(), b.to_string()))
         .collect()
+    }
+
+    // Burned 2026-11-07: e5-small finished downloading after the user had
+    // switched to BGE-M3, and the postcondition checked BGE-M3's files.
+    #[test]
+    fn a_finished_download_is_checked_against_its_own_model() {
+        let dir = std::env::temp_dir().join(format!("pc-router-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let small = &MODELS[0];
+        for (_, name, _) in small.files {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        let m3 = MODELS.iter().find(|m| m.id == "bge-m3").unwrap();
+        assert!(files_present(&dir, small));
+        assert!(!files_present(&dir.join(m3.subdir), m3));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
