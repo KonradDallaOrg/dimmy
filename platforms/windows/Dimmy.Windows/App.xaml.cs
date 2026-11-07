@@ -1609,15 +1609,16 @@ public partial class App : Application
         var margin = p.TryGetProperty("margin", out var m) && m.ValueKind == System.Text.Json.JsonValueKind.Number ? m.GetDouble() : 0;
         var say = S("say");
         var state = B("stable") ? "PARTIREBBE ORA" : B("sure") ? "quasi sicuro" : "in ascolto";
-        var line = $"\"{S("text")}\"   →   {(string.IsNullOrEmpty(say) ? "non ancora" : say)}   ·   {intent} {margin:0.000}   ·   {state}";
-        if (_captionWindow == null)
+        var action = intent switch
         {
-            _captionWindow = new CaptionWindow();
-            Helpers.WindowHelper.ShowWithoutActivating(_captionWindow);
-        }
-        _captionWindow.SetLine(line);
-        _captionWindow.PositionAtScreenBottom();
-        _captionWindow.Show();
+            "Open" => "Apri app",
+            "Tile" => "Affianca finestre",
+            "Move" => "Sposta finestra",
+            "FindFiles" => "Cerca file",
+            "Minimize" => "Riduci a icona",
+            _ => intent,
+        };
+        Views.PcLiveWindow.Update(S("text"), action, margin, say, state);
     }
 
     /// <summary>EXPERIMENT (exp/pc-actions): the core already ran the command
@@ -1636,7 +1637,7 @@ public partial class App : Application
             _appViewModel.ExecuteOneShot = false;
             _targetContext = null;
         }
-        _captionWindow?.SetLine($"\"{S("text")}\"   →   {S("say")}   ·   FATTO DAL VIVO");
+        Views.PcLiveWindow.Finish(S("say"), ok ? "FATTO mentre parlavi" : $"Non fatto: {S("error")}");
         if (ok)
         {
             Services.DictNotificationService.ShowPcAction(S("say"), "Fatto mentre parlavi");
@@ -1646,13 +1647,6 @@ public partial class App : Application
         {
             _appViewModel.SetError(S("error"));
         }
-        var dq = _dispatcherQueue;
-        _ = Task.Delay(2500).ContinueWith(_ => dq?.TryEnqueue(() =>
-        {
-            if (_appViewModel.ExecuteOneShot) return;
-            _captionWindow?.Hide();
-            _captionWindow?.Reset();
-        }));
     }
 
     /// <summary>Type one finalised streaming-dictation segment at the
@@ -2223,6 +2217,7 @@ public partial class App : Application
             if (spoken == null)
             {
                 PttLog("Execute: empty transcript");
+                Views.PcLiveWindow.Finish("", "Non ho sentito niente");
                 if (_appViewModel.CurrentState != AppState.Error)
                     _appViewModel.SetState(AppState.Idle);
                 return;
@@ -2235,6 +2230,9 @@ public partial class App : Application
             var said = Str("said") ?? "";
             var error = Str("error");
             var paste = Str("paste");
+            var engineUsed = Str("engine") ?? "";
+            if (engineUsed != "live")
+                Views.PcLiveWindow.Finish(said, error == null ? $"Fatto ({(engineUsed == "e5" ? "modello locale" : "Haiku")})" : "Non fatto");
             if (!string.IsNullOrEmpty(paste))
             {
                 await Task.Delay(150);
@@ -2258,13 +2256,6 @@ public partial class App : Application
         {
             _appViewModel.ExecuteOneShot = false;
             _targetContext = null;
-            var dq = _dispatcherQueue;
-            _ = Task.Delay(2500).ContinueWith(_ => dq?.TryEnqueue(() =>
-            {
-                if (_appViewModel.ExecuteOneShot) return;
-                _captionWindow?.Hide();
-                _captionWindow?.Reset();
-            }));
         }
     }
 

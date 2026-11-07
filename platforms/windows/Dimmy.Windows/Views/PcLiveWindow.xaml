@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  EXPERIMENT (exp/pc-actions): a fixed card that shows, while the user is
+  still talking, what the local PC-command router makes of the words: what
+  it hears, the action, how sure it is against the live threshold, what it
+  would do, and whether it acted. Same chrome as DictToastWindow.
+-->
+<Window
+    x:Class="Dimmy.Windows.Views.PcLiveWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <Grid x:Name="Root" Padding="16,12,16,14" Background="Transparent" RowSpacing="8">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+    <Grid.ColumnDefinitions>
+      <ColumnDefinition Width="84" />
+      <ColumnDefinition Width="*" />
+    </Grid.ColumnDefinitions>
+
+    <StackPanel Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="8">
+      <Image Source="ms-appx:///Assets/dimmy-logo.png" Width="16" Height="16" />
+      <TextBlock Text="Dimmy · Comandi PC" Style="{StaticResource DimmyCaption}" VerticalAlignment="Center" />
+    </StackPanel>
+
+    <TextBlock Grid.Row="1" Text="Sento" Style="{StaticResource DimmySecondary}" />
+    <TextBlock Grid.Row="1" Grid.Column="1" x:Name="HeardText" Style="{StaticResource DimmyBody}"
+               TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" />
+
+    <TextBlock Grid.Row="2" Text="Capito" Style="{StaticResource DimmySecondary}" />
+    <TextBlock Grid.Row="2" Grid.Column="1" x:Name="IntentText" Style="{StaticResource DimmyBody}" />
+
+    <TextBlock Grid.Row="3" Text="Sicurezza" Style="{StaticResource DimmySecondary}" VerticalAlignment="Center" />
+    <Grid Grid.Row="3" Grid.Column="1" ColumnSpacing="8">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*" />
+        <ColumnDefinition Width="Auto" />
+      </Grid.ColumnDefinitions>
+      <ProgressBar x:Name="MarginBar" Minimum="0" Maximum="100" Value="0" VerticalAlignment="Center" />
+      <TextBlock Grid.Column="1" x:Name="MarginText" Style="{StaticResource DimmySecondary}" />
+    </Grid>
+
+    <TextBlock Grid.Row="4" Text="Farei" Style="{StaticResource DimmySecondary}" />
+    <TextBlock Grid.Row="4" Grid.Column="1" x:Name="PlanText" Style="{StaticResource DimmyBody}"
+               TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" />
+
+    <TextBlock Grid.Row="5" Text="Stato" Style="{StaticResource DimmySecondary}" />
+    <TextBlock Grid.Row="5" Grid.Column="1" x:Name="StateText" Style="{StaticResource DimmyCardTitle}" />
+  </Grid>
+</Window>
