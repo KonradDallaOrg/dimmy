@@ -137,6 +137,11 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_terms_version(byte[] outBuf, int bufLen);
 
+    // kind 0 licence | 1 open source notices: JSON blocks, length-query
+    // contract like dimmy_license_text.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_legal_document(int kind, byte[]? outBuf, int bufLen);
+
     // ── Recording-consent notices ────────────────────────────────────
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_consent_text(
@@ -910,6 +915,10 @@ public static class DimmyNative
 
     /// <summary>Third-party licence texts and copyright notices.</summary>
     public static string? ThirdPartyNotices() => ReadSized(dimmy_third_party_notices);
+
+    /// <summary>The licence (kind 0) or the notices (kind 1) as JSON blocks
+    /// (headings, paragraphs, tables, licence texts), parsed by the core.</summary>
+    public static string? LegalDocument(int kind) => ReadSized((buf, len) => dimmy_legal_document(kind, buf, len));
 
     /// <summary>Terms version to store in terms_accepted_version when the user accepts.</summary>
     public static string TermsVersion() => ReadBuffer(dimmy_terms_version, 64)?.Trim() ?? string.Empty;

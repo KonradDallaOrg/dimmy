@@ -5761,43 +5761,11 @@ public sealed partial class SettingsWindow : Window
         }
     }
 
-    private async void ShowLicense_Click(object sender, RoutedEventArgs e) =>
-        await ShowLegalTextAsync("Licence (AGPL-3.0)", DimmyNative.LicenseText());
+    private void ShowLicense_Click(object sender, RoutedEventArgs e) =>
+        LegalTextWindow.ShowFor(0, "Licence (AGPL-3.0)");
 
-    private async void ShowNotices_Click(object sender, RoutedEventArgs e) =>
-        await ShowLegalTextAsync("Open source notices", DimmyNative.ThirdPartyNotices());
-
-    /// <summary>Read-only scrollable text. A TextBox, not a TextBlock: the
-    /// notices run to ~1 MB, past what one TextBlock lays out reliably.</summary>
-    private async Task ShowLegalTextAsync(string title, string? text)
-    {
-        var box = new TextBox
-        {
-            // Before Text: a single-line TextBox keeps only the first line.
-            AcceptsReturn = true,
-            Text = string.IsNullOrEmpty(text)
-                ? "Text unavailable."
-                : text.Replace("\r\n", "\n").Replace("\n", "\r"),
-            IsReadOnly = true,
-            TextWrapping = TextWrapping.Wrap,
-            FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"),
-            FontSize = 12,
-            MinWidth = 640,
-            Height = 440,
-        };
-        Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(box, "LegalTextBox");
-        ScrollViewer.SetVerticalScrollBarVisibility(box, ScrollBarVisibility.Auto);
-        var dlg = new ContentDialog
-        {
-            RequestedTheme = Dimmy.Windows.Helpers.ThemeHelper.ResolvedElementTheme(),
-            Title = title,
-            Content = box,
-            CloseButtonText = "Close",
-            DefaultButton = ContentDialogButton.Close,
-            XamlRoot = this.Content?.XamlRoot,
-        };
-        await dlg.ShowAsync();
-    }
+    private void ShowNotices_Click(object sender, RoutedEventArgs e) =>
+        LegalTextWindow.ShowFor(1, "Open source notices");
 
     private async void ReleaseNotes_Click(object sender, RoutedEventArgs e)
     {

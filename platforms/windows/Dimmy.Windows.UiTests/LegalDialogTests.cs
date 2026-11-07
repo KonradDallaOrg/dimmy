@@ -104,10 +104,14 @@ public class LegalDialogTests : IDisposable
         return command;
     }
 
+    /// The licence and the notices open in a window of their own, laid out
+    /// from the core's blocks (headings, aligned table columns, licence texts)
+    /// instead of raw text in a dialog: it resizes, scrolls to the end, and
+    /// shows the document's real structure.
     [Theory]
-    [InlineData("AboutLicenseViewButton", 30_000, "Version 3, 19 November 2007")]
-    [InlineData("AboutNoticesViewButton", 900_000, "# Open source notices")]
-    public void LegalDialogShowsTheWholeText(string buttonId, int minLength, string expected)
+    [InlineData("AboutLicenseViewButton", "Licence (AGPL-3.0)", "GNU AFFERO GENERAL PUBLIC LICENSE", "Preamble")]
+    [InlineData("AboutNoticesViewButton", "Open source notices", "Open source notices", "Crate")]
+    public void LegalWindowShowsTheLaidOutText(string buttonId, string title, string heading, string structure)
     {
         using var automation = new UIA3Automation();
         _app = Application.Launch(LocateDimmyExe());
@@ -119,12 +123,27 @@ public class LegalDialogTests : IDisposable
             .AsButton().Invoke();
 
         var clock = Stopwatch.StartNew();
-        var box = WaitFor("legal text box", () =>
-            settings.FindFirstDescendant(cf => cf.ByAutomationId("LegalTextBox")));
-        var text = box.Patterns.Value.Pattern.Value.Value;
-        _output.WriteLine($"{buttonId}: {text.Length} characters, read after {clock.ElapsedMilliseconds} ms");
+        var window = WaitFor($"{title} window", () =>
+            automation.GetDesktop().FindFirstChild(cf => cf.ByName(title)));
+        WaitFor($"heading '{heading}'", () => window.FindFirstDescendant(cf => cf.ByName(heading)));
+        WaitFor($"'{structure}'", () => window.FindFirstDescendant(cf => cf.ByName(structure)));
+        _output.WriteLine($"{title}: laid out after {clock.ElapsedMilliseconds} ms");
 
-        Assert.True(text.Length >= minLength, $"only {text.Length} characters: '{text}'");
-        Assert.Contains(expected, text);
+        Assert.True(window.Patterns.Transform.Pattern.CanResize.Value, "the window resizes");
+        var scroll = WaitFor("scroll viewer", () =>
+            window.FindFirstDescendant(cf => cf.ByControlType(FlaUI.Core.Definitions.ControlType.Pane)
+                .And(cf.ByClassName("ScrollViewer"))));
+        var pattern = scroll.Patterns.Scroll.Pattern;
+        Assert.True(pattern.VerticallyScrollable.Value, "the text scrolls");
+        // The content is virtualized: the scroll extent is estimated from
+        // the rows built so far and corrects itself as the jump builds the
+        // real ones, so reaching the end takes a few jumps (measured: 4 on
+        // the notices), like dragging the thumb down twice.
+        for (int i = 0; i < 10 && pattern.VerticalScrollPercent.Value < 99.9; i++)
+        {
+            pattern.SetScrollPercent(-1, 100);
+            Thread.Sleep(500);
+        }
+        Assert.True(pattern.VerticalScrollPercent.Value >= 99.9, "it scrolls to the end");
     }
 }
