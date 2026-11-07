@@ -780,6 +780,17 @@
                 <ToggleSwitch IsOn="{Binding PcCommandsEnabled, Mode=TwoWay}"
                               Style="{StaticResource CompactToggleSwitch}" />
               </controls:SettingCard>
+              <controls:SettingCard Glyph="&#xE950;"
+                                    IsEnabled="{Binding PcCommandsEnabled}"
+                                    Label="Local command model (experimental)"
+                                    InfoTip="Which small local model understands your PC commands. Fast: smallest download, decides fewer commands on its own. Precise: decides about twice as many commands while you talk, at about 20 ms each, and downloads 560 MB once. Claude handles whatever the local model is not sure about.">
+                <ComboBox SelectedValuePath="Tag" MinWidth="220"
+                          SelectedValue="{Binding PcRouterModel, Mode=TwoWay}">
+                  <ComboBoxItem Content="Fast (e5-small, 130 MB)" Tag="e5-small" />
+                  <ComboBoxItem Content="Balanced (e5-base, 280 MB)" Tag="e5-base" />
+                  <ComboBoxItem Content="Precise (BGE-M3, 560 MB)" Tag="bge-m3" />
+                </ComboBox>
+              </controls:SettingCard>
               <controls:SettingCard Glyph="&#xE7C4;"
                                     IsEnabled="{Binding PcCommandsEnabled}"
                                     Label="PC commands shortcut (experimental)"

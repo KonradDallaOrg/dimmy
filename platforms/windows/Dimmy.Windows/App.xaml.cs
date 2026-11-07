@@ -748,7 +748,8 @@ public partial class App : Application
         _hotkeyService.SetCommandShortcut(_uiPrefs.CommandHotkey);
         // EXPERIMENT (exp/pc-actions): the execute shortcut, Ctrl+Alt+X by default.
         _hotkeyService.SetExecuteShortcut(_uiPrefs.PcCommandsEnabled ? _uiPrefs.ExecuteHotkey : "");
-        // The local router takes ~3 s to load: do it now, not on the first command.
+        // The local router takes a few seconds to load: do it now, not on the first command.
+        DimmyNative.dimmy_pc_router_select(string.IsNullOrEmpty(_uiPrefs.PcRouterModel) ? "e5-small" : _uiPrefs.PcRouterModel);
         if (_uiPrefs.PcCommandsEnabled) DimmyNative.dimmy_pc_router_warm();
         // Optional meeting start/stop hotkey (empty = disabled). Toggle-only.
         _hotkeyService.SetMeetingShortcut(_uiPrefs.MeetingHotkey);
@@ -1013,7 +1014,7 @@ public partial class App : Application
             DimmyNative.dimmy_pc_router_warm();
             return;
         }
-        Services.DictNotificationService.ShowPcAction("Comandi vocali per il PC", "Scarico il modello locale (circa 130 MB). Nel frattempo i comandi li decide Claude.");
+        Services.DictNotificationService.ShowPcAction("Comandi vocali per il PC", "Scarico il modello locale. Nel frattempo i comandi li decide Claude.");
         var dq = _dispatcherQueue;
         _ = Task.Run(() =>
         {
@@ -1022,6 +1023,15 @@ public partial class App : Application
             dq?.TryEnqueue(() => Services.DictNotificationService.ShowPcAction("Comandi vocali per il PC",
                 rc == 0 ? "Modello locale pronto: i comandi semplici partono subito." : "Download del modello non riuscito: riprova spegnendo e riaccendendo l'opzione."));
         });
+    }
+
+    /// <summary>EXPERIMENT: switch the local router's encoder; fetch it if it is
+    /// missing, then load it in the background.</summary>
+    public void SetPcRouterModel(string id, bool enabled)
+    {
+        DimmyNative.dimmy_pc_router_select(id);
+        if (!enabled) return;
+        SetPcCommandsEnabled(true, _uiPrefs.ExecuteHotkey ?? "");
     }
 
     public void ReregisterExecuteHotkey(string combo)

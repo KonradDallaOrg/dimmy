@@ -8,7 +8,7 @@
 //! and at p >= 0.60 no wrong action and no out-of-scope line executed
 //! (22% of the commands decided that surely); at p >= 0.50, 1 mistake in 111.
 //! Embedding nearest-example routing reached 56%, Laya (a decision model)
-//! 34%, e5 then Laya 44%. Below `MIN_PROB`, on "none", or when a slot can't
+//! 34%, e5 then Laya 44%. Below `min_prob()`, on "none", or when a slot can't
 //! be filled, the router answers `None` and the command goes to Claude.
 //!
 //! Slots without a model: side and date from keywords, app names by fuzzy
@@ -20,8 +20,9 @@ use ort::value::Tensor;
 use std::sync::Mutex;
 use tokenizers::Tokenizer;
 
-/// After the stop the local plan runs at this probability, else Claude decides.
-const MIN_PROB: f32 = 0.50;
+fn min_prob() -> f32 {
+    selected().min_prob
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Intent {
@@ -541,46 +542,136 @@ fn apps_in(w: &[String], names: &[(String, String)]) -> Vec<String> {
     out
 }
 
-/// multilingual-e5-small int8, pinned to a revision; each file to its SHA-256.
-const HF_BASE: &str =
-    "https://huggingface.co/Xenova/multilingual-e5-small/resolve/761b726dd34fb83930e26aab4e9ac3899aa1fa78";
-const FILES: [(&str, &str, &str); 2] = [
-    (
-        "onnx/model_quantized.onnx",
-        "model_quantized.onnx",
-        "f80102d3f2a1229f387d3c81909990d8945513e347b0eab049f7de3c6f98c193",
-    ),
-    (
-        "tokenizer.json",
-        "tokenizer.json",
-        "0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39",
-    ),
-];
-pub const MODEL_SIZE_MB: u32 = 129;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Pooling {
+    /// Mean of the token vectors (e5).
+    Mean,
+    /// The first token's vector (BGE-M3 dense).
+    Cls,
+}
 
-pub fn model_present() -> bool {
-    let Some(dir) = model_dir() else {
+/// An encoder the router can run: where it comes from (pinned revision, each
+/// file to its SHA-256), where it lives, and how it is used.
+pub struct ModelSpec {
+    pub id: &'static str,
+    /// Sub-folder of `<config>/pc-router` ("" for the first model, which
+    /// shipped there before there was a choice).
+    subdir: &'static str,
+    base: &'static str,
+    files: [(&'static str, &'static str, &'static str); 2],
+    pub size_mb: u32,
+    prefix: &'static str,
+    pooling: Pooling,
+    /// After the stop the local plan runs at this probability, else Claude.
+    min_prob: f32,
+    /// Live, while the user talks: the lowest probability with no wrong
+    /// action on the independent set, plus 0.05.
+    live_prob: f32,
+}
+
+/// Measured on the 326-command set (Python, same classifier): e5-small 81%
+/// right / 29% decided live / 14 ms; e5-base 83% / 40% / 25 ms; BGE-M3 85% /
+/// 53% / 76 ms (fp32). All three MIT.
+pub const MODELS: [ModelSpec; 3] = [
+    ModelSpec {
+        id: "e5-small",
+        subdir: "",
+        base: "https://huggingface.co/Xenova/multilingual-e5-small/resolve/761b726dd34fb83930e26aab4e9ac3899aa1fa78",
+        files: [
+            ("onnx/model_quantized.onnx", "model_quantized.onnx", "f80102d3f2a1229f387d3c81909990d8945513e347b0eab049f7de3c6f98c193"),
+            ("tokenizer.json", "tokenizer.json", "0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39"),
+        ],
+        size_mb: 129,
+        prefix: "query: ",
+        pooling: Pooling::Mean,
+        min_prob: 0.50,
+        live_prob: 0.60,
+    },
+    ModelSpec {
+        id: "e5-base",
+        subdir: "e5-base",
+        base: "https://huggingface.co/Xenova/multilingual-e5-base/resolve/1ec9243030a27d1a115d5c340572074c125b58b2",
+        files: [
+            ("onnx/model_quantized.onnx", "model_quantized.onnx", "df7a9a29309e3ad491e1783adf8baee710262cc06079c7cbab63c630277fac94"),
+            ("tokenizer.json", "tokenizer.json", "62c24cdc13d4c9952d63718d6c9fa4c287974249e16b7ade6d5a85e7bbb75626"),
+        ],
+        size_mb: 282,
+        prefix: "query: ",
+        pooling: Pooling::Mean,
+        min_prob: 0.50,
+        live_prob: 0.60,
+    },
+    ModelSpec {
+        id: "bge-m3",
+        subdir: "bge-m3",
+        base: "https://huggingface.co/Xenova/bge-m3/resolve/4de13258303883538bd53b696b452bf8099f0858",
+        files: [
+            ("onnx/model_quantized.onnx", "model_quantized.onnx", "0826f8c1ab9edf1801db86c61919d4d108e8bfc0b809ec823ad366882ff0b77d"),
+            ("tokenizer.json", "tokenizer.json", "6710678b12670bc442b99edc952c4d996ae309a7020c1fa0096dd245c2faf790"),
+        ],
+        size_mb: 560,
+        prefix: "",
+        pooling: Pooling::Cls,
+        // Surer of itself than e5: no wrong action from 0.70 on (Rust, int8).
+        min_prob: 0.65,
+        live_prob: 0.75,
+    },
+];
+
+static SELECTED: Mutex<&'static str> = Mutex::new("e5-small");
+
+/// The encoder in use: the one selected, or DIMMY_PC_ROUTER_MODEL (tests).
+pub fn selected() -> &'static ModelSpec {
+    let want = std::env::var("DIMMY_PC_ROUTER_MODEL")
+        .ok()
+        .unwrap_or_else(|| SELECTED.lock().map(|s| s.to_string()).unwrap_or_default());
+    MODELS.iter().find(|m| m.id == want).unwrap_or(&MODELS[0])
+}
+
+/// Switch encoder. A change unloads the router; the host then downloads the
+/// model if needed and warms it. Returns false for an unknown id.
+pub fn select(id: &str) -> bool {
+    let Some(spec) = MODELS.iter().find(|m| m.id == id) else {
         return false;
     };
-    FILES.iter().all(|(_, name, _)| {
+    let changed = {
+        let mut cur = SELECTED.lock().unwrap_or_else(|e| e.into_inner());
+        let changed = *cur != spec.id;
+        *cur = spec.id;
+        changed
+    };
+    if changed {
+        *ROUTER.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        crate::log(&format!("[PcRouter] encoder -> {}", spec.id));
+    }
+    true
+}
+
+pub fn model_present() -> bool {
+    let spec = selected();
+    let Some(dir) = model_dir(spec) else {
+        return false;
+    };
+    spec.files.iter().all(|(_, name, _)| {
         std::fs::metadata(dir.join(name))
             .map(|m| m.is_file() && m.len() > 0)
             .unwrap_or(false)
     })
 }
 
-/// Download the router model. Resumable; every file is checked against its
-/// pinned SHA-256 and deleted on mismatch, so a retry starts clean.
+/// Download the selected encoder. Resumable; every file is checked against
+/// its pinned SHA-256 and deleted on mismatch, so a retry starts clean.
 pub async fn download(progress: impl Fn(u64, u64)) -> Result<(), String> {
-    let dir = model_dir().ok_or("config dir unknown")?;
+    let spec = selected();
+    let dir = model_dir(spec).ok_or("config dir unknown")?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("create {:?}: {e}", dir))?;
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(1800))
         .build()
         .map_err(|e| format!("http client: {e}"))?;
-    let total: u64 = MODEL_SIZE_MB as u64 * 1024 * 1024;
+    let total: u64 = spec.size_mb as u64 * 1024 * 1024;
     let mut base: u64 = 0;
-    for (remote, name, sha) in FILES {
+    for (remote, name, sha) in spec.files {
         let dest = dir.join(name);
         if crate::download::verify_file(&dest, &[], Some(sha)).is_ok() {
             base += std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
@@ -588,8 +679,8 @@ pub async fn download(progress: impl Fn(u64, u64)) -> Result<(), String> {
             continue;
         }
         let _ = std::fs::remove_file(&dest);
-        let url = format!("{HF_BASE}/{remote}");
-        crate::log(&format!("[PcRouter] downloading {name}"));
+        let url = format!("{}/{remote}", spec.base);
+        crate::log(&format!("[PcRouter] downloading {} {name}", spec.id));
         crate::download::download_resumable(&client, &url, &dest, &[], |done, _| {
             progress(base + done, total)
         })
@@ -606,7 +697,64 @@ pub async fn download(progress: impl Fn(u64, u64)) -> Result<(), String> {
     Ok(())
 }
 
+/// The example embeddings depend only on the encoder and the examples: kept
+/// on disk, a restart (or BGE-M3, ~15 s to embed them) skips the work.
+fn cache_key(spec: &ModelSpec) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in spec
+        .id
+        .bytes()
+        .chain(include_str!("../assets/pc-router-examples.json").bytes())
+    {
+        h ^= byte as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
+fn read_cache(path: &std::path::Path, n: usize) -> Option<Vec<Vec<f32>>> {
+    let bytes = std::fs::read(path).ok()?;
+    if bytes.len() < 8 {
+        return None;
+    }
+    let rows = u32::from_le_bytes(bytes[0..4].try_into().ok()?) as usize;
+    let dim = u32::from_le_bytes(bytes[4..8].try_into().ok()?) as usize;
+    if rows != n || dim == 0 || bytes.len() != 8 + rows * dim * 4 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(rows);
+    for r in 0..rows {
+        let start = 8 + r * dim * 4;
+        let v: Vec<f32> = bytes[start..start + dim * 4]
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        if v.iter().any(|x| !x.is_finite()) {
+            return None;
+        }
+        out.push(v);
+    }
+    Some(out)
+}
+
+fn write_cache(path: &std::path::Path, x: &[Vec<f32>]) {
+    let dim = x.first().map(|v| v.len()).unwrap_or(0);
+    let mut bytes = Vec::with_capacity(8 + x.len() * dim * 4);
+    bytes.extend_from_slice(&(x.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&(dim as u32).to_le_bytes());
+    for v in x {
+        for f in v {
+            bytes.extend_from_slice(&f.to_le_bytes());
+        }
+    }
+    let tmp = path.with_extension("tmp");
+    if std::fs::write(&tmp, &bytes).is_ok() {
+        let _ = std::fs::rename(&tmp, path);
+    }
+}
+
 struct Router {
+    spec: &'static ModelSpec,
     session: Session,
     tok: Tokenizer,
     needs_token_types: bool,
@@ -617,18 +765,24 @@ struct Router {
 
 static ROUTER: Mutex<Option<Router>> = Mutex::new(None);
 
-fn model_dir() -> Option<std::path::PathBuf> {
+fn model_dir(spec: &ModelSpec) -> Option<std::path::PathBuf> {
     // The override lets the ignored accuracy test point at the real files
     // (tests run against an isolated config dir).
-    if let Ok(d) = std::env::var("DIMMY_PC_ROUTER_DIR") {
-        return Some(d.into());
-    }
-    crate::config_dir_path().map(|p| p.join("pc-router"))
+    let root = match std::env::var("DIMMY_PC_ROUTER_DIR") {
+        Ok(d) => std::path::PathBuf::from(d),
+        Err(_) => crate::config_dir_path()?.join("pc-router"),
+    };
+    Some(if spec.subdir.is_empty() {
+        root
+    } else {
+        root.join(spec.subdir)
+    })
 }
 
 impl Router {
     fn load() -> Result<Self, String> {
-        let dir = model_dir().ok_or("no config dir")?;
+        let spec = selected();
+        let dir = model_dir(spec).ok_or("no config dir")?;
         let tok = Tokenizer::from_file(dir.join("tokenizer.json"))
             .map_err(|e| format!("tokenizer: {e}"))?;
         let session = Session::builder()
@@ -641,6 +795,7 @@ impl Router {
             .map_err(|e| format!("ort load: {e}"))?;
         let needs_token_types = session.inputs.iter().any(|i| i.name == "token_type_ids");
         let mut r = Router {
+            spec,
             session,
             tok,
             needs_token_types,
@@ -651,8 +806,8 @@ impl Router {
         let ex = examples();
         let t_embed = std::time::Instant::now();
         let mut classes: Vec<Intent> = Vec::new();
-        let (mut x, mut y) = (Vec::with_capacity(ex.len()), Vec::with_capacity(ex.len()));
-        for (intent, text) in &ex {
+        let mut y = Vec::with_capacity(ex.len());
+        for (intent, _) in &ex {
             let c = match classes.iter().position(|k| k == intent) {
                 Some(c) => c,
                 None => {
@@ -660,10 +815,33 @@ impl Router {
                     classes.len() - 1
                 }
             };
-            x.push(r.embed(text)?);
             y.push(c);
         }
+        let cache = dir.join(format!("examples-{:016x}.f32", cache_key(spec)));
+        let cached = read_cache(&cache, ex.len());
+        let from_cache = cached.is_some();
+        let x = match cached {
+            Some(x) => x,
+            None => {
+                let mut x = Vec::with_capacity(ex.len());
+                for (_, text) in &ex {
+                    x.push(r.embed(text)?);
+                }
+                write_cache(&cache, &x);
+                x
+            }
+        };
         let embed_ms = t_embed.elapsed().as_millis();
+        crate::log(&format!(
+            "[PcRouter] encoder {} ({}), examples {}",
+            spec.id,
+            spec.size_mb,
+            if from_cache {
+                "from cache"
+            } else {
+                "embedded and cached"
+            }
+        ));
         let t_train = std::time::Instant::now();
         let (w, b) = train_softmax(&x, &y, classes.len());
         crate::log(&format!(
@@ -680,7 +858,7 @@ impl Router {
     fn embed(&mut self, text: &str) -> Result<Vec<f32>, String> {
         let enc = self
             .tok
-            .encode(format!("query: {text}"), true)
+            .encode(format!("{}{text}", self.spec.prefix), true)
             .map_err(|e| format!("encode: {e}"))?;
         let ids: Vec<i64> = enc.get_ids().iter().map(|&x| x as i64).collect();
         let mask: Vec<i64> = enc.get_attention_mask().iter().map(|&x| x as i64).collect();
@@ -708,16 +886,21 @@ impl Router {
             return Err(format!("unexpected output shape {dims:?}"));
         }
         let hidden = dims[2] as usize;
-        // Mean of the token vectors under the attention mask, then unit length.
-        // (Dividing the sum by the token count is skipped: unit length
-        // after the normalisation is the same vector.)
+        // Mean of the token vectors under the attention mask (e5), or the
+        // first token's vector (BGE-M3), then unit length. (Dividing the sum
+        // by the token count is skipped: unit length makes it the same vector.)
         let mut v = vec![0f32; hidden];
-        for (t, m) in mask.iter().enumerate() {
-            if *m == 0 {
-                continue;
-            }
-            for (k, acc) in v.iter_mut().enumerate() {
-                *acc += data[t * hidden + k];
+        match self.spec.pooling {
+            Pooling::Cls => v.copy_from_slice(&data[0..hidden]),
+            Pooling::Mean => {
+                for (t, m) in mask.iter().enumerate() {
+                    if *m == 0 {
+                        continue;
+                    }
+                    for (k, acc) in v.iter_mut().enumerate() {
+                        *acc += data[t * hidden + k];
+                    }
+                }
             }
         }
         let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
@@ -777,8 +960,8 @@ pub fn warm() {
 /// `detail` says why, for the log.
 pub fn route(command: &str, names: &[(String, String)]) -> (Option<Plan>, String) {
     let (plan, margin, detail) = route_scored(command, names);
-    if margin < MIN_PROB {
-        return (None, format!("{detail} below {MIN_PROB}"));
+    if margin < min_prob() {
+        return (None, format!("{detail} below {}", min_prob()));
     }
     (plan, detail)
 }
@@ -950,10 +1133,10 @@ fn route_scored(command: &str, names: &[(String, String)]) -> (Option<Plan>, f32
 // log says, per candidate rule, when it would have fired, on which words,
 // and whether its plan matches the one that ran.
 
-/// Stricter than `MIN_PROB`: acting before the user is done. On the
-/// independent 326-command set nothing wrong, and no out-of-scope line, got
-/// past 0.60.
-const LIVE_PROB: f32 = 0.60;
+/// Stricter than the after-stop threshold: acting before the user is done.
+fn live_prob() -> f32 {
+    selected().live_prob
+}
 
 /// A sure plan runs once no new words have come for this long: Nemotron
 /// sends a partial only when the words change, so a pause is the only
@@ -1024,7 +1207,7 @@ fn try_fire(ms: u128, why: &str) {
         let ready = !s.fired
             && s.obs.last().is_some_and(|o| {
                 o.ms == ms
-                    && o.margin >= LIVE_PROB
+                    && o.margin >= live_prob()
                     && o.plan.as_ref().is_some_and(crate::pc_control::live_safe)
             });
         if !ready {
@@ -1073,12 +1256,12 @@ pub fn shadow_observe(cumulative: &str) {
     };
     std::thread::spawn(move || {
         let (plan, margin, detail) = route_scored(&text, &crate::pc_control::known_names());
-        let sure = plan.is_some() && margin >= LIVE_PROB;
+        let sure = plan.is_some() && margin >= live_prob();
         let mut stable = false;
         if let Some(s) = SHADOW.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
             stable = sure
                 && s.obs.last().is_some_and(|prev| {
-                    prev.margin >= LIVE_PROB
+                    prev.margin >= live_prob()
                         && prev
                             .plan
                             .as_ref()
@@ -1099,7 +1282,7 @@ pub fn shadow_observe(cumulative: &str) {
             "text": text,
             "detail": detail,
             "margin": margin,
-            "threshold": LIVE_PROB,
+            "threshold": live_prob(),
             "quiet_ms": LIVE_QUIET_MS,
             "say": plan.as_ref().map(|p| p.say.clone()),
             "sure": sure,
@@ -1162,7 +1345,7 @@ pub fn shadow_finish(final_plan: Option<&Plan>) {
         return;
     };
     let now = s.started.elapsed().as_millis();
-    let sure = |o: &Obs| o.plan.is_some() && o.margin >= LIVE_PROB;
+    let sure = |o: &Obs| o.plan.is_some() && o.margin >= live_prob();
     let first_sure = s.obs.iter().find(|o| sure(o));
     let first_stable = s.obs.windows(2).find(|w| {
         sure(&w[0])
@@ -1244,6 +1427,32 @@ mod tests {
     }
 
     #[test]
+    fn the_embedding_cache_round_trips_and_is_per_encoder() {
+        let dir = std::env::temp_dir().join(format!("dimmy-pc-cache-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("x.f32");
+        let x = vec![vec![0.5f32, -0.25, 1.0], vec![0.0, 0.125, -1.0]];
+        write_cache(&path, &x);
+        assert_eq!(read_cache(&path, 2), Some(x));
+        assert_eq!(
+            read_cache(&path, 3),
+            None,
+            "a different example count is a miss"
+        );
+        std::fs::write(&path, [1u8, 2, 3]).unwrap();
+        assert_eq!(
+            read_cache(&path, 2),
+            None,
+            "a broken file is a miss, not a panic"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_ne!(cache_key(&MODELS[0]), cache_key(&MODELS[2]));
+        assert!(MODELS
+            .iter()
+            .all(|m| m.files.iter().all(|(_, _, sha)| sha.len() == 64)));
+    }
+
+    #[test]
     fn softmax_training_separates_and_gives_probabilities() {
         let x = vec![
             vec![1.0, 0.0, 0.0],
@@ -1286,7 +1495,13 @@ mod tests {
             .into_iter()
             .map(|(_, t)| t.to_lowercase())
             .collect();
+        let t_load = std::time::Instant::now();
         let mut r = Router::load().expect("set DIMMY_PC_ROUTER_DIR");
+        println!(
+            "encoder {}: loaded in {} ms",
+            selected().id,
+            t_load.elapsed().as_millis()
+        );
         let (mut n, mut ok, mut ms) = (0usize, 0usize, Vec::new());
         let at = |thr: f32, rows: &[(Intent, Intent, f32)]| {
             let sure: Vec<_> = rows
@@ -1327,8 +1542,11 @@ mod tests {
             100.0 * ok as f64 / n as f64,
             ms[ms.len() / 2]
         );
-        at(MIN_PROB, &rows);
-        let (wrong, fa) = at(LIVE_PROB, &rows);
+        for t in [0.50f32, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90] {
+            at(t, &rows);
+        }
+        at(min_prob(), &rows);
+        let (wrong, fa) = at(live_prob(), &rows);
         assert!(ok as f64 / n as f64 >= 0.75, "the classifier regressed");
         assert!(
             wrong <= 1 && fa == 0,

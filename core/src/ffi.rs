@@ -8752,6 +8752,31 @@ pub extern "C" fn dimmy_pc_router_status() -> c_int {
     }
 }
 
+/// Choose the local router's encoder: "e5-small" (default), "e5-base",
+/// "bge-m3". A change unloads the router; the host then checks
+/// `dimmy_pc_router_status`, downloads if needed, and warms it. 1 = accepted,
+/// 0 = unknown id, -1 = this build has no local router.
+///
+/// # Safety
+/// `id_ptr` must be a valid null-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_pc_router_select(id_ptr: *const c_char) -> c_int {
+    if id_ptr.is_null() {
+        return 0;
+    }
+    #[cfg(feature = "pc-router")]
+    {
+        let Ok(id) = CStr::from_ptr(id_ptr).to_str() else {
+            return 0;
+        };
+        crate::pc_router::select(id) as c_int
+    }
+    #[cfg(not(feature = "pc-router"))]
+    {
+        -1
+    }
+}
+
 /// Load the local PC-command router in the background (~3 s, once). The host
 /// calls it at startup when PC commands are on, and when they are turned on.
 #[no_mangle]

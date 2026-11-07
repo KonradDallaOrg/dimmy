@@ -256,6 +256,7 @@ public sealed partial class SettingsWindow : Window
             ViewModel.MeetingHotkey = prefs.MeetingHotkey ?? "";
             ViewModel.ExecuteHotkey = prefs.ExecuteHotkey ?? "";
             ViewModel.PcCommandsEnabled = prefs.PcCommandsEnabled;
+            ViewModel.PcRouterModel = string.IsNullOrEmpty(prefs.PcRouterModel) ? "e5-small" : prefs.PcRouterModel;
             RefreshHome();
         }
         catch { }
@@ -321,6 +322,16 @@ public sealed partial class SettingsWindow : Window
                     prefs.Save();
                     if (prefs.PcCommandsEnabled) App.Instance?.ReregisterExecuteHotkey(exe);
                     App.Log($"execute hotkey updated to '{exe}'", "Hotkey");
+                }
+                else if (e.PropertyName == nameof(ViewModel.PcRouterModel))
+                {
+                    var id = ViewModel.PcRouterModel ?? "e5-small";
+                    var prefs = Services.UiPreferences.Load();
+                    if (prefs.PcRouterModel == id) return;
+                    prefs.PcRouterModel = id;
+                    prefs.Save();
+                    App.Instance?.SetPcRouterModel(id, prefs.PcCommandsEnabled);
+                    App.Log($"pc router model = {id}", "Hotkey");
                 }
                 else if (e.PropertyName == nameof(ViewModel.PcCommandsEnabled))
                 {

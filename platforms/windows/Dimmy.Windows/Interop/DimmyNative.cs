@@ -776,6 +776,10 @@ public static class DimmyNative
     public static extern void dimmy_pc_router_warm();
 
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_pc_router_select(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string id);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_pc_router_download();
 
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
