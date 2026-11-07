@@ -1448,8 +1448,10 @@ public sealed partial class PillWindow : Window
         TranscribingPanel.Margin = m7;
         ProcessingPanel.Margin = m7;
         RecapPanel.Margin = m7;
-        // On the sides the error is the icon alone: no padding, so it sits in a circle.
+        // On the sides the error is the icon alone: no padding, so it sits in a circle,
+        // and the auto length after an animation can't drop below the width.
         ErrorPanel.Margin = v ? new Thickness(0) : m7;
+        ColorBorder.MinHeight = v ? CapsuleHeight : 0;
         // Long labels can't stay upright inside a 36 px wide capsule.
         var textVis = v ? Visibility.Collapsed : Visibility.Visible;
         TranscribingText.Visibility = textVis;
