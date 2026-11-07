@@ -254,6 +254,7 @@ public sealed partial class SettingsWindow : Window
             // so modifier-only combos (Win+Alt) are valid — load it verbatim.
             ViewModel.CommandHotkey = prefs.CommandHotkey ?? "";
             ViewModel.MeetingHotkey = prefs.MeetingHotkey ?? "";
+            ViewModel.ExecuteHotkey = prefs.ExecuteHotkey ?? "";
             RefreshHome();
         }
         catch { }
@@ -266,8 +267,9 @@ public sealed partial class SettingsWindow : Window
             ["command"] = ViewModel.CommandHotkey ?? "",
             ["meeting"] = ViewModel.MeetingHotkey ?? "",
             ["dictionary"] = ViewModel.DictHotkey ?? "",
+            ["execute"] = ViewModel.ExecuteHotkey ?? "",
         };
-        foreach (var editor in new[] { DictationShortcutEditor, CommandShortcutEditor, MeetingShortcutEditor, DictionaryShortcutEditor })
+        foreach (var editor in new[] { DictationShortcutEditor, CommandShortcutEditor, MeetingShortcutEditor, DictionaryShortcutEditor, ExecuteShortcutEditor })
             editor.CurrentShortcuts = editing;
 
         // Persist DictHotkey / CommandHotkey changes + re-register the global
@@ -307,6 +309,17 @@ public sealed partial class SettingsWindow : Window
                     prefs.Save();
                     App.Instance?.ReregisterCommandHotkey(cmd);
                     App.Log($"command hotkey updated to '{cmd}'", "Hotkey");
+                }
+                else if (e.PropertyName == nameof(ViewModel.ExecuteHotkey))
+                {
+                    // The shortcut dialog already refused conflicts (the core
+                    // recorder knows the execute target).
+                    var exe = ViewModel.ExecuteHotkey ?? "";
+                    var prefs = Services.UiPreferences.Load();
+                    prefs.ExecuteHotkey = exe;
+                    prefs.Save();
+                    App.Instance?.ReregisterExecuteHotkey(exe);
+                    App.Log($"execute hotkey updated to '{exe}'", "Hotkey");
                 }
                 else if (e.PropertyName == nameof(ViewModel.MeetingHotkey))
                 {

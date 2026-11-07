@@ -774,6 +774,12 @@
                 <controls:ShortcutEditor x:Name="MeetingShortcutEditor" Target="meeting" AllowClear="True"
                                          Shortcut="{Binding MeetingHotkey, Mode=TwoWay}" />
               </controls:SettingCard>
+              <controls:SettingCard Glyph="&#xE7C4;"
+                                    Label="PC commands shortcut (experimental)"
+                                    InfoTip="Experimental. Say what the PC should do instead of dictating: open an app, put a window on the left or right, side by side or full screen, move it to the other monitor, find yesterday's files, write something at the end of a document. Nothing is deleted or sent. Follows the same Push-to-Talk or Toggle mode as your dictation shortcut.">
+                <controls:ShortcutEditor x:Name="ExecuteShortcutEditor" Target="execute" AllowClear="True"
+                                         Shortcut="{Binding ExecuteHotkey, Mode=TwoWay}" />
+              </controls:SettingCard>
 
               <TextBlock Text="Dictionary"
                          Style="{StaticResource DimmySection}" />
