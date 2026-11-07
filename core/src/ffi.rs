@@ -13932,6 +13932,7 @@ pub(crate) mod tests {
     // ── dimmy_set_event_callback tests ──────────────────────────────
 
     #[test]
+    #[serial]
     fn set_event_callback_replaces_previous() {
         extern "C" fn cb1(_: *const c_char) {}
         extern "C" fn cb2(_: *const c_char) {}
@@ -14204,6 +14205,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[serial]
     fn meeting_pause_resume_no_meeting_does_not_emit_event() {
         // Without an active meeting, dimmy_meeting_pause / _resume must
         // be silent no-ops — no event fires (avoids confusing the host
