@@ -129,16 +129,10 @@ public static class DimmyNative
 
     // ── Legal notices + terms (AGPL texts compiled into the core) ────
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
-    public static extern int dimmy_license_text(byte[]? outBuf, int bufLen);
-
-    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
-    public static extern int dimmy_third_party_notices(byte[]? outBuf, int bufLen);
-
-    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_terms_version(byte[] outBuf, int bufLen);
 
-    // kind 0 licence | 1 open source notices: JSON blocks, length-query
-    // contract like dimmy_license_text.
+    // kind 0 licence | 1 open source notices: JSON blocks. Length query:
+    // a null buffer returns the size needed.
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_legal_document(int kind, byte[]? outBuf, int bufLen);
 
@@ -909,12 +903,6 @@ public static class DimmyNative
         if (written < 0) return null;
         return System.Text.Encoding.UTF8.GetString(buf, 0, System.Math.Min(written, needed));
     }
-
-    /// <summary>The GNU AGPL v3 text, compiled into the core.</summary>
-    public static string? LicenseText() => ReadSized(dimmy_license_text);
-
-    /// <summary>Third-party licence texts and copyright notices.</summary>
-    public static string? ThirdPartyNotices() => ReadSized(dimmy_third_party_notices);
 
     /// <summary>The licence (kind 0) or the notices (kind 1) as JSON blocks
     /// (headings, paragraphs, tables, licence texts), parsed by the core.</summary>

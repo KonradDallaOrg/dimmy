@@ -334,6 +334,9 @@ int32_t dimmy_model_catalog_json(char * _Nullable out_buf, int32_t buf_len);
 /// TOTAL byte length, pass out_buf=NULL to size, then call again.
 int32_t dimmy_license_text(char * _Nullable out_buf, int32_t buf_len);
 int32_t dimmy_third_party_notices(char * _Nullable out_buf, int32_t buf_len);
+// kind 0 licence | 1 open source notices: JSON blocks, same length-query
+// contract as dimmy_license_text. -1 for an unknown kind.
+int32_t dimmy_legal_document(int32_t kind, char * _Nullable out_buf, int32_t buf_len);
 
 /// Terms of Service / EULA version the user is asked to accept. Store it in
 /// the `terms_accepted_version` config field on acceptance. Bytes written, -1

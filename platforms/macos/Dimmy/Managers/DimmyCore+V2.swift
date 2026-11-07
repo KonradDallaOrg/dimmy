@@ -308,14 +308,10 @@ extension DimmyCore {
         return String(cString: buffer)
     }
 
-    /// The GNU AGPL v3 text.
-    func licenseText() -> String? {
-        sizedString { dimmy_license_text($0, $1) }
-    }
-
-    /// Third-party licence texts and copyright notices.
-    func thirdPartyNotices() -> String? {
-        sizedString { dimmy_third_party_notices($0, $1) }
+    /// The licence (kind 0) or the open source notices (kind 1) as JSON
+    /// blocks (headings, paragraphs, tables, licence texts), parsed by the core.
+    func legalDocument(_ kind: Int32) -> String? {
+        sizedString { dimmy_legal_document(kind, $0, $1) }
     }
 
     /// Terms version to store in `terms_accepted_version` when the user accepts.
