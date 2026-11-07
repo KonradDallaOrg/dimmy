@@ -4,20 +4,19 @@
 //!   - 2 modifiers: e.g. Win+Alt, Ctrl+Shift
 //!   - 2 modifiers + 1 key: e.g. Ctrl+Shift+Space, Win+Alt+N
 //!
-//! Keys are configured at runtime via `set_shortcut()`.
-//! Recording mode uses GetAsyncKeyState polling to capture the combo.
+//! Keys are configured at runtime via `set_shortcut()`. Capturing a NEW
+//! shortcut from the settings dialog lives in `hotkey_recorder`; while it is
+//! open the hook hands every key to the recorder instead of the bindings.
 
 #![allow(dead_code)]
 
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
-
-const EVENT_NONE: u8 = 0;
-const EVENT_PRESSED: u8 = 1;
-const EVENT_RELEASED: u8 = 2;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::mpsc::{channel, Sender};
+use std::sync::OnceLock;
 
 /// Result of feeding one physical key event to a binding's state machine.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum Transition {
+pub(crate) enum Transition {
     None,
     Pressed,
     Released,
@@ -41,8 +40,6 @@ struct Binding {
     key2_down: AtomicBool,
     key3_down: AtomicBool,
     combo_active: AtomicBool,
-    /// Latest unread event: 0=none, 1=pressed, 2=released.
-    event: AtomicU8,
 }
 
 impl Binding {
@@ -55,7 +52,6 @@ impl Binding {
             key2_down: AtomicBool::new(false),
             key3_down: AtomicBool::new(false),
             combo_active: AtomicBool::new(false),
-            event: AtomicU8::new(EVENT_NONE),
         }
     }
 
@@ -75,7 +71,6 @@ impl Binding {
     /// it). Also drains any pending event.
     fn clear(&self) {
         self.set_codes(0, 0, 0);
-        self.event.store(EVENT_NONE, Ordering::SeqCst);
     }
 
     fn matches_key(&self, vk: u32) -> bool {
@@ -90,10 +85,6 @@ impl Binding {
         !self.key1_down.load(Ordering::SeqCst)
             && !self.key2_down.load(Ordering::SeqCst)
             && !self.key3_down.load(Ordering::SeqCst)
-    }
-
-    fn take_event(&self) -> u8 {
-        self.event.swap(EVENT_NONE, Ordering::SeqCst)
     }
 
     /// Clear the down-flag of every key the OS reports as up. The hook never
@@ -151,13 +142,11 @@ impl Binding {
                     if self.key2_down.load(Ordering::SeqCst)
                         && !self.combo_active.swap(true, Ordering::SeqCst)
                     {
-                        self.event.store(EVENT_PRESSED, Ordering::SeqCst);
                         return Transition::Pressed;
                     }
                 } else if is_up {
                     self.key1_down.store(false, Ordering::SeqCst);
                     if self.combo_active.swap(false, Ordering::SeqCst) {
-                        self.event.store(EVENT_RELEASED, Ordering::SeqCst);
                         return Transition::Released;
                     }
                 }
@@ -167,13 +156,11 @@ impl Binding {
                     if self.key1_down.load(Ordering::SeqCst)
                         && !self.combo_active.swap(true, Ordering::SeqCst)
                     {
-                        self.event.store(EVENT_PRESSED, Ordering::SeqCst);
                         return Transition::Pressed;
                     }
                 } else if is_up {
                     self.key2_down.store(false, Ordering::SeqCst);
                     if self.combo_active.swap(false, Ordering::SeqCst) {
-                        self.event.store(EVENT_RELEASED, Ordering::SeqCst);
                         return Transition::Released;
                     }
                 }
@@ -210,10 +197,8 @@ impl Binding {
                     && (k2 == 0 || self.key2_down.load(Ordering::SeqCst))
                     && self.key3_down.load(Ordering::SeqCst);
                 if all && !self.combo_active.swap(true, Ordering::SeqCst) {
-                    self.event.store(EVENT_PRESSED, Ordering::SeqCst);
                     return Transition::Pressed;
                 } else if !all && self.combo_active.swap(false, Ordering::SeqCst) {
-                    self.event.store(EVENT_RELEASED, Ordering::SeqCst);
                     return Transition::Released;
                 }
             }
@@ -247,32 +232,23 @@ static MTNG: Binding = Binding::new();
 /// then collide with. Event-driven, no timing.
 static MODIFIER_SUPPRESS: AtomicBool = AtomicBool::new(false);
 
-/// Recording mode flag.
-static RECORDING: AtomicBool = AtomicBool::new(false);
-static REC_GROUP1: AtomicU8 = AtomicU8::new(0);
-static REC_GROUP2: AtomicU8 = AtomicU8::new(0);
-static REC_KEY3: AtomicU32 = AtomicU32::new(0);
-static REC_DONE: AtomicBool = AtomicBool::new(false);
-/// Countdown: when 2 mods detected without a key, wait before confirming 2-mod combo.
-static REC_WAIT: AtomicU8 = AtomicU8::new(0);
-
 // ── Modifier groups ──────────────────────────────────────────────────
 
-const GROUP_WIN: u8 = 1;
-const GROUP_ALT: u8 = 2;
-const GROUP_CTRL: u8 = 3;
-const GROUP_SHIFT: u8 = 4;
+pub(crate) const GROUP_WIN: u8 = 1;
+pub(crate) const GROUP_ALT: u8 = 2;
+pub(crate) const GROUP_CTRL: u8 = 3;
+pub(crate) const GROUP_SHIFT: u8 = 4;
 
-const VK_LWIN: u32 = 0x5B;
-const VK_RWIN: u32 = 0x5C;
-const VK_LMENU: u32 = 0xA4;
-const VK_RMENU: u32 = 0xA5;
-const VK_LCONTROL: u32 = 0xA2;
-const VK_RCONTROL: u32 = 0xA3;
-const VK_LSHIFT: u32 = 0xA0;
-const VK_RSHIFT: u32 = 0xA1;
+pub(crate) const VK_LWIN: u32 = 0x5B;
+pub(crate) const VK_RWIN: u32 = 0x5C;
+pub(crate) const VK_LMENU: u32 = 0xA4;
+pub(crate) const VK_RMENU: u32 = 0xA5;
+pub(crate) const VK_LCONTROL: u32 = 0xA2;
+pub(crate) const VK_RCONTROL: u32 = 0xA3;
+pub(crate) const VK_LSHIFT: u32 = 0xA0;
+pub(crate) const VK_RSHIFT: u32 = 0xA1;
 
-fn vk_to_group(vk: u32) -> u8 {
+pub(crate) fn vk_to_group(vk: u32) -> u8 {
     match vk {
         VK_LWIN | VK_RWIN => GROUP_WIN,
         VK_LMENU | VK_RMENU => GROUP_ALT,
@@ -292,7 +268,7 @@ fn group_to_packed(group: u8) -> u32 {
     }
 }
 
-fn group_to_name(group: u8) -> &'static str {
+pub(crate) fn group_to_name(group: u8) -> &'static str {
     match group {
         GROUP_WIN => {
             if cfg!(target_os = "macos") {
@@ -339,7 +315,7 @@ fn group_to_label(group: u8) -> &'static str {
 fn name_to_group(name: &str) -> u8 {
     match name {
         "win" | "cmd" => GROUP_WIN,
-        "alt" | "option" => GROUP_ALT,
+        "alt" | "option" | "opt" => GROUP_ALT,
         "ctrl" => GROUP_CTRL,
         "shift" => GROUP_SHIFT,
         _ => 0,
@@ -348,7 +324,7 @@ fn name_to_group(name: &str) -> u8 {
 
 // ── Non-modifier key names ──────────────────────────────────────────
 
-fn vk_to_name(vk: u32) -> String {
+pub(crate) fn vk_to_name(vk: u32) -> String {
     match vk {
         0x08 => "backspace".into(),
         0x09 => "tab".into(),
@@ -368,7 +344,7 @@ fn vk_to_name(vk: u32) -> String {
     }
 }
 
-fn vk_to_label(vk: u32) -> String {
+pub(crate) fn vk_to_label(vk: u32) -> String {
     match vk {
         0x08 => "Backspace".into(),
         0x09 => "Tab".into(),
@@ -543,7 +519,7 @@ pub fn set_meeting_shortcut(combo: &str) {
 
 /// Tagged keyset of a combo for conflict detection: each modifier group and
 /// the non-modifier key become distinct tokens. `None` for empty/unparseable.
-fn combo_keyset(combo: &str) -> Option<Vec<u32>> {
+pub(crate) fn combo_keyset(combo: &str) -> Option<Vec<u32>> {
     if combo.is_empty() || !combo.contains('+') {
         return None;
     }
@@ -603,106 +579,94 @@ pub fn current_label() -> String {
     }
 }
 
-/// Start recording mode — enables GetAsyncKeyState polling.
-pub fn start_recording() {
-    REC_GROUP1.store(0, Ordering::SeqCst);
-    REC_GROUP2.store(0, Ordering::SeqCst);
-    REC_KEY3.store(0, Ordering::SeqCst);
-    REC_WAIT.store(0, Ordering::SeqCst);
-    REC_DONE.store(false, Ordering::SeqCst);
-    RECORDING.store(true, Ordering::SeqCst);
+// ── Edges to the host ────────────────────────────────────────────────
+//
+// Every press and release of a binding becomes one `hotkey` event:
+// `{"binding":"dictation","edge":"pressed"}`. The hook only pushes the edge
+// onto a queue and returns to Windows; a thread of its own hands it to the
+// host. The hook never waits on host code: Windows silently removes a
+// low-level hook that answers late, and every shortcut would die with it.
+// PowerToys keeps the same rule: its hook only calls SetEvent.
+//
+// The queue is unbounded on purpose: a dropped "released" would leave a
+// push-to-talk recording running. It only grows if the dispatcher thread
+// stops, and that thread does nothing but forward.
+
+/// Which binding an edge belongs to, named as the host names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Which {
+    Dictation,
+    Command,
+    Meeting,
 }
 
-/// Poll modifier key states using GetAsyncKeyState.
-/// Called from poll_shortcut_recording at ~100ms intervals.
-/// Detects 2 modifiers (+ optional non-modifier key).
-pub fn poll_recording_keys() {
-    if !RECORDING.load(Ordering::SeqCst) || REC_DONE.load(Ordering::SeqCst) {
+impl Which {
+    fn id(self) -> &'static str {
+        match self {
+            Which::Dictation => "dictation",
+            Which::Command => "command",
+            Which::Meeting => "meeting",
+        }
+    }
+}
+
+static EDGES: OnceLock<Sender<(Which, Transition)>> = OnceLock::new();
+
+/// Start the thread that turns queued edges into `hotkey` events. Idempotent.
+pub(crate) fn start_edge_dispatcher() {
+    EDGES.get_or_init(|| {
+        let (tx, rx) = channel::<(Which, Transition)>();
+        std::thread::Builder::new()
+            .name("dimmy-hotkey-edges".into())
+            .spawn(move || {
+                for (which, t) in rx {
+                    let edge = match t {
+                        Transition::Pressed => "pressed",
+                        Transition::Released => "released",
+                        Transition::None => continue,
+                    };
+                    if which == Which::Dictation && t == Transition::Pressed {
+                        // Hotkey-vs-button ratio on the dashboards: the in-app
+                        // button calls dimmy_start_recording and never gets here.
+                        crate::telemetry::track(crate::telemetry::Event::FeatureHotkeyTriggered);
+                    }
+                    crate::ffi::emit_event(
+                        "hotkey",
+                        &format!(r#"{{"binding":"{}","edge":"{}"}}"#, which.id(), edge),
+                    );
+                }
+            })
+            .expect("spawn the hotkey edge thread");
+        tx
+    });
+}
+
+/// Queue one edge. Never blocks: it runs inside the keyboard hook.
+pub(crate) fn deliver_edge(which: Which, t: Transition) {
+    if t == Transition::None {
         return;
     }
-    platform::poll_async_key_state();
-}
-
-/// Check if recording captured a combo. Returns Some((name, label)) or None.
-pub fn take_recorded() -> Option<(String, String)> {
-    if !REC_DONE.load(Ordering::SeqCst) {
-        return None;
-    }
-    let g1 = REC_GROUP1.load(Ordering::SeqCst);
-    let g2 = REC_GROUP2.load(Ordering::SeqCst);
-    let k3 = REC_KEY3.load(Ordering::SeqCst);
-
-    if g1 != 0 && g2 != 0 && g1 != g2 {
-        // Valid combo — clear recording state
-        RECORDING.store(false, Ordering::SeqCst);
-        REC_DONE.store(false, Ordering::SeqCst);
-        REC_WAIT.store(0, Ordering::SeqCst);
-
-        if k3 != 0 {
-            let name = format!(
-                "{}+{}+{}",
-                group_to_name(g1),
-                group_to_name(g2),
-                vk_to_name(k3)
-            );
-            let label = format!(
-                "{} + {} + {}",
-                group_to_label(g1),
-                group_to_label(g2),
-                vk_to_label(k3)
-            );
-            Some((name, label))
-        } else {
-            let name = format!("{}+{}", group_to_name(g1), group_to_name(g2));
-            let label = format!("{} + {}", group_to_label(g1), group_to_label(g2));
-            Some((name, label))
-        }
-    } else {
-        // Invalid — reset but keep recording active
-        REC_GROUP1.store(0, Ordering::SeqCst);
-        REC_GROUP2.store(0, Ordering::SeqCst);
-        REC_KEY3.store(0, Ordering::SeqCst);
-        REC_WAIT.store(0, Ordering::SeqCst);
-        REC_DONE.store(false, Ordering::SeqCst);
-        None
+    if let Some(tx) = EDGES.get() {
+        let _ = tx.send((which, t));
     }
 }
 
-/// Cancel recording mode — fully resets all recording state.
-pub fn stop_recording() {
-    RECORDING.store(false, Ordering::SeqCst);
-    REC_GROUP1.store(0, Ordering::SeqCst);
-    REC_GROUP2.store(0, Ordering::SeqCst);
-    REC_KEY3.store(0, Ordering::SeqCst);
-    REC_WAIT.store(0, Ordering::SeqCst);
-    REC_DONE.store(false, Ordering::SeqCst);
+/// macOS virtual keycode → the VK code the shared tables use (0 = unknown).
+#[cfg(target_os = "macos")]
+pub(crate) fn mac_keycode_to_vk(kc: u16) -> u32 {
+    platform::keycode_to_vk(kc)
 }
 
-/// Returns true if currently in recording mode.
-pub fn is_recording() -> bool {
-    RECORDING.load(Ordering::SeqCst)
-}
+static INSTALLED: AtomicBool = AtomicBool::new(false);
 
-/// Take the latest dictation hotkey event: 0=none, 1=pressed, 2=released.
-pub fn take_event() -> u8 {
-    DICT.take_event()
-}
-
-/// Take the latest command hotkey event: 0=none, 1=pressed, 2=released.
-/// Returns 0 forever while the command hotkey is unconfigured.
-pub fn take_command_event() -> u8 {
-    CMD.take_event()
-}
-
-/// Take the latest meeting hotkey event: 0=none, 1=pressed, 2=released.
-/// Returns 0 forever while the meeting hotkey is unconfigured. The host
-/// treats `pressed` as a toggle (start/stop) and ignores `released`.
-pub fn take_meeting_event() -> u8 {
-    MTNG.take_event()
-}
-
-/// Install the global keyboard hook.
+/// Install the global keyboard hook, once per process: a second hook would
+/// feed every key to the bindings twice. The shortcut dialog calls this too,
+/// because during onboarding it opens before the hotkey service exists.
 pub fn install(log_fn: fn(&str)) {
+    if INSTALLED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    start_edge_dispatcher();
     platform::install_hook(log_fn);
 }
 
@@ -711,6 +675,7 @@ pub fn install(log_fn: fn(&str)) {
 #[cfg(target_os = "windows")]
 mod platform {
     use super::*;
+    use crate::hotkey_recorder::Decision;
     use std::sync::atomic::AtomicIsize;
 
     static HOOK_HANDLE: AtomicIsize = AtomicIsize::new(0);
@@ -756,6 +721,8 @@ mod platform {
             -> i32;
         fn GetAsyncKeyState(vKey: i32) -> i16;
         fn SendInput(cInputs: u32, pInputs: *const INPUT, cbSize: i32) -> u32;
+        fn GetForegroundWindow() -> isize;
+        fn GetWindowThreadProcessId(hWnd: isize, lpdwProcessId: *mut u32) -> u32;
     }
 
     /// `LLKHF_INJECTED` (`0x10`) — set on any keyboard event injected by
@@ -908,89 +875,20 @@ mod platform {
         }
     }
 
+    fn foreground_is_ours() -> bool {
+        let mut pid: u32 = 0;
+        unsafe {
+            let hwnd = GetForegroundWindow();
+            if hwnd == 0 {
+                return false;
+            }
+            GetWindowThreadProcessId(hwnd, &mut pid);
+        }
+        pid == std::process::id()
+    }
+
     fn is_key_pressed(vk: u32) -> bool {
         unsafe { GetAsyncKeyState(vk as i32) & (0x8000u16 as i16) != 0 }
-    }
-
-    /// Scan for any pressed non-modifier key. Returns VK code or 0.
-    fn scan_non_modifier_key() -> u32 {
-        const SCAN: &[u32] = &[
-            0x08, 0x09, 0x0D, 0x1B, 0x20, // Bksp Tab Enter Esc Space
-            0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, // 0-9
-            0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, // A-Z
-            0x49, 0x4A, 0x4B, 0x4C, 0x4D, 0x4E, 0x4F, 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56,
-            0x57, 0x58, 0x59, 0x5A, 0x60, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68,
-            0x69, // Numpad 0-9
-            0x6A, 0x6B, 0x6D, 0x6E, 0x6F, // Numpad ops
-            0x70, 0x71, 0x72, 0x73, 0x74, 0x75, // F1-F12
-            0x76, 0x77, 0x78, 0x79, 0x7A, 0x7B,
-        ];
-        for &vk in SCAN {
-            if is_key_pressed(vk) {
-                return vk;
-            }
-        }
-        0
-    }
-
-    /// Poll all modifier keys + non-modifier keys via GetAsyncKeyState.
-    /// When 2+ mod groups pressed:
-    ///   - If a non-mod key is also pressed → record 3-key combo immediately.
-    ///   - Otherwise, wait 3 polls (~300ms) then confirm 2-mod combo.
-    pub fn poll_async_key_state() {
-        let mut pressed: [u8; 4] = [0; 4];
-        let mut count = 0usize;
-
-        if is_key_pressed(VK_LWIN) || is_key_pressed(VK_RWIN) {
-            pressed[count] = GROUP_WIN;
-            count += 1;
-        }
-        if is_key_pressed(VK_LMENU) || is_key_pressed(VK_RMENU) {
-            pressed[count] = GROUP_ALT;
-            count += 1;
-        }
-        if is_key_pressed(VK_LCONTROL) || is_key_pressed(VK_RCONTROL) {
-            pressed[count] = GROUP_CTRL;
-            count += 1;
-        }
-        if is_key_pressed(VK_LSHIFT) || is_key_pressed(VK_RSHIFT) {
-            pressed[count] = GROUP_SHIFT;
-            count += 1;
-        }
-
-        if count < 2 {
-            // Not enough modifiers — reset wait
-            REC_WAIT.store(0, Ordering::SeqCst);
-            return;
-        }
-
-        // 2+ mods detected — check for non-modifier key
-        let non_mod = scan_non_modifier_key();
-
-        if non_mod != 0 {
-            // 3-key combo — record immediately
-            REC_GROUP1.store(pressed[0], Ordering::SeqCst);
-            REC_GROUP2.store(pressed[1], Ordering::SeqCst);
-            REC_KEY3.store(non_mod, Ordering::SeqCst);
-            REC_DONE.store(true, Ordering::SeqCst);
-            return;
-        }
-
-        // No non-mod key — countdown for 2-mod confirmation
-        let wait = REC_WAIT.load(Ordering::SeqCst);
-        if wait == 0 {
-            // First detection — store groups and start countdown
-            REC_GROUP1.store(pressed[0], Ordering::SeqCst);
-            REC_GROUP2.store(pressed[1], Ordering::SeqCst);
-            REC_KEY3.store(0, Ordering::SeqCst);
-            REC_WAIT.store(3, Ordering::SeqCst);
-        } else if wait == 1 {
-            // Countdown done — confirm 2-mod combo
-            REC_WAIT.store(0, Ordering::SeqCst);
-            REC_DONE.store(true, Ordering::SeqCst);
-        } else {
-            REC_WAIT.store(wait - 1, Ordering::SeqCst);
-        }
     }
 
     /// Keyboard hook callback — combo detection + modifier suppression.
@@ -1036,12 +934,25 @@ mod platform {
         let is_down = wparam == WM_KEYDOWN || wparam == WM_SYSKEYDOWN;
         let is_up = wparam == WM_KEYUP || wparam == WM_SYSKEYUP;
 
-        // Skip hotkey detection while recording a new shortcut. Suppression
-        // also stays off — the user needs to actually press combos to
-        // configure them.
-        if RECORDING.load(Ordering::SeqCst) {
-            return unsafe {
+        // The settings dialog is recording a new shortcut: the keys belong to
+        // the recorder, not to the bindings, so pressing the current shortcut
+        // there can't start a dictation. Only while one of OUR windows is in
+        // front: a dialog left open behind another app must never eat the
+        // user's typing.
+        if crate::hotkey_recorder::is_active() && foreground_is_ours() {
+            let next = || unsafe {
                 CallNextHookEx(HOOK_HANDLE.load(Ordering::SeqCst), code, wparam, lparam)
+            };
+            return match crate::hotkey_recorder::feed(vk, is_down, true) {
+                Decision::Swallow => 1,
+                Decision::Pass => next(),
+                Decision::ForwardShiftTab(shift) => {
+                    // The Shift down went to the recorder, so the OS doesn't
+                    // know it's held: send it, then the Tab, in that order.
+                    emit_synthetic_keydown(shift as u16);
+                    emit_synthetic_keydown(0x09);
+                    1
+                }
             };
         }
 
@@ -1053,17 +964,17 @@ mod platform {
         for b in [&DICT, &CMD, &MTNG] {
             b.forget_released_keys(vk, is_key_pressed);
         }
-        if DICT.process(vk, is_down, is_up) == Transition::Pressed {
-            MODIFIER_SUPPRESS.store(true, Ordering::SeqCst);
-            emit_synthetic_combo_release(&DICT);
-        }
-        if CMD.process(vk, is_down, is_up) == Transition::Pressed {
-            MODIFIER_SUPPRESS.store(true, Ordering::SeqCst);
-            emit_synthetic_combo_release(&CMD);
-        }
-        if MTNG.process(vk, is_down, is_up) == Transition::Pressed {
-            MODIFIER_SUPPRESS.store(true, Ordering::SeqCst);
-            emit_synthetic_combo_release(&MTNG);
+        for (which, binding) in [
+            (Which::Dictation, &DICT),
+            (Which::Command, &CMD),
+            (Which::Meeting, &MTNG),
+        ] {
+            let t = binding.process(vk, is_down, is_up);
+            if t == Transition::Pressed {
+                MODIFIER_SUPPRESS.store(true, Ordering::SeqCst);
+                emit_synthetic_combo_release(binding);
+            }
+            deliver_edge(which, t);
         }
 
         // Clear suppression only once NO combo is active AND every shortcut key
@@ -1133,7 +1044,7 @@ mod platform {
     /// Map macOS keycode to the Windows-compatible VK code used by the shared logic.
     /// Modifier keys use the platform VK constants; non-modifier keys are mapped
     /// to the same codes that vk_to_name/vk_to_label/name_to_vk understand.
-    fn keycode_to_vk(kc: u16) -> u32 {
+    pub(super) fn keycode_to_vk(kc: u16) -> u32 {
         match kc {
             // Modifiers — mapped to Windows VK codes so matches_key_group works
             KC_LEFT_CMD => VK_LWIN,
@@ -1378,60 +1289,15 @@ mod platform {
         // Skip hotkey detection while recording a new shortcut. Listen-only
         // tap → just update both bindings' state + event mailboxes (no
         // suppression; macOS can't consume the event here).
-        if !RECORDING.load(Ordering::SeqCst) {
-            DICT.process(vk, is_down, is_up);
-            CMD.process(vk, is_down, is_up);
+        if !crate::hotkey_recorder::is_active() {
+            deliver_edge(Which::Dictation, DICT.process(vk, is_down, is_up));
+            deliver_edge(Which::Command, CMD.process(vk, is_down, is_up));
         }
 
         event
     }
 
     /// Poll modifier key state using CGEventSourceFlagsState (for recording mode).
-    pub fn poll_async_key_state() {
-        let flags = unsafe { CGEventSourceFlagsState(K_CG_EVENT_SOURCE_STATE_COMBINED_SESSION) };
-
-        let mut pressed: [u8; 4] = [0; 4];
-        let mut count = 0usize;
-
-        if flags & K_CG_EVENT_FLAG_MASK_COMMAND != 0 {
-            pressed[count] = GROUP_WIN;
-            count += 1;
-        }
-        if flags & K_CG_EVENT_FLAG_MASK_ALTERNATE != 0 {
-            pressed[count] = GROUP_ALT;
-            count += 1;
-        }
-        if flags & K_CG_EVENT_FLAG_MASK_CONTROL != 0 {
-            pressed[count] = GROUP_CTRL;
-            count += 1;
-        }
-        if flags & K_CG_EVENT_FLAG_MASK_SHIFT != 0 {
-            pressed[count] = GROUP_SHIFT;
-            count += 1;
-        }
-
-        if count < 2 {
-            REC_WAIT.store(0, Ordering::SeqCst);
-            return;
-        }
-
-        // On macOS we cannot scan non-modifier keys via flags alone, so
-        // we only support 2-modifier combos in recording mode (matching
-        // typical macOS usage patterns like Cmd+Option).
-        let wait = REC_WAIT.load(Ordering::SeqCst);
-        if wait == 0 {
-            REC_GROUP1.store(pressed[0], Ordering::SeqCst);
-            REC_GROUP2.store(pressed[1], Ordering::SeqCst);
-            REC_KEY3.store(0, Ordering::SeqCst);
-            REC_WAIT.store(3, Ordering::SeqCst);
-        } else if wait == 1 {
-            REC_WAIT.store(0, Ordering::SeqCst);
-            REC_DONE.store(true, Ordering::SeqCst);
-        } else {
-            REC_WAIT.store(wait - 1, Ordering::SeqCst);
-        }
-    }
-
     pub fn install_hook(log_fn: fn(&str)) {
         std::thread::spawn(move || unsafe {
             let mask = event_mask(K_CG_EVENT_KEY_DOWN)
@@ -1476,7 +1342,6 @@ mod platform {
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 mod platform {
     pub fn install_hook(_log_fn: fn(&str)) {}
-    pub fn poll_async_key_state() {}
 }
 
 // ── Tests ─────────────────────────────────────────────────────────
@@ -1617,14 +1482,6 @@ mod tests {
 
     #[test]
     #[serial]
-    fn take_event_returns_none_by_default() {
-        // Clear any pending event
-        take_event();
-        assert_eq!(take_event(), EVENT_NONE);
-    }
-
-    #[test]
-    #[serial]
     fn current_label_reflects_set_shortcut() {
         set_shortcut("Ctrl+Shift+X");
         let label = current_label();
@@ -1645,10 +1502,8 @@ mod tests {
         // Ctrl down → not yet; Shift down → PRESSED.
         assert_eq!(b.process(VK_LCONTROL, true, false), Transition::None);
         assert_eq!(b.process(VK_LSHIFT, true, false), Transition::Pressed);
-        assert_eq!(b.take_event(), EVENT_PRESSED);
         // Shift up → RELEASED; Ctrl up → nothing more.
         assert_eq!(b.process(VK_LSHIFT, false, true), Transition::Released);
-        assert_eq!(b.take_event(), EVENT_RELEASED);
         assert_eq!(b.process(VK_LCONTROL, false, true), Transition::None);
         assert!(b.all_released());
     }
@@ -1820,19 +1675,26 @@ mod tests {
             group_to_packed(GROUP_SHIFT)
         );
         assert_eq!(MTNG.key3_code.load(Ordering::SeqCst), name_to_vk("o"));
-        // Empty disables it + the event mailbox stays silent.
+        // Empty disables it: a disabled binding never fires.
         set_meeting_shortcut("");
         assert_eq!(MTNG.key1_codes.load(Ordering::SeqCst), 0);
         assert_eq!(MTNG.key3_code.load(Ordering::SeqCst), 0);
-        assert_eq!(
-            take_meeting_event(),
-            0,
-            "disabled meeting hotkey never fires"
-        );
+        assert_eq!(MTNG.process(VK_LCONTROL, true, false), Transition::None);
+        assert_eq!(MTNG.process(VK_LSHIFT, true, false), Transition::None);
+        assert_eq!(MTNG.process(name_to_vk("o"), true, false), Transition::None);
     }
 
     #[test]
     #[serial]
+    fn opt_is_option_so_mac_combos_conflict_check_works() {
+        // macOS spells Option as "opt" in its grammar. Unknown to the parser,
+        // "cmd+opt" read as Cmd alone and never conflicted with anything.
+        assert!(combos_conflict("cmd+opt", "cmd+option"));
+        assert!(combos_conflict("cmd+opt", "cmd+opt+d"));
+        assert!(is_valid_combo("cmd+opt"));
+    }
+
+    #[test]
     fn combos_conflict_three_way() {
         // The host validates a candidate meeting combo against BOTH dictation
         // and command before binding it.

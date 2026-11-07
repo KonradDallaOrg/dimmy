@@ -129,13 +129,12 @@ public static class DimmyNative
 
     // ── Legal notices + terms (AGPL texts compiled into the core) ────
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
-    public static extern int dimmy_license_text(byte[]? outBuf, int bufLen);
-
-    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
-    public static extern int dimmy_third_party_notices(byte[]? outBuf, int bufLen);
-
-    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_terms_version(byte[] outBuf, int bufLen);
+
+    // kind 0 licence | 1 open source notices: JSON blocks. Length query:
+    // a null buffer returns the size needed.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_legal_document(int kind, byte[]? outBuf, int bufLen);
 
     // ── Recording-consent notices ────────────────────────────────────
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
@@ -754,9 +753,6 @@ public static class DimmyNative
     public static extern void dimmy_hotkey_set(
         [MarshalAs(UnmanagedType.LPUTF8Str)] string combo);
 
-    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
-    public static extern int dimmy_hotkey_take_event();
-
     // Optional dedicated command-mode hotkey — runs on the SAME Rust hook,
     // so it inherits toggle/PTT + every combo (incl. modifier-only like
     // Win+Alt). Empty combo disables it.
@@ -764,17 +760,11 @@ public static class DimmyNative
     public static extern void dimmy_hotkey_set_command(
         [MarshalAs(UnmanagedType.LPUTF8Str)] string combo);
 
-    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
-    public static extern int dimmy_hotkey_take_command_event();
-
     // Optional meeting start/stop hotkey on the same Rust hook. Empty combo
     // disables it. Its event is a TOGGLE (pressed = start/stop).
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern void dimmy_hotkey_set_meeting(
         [MarshalAs(UnmanagedType.LPUTF8Str)] string combo);
-
-    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
-    public static extern int dimmy_hotkey_take_meeting_event();
 
     // Telemetry: a meeting was started/stopped from a shortcut or menu.
     // source = "hotkey" | "menu" | "jumplist" (categorical, no content).
@@ -789,17 +779,29 @@ public static class DimmyNative
         [MarshalAs(UnmanagedType.LPUTF8Str)] string a,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string b);
 
+    // Shortcut recorder behind the "set shortcut" dialog. While it is open
+    // the Rust hook hands every key to it (the current shortcuts can't fire)
+    // and each change arrives as a `hotkey_recorder` event. target =
+    // dictation | command | meeting | dictionary; current = JSON of the four
+    // configured combos. 0 ok, -1 bad target, -2 bad JSON.
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
-    public static extern void dimmy_hotkey_start_recording();
+    public static extern int dimmy_hotkey_recorder_start(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string target,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string currentJson);
 
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
-    public static extern void dimmy_hotkey_poll_recording();
+    public static extern void dimmy_hotkey_recorder_stop();
 
+    // The dictation session state machine (core/src/dictation_session.rs).
+    // input 1 press | 2 release | 3 stop | 4 start failed | 5 delivered |
+    // 6 cancel; kind 0 dictation | 1 command; mode 0 toggle | 1 hold.
+    // Returns 0 nothing | 1 start | 2 finish | 3 discard | 4 busy | -1 bad.
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
-    public static extern int dimmy_hotkey_take_recorded(byte[] buf, int len);
+    public static extern int dimmy_dictation_input(int input, int kind, int mode);
 
+    // 0 idle | 1 recording | 2 finishing.
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
-    public static extern void dimmy_hotkey_stop_recording();
+    public static extern int dimmy_dictation_phase();
 
     // ── Utility ──────────────────────────────────────────────────────
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
@@ -902,11 +904,9 @@ public static class DimmyNative
         return System.Text.Encoding.UTF8.GetString(buf, 0, System.Math.Min(written, needed));
     }
 
-    /// <summary>The GNU AGPL v3 text, compiled into the core.</summary>
-    public static string? LicenseText() => ReadSized(dimmy_license_text);
-
-    /// <summary>Third-party licence texts and copyright notices.</summary>
-    public static string? ThirdPartyNotices() => ReadSized(dimmy_third_party_notices);
+    /// <summary>The licence (kind 0) or the notices (kind 1) as JSON blocks
+    /// (headings, paragraphs, tables, licence texts), parsed by the core.</summary>
+    public static string? LegalDocument(int kind) => ReadSized((buf, len) => dimmy_legal_document(kind, buf, len));
 
     /// <summary>Terms version to store in terms_accepted_version when the user accepts.</summary>
     public static string TermsVersion() => ReadBuffer(dimmy_terms_version, 64)?.Trim() ?? string.Empty;

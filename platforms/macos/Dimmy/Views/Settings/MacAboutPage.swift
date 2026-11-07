@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // About, hero with app icon + version + check-for-updates / release
@@ -8,7 +9,6 @@ import SwiftUI
 struct MacAboutPage: View {
     @ObservedObject var appState: AppState
     @ObservedObject private var updates = UpdateService.shared
-    @State private var legalSheet: LegalSheetKind?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -33,9 +33,6 @@ struct MacAboutPage: View {
             legalGroup
             // "Made with Claude Code" credit removed per Win redesign
             // (commit 4080ff06).
-        }
-        .sheet(item: $legalSheet) { kind in
-            LegalSheet(title: kind.title, text: kind.text) { legalSheet = nil }
         }
     }
 
@@ -234,7 +231,7 @@ struct MacAboutPage: View {
                     icon: "doc.text.fill",
                     iconBackground: Color.gray
                 ) {
-                    Button("View") { legalSheet = .license }
+                    Button("View") { LegalWindow.show(kind: 0, title: "Licence (AGPL-3.0)") }
                 }
                 MacRow(
                     "Open source notices",
@@ -243,7 +240,7 @@ struct MacAboutPage: View {
                     iconBackground: Color.gray,
                     showsDivider: false
                 ) {
-                    Button("View") { legalSheet = .notices }
+                    Button("View") { LegalWindow.show(kind: 1, title: "Open source notices") }
                 }
             }
         }
@@ -292,65 +289,184 @@ struct MacAboutPage: View {
     }
 }
 
-// MARK: - Legal text sheet
+// MARK: - Legal text window
 
-private enum LegalSheetKind: String, Identifiable {
-    case license
-    case notices
+/// The core's legal blocks (`dimmy_legal_document`) as one attributed
+/// document for an NSTextView: headings, paragraphs, tables as NSTextTable
+/// (the columns line up and long cells wrap), licence texts reflowed in a
+/// tinted block. Same column and reflow rules as Windows' LegalDocument.
+/// An NSTextView, not a SwiftUI list: the notices are ~1 MB, and on Windows
+/// both virtualizing lists failed on rows this uneven (a crash and a hang,
+/// 2026-11-07). TextKit lays a document out as a document, and gives
+/// selection and Cmd+F for free.
+enum LegalDocument {
+    private struct Block: Decodable {
+        let t: String
+        let level: Int?
+        let text: String?
+        let header: [String]?
+        let rows: [[String]]?
+    }
 
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .license: return "Licence (AGPL-3.0)"
-        case .notices: return "Open source notices"
+    /// Each column's share of a table: its longest cell, clamped to 6...48.
+    static func proportions(header: [String], rows: [[String]]) -> [CGFloat] {
+        header.indices.map { c in
+            let longest = ([header[c]] + rows.compactMap { c < $0.count ? $0[c] : nil })
+                .map(\.count).max() ?? 0
+            return CGFloat(min(max(longest, 6), 48))
         }
     }
 
-    var text: String {
-        let raw = self == .license
-            ? DimmyCore.shared.licenseText()
-            : DimmyCore.shared.thirdPartyNotices()
-        return raw ?? "Text unavailable."
+    private static let listMarker = try! NSRegularExpression(pattern: #"^(\(?[0-9a-zA-Z]{1,3}[.)]|[-*•+])\s"#)
+
+    private static func trimmedEnd(_ s: Substring) -> String {
+        var s = s
+        while let last = s.last, last.isWhitespace { s.removeLast() }
+        return String(s)
     }
-}
 
-private struct LegalSheet: View {
-    let title: String
-    let text: String
-    let onClose: () -> Void
+    /// One paragraph as flowing text when it is prose; with its line breaks
+    /// (common indent removed) when a line carries structure.
+    static func reflow(_ lines: [String]) -> String {
+        let indent: (String) -> Int = { $0.prefix(while: { $0 == " " || $0 == "\t" }).count }
+        let cut = lines.map(indent).min() ?? 0
+        let body = lines.map { trimmedEnd($0.dropFirst(cut)) }
+        let hasText: (String) -> Bool = { $0.contains(where: { $0.isLetter || $0.isNumber }) }
+        let structured = body.count > 1 && (!hasText(body[0]) || body.dropFirst().contains { l in
+            guard let first = l.first else { return false }
+            let range = NSRange(l.startIndex..., in: l)
+            return first.isWhitespace || listMarker.firstMatch(in: l, range: range) != nil || !hasText(l)
+        })
+        return structured
+            ? body.joined(separator: "\n")
+            : body.map { $0.trimmingCharacters(in: .whitespaces) }.joined(separator: " ")
+    }
 
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text(title).font(.headline)
-                Spacer()
-                Button("Close", action: onClose)
-                    .keyboardShortcut(.cancelAction)
+    /// A licence text, hard-wrapped at ~80 columns, with each paragraph
+    /// reflowed to the window width.
+    static func licence(_ text: String) -> String {
+        var paragraphs: [String] = []
+        var para: [String] = []
+        for line in text.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n") {
+            if line.trimmingCharacters(in: .whitespaces).isEmpty {
+                if !para.isEmpty { paragraphs.append(reflow(para)); para = [] }
+            } else {
+                para.append(line)
             }
-            .padding(12)
-            Divider()
-            LegalTextView(text: text)
         }
-        .frame(minWidth: 640, minHeight: 480)
+        if !para.isEmpty { paragraphs.append(reflow(para)) }
+        return paragraphs.joined(separator: "\n\n")
+    }
+
+    private static func style(before: CGFloat = 0, after: CGFloat = 0, blocks: [NSTextBlock] = []) -> NSParagraphStyle {
+        let p = NSMutableParagraphStyle()
+        p.paragraphSpacingBefore = before
+        p.paragraphSpacing = after
+        p.textBlocks = blocks
+        return p
+    }
+
+    static func attributed(_ json: String?) -> NSAttributedString {
+        let out = NSMutableAttributedString()
+        guard let data = json?.data(using: .utf8),
+              let blocks = try? JSONDecoder().decode([Block].self, from: data), !blocks.isEmpty else {
+            return NSAttributedString(string: "Text unavailable.", attributes: [.font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.labelColor])
+        }
+        func add(_ text: String, _ font: NSFont, _ paragraph: NSParagraphStyle, _ color: NSColor = .labelColor) {
+            out.append(NSAttributedString(string: text + "\n", attributes: [.font: font, .foregroundColor: color, .paragraphStyle: paragraph]))
+        }
+        for b in blocks {
+            switch b.t {
+            case "heading":
+                let level = b.level ?? 1
+                let font: NSFont = level <= 1 ? .systemFont(ofSize: 22, weight: .bold)
+                    : level == 2 ? .systemFont(ofSize: 17, weight: .semibold) : .systemFont(ofSize: 14, weight: .semibold)
+                add(b.text ?? "", font, style(before: out.length == 0 ? 0 : 18, after: 6))
+            case "paragraph":
+                add(b.text ?? "", .systemFont(ofSize: 13), style(after: 8))
+            case "code":
+                let card = NSTextBlock()
+                card.backgroundColor = .controlBackgroundColor
+                card.setWidth(14, type: .absoluteValueType, for: .padding)
+                card.setWidth(1, type: .absoluteValueType, for: .border)
+                card.setBorderColor(.separatorColor)
+                card.setWidth(4, type: .absoluteValueType, for: .margin, edge: .minY)
+                card.setWidth(10, type: .absoluteValueType, for: .margin, edge: .maxY)
+                add(licence(b.text ?? ""), .systemFont(ofSize: 12), style(blocks: [card]))
+            case "table":
+                let header = b.header ?? [], rows = b.rows ?? []
+                guard !header.isEmpty else { continue }
+                let cols = proportions(header: header, rows: rows)
+                let total = cols.reduce(0, +)
+                let table = NSTextTable()
+                table.numberOfColumns = header.count
+                table.collapsesBorders = true
+                table.setContentWidth(100, type: .percentageValueType)
+                for (r, cells) in ([header] + rows).enumerated() {
+                    for c in header.indices {
+                        let cell = NSTextTableBlock(table: table, startingRow: r, rowSpan: 1, startingColumn: c, columnSpan: 1)
+                        cell.setContentWidth(100 * cols[c] / total, type: .percentageValueType)
+                        cell.setWidth(r == 0 ? 7 : 4, type: .absoluteValueType, for: .padding)
+                        cell.setWidth(1, type: .absoluteValueType, for: .border, edge: .maxY)
+                        cell.setBorderColor(.separatorColor, for: .maxY)
+                        let font: NSFont = r == 0 ? .systemFont(ofSize: 12, weight: .semibold) : .systemFont(ofSize: 12)
+                        add(c < cells.count ? cells[c] : "", font, style(blocks: [cell]))
+                    }
+                }
+                add("", .systemFont(ofSize: 6), style(after: 6))
+            default:
+                continue
+            }
+        }
+        return out
     }
 }
 
-/// NSTextView, not SwiftUI Text: the notices are ~1 MB.
-private struct LegalTextView: NSViewRepresentable {
-    let text: String
+/// The licence or the notices in a window of their own: resizable, with a
+/// scroll bar, searchable with Cmd+F.
+@MainActor
+enum LegalWindow {
+    private static var windows: [Int32: NSWindow] = [:]
 
-    func makeNSView(context: Context) -> NSScrollView {
-        let scroll = NSTextView.scrollableTextView()
-        if let tv = scroll.documentView as? NSTextView {
-            tv.isEditable = false
-            tv.isSelectable = true
-            tv.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-            tv.textContainerInset = NSSize(width: 8, height: 8)
-            tv.string = text
+    /// kind 0 licence, 1 open source notices. Asking again brings it back.
+    static func show(kind: Int32, title: String) {
+        if let w = windows[kind] {
+            w.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
         }
-        return scroll
-    }
+        let text = NSTextView(usingTextLayoutManager: false) // TextKit 1: NSTextTable
+        text.isEditable = false
+        text.isSelectable = true
+        text.usesFindBar = true
+        text.isIncrementalSearchingEnabled = true
+        text.drawsBackground = true
+        text.backgroundColor = .windowBackgroundColor
+        text.textContainerInset = NSSize(width: 24, height: 20)
+        text.isVerticallyResizable = true
+        text.isHorizontallyResizable = false
+        text.autoresizingMask = [.width]
+        text.textContainer?.widthTracksTextView = true
+        text.layoutManager?.allowsNonContiguousLayout = true
+        text.textStorage?.setAttributedString(LegalDocument.attributed(DimmyCore.shared.legalDocument(kind)))
 
-    func updateNSView(_ nsView: NSScrollView, context: Context) {}
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = false
+        scroll.autohidesScrollers = false
+        scroll.documentView = text
+
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 860, height: 720),
+                         styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                         backing: .buffered, defer: false)
+        w.title = title
+        w.isReleasedWhenClosed = false
+        w.contentView = scroll
+        w.contentMinSize = NSSize(width: 520, height: 400)
+        text.frame = NSRect(origin: .zero, size: scroll.contentSize)
+        w.center()
+        windows[kind] = w
+        w.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
 }

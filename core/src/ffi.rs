@@ -31,6 +31,33 @@ static CHUNKED: Mutex<Option<crate::chunked_stt::ChunkedTranscriber>> = Mutex::n
 /// same contract as CHUNKED.
 static STREAMING: Mutex<Option<ActiveStreamer>> = Mutex::new(None);
 
+/// One number per dictation. A live-text callback carries the number of the
+/// dictation that started it and drops its text once that is no longer the
+/// current one: a streamer left running (cancelled, replaced) must never
+/// type into the user's document. Every word came out three times after two
+/// cancelled sessions had left their Nemotron streamers reading the mic
+/// (2026-11-07).
+static DICTATION_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn dictation_is_current(gen: u64) -> bool {
+    DICTATION_GEN.load(std::sync::atomic::Ordering::SeqCst) == gen
+}
+
+/// Stop a streamer off the caller thread (it joins its worker and flushes
+/// the tail); its text is discarded, and any it still emits is dropped by
+/// the generation check.
+fn retire_streamer() {
+    if let Some(old) = STREAMING.lock().ok().and_then(|mut slot| slot.take()) {
+        log(&format!(
+            "[Stream] retiring a leftover {} streamer",
+            old.label()
+        ));
+        // On the caller thread on purpose: done in the background it went
+        // on emitting after the caller had moved on.
+        let _ = old.stop();
+    }
+}
+
 /// The realtime cloud engine owning the current dictation.
 ///
 /// One slot, not one static per engine: the two are mutually exclusive by
@@ -848,6 +875,9 @@ pub extern "C" fn dimmy_init() -> c_int {
     match result {
         Ok(rc) => {
             write_init_trace(&format!("P_OK: dimmy_init returning {}", rc));
+            if rc == 0 {
+                warm_local_stt(state());
+            }
             rc
         }
         Err(payload) => {
@@ -862,6 +892,68 @@ pub extern "C" fn dimmy_init() -> c_int {
             -1
         }
     }
+}
+
+/// Which local dictation backend to load at startup, if any.
+fn local_stt_to_warm<'a>(stt_mode: &str, backend: &'a str) -> Option<&'a str> {
+    if stt_mode != "local" {
+        return None;
+    }
+    match backend {
+        "nemotron" => None,
+        "" => Some("whisper"),
+        b => Some(b),
+    }
+}
+
+/// Load the local dictation model on a background thread right after init.
+/// The first dictation after a start used to pay the cold load (~5 s with
+/// Parakeet on Windows, measured 2026-11-07) while its chunks queued up.
+/// One second of silence through the backend's own path loads and caches
+/// the model; the text is discarded and an empty result still counts.
+fn warm_local_stt(st: &AppState) {
+    let stt_mode = st.stt_mode.lock().map(|s| s.clone()).unwrap_or_default();
+    let backend = st
+        .local_stt_backend
+        .lock()
+        .map(|s| s.clone())
+        .unwrap_or_default();
+    let Some(backend) = local_stt_to_warm(&stt_mode, &backend).map(str::to_string) else {
+        return;
+    };
+    let language = st.language.lock().map(|l| l.clone()).unwrap_or_default();
+    let whisper_model = st.local_model.lock().map(|m| m.clone()).unwrap_or_default();
+    std::thread::spawn(move || {
+        let started = std::time::Instant::now();
+        let silence = vec![0.0f32; 16_000];
+        let outcome: Result<(), String> = match backend.as_str() {
+            "parakeet" => crate::parakeet::warmup().map_err(|e| e.to_string()),
+            "qwen" => crate::qwen_asr::transcribe(&silence, &qwen_asr_variant(), &language)
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            "whistle" => crate::whistle::transcribe(&silence, &language, &[])
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            _ => match crate::local_stt::transcribe_local(
+                &crate::local_stt::model_path(&whisper_model),
+                &silence,
+                &language,
+                "",
+            ) {
+                Ok(_) | Err(crate::error::TranscribeError::Empty) => Ok(()),
+                Err(e) => Err(e.to_string()),
+            },
+        };
+        log(&format!(
+            "[Warmup] local STT {} in {} ms: {}",
+            backend,
+            started.elapsed().as_millis(),
+            match &outcome {
+                Ok(()) => "ready".to_string(),
+                Err(e) => crate::truncate_utf8(e, 200).to_string(),
+            }
+        ));
+    });
 }
 
 /// Shut down: stop audio, save config and clean up.
@@ -1069,6 +1161,9 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
     // NOT hijack streaming when the user picked a LOCAL backend — otherwise
     // local typing never fires (the "non va" report, 2026-06-06).
     let streaming_on = st.streaming_dictation.lock().map(|b| *b).unwrap_or(false);
+    // A new dictation: earlier live text is dead from here on.
+    let gen = DICTATION_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    retire_streamer();
     let use_kr = st.use_keyring.lock().map(|k| *k).unwrap_or(false);
     // Engine selection. Derived from the STT provider the user already picked,
     // so "I chose OpenAI for voice input" means OpenAI here too — no second
@@ -1113,6 +1208,9 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
         };
         let on_chunk: Arc<crate::deepgram_stream::StreamCallback> =
             Arc::new(move |delta: &str, cumulative: &str, is_final: bool| {
+                if !dictation_is_current(gen) {
+                    return;
+                }
                 let payload = serde_json::json!({
                     "delta": delta,
                     "cumulative": cumulative,
@@ -1223,6 +1321,9 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
         };
         let on_chunk: Arc<crate::nemotron::ChunkCallback> = Arc::new(
             move |backspace: usize, delta: &str, cumulative: &str, is_final: bool| {
+                if !dictation_is_current(gen) {
+                    return;
+                }
                 // `backspace`: characters the host deletes before typing
                 // `delta` (a word the engine corrected). Absent elsewhere.
                 let payload = serde_json::json!({
@@ -1287,6 +1388,9 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
         let typing = local_typing;
         let on_chunk: Arc<crate::chunked_stt::ChunkCallback> =
             Arc::new(move |delta: &str, cumulative: &str, is_final: bool| {
+                if !dictation_is_current(gen) {
+                    return;
+                }
                 // Typing mode: prefix a space so cursor-injected segments
                 // don't run together — the chunked delta carries no leading
                 // space (cumulative inserts one between segments).
@@ -1349,8 +1453,39 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
         *slot = Some(std::time::Instant::now());
     }
 
+    prewarm_claude_for_dictation(st);
+
     emit_event("recording_started", "{}");
     0
+}
+
+/// Start the `claude` CLI now when this dictation will end in a subscription
+/// rewrite, so its startup overlaps the user's speech. Same model resolution
+/// as `dimmy_process_with_llm`, or the prewarmed process goes unused.
+fn prewarm_claude_for_dictation(st: &AppState) {
+    let read = |m: &Mutex<String>| m.lock().map(|s| s.clone()).unwrap_or_default();
+    let llm_mode = read(&st.llm_mode);
+    let auth_method = read(&st.llm_auth_method);
+    let llm_url = read(&st.llm_api_url);
+    let translate_to = read(&st.llm_translate_to);
+    let inputs = crate::claude_code::PrewarmInputs {
+        llm_mode: &llm_mode,
+        auth_method: &auth_method,
+        llm_url: &llm_url,
+        llm_enabled: st.llm_enabled.lock().map(|e| *e).unwrap_or(false),
+        translate_to: &translate_to,
+        has_app_rules: st.app_rules.lock().map(|r| !r.is_empty()).unwrap_or(false),
+    };
+    if !crate::claude_code::should_prewarm(&inputs) {
+        return;
+    }
+    let model = read(&st.llm_api_model);
+    let model = if model.is_empty() {
+        crate::DEFAULT_LLM_MODEL.to_string()
+    } else {
+        model
+    };
+    crate::claude_code::prewarm(&model);
 }
 
 /// Stop recording and get transcript. Returns transcript length, or negative on error.
@@ -2236,6 +2371,10 @@ pub extern "C" fn dimmy_cancel_recording() {
     if let Some(ct) = CHUNKED.lock().ok().and_then(|mut slot| slot.take()) {
         let _ = ct.stop();
     }
+    // The realtime streamer too (Nemotron, Deepgram, OpenAI): left running it
+    // kept transcribing the mic into every later dictation.
+    DICTATION_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    retire_streamer();
     emit_event("recording_cancelled", "{}");
 
     crate::telemetry::track(crate::telemetry::Event::TranscriptionCancelled { audio_secs });
@@ -5131,6 +5270,7 @@ pub extern "C" fn dimmy_claude_code_ping() -> c_int {
         "reply with the single word: pong",
         "",
         std::time::Duration::from_secs(15),
+        true,
     );
     let elapsed_ms = started.elapsed().as_millis() as u64;
     let (success, category) = match &result {
@@ -7021,6 +7161,20 @@ pub extern "C" fn dimmy_third_party_notices(out_buf: *mut c_char, buf_len: c_int
     write_static_text(crate::THIRD_PARTY_NOTICES, out_buf, buf_len)
 }
 
+/// The licence (`kind` 0) or the open source notices (`kind` 1) as JSON
+/// blocks to draw natively: `[{"t":"heading","level":1,"text":..},
+/// {"t":"paragraph","text":..}, {"t":"table","header":[..],"rows":[[..]]},
+/// {"t":"code","text":..}]`. Length-query contract, see
+/// [`write_static_text`]; -1 for an unknown kind.
+#[no_mangle]
+pub extern "C" fn dimmy_legal_document(kind: c_int, out_buf: *mut c_char, buf_len: c_int) -> c_int {
+    match kind {
+        0 => write_static_text(crate::legal_doc::json(false), out_buf, buf_len),
+        1 => write_static_text(crate::legal_doc::json(true), out_buf, buf_len),
+        _ => -1,
+    }
+}
+
 /// Version of the Terms of Service / EULA the app asks the user to accept.
 /// Hosts store it in `terms_accepted_version` when the user ticks the box.
 /// Returns bytes written, or -1 on a null buffer.
@@ -8505,8 +8659,8 @@ pub extern "C" fn dimmy_history_delete(id: c_int) -> c_int {
 
 // ── Hotkey (low-level keyboard hook) ─────────────────────────────
 
-/// Install the global keyboard hook. Call once at startup.
-/// The hook runs on a background thread with its own message pump.
+/// Install the global keyboard hook. The hook runs on a background thread
+/// with its own message pump. Later calls are no-ops.
 #[no_mangle]
 pub extern "C" fn dimmy_hotkey_install() {
     crate::hotkey::install(|msg| crate::log(&format!("[Hotkey] {}", msg)));
@@ -8550,7 +8704,7 @@ pub unsafe extern "C" fn dimmy_hotkey_set_command(combo_ptr: *const c_char) {
 
 /// Set (or clear) the optional meeting start/stop shortcut. Mirrors
 /// `dimmy_hotkey_set_command`: a null/empty/unparseable combo DISABLES it.
-/// The host treats its event (via `dimmy_hotkey_take_meeting_event`) as a
+/// The host treats its `hotkey` event (`binding: "meeting"`) as a
 /// TOGGLE — start the meeting if idle, stop it if a meeting is recording.
 ///
 /// # Safety
@@ -10083,43 +10237,6 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
     write_to_buf(&out, out_buf, buf_len)
 }
 
-/// Poll for hotkey events. Returns:
-/// - 0 = no event
-/// - 1 = pressed (all keys in combo are down)
-/// - 2 = released (any key in combo released after price)
-#[no_mangle]
-pub extern "C" fn dimmy_hotkey_take_event() -> c_int {
-    let ev = crate::hotkey::take_event();
-    // Emit telemetry on EVENT_PRESSED (=1). The C# host polls this
-    // every ~50ms; a non-zero return at the press edge means the
-    // user actually triggered a recording via the global hotkey
-    // (vs the in-app button, which calls `dimmy_start_recording`
-    // directly and never goes through the hotkey path). Combined
-    // with `transcription.completed` totals, dashboards derive the
-    // hotkey-vs-button ratio.
-    if ev == 1 {
-        crate::telemetry::track(crate::telemetry::Event::FeatureHotkeyTriggered);
-    }
-    ev as c_int
-}
-
-/// Poll for command-mode hotkey events (the optional dedicated shortcut).
-/// Returns 0=none, 1=pressed, 2=released — same edges as
-/// `dimmy_hotkey_take_event`, but for the command binding. Returns 0 forever
-/// while the command hotkey is unconfigured.
-#[no_mangle]
-pub extern "C" fn dimmy_hotkey_take_command_event() -> c_int {
-    crate::hotkey::take_command_event() as c_int
-}
-
-/// Take the latest meeting hotkey event: 0=none, 1=pressed, 2=released.
-/// Returns 0 forever while the meeting hotkey is unconfigured. The host
-/// treats `1` (pressed) as a toggle and ignores `2` (released).
-#[no_mangle]
-pub extern "C" fn dimmy_hotkey_take_meeting_event() -> c_int {
-    crate::hotkey::take_meeting_event() as c_int
-}
-
 /// Track that a meeting recording was started/stopped from one of the new
 /// surfaces. `source` is mapped to a fixed categorical enum tag
 /// (hotkey|menu|jumplist|other) before emitting — never forwarded verbatim, so
@@ -10143,35 +10260,127 @@ pub unsafe extern "C" fn dimmy_track_meeting_action(source_ptr: *const c_char) {
     crate::telemetry::track(crate::telemetry::Event::FeatureMeetingShortcut { source });
 }
 
-/// Start recording mode for shortcut capture.
+/// Open the shortcut recorder behind a settings dialog. From now until
+/// `dimmy_hotkey_recorder_stop`, the keys the user presses build a new
+/// shortcut instead of triggering the current ones, and every change is
+/// published as one `hotkey_recorder` event:
+///
+/// `{"target":"command","keys":["Ctrl","Shift","D"],"combo":"ctrl+shift+d",
+///   "can_save":true,"error":"","warnings":[],
+///   "mods":{"win":false,"ctrl":true,"alt":false,"shift":true,"fn":false},
+///   "native_key":68}`
+///
+/// `target` is `dictation` | `command` | `meeting` | `dictionary`.
+/// `current_json` holds the shortcuts configured now, keyed the same way, so
+/// the verdict can name a conflict. Returns 0, -1 for a null or unknown
+/// target, -2 when `current_json` is not a JSON object.
+///
+/// # Safety
+/// Both arguments must be null or valid null-terminated UTF-8 C strings.
 #[no_mangle]
-pub extern "C" fn dimmy_hotkey_start_recording() {
-    crate::hotkey::start_recording();
+pub unsafe extern "C" fn dimmy_hotkey_recorder_start(
+    target: *const c_char,
+    current_json: *const c_char,
+) -> c_int {
+    if target.is_null() || current_json.is_null() {
+        return -1;
+    }
+    let Some(t) = crate::hotkey_recorder::Target::parse(&CStr::from_ptr(target).to_string_lossy())
+    else {
+        return -1;
+    };
+    let Some(current) =
+        crate::hotkey_recorder::Current::from_json(&CStr::from_ptr(current_json).to_string_lossy())
+    else {
+        return -2;
+    };
+    crate::hotkey_recorder::start(t, current);
+    crate::log(&format!("[Hotkey] recorder opened for {}", t.id()));
+    0
 }
 
-/// Poll recording: scans for pressed key combo via GetAsyncKeyState.
-/// Call this every ~100ms while recording a new shortcut.
+/// Close the shortcut recorder: the configured shortcuts work again.
+/// Harmless when none is open.
 #[no_mangle]
-pub extern "C" fn dimmy_hotkey_poll_recording() {
-    crate::hotkey::poll_recording_keys();
-}
-
-/// Take the recorded shortcut. Returns bytes written to buf, or 0 if not ready.
-/// Format: JSON `{"label":"Ctrl+Shift+X","combo":"Ctrl+Shift+X"}`.
-#[no_mangle]
-pub extern "C" fn dimmy_hotkey_take_recorded(buf: *mut c_char, buf_len: c_int) -> c_int {
-    if let Some((label, combo)) = crate::hotkey::take_recorded() {
-        let json = serde_json::json!({"label": label, "combo": combo});
-        write_to_buf(&json.to_string(), buf, buf_len)
-    } else {
-        0
+pub extern "C" fn dimmy_hotkey_recorder_stop() {
+    if crate::hotkey_recorder::stop() {
+        crate::log("[Hotkey] recorder closed");
     }
 }
 
-/// Stop recording mode.
+/// Feed the dictation session one input and get back what to do. One state
+/// machine for every way a dictation starts, stops or is thrown away (see
+/// `dictation_session.rs` for the table).
+///
+/// `input`: 1 press, 2 release, 3 stop (pill, menu, length cap),
+/// 4 start failed, 5 delivered, 6 cancel. `kind` (press, release):
+/// 0 dictation, 1 command. `mode` (press): 0 toggle, 1 hold.
+/// Returns 0 nothing, 1 start, 2 finish (stop, transcribe, deliver, then
+/// send 5), 3 discard (cancel the recording), 4 busy (the last dictation
+/// is still being transcribed: tell the user); -1 for an unknown code.
 #[no_mangle]
-pub extern "C" fn dimmy_hotkey_stop_recording() {
-    crate::hotkey::stop_recording();
+pub extern "C" fn dimmy_dictation_input(input: c_int, kind: c_int, mode: c_int) -> c_int {
+    use crate::dictation_session::{Action, Input, Kind, Mode};
+    let kind = match kind {
+        0 => Kind::Dictation,
+        1 => Kind::Command,
+        _ => return -1,
+    };
+    let mode = match mode {
+        0 => Mode::Toggle,
+        1 => Mode::Hold,
+        _ => return -1,
+    };
+    let i = match input {
+        1 => Input::Press(kind, mode),
+        2 => Input::Release(kind),
+        3 => Input::Stop,
+        4 => Input::StartFailed,
+        5 => Input::Delivered,
+        6 => Input::Cancel,
+        _ => return -1,
+    };
+    match crate::dictation_session::input(i) {
+        Action::None => 0,
+        Action::Start(_) => 1,
+        Action::Finish => 2,
+        Action::Discard => 3,
+        Action::Busy => 4,
+    }
+}
+
+/// The session's phase right now: 0 idle, 1 recording, 2 finishing
+/// (transcribing and delivering). A read for the decisions hosts already
+/// take at a moment in time ("is a dictation in progress?"), not a poll.
+#[no_mangle]
+pub extern "C" fn dimmy_dictation_phase() -> c_int {
+    use crate::dictation_session::Phase;
+    match crate::dictation_session::phase() {
+        Phase::Idle => 0,
+        Phase::Recording { .. } => 1,
+        Phase::Finishing => 2,
+    }
+}
+
+/// 1 while a shortcut dialog is recording, else 0. The macOS event taps
+/// (HotkeyManager, DictHotkeyManager) check it on every key and step aside,
+/// so pressing the current shortcut in the dialog doesn't fire it.
+#[no_mangle]
+pub extern "C" fn dimmy_hotkey_recorder_is_active() -> c_int {
+    crate::hotkey_recorder::is_active() as c_int
+}
+
+/// macOS host: hand one key event from the sheet's event monitors to the
+/// recorder (`native_code` = the keycode). Windows doesn't call this, its
+/// keyboard hook feeds the recorder directly. Returns 1 when the key belongs
+/// to the shortcut (consume it), 0 when it must reach the sheet (Tab, Enter,
+/// Esc on their own) or no recorder is open.
+#[no_mangle]
+pub extern "C" fn dimmy_hotkey_recorder_key(native_code: u32, is_down: c_int) -> c_int {
+    match crate::hotkey_recorder::feed(native_code, is_down != 0, false) {
+        crate::hotkey_recorder::Decision::Pass => 0,
+        _ => 1,
+    }
 }
 
 // ── Telemetry ─────────────────────────────────────────────────────────
@@ -12107,6 +12316,32 @@ pub(crate) mod tests {
     use serial_test::serial;
     use std::ffi::c_char;
 
+    #[test]
+    #[serial]
+    fn live_text_from_an_older_dictation_is_dropped() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let gen = DICTATION_GEN.fetch_add(1, SeqCst) + 1;
+        assert!(dictation_is_current(gen));
+        // A cancel, or the next dictation, moves the number on.
+        DICTATION_GEN.fetch_add(1, SeqCst);
+        assert!(!dictation_is_current(gen));
+        // Nothing left in the slot: retiring is a no-op, not a panic.
+        retire_streamer();
+    }
+
+    #[test]
+    fn init_warms_the_dictation_backend_only_when_dictation_is_local() {
+        assert_eq!(local_stt_to_warm("local", "parakeet"), Some("parakeet"));
+        assert_eq!(local_stt_to_warm("local", "whisper"), Some("whisper"));
+        assert_eq!(local_stt_to_warm("local", "qwen"), Some("qwen"));
+        assert_eq!(local_stt_to_warm("local", "whistle"), Some("whistle"));
+        // An empty backend means whisper everywhere else in the core.
+        assert_eq!(local_stt_to_warm("local", ""), Some("whisper"));
+        // Nemotron builds its recognizer per session and frees it after 10 min idle.
+        assert_eq!(local_stt_to_warm("local", "nemotron"), None);
+        assert_eq!(local_stt_to_warm("cloud", "parakeet"), None);
+    }
+
     // ── back-to-back meetings ────────────────────────────────────
 
     #[test]
@@ -12767,6 +13002,251 @@ pub(crate) mod tests {
         if let Ok(mut guard) = EVENT_CALLBACK.lock() {
             *guard = None;
         }
+    }
+
+    #[test]
+    fn legal_documents_are_json_blocks_with_the_length_contract() {
+        for kind in [0, 1] {
+            let len = dimmy_legal_document(kind, std::ptr::null_mut(), 0);
+            assert!(len > 1000, "kind {kind}: {len}");
+            let mut buf = vec![0u8; len as usize + 1];
+            dimmy_legal_document(kind, buf.as_mut_ptr() as *mut c_char, buf.len() as c_int);
+            let text = std::str::from_utf8(&buf[..len as usize]).unwrap();
+            let v: serde_json::Value = serde_json::from_str(text).unwrap();
+            assert_eq!(v[0]["t"], "heading", "kind {kind} opens with its title");
+        }
+        assert_eq!(dimmy_legal_document(7, std::ptr::null_mut(), 0), -1);
+    }
+
+    // ── dictation session FFI ────────────────────────────────────
+
+    #[test]
+    #[serial]
+    fn dictation_session_ffi_codes_round_trip() {
+        dimmy_dictation_input(6, 0, 0); // cancel: start from idle
+        assert_eq!(dimmy_dictation_phase(), 0);
+        assert_eq!(dimmy_dictation_input(1, 0, 0), 1, "toggle press starts");
+        assert_eq!(dimmy_dictation_phase(), 1);
+        assert_eq!(dimmy_dictation_input(3, 0, 0), 2, "stop finishes");
+        assert_eq!(dimmy_dictation_phase(), 2);
+        assert_eq!(
+            dimmy_dictation_input(1, 1, 1),
+            4,
+            "press while finishing: busy"
+        );
+        assert_eq!(dimmy_dictation_input(5, 0, 0), 0, "delivered");
+        assert_eq!(dimmy_dictation_phase(), 0);
+        assert_eq!(dimmy_dictation_input(1, 0, 1), 1, "hold press starts");
+        assert_eq!(
+            dimmy_dictation_input(2, 0, 0),
+            3,
+            "an instant release discards"
+        );
+        assert_eq!(dimmy_dictation_input(9, 0, 0), -1);
+        assert_eq!(dimmy_dictation_input(1, 7, 0), -1);
+        assert_eq!(dimmy_dictation_input(1, 0, 7), -1);
+        assert_eq!(dimmy_dictation_phase(), 0);
+    }
+
+    // ── hotkey edges ─────────────────────────────────────────────
+
+    static HOTKEY_EVENTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    extern "C" fn hotkey_callback(ptr: *const c_char) {
+        let json = unsafe { CStr::from_ptr(ptr) }
+            .to_string_lossy()
+            .into_owned();
+        if json.contains(r#""event":"hotkey""#) {
+            HOTKEY_EVENTS.lock().unwrap().push(json);
+        }
+    }
+
+    fn wait_for_hotkey_events(n: usize) -> Vec<serde_json::Value> {
+        for _ in 0..200 {
+            let got = HOTKEY_EVENTS.lock().unwrap().clone();
+            if got.len() >= n {
+                return got
+                    .iter()
+                    .map(|j| {
+                        serde_json::from_str::<serde_json::Value>(j).unwrap()["payload"].clone()
+                    })
+                    .collect();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("expected {n} hotkey events");
+    }
+
+    /// The host used to read each binding's edges from a one-slot mailbox
+    /// every 10 ms: a press and its release inside one poll left only
+    /// "released", and in toggle mode that press was lost. Every edge is an
+    /// event now, delivered in order.
+    #[test]
+    #[serial]
+    fn every_hotkey_edge_arrives_in_order_even_back_to_back() {
+        use crate::hotkey::{deliver_edge, start_edge_dispatcher, Which};
+        HOTKEY_EVENTS.lock().unwrap().clear();
+        if let Ok(mut guard) = EVENT_CALLBACK.lock() {
+            *guard = Some(hotkey_callback);
+        }
+        start_edge_dispatcher();
+
+        deliver_edge(Which::Dictation, crate::hotkey::Transition::Pressed);
+        deliver_edge(Which::Dictation, crate::hotkey::Transition::Released);
+        deliver_edge(Which::Meeting, crate::hotkey::Transition::Pressed);
+        deliver_edge(Which::Command, crate::hotkey::Transition::None);
+        deliver_edge(Which::Command, crate::hotkey::Transition::Released);
+
+        let events = wait_for_hotkey_events(4);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let all = HOTKEY_EVENTS.lock().unwrap().len();
+        if let Ok(mut guard) = EVENT_CALLBACK.lock() {
+            *guard = None;
+        }
+
+        let pairs: Vec<(String, String)> = events
+            .iter()
+            .map(|p| {
+                (
+                    p["binding"].as_str().unwrap().to_string(),
+                    p["edge"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            pairs,
+            [
+                ("dictation".to_string(), "pressed".to_string()),
+                ("dictation".to_string(), "released".to_string()),
+                ("meeting".to_string(), "pressed".to_string()),
+                ("command".to_string(), "released".to_string()),
+            ]
+        );
+        assert_eq!(all, 4, "Transition::None is not an edge");
+    }
+
+    // ── shortcut recorder ────────────────────────────────────────
+
+    static RECORDER_EVENTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    extern "C" fn recorder_callback(ptr: *const c_char) {
+        let json = unsafe { CStr::from_ptr(ptr) }
+            .to_string_lossy()
+            .into_owned();
+        if json.contains(r#""event":"hotkey_recorder""#) {
+            RECORDER_EVENTS.lock().unwrap().push(json);
+        }
+    }
+
+    fn wait_for_recorder_events(n: usize) -> Vec<serde_json::Value> {
+        for _ in 0..200 {
+            let got = RECORDER_EVENTS.lock().unwrap().clone();
+            if got.len() >= n {
+                return got
+                    .iter()
+                    .map(|j| {
+                        serde_json::from_str::<serde_json::Value>(j).unwrap()["payload"].clone()
+                    })
+                    .collect();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("expected {n} hotkey_recorder events");
+    }
+
+    // Native key codes as each host feeds them: Windows VKs, macOS keycodes.
+    #[cfg(target_os = "macos")]
+    const REC_KEYS: (u32, u32, u32, u32) = (0x35, 0x3B, 0x38, 0x02);
+    #[cfg(not(target_os = "macos"))]
+    const REC_KEYS: (u32, u32, u32, u32) = (0x1B, 0xA2, 0xA0, 0x44);
+    #[cfg(target_os = "macos")]
+    const REC_LABELS: (&str, &str) = ("⌃", "⇧");
+    #[cfg(not(target_os = "macos"))]
+    const REC_LABELS: (&str, &str) = ("Ctrl", "Shift");
+
+    #[test]
+    #[serial]
+    fn recorder_session_publishes_each_key_down_with_its_verdict() {
+        let (esc, ctrl, shift, d) = REC_KEYS;
+        let (l_ctrl, l_shift) = REC_LABELS;
+        RECORDER_EVENTS.lock().unwrap().clear();
+        if let Ok(mut guard) = EVENT_CALLBACK.lock() {
+            *guard = Some(recorder_callback);
+        }
+        let target = CString::new("command").unwrap();
+        let current =
+            CString::new(r#"{"dictation":"win+alt","dictionary":"ctrl+shift+d"}"#).unwrap();
+
+        assert_eq!(
+            dimmy_hotkey_recorder_key(ctrl, 1),
+            0,
+            "no session: keys pass"
+        );
+        assert_eq!(
+            unsafe { dimmy_hotkey_recorder_start(target.as_ptr(), current.as_ptr()) },
+            0
+        );
+        assert_eq!(dimmy_hotkey_recorder_is_active(), 1);
+        assert_eq!(
+            dimmy_hotkey_recorder_key(esc, 1),
+            0,
+            "Esc alone is for the dialog"
+        );
+        assert_eq!(dimmy_hotkey_recorder_key(ctrl, 1), 1, "Ctrl is recorded");
+        assert_eq!(dimmy_hotkey_recorder_key(shift, 1), 1, "Shift is recorded");
+        assert_eq!(dimmy_hotkey_recorder_key(d, 1), 1, "D is recorded");
+
+        let events = wait_for_recorder_events(3);
+        dimmy_hotkey_recorder_stop();
+        if let Ok(mut guard) = EVENT_CALLBACK.lock() {
+            *guard = None;
+        }
+
+        assert_eq!(events[0]["keys"], serde_json::json!([l_ctrl]));
+        assert_eq!(events[0]["can_save"], false);
+        assert_eq!(events[1]["keys"], serde_json::json!([l_ctrl, l_shift]));
+        let last = &events[2];
+        assert_eq!(last["target"], "command");
+        assert_eq!(last["keys"], serde_json::json!([l_ctrl, l_shift, "D"]));
+        assert_eq!(last["combo"], "ctrl+shift+d");
+        assert_eq!(last["can_save"], false);
+        assert_eq!(
+            last["error"],
+            "Already used by the add-to-dictionary shortcut."
+        );
+        assert_eq!(last["key"], "d");
+        assert_eq!(last["mods"]["shift"], true);
+        assert_eq!(dimmy_hotkey_recorder_is_active(), 0);
+        assert_eq!(
+            dimmy_hotkey_recorder_key(ctrl, 1),
+            0,
+            "closed: keys pass again"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn recorder_start_rejects_bad_arguments() {
+        dimmy_hotkey_recorder_stop();
+        let bad_target = CString::new("pill").unwrap();
+        let ok_target = CString::new("meeting").unwrap();
+        let current = CString::new("{}").unwrap();
+        let garbage = CString::new("not json").unwrap();
+        unsafe {
+            assert_eq!(
+                dimmy_hotkey_recorder_start(std::ptr::null(), current.as_ptr()),
+                -1
+            );
+            assert_eq!(
+                dimmy_hotkey_recorder_start(bad_target.as_ptr(), current.as_ptr()),
+                -1
+            );
+            assert_eq!(
+                dimmy_hotkey_recorder_start(ok_target.as_ptr(), garbage.as_ptr()),
+                -2
+            );
+        }
+        assert!(!crate::hotkey_recorder::is_active());
     }
 
     // ── Test helper: minimal AppState for unit tests ────────────────
@@ -13452,6 +13932,7 @@ pub(crate) mod tests {
     // ── dimmy_set_event_callback tests ──────────────────────────────
 
     #[test]
+    #[serial]
     fn set_event_callback_replaces_previous() {
         extern "C" fn cb1(_: *const c_char) {}
         extern "C" fn cb2(_: *const c_char) {}
@@ -13724,6 +14205,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[serial]
     fn meeting_pause_resume_no_meeting_does_not_emit_event() {
         // Without an active meeting, dimmy_meeting_pause / _resume must
         // be silent no-ops — no event fires (avoids confusing the host

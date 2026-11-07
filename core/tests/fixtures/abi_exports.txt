@@ -61,6 +61,8 @@ dimmy_cycle_llm_style
 dimmy_cycle_llm_tone
 dimmy_decode_audio_to_wav
 dimmy_detect_audio_language
+dimmy_dictation_input
+dimmy_dictation_phase
 dimmy_diarization_download
 dimmy_diarization_model_present
 dimmy_download_llm_model
@@ -93,16 +95,13 @@ dimmy_history_update_word_timestamps
 dimmy_host_log
 dimmy_hotkey_combos_conflict
 dimmy_hotkey_install
-dimmy_hotkey_poll_recording
+dimmy_hotkey_recorder_is_active
+dimmy_hotkey_recorder_key
+dimmy_hotkey_recorder_start
+dimmy_hotkey_recorder_stop
 dimmy_hotkey_set
 dimmy_hotkey_set_command
 dimmy_hotkey_set_meeting
-dimmy_hotkey_start_recording
-dimmy_hotkey_stop_recording
-dimmy_hotkey_take_command_event
-dimmy_hotkey_take_event
-dimmy_hotkey_take_meeting_event
-dimmy_hotkey_take_recorded
 dimmy_init
 dimmy_is_recording
 dimmy_license_billing_portal_url
@@ -118,6 +117,7 @@ dimmy_license_register_interest
 dimmy_license_request_trial
 dimmy_license_sales_open
 dimmy_license_status_json
+dimmy_legal_document
 dimmy_license_text
 dimmy_list_devices_json
 dimmy_list_llm_models

@@ -31,6 +31,7 @@ pub mod dfn;
 #[cfg(feature = "local-dfn")]
 pub mod dfn3;
 pub mod diarize;
+pub mod dictation_session;
 pub mod download;
 pub mod download_center;
 pub mod error;
@@ -48,8 +49,10 @@ pub mod gtcrn;
 pub mod hardware;
 pub mod history;
 mod hotkey;
+mod hotkey_recorder;
 pub mod keystore;
 pub mod lang_detect;
+pub mod legal_doc;
 /// Licensing — local-server PoC for the v2 architecture (see
 /// `docs/dev/licensing-poc.md`). Always-available types + file I/O +
 /// HTTP client; Ed25519 verify is gated behind `license-client`.

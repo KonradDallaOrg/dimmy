@@ -114,7 +114,7 @@ struct MeetingWizardView: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .sheet(isPresented: $recording) {
-            MeetingHotkeyRecorderSheet(appState: appState, isPresented: $recording)
+            ShortcutRecorderSheet(appState: appState, target: .meeting, isPresented: $recording)
         }
     }
 

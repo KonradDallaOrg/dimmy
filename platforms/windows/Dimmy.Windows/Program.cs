@@ -79,7 +79,7 @@ public static class Program
         catch { }
     }
 
-    private static void LogCrash(string stage, Exception? ex)
+    internal static void LogCrash(string stage, Exception? ex)
     {
         try
         {

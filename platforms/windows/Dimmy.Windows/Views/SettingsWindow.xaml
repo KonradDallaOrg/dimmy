@@ -742,9 +742,10 @@
                          Style="{StaticResource DimmySection}" />
               <controls:SettingCard Glyph="&#xE765;"
                                     Label="Recording shortcut"
-                                    InfoTip="Press the keys you want, then release to confirm. This is the shortcut you press to dictate."
+                                    InfoTip="Click the keys to change them. This is the shortcut you press to dictate."
                                     HelpUrl="https://dimmy.app/help/hotkey-change">
-                <controls:ShortcutRecorder Shortcut="{Binding Shortcut, Mode=TwoWay}" />
+                <controls:ShortcutEditor x:Name="DictationShortcutEditor" Target="dictation" DefaultShortcut="win+alt"
+                                         Shortcut="{Binding Shortcut, Mode=TwoWay}" />
               </controls:SettingCard>
               <controls:SettingCard Glyph="&#xE7C8;"
                                     Label="Mode"
@@ -763,30 +764,25 @@
                                     Label="Command mode shortcut"
                                     InfoTip="Optional. A dedicated shortcut that runs ONE command (transform the selected text, or generate and insert when nothing is selected) and then goes back to normal dictation. It follows the same Push-to-Talk or Toggle mode as your dictation shortcut. Leave it unset to use command mode only from the pill menu, where it stays on until you turn it off."
                                     HelpUrl="https://dimmy.app/help/hotkey-change">
-                <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" HorizontalAlignment="Right">
-                  <Button Content="Clear" Click="CommandHotkeyClear_Click"
-                          VerticalAlignment="Center" />
-                  <controls:ShortcutRecorder Shortcut="{Binding CommandHotkey, Mode=TwoWay}" />
-                </StackPanel>
+                <controls:ShortcutEditor x:Name="CommandShortcutEditor" Target="command" AllowClear="True"
+                                         Shortcut="{Binding CommandHotkey, Mode=TwoWay}" />
               </controls:SettingCard>
               <controls:SettingCard Glyph="&#xE720;"
                                     Label="Meeting recording shortcut"
                                     InfoTip="Optional. A dedicated shortcut that starts or stops a meeting recording (toggle). It runs the same recording-consent prompt as the Start button, then records in the background — it does NOT open the meeting window. Leave it unset to start meetings only from the menu. Tip: avoid Ctrl+Shift+M — that's Microsoft Teams' mute toggle."
                                     HelpUrl="https://dimmy.app/help/hotkey-change">
-                <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}" HorizontalAlignment="Right">
-                  <Button Content="Clear" Click="MeetingHotkeyClear_Click"
-                          VerticalAlignment="Center" />
-                  <controls:ShortcutRecorder Shortcut="{Binding MeetingHotkey, Mode=TwoWay}" />
-                </StackPanel>
+                <controls:ShortcutEditor x:Name="MeetingShortcutEditor" Target="meeting" AllowClear="True"
+                                         Shortcut="{Binding MeetingHotkey, Mode=TwoWay}" />
               </controls:SettingCard>
 
               <TextBlock Text="Dictionary"
                          Style="{StaticResource DimmySection}" />
               <controls:SettingCard Glyph="&#xE82D;"
                                     Label="Add-to-dictionary shortcut"
-                                    InfoTip="Select text in any app and press these keys to add it to your custom dictionary. Press the keys here, then release to confirm."
+                                    InfoTip="Select text in any app and press these keys to add it to your custom dictionary. Click the keys to change them."
                                     HelpUrl="https://dimmy.app/help/hotkey-change">
-                <controls:ShortcutRecorder Shortcut="{Binding DictHotkey, Mode=TwoWay}" RequireKey="True" />
+                <controls:ShortcutEditor x:Name="DictionaryShortcutEditor" Target="dictionary" DefaultShortcut="ctrl+shift+d"
+                                         Shortcut="{Binding DictHotkey, Mode=TwoWay}" />
               </controls:SettingCard>
             </StackPanel>
 
@@ -1375,7 +1371,7 @@
                          Style="{StaticResource DimmySection}" />
               <controls:SettingCard Glyph="&#xE790;"
                                     Label="Border style"
-                                    InfoTip="Pick the rainbow glow or a solid color. None hides the outline."
+                                    InfoTip="Pick the rainbow glow or a solid color. Accent follows the accent color in Windows Settings. None hides the outline."
                                     HelpUrl="https://dimmy.app/help/pill-overview">
                 <ComboBox MinWidth="{StaticResource SettingFieldWidth}"
                           SelectedItem="{Binding BorderStyle, Mode=TwoWay}"
@@ -1385,6 +1381,7 @@
                   <x:String>Green</x:String>
                   <x:String>Purple</x:String>
                   <x:String>Orange</x:String>
+                  <x:String>Accent</x:String>
                   <x:String>None</x:String>
                 </ComboBox>
               </controls:SettingCard>

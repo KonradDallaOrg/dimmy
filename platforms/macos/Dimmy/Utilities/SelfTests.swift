@@ -41,6 +41,7 @@ enum SelfTests {
         testRecordingStateAnimationIds()
         testSttProviderFromUrl()
         testHotkeyStatusCases()
+        testPillDockRule()
         testOnboardingStepCount()
         testPillCycleStyleWrap()
         testPillCycleLanguageWrap()
@@ -64,6 +65,27 @@ enum SelfTests {
     }
 
     // MARK: - Language mapping
+
+    /// Mirror of Windows' PillDockMathTests: a 1920x1040 visible frame.
+    private static func testPillDockRule() {
+        let vf = NSRect(x: 0, y: 0, width: 1920, height: 1040)
+        func d(_ x: CGFloat, _ y: CGFloat) -> String { PillWindowController.dock(pillCentre: NSPoint(x: x, y: y), visible: vf) }
+        assert(d(1890, 30) == "bottomRight", "Dropped against a corner docks to it")
+        assert(d(30, 1010) == "topLeft", "Dropped against a corner docks to it")
+        assert(d(1040, 30) == "bottom", "Dropped against an edge's middle docks to it")
+        assert(d(30, 420) == "left", "Dropped against an edge's middle docks to it")
+        assert(d(960, 150) == "", "A hand away from the edge stays where it was dropped")
+        assert(d(560, 30) == "", "Along an edge, away from its middle and corners, stays put")
+        // The zones drawn while dragging are where the pill docks.
+        for z in PillWindowController.dockZones(visible: vf) {
+            assert(d(z.rect.midX, z.rect.midY) == z.dock, "The centre of the \(z.dock) zone docks to it")
+            assert(vf.contains(z.rect), "The \(z.dock) zone stays on screen")
+        }
+        assert(PillWindowController.nearDocks(pillCentre: NSPoint(x: 960, y: 520), visible: vf).isEmpty,
+               "No zone shows in the middle of the screen")
+        assert(PillWindowController.nearDocks(pillCentre: NSPoint(x: 960, y: 150), visible: vf).contains("bottom"),
+               "The bottom zone shows as the pill comes close")
+    }
 
     private static func testLanguageMappingRoundtrip() {
         for item in AppState.languageMap {
@@ -206,6 +228,7 @@ enum SelfTests {
         assert(BorderStyle.from("Green") == .green, "Green")
         assert(BorderStyle.from("Purple") == .purple, "Purple")
         assert(BorderStyle.from("Orange") == .orange, "Orange")
+        assert(BorderStyle.from("Accent") == .accent, "Accent")
         assert(BorderStyle.from("None") == .none, "None")
         assert(BorderStyle.from("???") == .rainbow, "Unknown → rainbow")
     }

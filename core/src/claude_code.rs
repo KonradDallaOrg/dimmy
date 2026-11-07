@@ -46,7 +46,7 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::RwLock;
 use std::time::Duration;
 
@@ -762,16 +762,15 @@ impl std::error::Error for ClaudeCodeError {}
 ///
 /// `prompt` is written to stdin and only stdin — never as a CLI
 /// arg. Anthropic's CLI accepts any length there.
-/// Does the installed CLI accept `--include-partial-messages`?
+/// The installed CLI's `--help`, probed once and cached.
 ///
-/// Probed once from `--help` and cached. An older `claude` rejects an
-/// unknown flag with a non-zero exit, which would turn every recap and
-/// rewrite for a subscription user into a hard failure — so streaming is
-/// opt-in on evidence, never assumed. When this is false the call takes the
-/// byte-for-byte path it took before streaming existed.
-fn cli_supports_partial_messages(binary: &Path) -> bool {
-    static SUPPORTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *SUPPORTED.get_or_init(|| {
+/// An older `claude` rejects an unknown flag with a non-zero exit, which
+/// would turn every recap and rewrite for a subscription user into a hard
+/// failure — so every optional flag is opt-in on evidence from here, never
+/// assumed.
+fn cli_help(binary: &Path) -> &'static str {
+    static HELP: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    HELP.get_or_init(|| {
         let mut cmd = Command::new(binary);
         cmd.arg("--help");
         cmd.stdout(Stdio::piped());
@@ -781,23 +780,81 @@ fn cli_supports_partial_messages(binary: &Path) -> bool {
             use std::os::windows::process::CommandExt;
             cmd.creation_flags(0x08000000);
         }
-        let supported = cmd
-            .output()
+        cmd.output()
             .ok()
-            .map(|o| String::from_utf8_lossy(&o.stdout).contains("--include-partial-messages"))
-            .unwrap_or(false);
-        crate::log(&format!(
-            "[ClaudeCode] --include-partial-messages supported: {}",
-            supported
-        ));
-        supported
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default()
     })
+}
+
+/// True when `flag` is one of the options `--help` lists, not merely a word
+/// in some other option's description ("… unless --tools names them").
+fn help_offers(help: &str, flag: &str) -> bool {
+    help.lines().any(|line| {
+        line.split_whitespace()
+            .take_while(|tok| tok.starts_with('-'))
+            .any(|tok| tok.trim_end_matches(',') == flag)
+    })
+}
+
+/// When false the call takes the byte-for-byte path it took before
+/// streaming existed.
+fn cli_supports_partial_messages(binary: &Path) -> bool {
+    help_offers(cli_help(binary), "--include-partial-messages")
+}
+
+/// Keeps the user's own Claude Code setup out of a Dimmy call.
+///
+/// Without these the CLI loads the user's CLAUDE.md, plugins, hooks, MCP
+/// servers and tool definitions into every rewrite: measured 2026-11-07 at
+/// ~44k input tokens for one dictation against ~4k with the set, 9.5 s →
+/// 3.5 s. It also saved every dictation and recap as a session in the
+/// user's `claude --resume` history.
+const LEAN_ARGS: [&str; 7] = [
+    "--tools",
+    "",
+    "--setting-sources",
+    "",
+    "--strict-mcp-config",
+    "--disable-slash-commands",
+    "--no-session-persistence",
+];
+
+/// A quick call (a dictation rewrite, a ping) wants the answer, not the
+/// model's deliberation. Claude Code thinks by default: the env var turns
+/// extended thinking off where the model allows it (Haiku 4.5), and low
+/// effort trims the adaptive reasoning of models that always think
+/// (Haiku/Sonnet/Opus 5.5). An unknown env var is ignored by an old CLI;
+/// an unknown flag is not, hence the `--help` gate on `--effort`.
+const QUICK_ENV: (&str, &str) = ("MAX_THINKING_TOKENS", "0");
+
+fn quick_args(help: &str) -> &'static [&'static str] {
+    if help_offers(help, "--effort") {
+        &["--effort", "low"]
+    } else {
+        &[]
+    }
+}
+
+/// All of [`LEAN_ARGS`] or none: `--tools ""` alone measured ~330k input
+/// tokens, worse than no flags at all.
+fn lean_args(help: &str) -> &'static [&'static str] {
+    let offered = LEAN_ARGS
+        .iter()
+        .filter(|a| a.starts_with("--"))
+        .all(|flag| help_offers(help, flag));
+    if offered {
+        &LEAN_ARGS
+    } else {
+        &[]
+    }
 }
 
 pub fn run_blocking(
     prompt: &str,
     model: &str,
     timeout: Duration,
+    quick: bool,
 ) -> Result<String, ClaudeCodeError> {
     let binary = match detect_binary() {
         Some(p) => p,
@@ -808,13 +865,19 @@ pub fn run_blocking(
     }
 
     if cli_supports_partial_messages(&binary) {
-        return run_blocking_streaming(&binary, prompt, model, timeout);
+        return run_blocking_streaming(&binary, prompt, model, timeout, quick);
     }
 
+    let lean = lean_args(cli_help(&binary));
     let mut cmd = Command::new(&binary);
     cmd.arg("--print");
     cmd.arg("--output-format");
     cmd.arg("text");
+    cmd.args(lean);
+    if quick {
+        cmd.args(quick_args(cli_help(&binary)));
+        cmd.env(QUICK_ENV.0, QUICK_ENV.1);
+    }
     if !model.is_empty() {
         cmd.arg("--model");
         cmd.arg(model);
@@ -836,10 +899,12 @@ pub fn run_blocking(
     }
 
     crate::log(&format!(
-        "[ClaudeCode] spawn binary={:?} model={:?} prompt_chars={}",
+        "[ClaudeCode] spawn binary={:?} model={:?} prompt_chars={} lean={} quick={}",
         binary,
         model,
-        prompt.len()
+        prompt.len(),
+        !lean.is_empty(),
+        quick
     ));
 
     let mut child = cmd
@@ -913,27 +978,10 @@ pub fn run_blocking(
     Ok(text)
 }
 
-/// Same contract as `run_blocking`, but reads the CLI's `stream-json`
-/// output as it arrives so the host can show progress.
-///
-/// Two deliberate choices:
-///
-/// 1. **The answer comes from the `result` line, not from the deltas.**
-///    `stream-json` ends with `{"type":"result","result":"<full text>"}`,
-///    which is exactly as authoritative as today's `--output-format text`.
-///    The `stream_event` deltas drive the UI only, so a bug in delta
-///    parsing can dull the progress display but can never corrupt a recap.
-/// 2. **Thinking deltas ride their own phase.** They are the model's
-///    private deliberation; folding them into the answer would put them in
-///    the user's recap. Same contract as the Anthropic SSE reader.
-fn run_blocking_streaming(
-    binary: &Path,
-    prompt: &str,
-    model: &str,
-    timeout: Duration,
-) -> Result<String, ClaudeCodeError> {
-    use std::io::{BufRead, BufReader};
-
+/// The `claude --print` command for a streaming call. `json_input` makes
+/// it wait for one stream-json user message on stdin, which is how a
+/// prewarmed process is started before the prompt exists.
+fn streaming_command(binary: &Path, model: &str, quick: bool, json_input: bool) -> Command {
     let mut cmd = Command::new(binary);
     cmd.arg("--print");
     cmd.arg("--output-format");
@@ -941,6 +989,15 @@ fn run_blocking_streaming(
     // stream-json refuses to emit without --verbose under --print.
     cmd.arg("--verbose");
     cmd.arg("--include-partial-messages");
+    if json_input {
+        cmd.arg("--input-format");
+        cmd.arg("stream-json");
+    }
+    cmd.args(lean_args(cli_help(binary)));
+    if quick {
+        cmd.args(quick_args(cli_help(binary)));
+        cmd.env(QUICK_ENV.0, QUICK_ENV.1);
+    }
     if !model.is_empty() {
         cmd.arg("--model");
         cmd.arg(model);
@@ -955,20 +1012,168 @@ fn run_blocking_streaming(
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x08000000);
     }
+    cmd
+}
 
+fn stream_json_user_message(prompt: &str) -> String {
+    let msg = serde_json::json!({
+        "type": "user",
+        "message": { "role": "user", "content": prompt },
+    });
+    format!("{}\n", msg)
+}
+
+/// What the hotkey knows about the coming dictation's LLM step.
+#[derive(Clone, Copy)]
+pub struct PrewarmInputs<'a> {
+    pub llm_mode: &'a str,
+    pub auth_method: &'a str,
+    pub llm_url: &'a str,
+    pub llm_enabled: bool,
+    pub translate_to: &'a str,
+    pub has_app_rules: bool,
+}
+
+/// True when the dictation that is starting will most likely end in a
+/// `claude` CLI rewrite. Errs towards yes on app rules (they are resolved
+/// only at stop): a prewarm that goes unused costs a waiting process, no quota.
+pub fn should_prewarm(i: &PrewarmInputs) -> bool {
+    let other_cli =
+        crate::codex::is_codex_url(i.llm_url) || crate::gemini_cli::is_gemini_cli_url(i.llm_url);
+    let via_claude_cli =
+        !other_cli && (i.auth_method == "subscription" || is_claude_code_url(i.llm_url));
+    let translating = !i.translate_to.is_empty() && i.translate_to != "none";
+    i.llm_mode != "local" && via_claude_cli && (i.llm_enabled || translating || i.has_app_rules)
+}
+
+/// A `claude` process started at hotkey-down, waiting for its one prompt.
+/// One process per dictation, so no context ever carries over.
+struct Warm {
+    child: Child,
+    model: String,
+    born: std::time::Instant,
+}
+
+static WARM: std::sync::Mutex<Option<Warm>> = std::sync::Mutex::new(None);
+
+/// A waiting CLI is cheap but not free (~200 MB); past this it is retired.
+const WARM_MAX_AGE: Duration = Duration::from_secs(600);
+
+impl Warm {
+    fn usable_for(&mut self, model: &str) -> bool {
+        self.model == model
+            && self.born.elapsed() < WARM_MAX_AGE
+            && matches!(self.child.try_wait(), Ok(None))
+    }
+
+    /// Closing stdin lets the CLI exit on its own; killing it could cut a
+    /// write to the user's ~/.claude.json short.
+    fn retire(mut self) {
+        drop(self.child.stdin.take());
+        std::thread::spawn(move || {
+            let _ = self.child.wait_with_output();
+        });
+    }
+}
+
+/// Start the CLI for a dictation that is about to need it, so its ~0.85 s
+/// startup runs while the user is still talking. Returns at once: the
+/// binary lookup and `--help` probe happen on a thread of their own.
+pub fn prewarm(model: &str) {
+    let model = model.to_string();
+    std::thread::spawn(move || {
+        let Some(binary) = detect_binary() else {
+            return;
+        };
+        if !has_credentials() || !cli_supports_partial_messages(&binary) {
+            return;
+        }
+        let Ok(mut slot) = WARM.lock() else {
+            return;
+        };
+        if let Some(w) = slot.as_mut() {
+            if w.usable_for(&model) {
+                return;
+            }
+        }
+        if let Some(old) = slot.take() {
+            old.retire();
+        }
+        match streaming_command(&binary, &model, true, true).spawn() {
+            Ok(child) => {
+                crate::log(&format!("[ClaudeCode] prewarmed model={:?}", model));
+                *slot = Some(Warm {
+                    child,
+                    model,
+                    born: std::time::Instant::now(),
+                });
+            }
+            Err(e) => crate::log(&format!("[ClaudeCode] prewarm spawn failed: {}", e)),
+        }
+    });
+}
+
+fn take_warm(model: &str) -> Option<Warm> {
+    let mut slot = WARM.lock().ok()?;
+    let mut w = slot.take()?;
+    if w.usable_for(model) {
+        Some(w)
+    } else {
+        w.retire();
+        None
+    }
+}
+
+/// Same contract as `run_blocking`, but reads the CLI's `stream-json`
+/// output as it arrives so the host can show progress.
+///
+/// Three deliberate choices:
+///
+/// 1. **The answer comes from the `result` line, not from the deltas.**
+///    `stream-json` ends with `{"type":"result","result":"<full text>"}`,
+///    which is exactly as authoritative as today's `--output-format text`.
+///    The `stream_event` deltas drive the UI only, so a bug in delta
+///    parsing can dull the progress display but can never corrupt a recap.
+/// 2. **Thinking deltas ride their own phase.** They are the model's
+///    private deliberation; folding them into the answer would put them in
+///    the user's recap. Same contract as the Anthropic SSE reader.
+/// 3. **The answer returns as soon as the result line arrives.** The CLI
+///    then needs ~0.75 s to shut down; it does so on a reaper thread
+///    instead of in front of the user's paste.
+fn run_blocking_streaming(
+    binary: &Path,
+    prompt: &str,
+    model: &str,
+    timeout: Duration,
+    quick: bool,
+) -> Result<String, ClaudeCodeError> {
+    use std::io::{BufRead, BufReader};
+
+    let warm = if quick { take_warm(model) } else { None };
+    let warm_age_ms = warm.as_ref().map(|w| w.born.elapsed().as_millis());
     crate::log(&format!(
-        "[ClaudeCode] spawn (streaming) binary={:?} model={:?} prompt_chars={}",
+        "[ClaudeCode] spawn (streaming) binary={:?} model={:?} prompt_chars={} lean={} quick={} warm_age_ms={:?}",
         binary,
         model,
-        prompt.len()
+        prompt.len(),
+        !lean_args(cli_help(binary)).is_empty(),
+        quick,
+        warm_age_ms
     ));
 
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| ClaudeCodeError::Spawn(format!("{}", e)))?;
+    let spawned_at = std::time::Instant::now();
+    let (mut child, payload) = match warm {
+        Some(w) => (w.child, stream_json_user_message(prompt)),
+        None => (
+            streaming_command(binary, model, quick, false)
+                .spawn()
+                .map_err(|e| ClaudeCodeError::Spawn(format!("{}", e)))?,
+            prompt.to_string(),
+        ),
+    };
 
     if let Some(mut stdin) = child.stdin.take() {
-        if let Err(e) = stdin.write_all(prompt.as_bytes()) {
+        if let Err(e) = stdin.write_all(payload.as_bytes()) {
             let _ = child.kill();
             return Err(ClaudeCodeError::Spawn(format!("stdin write: {}", e)));
         }
@@ -987,15 +1192,34 @@ fn run_blocking_streaming(
             return Err(ClaudeCodeError::Spawn("no stdout handle".into()));
         }
     };
-    let collected = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
-    let collected_writer = std::sync::Arc::clone(&collected);
+    // Some(text) = the answer; None = stdout ended without one.
+    let (answer_tx, answer_rx) = std::sync::mpsc::channel::<Option<String>>();
+    let timing = std::sync::Arc::new(std::sync::Mutex::new(StreamTiming::default()));
+    let timing_writer = std::sync::Arc::clone(&timing);
     let reader = std::thread::spawn(move || {
         let mut started = false;
+        let mut answered = false;
+        let mark = |f: fn(&mut StreamTiming) -> &mut Option<u128>| {
+            if let Ok(mut t) = timing_writer.lock() {
+                let slot = f(&mut t);
+                if slot.is_none() {
+                    *slot = Some(spawned_at.elapsed().as_millis());
+                }
+            }
+        };
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            mark(|t| &mut t.first_line_ms);
             let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
                 continue; // a non-JSON line is not fatal, just not ours
             };
             match v["type"].as_str().unwrap_or("") {
+                "rate_limit_event" => {
+                    if let Ok(mut t) = timing_writer.lock() {
+                        t.five_hour = v["rate_limit_info"]["unifiedWindows"]["five_hour"]
+                            ["utilization"]
+                            .as_f64();
+                    }
+                }
                 "stream_event" => {
                     let ev = &v["event"];
                     if ev["type"].as_str() == Some("content_block_delta") {
@@ -1005,6 +1229,7 @@ fn run_blocking_streaming(
                                     if !d.is_empty() {
                                         if !started {
                                             started = true;
+                                            mark(|t| &mut t.first_text_ms);
                                             crate::llm::emit_recap_stream_event("start", "");
                                         }
                                         crate::llm::emit_recap_stream_event("delta", d);
@@ -1023,48 +1248,95 @@ fn run_blocking_streaming(
                     }
                 }
                 "result" => {
+                    mark(|t| &mut t.result_ms);
+                    if let Ok(mut t) = timing_writer.lock() {
+                        t.cli_ms = v["duration_ms"].as_u64();
+                        t.api_ms = v["duration_api_ms"].as_u64();
+                        let u = &v["usage"];
+                        t.tokens_in = Some(
+                            [
+                                "input_tokens",
+                                "cache_creation_input_tokens",
+                                "cache_read_input_tokens",
+                            ]
+                            .iter()
+                            .filter_map(|k| u[*k].as_u64())
+                            .sum(),
+                        );
+                    }
                     // The authoritative answer. `is_error` marks a CLI-level
                     // failure whose `result` is a message, not an answer.
                     if v["is_error"].as_bool() == Some(true) {
+                        // The only place the CLI says why (usage limit, auth):
+                        // stderr stays empty in stream-json mode.
+                        let why: String = v["result"]
+                            .as_str()
+                            .unwrap_or("")
+                            .chars()
+                            .take(200)
+                            .collect();
+                        crate::log(&format!("[ClaudeCode] error result: {}", why));
                         continue;
                     }
                     if let Some(text) = v["result"].as_str() {
-                        if let Ok(mut guard) = collected_writer.lock() {
-                            *guard = text.to_string();
+                        if !text.is_empty() && !answered {
+                            answered = true;
+                            if started {
+                                crate::llm::emit_recap_stream_event("end", "");
+                            }
+                            let _ = answer_tx.send(Some(text.to_string()));
                         }
                     }
                 }
                 _ => {}
             }
         }
-        if started {
-            crate::llm::emit_recap_stream_event("end", "");
+        if !answered {
+            if started {
+                crate::llm::emit_recap_stream_event("end", "");
+            }
+            let _ = answer_tx.send(None);
         }
     });
 
-    // Identical deadline policy to run_blocking: 100 ms polling, kill on
-    // expiry. Killing the child closes stdout, which ends the reader.
-    let deadline = std::time::Instant::now() + timeout;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_status)) => break,
-            Ok(None) => {
-                if std::time::Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = reader.join();
-                    return Err(ClaudeCodeError::Timeout);
-                }
-                std::thread::sleep(Duration::from_millis(100));
-            }
-            Err(e) => {
-                let _ = child.kill();
-                let _ = reader.join();
-                return Err(ClaudeCodeError::Spawn(format!("wait: {}", e)));
-            }
+    let answer = match answer_rx.recv_timeout(timeout) {
+        Ok(a) => a,
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            // Killing the child closes stdout, which ends the reader.
+            let _ = child.kill();
+            let _ = reader.join();
+            return Err(ClaudeCodeError::Timeout);
         }
-    }
-    let _ = reader.join();
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => None,
+    };
 
+    if let Some(text) = answer {
+        let answered_ms = spawned_at.elapsed().as_millis();
+        std::thread::spawn(move || {
+            let _ = reader.join();
+            let _ = child.wait_with_output();
+        });
+        let t = timing.lock().map(|t| t.clone()).unwrap_or_default();
+        crate::log(&format!(
+            "[ClaudeCode] success (streaming) prompt_chars={} response_chars={} \
+             warm_age_ms={:?} first_line_ms={:?} first_text_ms={:?} result_ms={:?} answered_ms={} \
+             cli_ms={:?} api_ms={:?} tokens_in={:?} five_hour={:?}",
+            prompt.len(),
+            text.len(),
+            warm_age_ms,
+            t.first_line_ms,
+            t.first_text_ms,
+            t.result_ms,
+            answered_ms,
+            t.cli_ms,
+            t.api_ms,
+            t.tokens_in,
+            t.five_hour
+        ));
+        return Ok(text);
+    }
+
+    let _ = reader.join();
     let output = child
         .wait_with_output()
         .map_err(|e| ClaudeCodeError::Spawn(format!("collect: {}", e)))?;
@@ -1081,25 +1353,25 @@ fn run_blocking_streaming(
             stderr_excerpt: excerpt,
         });
     }
+    // Exit 0 but no result line: treat as a failure rather than hand
+    // back an empty recap that reads as a successful one.
+    Err(ClaudeCodeError::NonZeroExit {
+        code: 0,
+        stderr_excerpt: "stream-json produced no result line".into(),
+    })
+}
 
-    let text = collected
-        .lock()
-        .map(|g| g.clone())
-        .unwrap_or_else(|_| String::new());
-    if text.is_empty() {
-        // Exit 0 but no result line: treat as a failure rather than hand
-        // back an empty recap that reads as a successful one.
-        return Err(ClaudeCodeError::NonZeroExit {
-            code: 0,
-            stderr_excerpt: "stream-json produced no result line".into(),
-        });
-    }
-    crate::log(&format!(
-        "[ClaudeCode] success (streaming) prompt_chars={} response_chars={}",
-        prompt.len(),
-        text.len()
-    ));
-    Ok(text)
+/// Where a streaming call spends its time, all in ms since the spawn
+/// except `cli_ms` / `api_ms`, which the CLI reports about itself.
+#[derive(Default, Clone)]
+struct StreamTiming {
+    first_line_ms: Option<u128>,
+    first_text_ms: Option<u128>,
+    result_ms: Option<u128>,
+    cli_ms: Option<u64>,
+    api_ms: Option<u64>,
+    tokens_in: Option<u64>,
+    five_hour: Option<f64>,
 }
 
 /// Spawn `claude /login` as a detached subprocess. Returns once the
@@ -1224,6 +1496,153 @@ mod tests {
         assert!(!is_claude_code_url("https://api.anthropic.com/v1/messages"));
         assert!(!is_claude_code_url("http://claude-code/"));
         assert!(!is_claude_code_url(""));
+    }
+
+    const HELP_WITH_LEAN_FLAGS: &str = "\
+Options:
+  -p, --print                           Print response and exit
+  --disable-slash-commands              Disable all skills and commands
+  --include-partial-messages            Include partial message chunks
+  --no-session-persistence              Disable session persistence
+  --setting-sources <sources>           Comma-separated list of setting sources
+  --strict-mcp-config                   Only use MCP servers from --mcp-config
+  --tools <tools...>                    Specify the list of available tools
+";
+
+    #[test]
+    fn lean_args_are_used_when_the_cli_offers_every_one() {
+        assert_eq!(lean_args(HELP_WITH_LEAN_FLAGS), LEAN_ARGS);
+    }
+
+    #[test]
+    fn lean_args_are_all_or_nothing() {
+        // `--tools ""` on its own measured ~330k input tokens per dictation
+        // against ~44k for no flags at all: a partial set is worse than none.
+        let without_settings = HELP_WITH_LEAN_FLAGS.replace(
+            "  --setting-sources <sources>           Comma-separated list of setting sources\n",
+            "",
+        );
+        assert!(lean_args(&without_settings).is_empty());
+        assert!(lean_args("").is_empty());
+    }
+
+    #[test]
+    fn a_flag_named_only_in_prose_is_not_offered() {
+        let help = "  --allowed-tools <tools...>   Allowed tools, unless --tools names them\n";
+        assert!(!help_offers(help, "--tools"));
+        assert!(help_offers(HELP_WITH_LEAN_FLAGS, "--tools"));
+        assert!(help_offers(HELP_WITH_LEAN_FLAGS, "--print"));
+    }
+
+    /// Manual check after a CLI upgrade: needs an installed, logged-in `claude`.
+    /// `cargo test --lib claude_code::tests::real_cli -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn real_cli_takes_the_lean_set_and_still_answers() {
+        let binary = detect_binary().expect("claude not installed");
+        assert_eq!(lean_args(cli_help(&binary)), LEAN_ARGS);
+        let started = std::time::Instant::now();
+        let reply = run_blocking(
+            "Reply with the single word OK.",
+            "",
+            Duration::from_secs(60),
+            true,
+        )
+        .expect("lean call failed");
+        println!("reply={:?} elapsed={:?}", reply, started.elapsed());
+        assert!(!reply.trim().is_empty());
+    }
+
+    #[test]
+    fn a_quick_call_asks_for_low_effort_only_when_the_cli_offers_it() {
+        let with_effort = format!(
+            "{}  --effort <level>                      Effort level for the current session\n",
+            HELP_WITH_LEAN_FLAGS
+        );
+        assert_eq!(quick_args(&with_effort), ["--effort", "low"]);
+        assert!(quick_args(HELP_WITH_LEAN_FLAGS).is_empty());
+    }
+
+    #[test]
+    fn a_quick_call_turns_extended_thinking_off() {
+        // 12 of 13 saved dictations carried a thinking block: a 117-char
+        // answer cost 614 output tokens and ~7 s before the first word.
+        assert_eq!(QUICK_ENV, ("MAX_THINKING_TOKENS", "0"));
+    }
+
+    #[test]
+    fn prewarm_only_when_the_dictation_will_reach_the_claude_cli() {
+        let base = PrewarmInputs {
+            llm_mode: "cloud",
+            auth_method: "subscription",
+            llm_url: "https://api.anthropic.com/v1/messages",
+            llm_enabled: true,
+            translate_to: "",
+            has_app_rules: false,
+        };
+        assert!(should_prewarm(&base));
+        assert!(should_prewarm(&PrewarmInputs {
+            llm_enabled: false,
+            translate_to: "en",
+            ..base
+        }));
+        assert!(should_prewarm(&PrewarmInputs {
+            llm_enabled: false,
+            has_app_rules: true,
+            ..base
+        }));
+        assert!(!should_prewarm(&PrewarmInputs {
+            llm_enabled: false,
+            ..base
+        }));
+        assert!(!should_prewarm(&PrewarmInputs {
+            llm_enabled: false,
+            translate_to: "none",
+            ..base
+        }));
+        assert!(!should_prewarm(&PrewarmInputs {
+            llm_mode: "local",
+            ..base
+        }));
+        assert!(!should_prewarm(&PrewarmInputs {
+            auth_method: "api_key",
+            ..base
+        }));
+        assert!(should_prewarm(&PrewarmInputs {
+            auth_method: "api_key",
+            llm_url: "claude-code://default",
+            ..base
+        }));
+        assert!(!should_prewarm(&PrewarmInputs {
+            llm_url: "codex://default",
+            ..base
+        }));
+    }
+
+    #[test]
+    fn a_prewarmed_cli_gets_the_prompt_as_one_stream_json_user_message() {
+        let line = stream_json_user_message("ciao \"Marco\"\nriga due");
+        assert!(line.ends_with('\n'));
+        let v: serde_json::Value = serde_json::from_str(line.trim_end()).unwrap();
+        assert_eq!(v["type"], "user");
+        assert_eq!(v["message"]["role"], "user");
+        assert_eq!(v["message"]["content"], "ciao \"Marco\"\nriga due");
+    }
+
+    #[test]
+    fn lean_args_pin_the_measured_set() {
+        assert_eq!(
+            LEAN_ARGS,
+            [
+                "--tools",
+                "",
+                "--setting-sources",
+                "",
+                "--strict-mcp-config",
+                "--disable-slash-commands",
+                "--no-session-persistence",
+            ]
+        );
     }
 
     #[test]
@@ -1590,7 +2009,7 @@ mod tests {
         // without Claude Code installed. On a dev machine WITH
         // claude installed, this test is skipped because the
         // contract still holds (just via a different branch).
-        let _ = run_blocking("ping", "", Duration::from_secs(1));
+        let _ = run_blocking("ping", "", Duration::from_secs(1), true);
         // No assertion — either NotInstalled error or an actual
         // claude invocation. Both are acceptable; we only check
         // that the call doesn't panic.

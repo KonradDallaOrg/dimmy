@@ -3,7 +3,7 @@ import SwiftUI
 // MARK: - Border style helpers
 
 enum BorderStyle {
-    case rainbow, blue, green, purple, orange, none
+    case rainbow, blue, green, purple, orange, accent, none
 
     static func from(_ string: String) -> BorderStyle {
         switch string.lowercased() {
@@ -12,6 +12,9 @@ enum BorderStyle {
         case "green": return .green
         case "purple": return .purple
         case "orange": return .orange
+        // The macOS accent colour (System Settings > Appearance); Windows
+        // uses its own accent for the same value.
+        case "accent": return .accent
         case "none": return .none
         default: return .rainbow
         }
@@ -29,6 +32,7 @@ enum BorderStyle {
         case .green: return .green
         case .purple: return .purple
         case .orange: return .orange
+        case .accent: return Color(nsColor: .controlAccentColor)
         case .none: return .clear
         }
     }
@@ -40,6 +44,7 @@ enum BorderStyle {
         case .green: return .green
         case .purple: return .purple
         case .orange: return .orange
+        case .accent: return Color(nsColor: .controlAccentColor)
         case .none: return .clear
         }
     }
@@ -134,7 +139,8 @@ struct PillView: View {
 
     /// One height for every shape (circle and capsule), so no state makes
     /// the pill bigger than the idle circle. Mirror of Win CircleSize.
-    private let pillHeight: CGFloat = 32
+    nonisolated static let pillHeight: CGFloat = 32
+    private var pillHeight: CGFloat { Self.pillHeight }
 
     private static let readyGreen = Color(red: 0x4a / 255.0, green: 0xde / 255.0, blue: 0x80 / 255.0)
     private static let commandAmber = Color(red: 1.0, green: 0x9F / 255.0, blue: 0x0A / 255.0)
@@ -219,6 +225,12 @@ struct PillView: View {
     }
 
     private var pillAlignment: Alignment {
+        Self.alignment(dock: dock, overlayPosition: appState.overlayPosition)
+    }
+
+    /// Where the pill sits inside the larger panel. The controller reads the
+    /// same rule to find the pill a drag left behind.
+    nonisolated static func alignment(dock: String, overlayPosition: String) -> Alignment {
         switch dock {
         case "left": return .leading
         case "right": return .trailing
@@ -230,7 +242,7 @@ struct PillView: View {
         case "bottomRight": return .bottomTrailing
         default: break
         }
-        switch appState.overlayPosition {
+        switch overlayPosition {
         case "Top Left":      return .topLeading
         case "Top Center":    return .top
         case "Top Right":     return .topTrailing

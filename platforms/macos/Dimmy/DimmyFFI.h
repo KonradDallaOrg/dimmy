@@ -334,6 +334,9 @@ int32_t dimmy_model_catalog_json(char * _Nullable out_buf, int32_t buf_len);
 /// TOTAL byte length, pass out_buf=NULL to size, then call again.
 int32_t dimmy_license_text(char * _Nullable out_buf, int32_t buf_len);
 int32_t dimmy_third_party_notices(char * _Nullable out_buf, int32_t buf_len);
+// kind 0 licence | 1 open source notices: JSON blocks, same length-query
+// contract as dimmy_license_text. -1 for an unknown kind.
+int32_t dimmy_legal_document(int32_t kind, char * _Nullable out_buf, int32_t buf_len);
 
 /// Terms of Service / EULA version the user is asked to accept. Store it in
 /// the `terms_accepted_version` config field on acceptance. Bytes written, -1
@@ -1027,6 +1030,27 @@ int32_t dimmy_call_detector_state(char * _Nonnull out_buf, int32_t buf_len);
 /// `backspace`, `num0`-`num9`). Examples: `"cmd+shift+d"`, `"cmd+opt"`.
 int32_t dimmy_hotkey_combos_conflict(const char * _Nullable a,
                                      const char * _Nullable b);
+
+/// Shortcut recorder behind the "set shortcut" sheet. `target` =
+/// dictation | command | meeting | dictionary; `current_json` = the four
+/// configured combos keyed the same way. Every change arrives as a
+/// `hotkey_recorder` event. Returns 0, -1 bad target, -2 bad JSON.
+int32_t dimmy_hotkey_recorder_start(const char * _Nullable target,
+                                    const char * _Nullable current_json);
+void dimmy_hotkey_recorder_stop(void);
+/// 1 while a sheet is recording: the event taps step aside.
+int32_t dimmy_hotkey_recorder_is_active(void);
+/// Feed one key from the sheet's monitors (macOS keycode). 1 = it belongs
+/// to the shortcut (consume it), 0 = let the sheet have it.
+int32_t dimmy_hotkey_recorder_key(uint32_t native_code, int32_t is_down);
+
+/// The dictation session state machine (core/src/dictation_session.rs).
+/// input 1 press | 2 release | 3 stop | 4 start failed | 5 delivered |
+/// 6 cancel; kind 0 dictation | 1 command; mode 0 toggle | 1 hold.
+/// Returns 0 nothing | 1 start | 2 finish | 3 discard | 4 busy | -1 bad.
+int32_t dimmy_dictation_input(int32_t input, int32_t kind, int32_t mode);
+/// 0 idle | 1 recording | 2 finishing.
+int32_t dimmy_dictation_phase(void);
 
 // ── Telegram inbox source ───────────────────────────────────────────
 // Rust core/src/telegram.rs — the "Saved Messages audio inbox". Every

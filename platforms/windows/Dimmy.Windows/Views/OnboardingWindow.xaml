@@ -182,15 +182,11 @@
                        HorizontalAlignment="Center" />
             <TextBlock Text="Press the keys you want to dictate with." Style="{StaticResource DimmySecondary}"
                        HorizontalAlignment="Center" />
-            <Border x:Name="ShortcutCaptureBorder"
-                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                    CornerRadius="{StaticResource DimmyCardRadius}" Padding="24,16" HorizontalAlignment="Center"
-                    MinWidth="220" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                    BorderThickness="1" Tapped="ShortcutCapture_Tapped">
-                <TextBlock x:Name="ShortcutCaptureText" Text="{Binding Shortcut, Mode=OneWay}"
-                           Style="{StaticResource DimmyPageTitle}" HorizontalAlignment="Center" />
-            </Border>
-            <TextBlock Text="Click here, then press and hold your combo." Style="{StaticResource DimmyCaption}"
+            <controls:ShortcutEditor x:Name="OnboardingShortcutEditor" Target="dictation"
+                                     DefaultShortcut="win+alt" IsLarge="True"
+                                     Shortcut="{Binding Shortcut, Mode=TwoWay}"
+                                     HorizontalAlignment="Center" />
+            <TextBlock Text="Click the keys to pick different ones." Style="{StaticResource DimmyCaption}"
                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                        HorizontalAlignment="Center" />
             <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceL}" HorizontalAlignment="Center"

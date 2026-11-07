@@ -1,4 +1,6 @@
 ﻿using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -76,8 +78,18 @@ public sealed partial class PillWindow : Window
         BuildRainbowBrush();
         SetupWindow();
         _vm.PropertyChanged += Vm_PropertyChanged;
+        // "Accent" follows the Windows accent colour, also when the user
+        // changes it while Dimmy runs. Raised off the UI thread.
+        _uiSettings.ColorValuesChanged += (_, _) =>
+        {
+            if (_vm.BorderStyle == "Accent") DispatcherQueue.TryEnqueue(UpdateVisualState);
+        };
         Waveform.StyleMode = _vm.WaveformStyle;
         ColorBorder.SizeChanged += ColorBorder_SizeChanged;
+        // Every change of the pill's shape or place goes through layout
+        // (the capsule animates Width/Height, docking moves alignment and
+        // margins, the tip toggles Visibility), so this tracks them all.
+        RootGrid.LayoutUpdated += (_, _) => UpdateHitRegion();
         UpdateVisualState();
         // Initial sync: one shot in case a meeting is already active when
         // the pill is opened (e.g. the user closed and reopened the pill
@@ -443,6 +455,8 @@ public sealed partial class PillWindow : Window
 
         if (vertical)
         {
+            // Never shorter than wide: icon-only content stays a circle, not a squashed capsule.
+            measuredW = Math.Max(measuredW, CapsuleHeight);
             AnimateTransition(CapsuleHeight, measuredW, borderColor, newPanel, oldPanel, () =>
             {
                 ColorBorder.Height = double.NaN;
@@ -474,6 +488,15 @@ public sealed partial class PillWindow : Window
     private static readonly global::Windows.UI.Color ColorError =
         global::Windows.UI.Color.FromArgb(255, 239, 68, 68);
 
+    private readonly global::Windows.UI.ViewManagement.UISettings _uiSettings = new();
+
+    /// <summary>The Windows accent colour (Settings > Personalization >
+    /// Colors), in the shade that reads on the pill: lighter on the dark
+    /// pill, the deeper one on the light glass, as Windows itself does.</summary>
+    private global::Windows.UI.Color AccentBorder => _uiSettings.GetColorValue(IsGlass
+        ? global::Windows.UI.ViewManagement.UIColorType.AccentDark1
+        : global::Windows.UI.ViewManagement.UIColorType.AccentLight1);
+
     // Border style solid colors
     private static readonly global::Windows.UI.Color BorderBlue =
         global::Windows.UI.Color.FromArgb(255, 56, 189, 248);
@@ -493,6 +516,7 @@ public sealed partial class PillWindow : Window
             "Green" => new SolidColorBrush(BorderGreen),
             "Purple" => new SolidColorBrush(BorderPurple),
             "Orange" => new SolidColorBrush(BorderOrange),
+            "Accent" => new SolidColorBrush(AccentBorder),
             "None" => new SolidColorBrush(global::Windows.UI.Color.FromArgb(255, 60, 60, 60)),
             _ => _rainbowBrush!, // Rainbow default
         };
@@ -703,6 +727,7 @@ public sealed partial class PillWindow : Window
         _glowColor = color;
         _glowSubtle = subtle;
         ApplyGlow();
+        UpdateHitRegion(); // the blur radius may have changed with no layout pass
     }
 
     private void HideGlow()
@@ -735,6 +760,7 @@ public sealed partial class PillWindow : Window
     {
         "Blue" => BorderBlue, "Green" => BorderGreen,
         "Purple" => BorderPurple, "Orange" => BorderOrange,
+        "Accent" => AccentBorder,
         _ => BorderBlue,
     };
 
@@ -1178,6 +1204,7 @@ public sealed partial class PillWindow : Window
     {
         _snapTimer?.Stop();
         _isDragging = true;
+        _zonesShown = false;
         GetCursorPos(out _dragStartScreen);
         var appWindow = WindowHelper.GetAppWindow(this);
         if (appWindow != null) _windowStartPos = appWindow.Position;
@@ -1189,20 +1216,132 @@ public sealed partial class PillWindow : Window
         if (!_isDragging) return;
         GetCursorPos(out var current);
         var appWindow = WindowHelper.GetAppWindow(this);
-        appWindow?.Move(new global::Windows.Graphics.PointInt32(
+        if (appWindow == null) return;
+        var pos = new global::Windows.Graphics.PointInt32(
             _windowStartPos.X + current.X - _dragStartScreen.X,
-            _windowStartPos.Y + current.Y - _dragStartScreen.Y));
+            _windowStartPos.Y + current.Y - _dragStartScreen.Y);
+        appWindow.Move(pos);
+        ShowDockZones(appWindow, pos);
+    }
+
+    // ── Dock zones drawn while dragging ─────────────────────────────
+    private DockZoneOverlay? _dockZones;
+    private global::Windows.Graphics.RectInt32 _dockZonesArea;
+    private bool _zonesShown;
+
+    /// Faint outlines of the zones the pill is near, the one it would dock to
+    /// if dropped now drawn stronger. A press without a move shows nothing.
+    private void ShowDockZones(AppWindow aw, global::Windows.Graphics.PointInt32 pos)
+    {
+        try
+        {
+            var wa = DisplayArea.GetFromWindowId(aw.Id, DisplayAreaFallback.Nearest).WorkArea;
+            var scale = WindowScale();
+            _dockZones ??= new DockZoneOverlay();
+            if (!_zonesShown || !wa.Equals(_dockZonesArea))
+            {
+                _dockZonesArea = wa;
+                _dockZones.Layout(PillDockMath.Zones(wa.X, wa.Y, wa.Width, wa.Height, scale), scale);
+                _zonesShown = true;
+            }
+            var (cx, cy) = PillCentrePx(pos, scale);
+            _dockZones.Show(
+                PillDockMath.Near(cx, cy, wa.X, wa.Y, wa.Width, wa.Height, scale),
+                PillDockMath.Pick(cx, cy, wa.X, wa.Y, wa.Width, wa.Height, scale),
+                WindowHelper.GetHwnd(this));
+        }
+        catch (Exception ex)
+        {
+            // Decoration only: a failure here must never stop the drag.
+            System.Diagnostics.Debug.WriteLine($"[PillWindow] dock zones: {ex.Message}");
+        }
+    }
+
+    private double WindowScale()
+    {
+        var scale = GetDpiForWindow(WindowHelper.GetHwnd(this)) / 96.0;
+        return scale > 0 ? scale : 1.0;
+    }
+
+    /// The visible pill's centre on screen, in physical pixels, for the
+    /// window at <paramref name="pos"/>. The window is several times larger
+    /// than the pill and, docked, the pill sits against one of its sides.
+    private (double X, double Y) PillCentrePx(global::Windows.Graphics.PointInt32 pos, double scale)
+    {
+        var pill = ColorBorder.TransformToVisual(null).TransformBounds(
+            new global::Windows.Foundation.Rect(0, 0, ColorBorder.ActualWidth, ColorBorder.ActualHeight));
+        return (pos.X + (pill.X + pill.Width / 2) * scale, pos.Y + (pill.Y + pill.Height / 2) * scale);
     }
 
     private void Pill_PointerReleased(object sender, PointerRoutedEventArgs e)
     {
         _isDragging = false;
         ((UIElement)sender).ReleasePointerCapture(e.Pointer);
+        _dockZones?.HideAll();
+        _zonesShown = false;
         SnapToEdgeMiddle();
     }
 
+    // ── Hit region: clicks outside the pill reach the app underneath ──
+    [DllImport("user32.dll")]
+    private static extern int SetWindowRgn(IntPtr hWnd, IntPtr hRgn, bool bRedraw);
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr CreateRoundRectRgn(int x1, int y1, int x2, int y2, int w, int h);
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr CreateRectRgn(int x1, int y1, int x2, int y2);
+    [DllImport("gdi32.dll")]
+    private static extern int CombineRgn(IntPtr dest, IntPtr src1, IntPtr src2, int mode);
+    [DllImport("gdi32.dll")]
+    private static extern bool DeleteObject(IntPtr obj);
+    private const int RGN_OR = 2;
+
+    private List<RegionShape>? _hitShapes;
+
+    /// The window is several times larger than the pill and a transparent
+    /// pixel of it still takes the click, so the window region is cut to the
+    /// pill plus its glow (and the tip while it shows). Outside it, Windows
+    /// hands the click to the window underneath. Only re-applied when the
+    /// shapes actually change.
+    private void UpdateHitRegion()
+    {
+        if (ColorBorder.ActualWidth <= 0 || RootGrid.XamlRoot == null) return;
+        var hwnd = WindowHelper.GetHwnd(this);
+        var scale = GetDpiForWindow(hwnd) / 96.0;
+        if (scale <= 0) scale = 1.0;
+        var pill = ColorBorder.TransformToVisual(null).TransformBounds(
+            new global::Windows.Foundation.Rect(0, 0, ColorBorder.ActualWidth, ColorBorder.ActualHeight));
+        DipRect? tip = null;
+        if (ScrollTooltip.Visibility == Visibility.Visible && ScrollTooltip.ActualWidth > 0)
+        {
+            var t = ScrollTooltip.TransformToVisual(null).TransformBounds(
+                new global::Windows.Foundation.Rect(0, 0, ScrollTooltip.ActualWidth, ScrollTooltip.ActualHeight));
+            tip = new DipRect(t.X, t.Y, t.Width, t.Height);
+        }
+        var glow = _glowShadow?.BlurRadius ?? GlowPad;
+        var shapes = PillHitRegion.Compute(new DipRect(pill.X, pill.Y, pill.Width, pill.Height), glow, tip, scale);
+        if (shapes.Count == 0) return;
+        if (_hitShapes != null && _hitShapes.SequenceEqual(shapes)) return;
+
+        IntPtr region = IntPtr.Zero;
+        foreach (var sh in shapes)
+        {
+            var part = sh.Round > 0
+                ? CreateRoundRectRgn(sh.Left, sh.Top, sh.Right, sh.Bottom, sh.Round, sh.Round)
+                : CreateRectRgn(sh.Left, sh.Top, sh.Right, sh.Bottom);
+            if (region == IntPtr.Zero) { region = part; continue; }
+            CombineRgn(region, region, part, RGN_OR);
+            DeleteObject(part);
+        }
+        // On success the system owns the region; on failure it is ours to free.
+        if (SetWindowRgn(hwnd, region, true) == 0)
+        {
+            DeleteObject(region);
+            return;
+        }
+        _hitShapes = shapes;
+    }
+
     // ── Snap to corners / edge middles; vertical on the sides ───────
-    private enum PillDock { None, Left, Right, Top, Bottom, TopLeft, TopRight, BottomLeft, BottomRight }
     private PillDock _dock = PillDock.None;
     private bool IsVertical => _dock is PillDock.Left or PillDock.Right;
     private bool DockTop => _dock is PillDock.Top or PillDock.TopLeft or PillDock.TopRight;
@@ -1241,30 +1380,11 @@ public sealed partial class PillWindow : Window
         var size = aw.Size;
         double cx = pos.X + size.Width / 2.0, cy = pos.Y + size.Height / 2.0;
         double mx = wa.X + wa.Width / 2.0, my = wa.Y + wa.Height / 2.0;
-        double dl = cx - wa.X, dr = wa.X + wa.Width - cx, dt = cy - wa.Y, db = wa.Y + wa.Height - cy;
-        const double reach = 200; // px from an edge that still counts as "on" it
 
-        var dock = PillDock.None;
-        if (Math.Min(dl, dr) < reach && Math.Min(dt, db) < reach)
-            dock = (dt < db, dl < dr) switch
-            {
-                (true, true) => PillDock.TopLeft,
-                (true, false) => PillDock.TopRight,
-                (false, true) => PillDock.BottomLeft,
-                _ => PillDock.BottomRight,
-            };
-        else
-        {
-            double best = double.MaxValue;
-            void Try(PillDock d, double perp, double along, double alongMax)
-            {
-                if (perp < reach && along < alongMax && perp < best) { best = perp; dock = d; }
-            }
-            Try(PillDock.Left, dl, Math.Abs(cy - my), wa.Height * 0.2);
-            Try(PillDock.Right, dr, Math.Abs(cy - my), wa.Height * 0.2);
-            Try(PillDock.Top, dt, Math.Abs(cx - mx), wa.Width * 0.15);
-            Try(PillDock.Bottom, db, Math.Abs(cx - mx), wa.Width * 0.15);
-        }
+        // Measure from the pill the user sees, not from the window.
+        var scale = WindowScale();
+        var (pcx, pcy) = PillCentrePx(pos, scale);
+        var dock = PillDockMath.Pick(pcx, pcy, wa.X, wa.Y, wa.Width, wa.Height, scale);
 
         bool vertical = dock is PillDock.Left or PillDock.Right;
         int w = Px(vertical ? VerticalWindowWidth : WindowWidth);
@@ -1328,7 +1448,10 @@ public sealed partial class PillWindow : Window
         TranscribingPanel.Margin = m7;
         ProcessingPanel.Margin = m7;
         RecapPanel.Margin = m7;
-        ErrorPanel.Margin = m7;
+        // On the sides the error is the icon alone: no padding, so it sits in a circle,
+        // and the auto length after an animation can't drop below the width.
+        ErrorPanel.Margin = v ? new Thickness(0) : m7;
+        ColorBorder.MinHeight = v ? CapsuleHeight : 0;
         // Long labels can't stay upright inside a 36 px wide capsule.
         var textVis = v ? Visibility.Collapsed : Visibility.Visible;
         TranscribingText.Visibility = textVis;
@@ -1776,24 +1899,13 @@ public sealed partial class PillWindow : Window
                 return;
             }
 
-            // Flip out of the red Recording dot IMMEDIATELY (before the
-            // seconds-long STT round-trip) so the user sees the stop landed
-            // and doesn't re-press → a still-"recording" pill is exactly what
-            // made the user click Stop twice. StopAndProcess below drives
-            // Completing→Idle, so this can't stick in Transcribing.
-            if (_vm.CurrentState == AppState.Recording)
-                _vm.SetState(AppState.Transcribing);
-
-            // Delegate to the SINGLE App pipeline instead of duplicating
-            // stop→transcribe→paste here. Critically this gives the pill the
-            // _targetContext foreground-restore: clicking the pill Stop steals
-            // focus from the app the user was dictating into, so a naive paste
-            // would land in the pill (or wherever focus drifted). App.StopAndProcess
-            // restores the recorded target before Ctrl+V — same as the hotkey path.
-            // It also shares the _stopInProgress guard + the rc -9 concurrent-stop
-            // no-op, so a mashed Stop / hotkey+pill race resolves cleanly.
+            // The session machine decides (a second Stop, or one while the
+            // last dictation is still transcribing, does nothing) and, when it
+            // finishes, flips the pill to Transcribing at once and runs the
+            // single stop pipeline: that restores the app the user was
+            // dictating into before Ctrl+V, since clicking the pill stole focus.
             if (App.Instance is { } app)
-                await app.StopAndProcess();
+                await app.StopDictationAsync();
         }
         catch (Exception ex) { _vm.SetError(ex.Message); }
     }

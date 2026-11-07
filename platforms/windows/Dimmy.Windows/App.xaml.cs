@@ -90,7 +90,7 @@ public partial class App : Application
                     await _pillWindow.StopMeetingFromPillAsync();
                 return;
             }
-            if (_appViewModel.IsRecording || _pttStarted)
+            if (!Services.DictationSession.IsIdle)
             {
                 PttLog("Meeting hotkey ignored — a dictation is in progress");
                 _appViewModel.SetError("Finish the dictation first");
@@ -208,7 +208,7 @@ public partial class App : Application
         try
         {
             // Same live-dictation gate as OnDictationMaxDuration below.
-            if (!_appViewModel.IsRecording && !_pttStarted)
+            if (!Services.DictationSession.IsRecording)
                 return;
             Services.DictNotificationService.ShowLongDictationWarning();
         }
@@ -228,11 +228,10 @@ public partial class App : Application
             // >10-min meeting stop) showed "Dictation stopped at 10 min"
             // while the user was wrapping up a MEETING — wrong message,
             // misleading ptt.log line (2026-07-03).
-            if (!_appViewModel.IsRecording && !_pttStarted)
+            if (!Services.DictationSession.IsRecording)
                 return;
             PttLog("dictation.max_duration — auto-stopping the runaway dictation");
-            await StopAndProcess();
-            _pttStarted = false;
+            await DictationInputAsync(DictationInputKind.Stop, Services.SessionKind.Dictation);
             Services.DictNotificationService.ShowLongDictationCapped();
         }
         catch (Exception ex) { PttLog($"OnDictationMaxDuration exc: {ex.Message}"); }
@@ -297,10 +296,10 @@ public partial class App : Application
     /// hold/toggle mode, pill visibility + rc handling).</summary>
     public void MenuToggleDictation()
     {
-        if (_appViewModel.IsRecording || _pttStarted)
-            _dispatcherQueue?.TryEnqueue(async () => await StopAndProcess());
-        else
-            OnHotkeyPressed();
+        // The menu has no key to hold: it always behaves as a toggle.
+        _dispatcherQueue?.TryEnqueue(async () => await DictationInputAsync(
+            Services.DictationSession.IsRecording ? DictationInputKind.Stop : DictationInputKind.Press,
+            Services.SessionKind.Dictation, menu: true));
     }
 
     /// <summary>Menu action "Command (next dictation)": arm a ONE-SHOT command
@@ -360,16 +359,10 @@ public partial class App : Application
     // Must be stored as a field to prevent GC collection of the delegate
     private DimmyNative.EventCallback? _eventCallbackDelegate;
 
-    // PTT: tracks that WE started recording (don't wait for Rust event)
-    private volatile bool _pttStarted;
-    // PTT: set by release handler if it fires before/during recording start
-    private volatile bool _pendingStop;
+    // Re-entry guard for the stop pipeline. The session machine already
+    // issues one Finish per dictation; this keeps a second caller (a
+    // concurrent rc -9 stop) from running the pipeline twice.
     private volatile bool _stopInProgress;
-    // Toggle debounce: ignore presses within 300ms of last action
-    private long _lastToggleMs;
-    // Separate debounce for the command hotkey so a recent dictation toggle
-    // can't swallow a command press (and vice versa).
-    private long _lastCommandToggleMs;
 
     private static readonly string PttLogPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "dimmy", "ptt.log");
@@ -419,6 +412,14 @@ public partial class App : Application
     {
         Instance = this;
         this.InitializeComponent();
+        // WinUI reports its own failures here (a layout cycle, a bad
+        // resource) and then ends the process with 0xc000027b, which leaves
+        // no managed trace. Log it; Handled stays false, so it still crashes.
+        UnhandledException += (_, e) =>
+        {
+            Program.LogCrash($"Xaml.UnhandledException ({e.Message})", e.Exception);
+            PttLog($"[Crash] Xaml.UnhandledException: {e.Message} | {e.Exception}");
+        };
     }
 
     public void ReloadConfig()
@@ -438,8 +439,6 @@ public partial class App : Application
         _appViewModel.KeepInClipboard = settings.KeepInClipboard;
 
         _appViewModel.ShortcutMode = settings.ShortcutMode;
-        if (_hotkeyService != null)
-            _hotkeyService.PttMode = settings.ShortcutMode == "hold";
 
         // Always re-register hotkey — ReloadConfig() may have already updated
         // _appViewModel.Shortcut, so comparing would miss the change.
@@ -709,11 +708,7 @@ public partial class App : Application
             _appViewModel.Shortcut = shortcut;
         if (!string.IsNullOrWhiteSpace(mode))
             _appViewModel.ShortcutMode = mode;
-        if (_hotkeyService != null)
-        {
-            _hotkeyService.PttMode = _appViewModel.ShortcutMode == "hold";
-            _hotkeyService.Register(_appViewModel.Shortcut);
-        }
+        _hotkeyService?.Register(_appViewModel.Shortcut);
     }
 
     /// <summary>Show pill + register hotkey. Safe to call multiple times.</summary>
@@ -737,13 +732,12 @@ public partial class App : Application
         if (!_appViewModel.PillShowOnStartup)
             HidePill();
 
-        _hotkeyService = new HotkeyService(_dispatcherQueue!);
+        _hotkeyService = new HotkeyService(() => _appViewModel.ShortcutMode);
         _hotkeyService.HotkeyPressed += OnHotkeyPressed;
         _hotkeyService.HotkeyReleased += OnHotkeyReleased;
         _hotkeyService.CommandHotkeyPressed += OnCommandHotkeyPressed;
         _hotkeyService.CommandHotkeyReleased += OnCommandHotkeyReleased;
         _hotkeyService.MeetingHotkeyPressed += OnMeetingHotkeyPressed;
-        _hotkeyService.PttMode = _appViewModel.ShortcutMode == "hold";
         _hotkeyService.Register(_appViewModel.Shortcut);
         // Optional dedicated command-mode hotkey (empty = disabled). Runs on
         // the same hook, so it inherits toggle/PTT + every combo.
@@ -983,147 +977,13 @@ public partial class App : Application
     /// self-clears in StopAndCommandTransform). Honours the SAME ShortcutMode
     /// as dictation: in PTT mode this press starts and the release stops; in
     /// toggle mode this press starts and the next press stops.</summary>
-    private void OnCommandHotkeyPressed()
-    {
-        _dispatcherQueue?.TryEnqueue(async () =>
-        {
-            try
-            {
-                if (DimmyNative.dimmy_meeting_is_active() != 0)
-                {
-                    PttLog("command hotkey ignored — meeting recording in progress");
-                    return;
-                }
-
-                if (!IsPillVisible() && _appViewModel.PillShowOnHotkey)
-                    ShowPill();
-
-                if (_appViewModel.ShortcutMode == "hold")
-                {
-                    // PTT: press starts a one-shot command recording.
-                    if (!_appViewModel.IsBusy && !_pttStarted)
-                    {
-                        CaptureAndPushAppContext();
-                        // Grab the selection NOW (pristine focus, no keys) so
-                        // hold mode never fights the synthetic Ctrl+C.
-                        BeginCommandSelectionCapture();
-                        _pendingStop = false;
-                        _pttStarted = true;
-                        _appViewModel.SuppressRecordingStarted = false;
-                        _appViewModel.CommandOneShot = true;
-                        PttLog("Command hotkey (PTT): starting recording...");
-                        var result = DimmyNative.dimmy_start_recording();
-                        if (result == -1)
-                        {
-                            _pttStarted = false;
-                            _appViewModel.CommandOneShot = false;
-                            _appViewModel.SetError("No API key configured");
-                        }
-                        else if (result == -7)
-                        {
-                            _pttStarted = false;
-                            _appViewModel.CommandOneShot = false;
-                            PttLog("Command hotkey suppressed: meeting recording active (rc=-7)");
-                        }
-                        else if (result < 0)
-                        {
-                            _pttStarted = false;
-                            _appViewModel.CommandOneShot = false;
-                            _appViewModel.SetError($"Recording failed ({result})");
-                        }
-                        else if (_pendingStop)
-                        {
-                            PttLog("Command hotkey (PTT): pending stop after start — stopping");
-                            _pttStarted = false;
-                            await StopAndProcess();
-                        }
-                        else
-                        {
-                            PttLog("Command hotkey (PTT): recording started OK");
-                        }
-                    }
-                }
-                else
-                {
-                    // Toggle: press toggles the command recording on/off.
-                    var now = Environment.TickCount64;
-                    if (now - _lastCommandToggleMs < 300)
-                    {
-                        PttLog($"Command toggle debounce: {now - _lastCommandToggleMs}ms < 300ms, ignoring");
-                        return;
-                    }
-                    _lastCommandToggleMs = now;
-
-                    if (_appViewModel.IsRecording && !_stopInProgress)
-                    {
-                        _appViewModel.SuppressRecordingStarted = true;
-                        PttLog("Command hotkey (toggle): stopping → command transform");
-                        await StopAndProcess();
-                    }
-                    else if (!_appViewModel.IsBusy && !_stopInProgress)
-                    {
-                        CaptureAndPushAppContext();
-                        BeginCommandSelectionCapture();
-                        _appViewModel.SuppressRecordingStarted = false;
-                        _appViewModel.CommandOneShot = true;
-                        var result = DimmyNative.dimmy_start_recording();
-                        if (result == -1)
-                        {
-                            _appViewModel.CommandOneShot = false;
-                            _appViewModel.SetError("No API key configured");
-                        }
-                        else if (result == -7)
-                        {
-                            _appViewModel.CommandOneShot = false;
-                            PttLog("Command toggle suppressed: meeting recording active (rc=-7)");
-                        }
-                        else if (result == -2)
-                        {
-                            PttLog("Command toggle race: start returned -2 (already recording) — treating as stop");
-                            await StopAndProcess();
-                        }
-                        else if (result < 0)
-                        {
-                            _appViewModel.CommandOneShot = false;
-                            _appViewModel.SetError($"Recording failed ({result})");
-                        }
-                        else
-                        {
-                            PttLog("Command hotkey (toggle): one-shot recording started");
-                            _appViewModel.SetState(AppState.Recording);
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                PttLog($"Command hotkey press handler exc: {ex.Message}");
-            }
-        });
-    }
+    private void OnCommandHotkeyPressed() =>
+        _dispatcherQueue?.TryEnqueue(async () => await DictationInputAsync(DictationInputKind.Press, Services.SessionKind.Command));
 
     /// <summary>Command-mode hotkey RELEASE — only delivered in PTT mode
-    /// (HotkeyService gates Released on PttMode). Mirror of
-    /// <see cref="OnHotkeyReleased"/>: ends the held command recording and
-    /// routes the stop to the transform/generate path via the still-set
-    /// CommandOneShot flag.</summary>
-    private void OnCommandHotkeyReleased()
-    {
-        _pendingStop = true;
-        _pttStarted = false;
-        PttLog("Command key released — enqueueing stop");
-        _dispatcherQueue?.TryEnqueue(async () =>
-        {
-            _appViewModel.SuppressRecordingStarted = true;
-            PttLog($"Command release handler executing, state={_appViewModel.CurrentState}");
-            await StopAndProcess();
-            if (_appViewModel.CurrentState == AppState.Recording)
-            {
-                PttLog("Command release: force-resetting to Idle");
-                _appViewModel.SetState(AppState.Idle);
-            }
-        });
-    }
+    /// (HotkeyService asks HotkeyEdgePolicy with the live mode).</summary>
+    private void OnCommandHotkeyReleased() =>
+        _dispatcherQueue?.TryEnqueue(async () => await DictationInputAsync(DictationInputKind.Release, Services.SessionKind.Command));
 
     /// <summary>Add-to-dictionary handler — fires on the DictHotkey
     /// pump thread, marshals to UI thread to read clipboard and call
@@ -1640,8 +1500,6 @@ public partial class App : Application
         {
             ReloadConfig();
             _hotkeyService?.Register(_appViewModel.Shortcut);
-            if (_hotkeyService != null)
-                _hotkeyService.PttMode = _appViewModel.ShortcutMode == "hold";
         }
         catch (Exception ex)
         {
@@ -1910,169 +1768,132 @@ public partial class App : Application
         }
     }
 
-    private void OnHotkeyPressed()
+    private void OnHotkeyPressed() =>
+        _dispatcherQueue?.TryEnqueue(async () => await DictationInputAsync(DictationInputKind.Press, Services.SessionKind.Dictation));
+
+    private void OnHotkeyReleased() =>
+        _dispatcherQueue?.TryEnqueue(async () => await DictationInputAsync(DictationInputKind.Release, Services.SessionKind.Dictation));
+
+    private enum DictationInputKind { Press, Release, Stop }
+
+    /// <summary>Stop requested by the pill's Stop button.</summary>
+    internal Task StopDictationAsync() =>
+        DictationInputAsync(DictationInputKind.Stop, Services.SessionKind.Dictation);
+
+    /// <summary>Every way a dictation or command recording starts, stops or
+    /// is thrown away goes through here: the core's session machine decides
+    /// (core/src/dictation_session.rs), this does what it answers. Runs on
+    /// the UI thread, in the order the inputs arrived.</summary>
+    private async Task DictationInputAsync(DictationInputKind input, Services.SessionKind kind, bool menu = false)
     {
-        _dispatcherQueue?.TryEnqueue(async () =>
+        try
         {
-            // Gate: if a meeting recording is active, swallow the hotkey
-            // entirely. Starting a parallel dictation would corrupt the
-            // shared cpal audio buffer (both writers append to the same
-            // Vec<f32>). User gets visible feedback via the meeting
-            // window's pulsing red dot — no toast needed.
-            if (DimmyNative.dimmy_meeting_is_active() != 0)
+            if (input == DictationInputKind.Press && DimmyNative.dimmy_meeting_is_active() != 0)
             {
-                PttLog("hotkey ignored — meeting recording in progress");
+                // Starting a parallel dictation would corrupt the shared
+                // audio buffer. The meeting window's red dot is the feedback.
+                PttLog($"{kind} press ignored — meeting recording in progress");
                 return;
             }
-
-            // Show pill if hidden — but only if the user hasn't opted
-            // into "taskbar-only" mode. With PillShowOnHotkey=false the
-            // recording status is conveyed exclusively via the taskbar
-            // overlay icon (red dot + amplitude bar) and the pill is
-            // never auto-resurrected.
-            if (!IsPillVisible() && _appViewModel.PillShowOnHotkey)
-                ShowPill();
-
-            if (_appViewModel.ShortcutMode == "hold")
+            bool hold = !menu && _appViewModel.ShortcutMode == "hold";
+            var action = input switch
             {
-                // PTT: press starts recording
-                if (!_appViewModel.IsBusy && !_pttStarted)
-                {
-                    // Snapshot foreground app BEFORE start_recording —
-                    // by the time Rust applies app_rules at LLM-enhance
-                    // time the focus may have moved to Dimmy itself or
-                    // wherever the paste landed.
-                    CaptureAndPushAppContext();
-                    _pendingStop = false; // clear before starting
-                    _pttStarted = true;
-                    _appViewModel.SuppressRecordingStarted = false; // allow recording_started event
-                    PttLog("Starting recording...");
-                    var result = DimmyNative.dimmy_start_recording();
-                    if (result == -1)
-                    {
-                        _pttStarted = false;
-                        _appViewModel.SetError("No API key configured");
-                    }
-                    else if (result == -7)
-                    {
-                        // Meeting recording is active — silent suppress per
-                        // user spec. The pill stays at idle, no error toast,
-                        // ptt.log gets the diagnostic line so it's debuggable
-                        // if the user wonders why the hotkey didn't engage.
-                        _pttStarted = false;
-                        PttLog("PTT hotkey suppressed: meeting recording active (rc=-7)");
-                    }
-                    else if (result < 0)
-                    {
-                        _pttStarted = false;
-                        _appViewModel.SetError($"Recording failed ({result})");
-                    }
-                    else if (_pendingStop)
-                    {
-                        // Release happened while we were starting — stop immediately
-                        PttLog("Pending stop detected after start — stopping immediately");
-                        _pttStarted = false;
-                        await StopAndProcess();
-                    }
-                    else
-                    {
-                        PttLog("Recording started OK");
-                    }
-                }
-            }
-            else
-            {
-                // Toggle mode: press toggles recording on/off
-                var now = Environment.TickCount64;
-                if (now - _lastToggleMs < 300)
-                {
-                    PttLog($"Toggle debounce: {now - _lastToggleMs}ms < 300ms, ignoring");
-                    return;
-                }
-                _lastToggleMs = now;
+                DictationInputKind.Press => Services.DictationSession.Press(kind, hold),
+                DictationInputKind.Release => Services.DictationSession.Release(kind),
+                _ => Services.DictationSession.Stop(),
+            };
+            PttLog($"session: {kind} {input}{(input == DictationInputKind.Press ? (hold ? " (hold)" : " (toggle)") : "")} -> {action}");
 
-                if (_stopInProgress)
-                {
-                    // A stop is already running (whisper still processing a
-                    // long dictation). Without this explicit arm the press
-                    // falls through BOTH branches below — IsRecording can
-                    // still be true while _stopInProgress is true — and is
-                    // silently lost, so the user mashes the key and spawns
-                    // concurrent stops (the race that drops the paste). Ack
-                    // + no-op; the in-flight stop owns delivery.
-                    PttLog("Toggle ignored: stop already in progress");
-                    return;
-                }
-                if (_appViewModel.IsRecording)
-                {
-                    // Flip to Transcribing IMMEDIATELY so the pill leaves the
-                    // red Recording dot the instant the user stops. whisper can
-                    // take a couple seconds; a still-red pill is exactly what
-                    // makes the user re-press (→ the concurrent-stop race that
-                    // loses the paste). SetState also clears IsRecording.
+            switch (action)
+            {
+                case Services.SessionAction.Start:
+                    await StartRecordingAsync(kind);
+                    break;
+                case Services.SessionAction.Finish:
+                    // Leave the red dot the instant the user stops, and keep
+                    // the pill on Transcribing until the result is delivered:
+                    // a pill back at idle mid-transcription is what makes
+                    // people press again.
+                    _appViewModel.SuppressRecordingStarted = true;
                     _appViewModel.SetState(AppState.Transcribing);
                     await StopAndProcess();
-                }
-                else if (!_appViewModel.IsBusy)
-                {
-                    CaptureAndPushAppContext();
-                    _appViewModel.SuppressRecordingStarted = false; // ensure Rust event is accepted
-                    var result = DimmyNative.dimmy_start_recording();
-                    if (result == -1)
-                        _appViewModel.SetError("No API key configured");
-                    else if (result == -7)
-                    {
-                        // Meeting in progress — silent no-op, log only.
-                        PttLog("Toggle suppressed: meeting recording active (rc=-7)");
-                    }
-                    else if (result == -2)
-                    {
-                        // Race: Rust thinks it's already recording (a previous
-                        // start that we initiated is still spinning up the
-                        // audio stream and hasn't fired recording_started yet
-                        // → ViewModel still shows IsRecording=false → we
-                        // mistook this press as a "start" instead of "stop").
-                        // Auto-recover: treat as the intended stop. This is
-                        // the difference between a frustrating "Recording
-                        // failed (-2)" toast and the user's intent.
-                        PttLog("Toggle race: dimmy_start_recording returned -2 (already recording) — treating as stop");
-                        await StopAndProcess();
-                    }
-                    else if (result < 0)
-                        _appViewModel.SetError($"Recording failed ({result})");
-                    else
-                    {
-                        // Optimistic state update: Rust is now recording, but
-                        // the recording_started event roundtrip can take ~1s
-                        // (audio stream build time). Without this, a quick
-                        // second toggle press during the build window would
-                        // see IsRecording=false and try to start AGAIN — the
-                        // -2 race above. Setting state here closes the gap.
-                        _appViewModel.SetState(AppState.Recording);
-                    }
-                }
+                    break;
+                case Services.SessionAction.Discard:
+                    DiscardRecording(kind);
+                    break;
+                case Services.SessionAction.Busy:
+                    Services.DictNotificationService.ShowStillTranscribing();
+                    break;
             }
-        });
+        }
+        catch (Exception ex)
+        {
+            PttLog($"session {kind} {input} exc: {ex.Message}");
+        }
     }
 
-    private void OnHotkeyReleased()
+    private async Task StartRecordingAsync(Services.SessionKind kind)
     {
-        _pendingStop = true; // signal pressed handler in case it hasn't finished yet
-        _pttStarted = false;
-        PttLog("Key released — enqueueing stop");
-        _dispatcherQueue?.TryEnqueue(async () =>
+        // Show pill if hidden — but only if the user hasn't opted into
+        // "taskbar-only" mode (PillShowOnHotkey=false): then the taskbar
+        // overlay is the only recording indicator.
+        if (!IsPillVisible() && _appViewModel.PillShowOnHotkey)
+            ShowPill();
+
+        // Snapshot the foreground app BEFORE start_recording: by the time
+        // Rust applies app_rules at LLM time focus may have moved to Dimmy
+        // itself or wherever the paste landed.
+        CaptureAndPushAppContext();
+        if (kind == Services.SessionKind.Command)
         {
-            // Suppress late "recording_started" Rust callbacks that arrive after we stop
-            _appViewModel.SuppressRecordingStarted = true;
-            PttLog($"Release handler executing, state={_appViewModel.CurrentState}");
-            await StopAndProcess();
-            // Belt-and-suspenders: PTT release MUST end recording state
-            if (_appViewModel.CurrentState == AppState.Recording)
-            {
-                PttLog("Force-resetting to Idle (state was still Recording after StopAndProcess)");
-                _appViewModel.SetState(AppState.Idle);
-            }
-        });
+            // Grab the selection NOW (pristine focus, no keys) so hold mode
+            // never fights the synthetic Ctrl+C.
+            BeginCommandSelectionCapture();
+            _appViewModel.CommandOneShot = true;
+        }
+        _appViewModel.SuppressRecordingStarted = false;
+        var result = DimmyNative.dimmy_start_recording();
+        if (result >= 0)
+        {
+            // Optimistic: the recording_started event can take ~1 s (stream
+            // build); the pill shows it now.
+            _appViewModel.SetState(AppState.Recording);
+            PttLog($"{kind}: recording started");
+            return;
+        }
+        if (result == -2)
+        {
+            // The core is already recording (a start we issued is still
+            // spinning up): the user's intent was a stop.
+            PttLog($"{kind}: start returned -2 (already recording) — finishing it");
+            await DictationInputAsync(DictationInputKind.Stop, kind);
+            return;
+        }
+        Services.DictationSession.StartFailed();
+        if (kind == Services.SessionKind.Command) _appViewModel.CommandOneShot = false;
+        if (result == -1)
+            _appViewModel.SetError("No API key configured");
+        else if (result == -7)
+            PttLog($"{kind}: suppressed — meeting recording active (rc=-7)");
+        else
+            _appViewModel.SetError($"Recording failed ({result})");
+    }
+
+    /// <summary>A push-to-talk tap too short to hold speech: drop the
+    /// recording instead of transcribing silence into an empty result.</summary>
+    private void DiscardRecording(Services.SessionKind kind)
+    {
+        _appViewModel.SuppressRecordingStarted = true;
+        DimmyNative.dimmy_cancel_recording();
+        DimmyNative.dimmy_clear_app_context();
+        _targetContext = null;
+        if (kind == Services.SessionKind.Command)
+        {
+            _appViewModel.CommandOneShot = false;
+            _pendingCommandSelection = null;
+        }
+        _appViewModel.SetState(AppState.Idle);
+        PttLog($"{kind}: tap too short to be speech — recording discarded");
     }
 
     /// <summary>The single dictation stop→transcribe→paste pipeline. Callable
@@ -2216,6 +2037,7 @@ public partial class App : Application
         finally
         {
             _stopInProgress = false;
+            Services.DictationSession.Delivered();
         }
     }
 
@@ -3002,10 +2824,10 @@ public partial class App : Application
         // Cancel any active recording before shutdown to release microphone
         try
         {
-            if (_appViewModel.IsRecording || _pttStarted)
+            if (Services.DictationSession.IsRecording)
             {
                 DimmyNative.dimmy_cancel_recording();
-                _pttStarted = false;
+                Services.DictationSession.Cancel();
             }
         }
         catch { }

@@ -243,7 +243,7 @@ public sealed partial class SettingsWindow : Window
         // Custom-dict ListView source-of-truth lives in the Rust
         // AppState; pull it now so the UI matches reality, AND
         // restore the user's hotkey preference from UiPreferences so
-        // the ShortcutRecorder shows the right combo.
+        // the shortcut editor shows the right combo.
         ReloadUserDict();
         try
         {
@@ -257,6 +257,18 @@ public sealed partial class SettingsWindow : Window
             RefreshHome();
         }
         catch { }
+
+        // The shortcut dialogs check conflicts against what this page is
+        // editing, which can be ahead of what is saved.
+        Func<IReadOnlyDictionary<string, string>> editing = () => new Dictionary<string, string>
+        {
+            ["dictation"] = ViewModel.Shortcut ?? "",
+            ["command"] = ViewModel.CommandHotkey ?? "",
+            ["meeting"] = ViewModel.MeetingHotkey ?? "",
+            ["dictionary"] = ViewModel.DictHotkey ?? "",
+        };
+        foreach (var editor in new[] { DictationShortcutEditor, CommandShortcutEditor, MeetingShortcutEditor, DictionaryShortcutEditor })
+            editor.CurrentShortcuts = editing;
 
         // Persist DictHotkey / CommandHotkey changes + re-register the global
         // hotkey on the App's services so the new combo binds without a
@@ -334,20 +346,6 @@ public sealed partial class SettingsWindow : Window
         RefreshAuthIntegrationStatus();
         RefreshCodexIntegrationStatus();
         RefreshGeminiIntegrationStatus();
-    }
-
-    /// <summary>Disable the optional command-mode hotkey. Empties the combo
-    /// → the PropertyChanged handler persists "" and unregisters it.</summary>
-    private void CommandHotkeyClear_Click(object sender, RoutedEventArgs e)
-    {
-        ViewModel.CommandHotkey = "";
-    }
-
-    /// <summary>Disable the optional meeting hotkey. Empties the combo → the
-    /// PropertyChanged handler persists "" and unregisters it.</summary>
-    private void MeetingHotkeyClear_Click(object sender, RoutedEventArgs e)
-    {
-        ViewModel.MeetingHotkey = "";
     }
 
     /// File extensions accepted by `dimmy_transcribe_file`. WAV is the
@@ -5763,43 +5761,11 @@ public sealed partial class SettingsWindow : Window
         }
     }
 
-    private async void ShowLicense_Click(object sender, RoutedEventArgs e) =>
-        await ShowLegalTextAsync("Licence (AGPL-3.0)", DimmyNative.LicenseText());
+    private void ShowLicense_Click(object sender, RoutedEventArgs e) =>
+        LegalTextWindow.ShowFor(0, "Licence (AGPL-3.0)");
 
-    private async void ShowNotices_Click(object sender, RoutedEventArgs e) =>
-        await ShowLegalTextAsync("Open source notices", DimmyNative.ThirdPartyNotices());
-
-    /// <summary>Read-only scrollable text. A TextBox, not a TextBlock: the
-    /// notices run to ~1 MB, past what one TextBlock lays out reliably.</summary>
-    private async Task ShowLegalTextAsync(string title, string? text)
-    {
-        var box = new TextBox
-        {
-            // Before Text: a single-line TextBox keeps only the first line.
-            AcceptsReturn = true,
-            Text = string.IsNullOrEmpty(text)
-                ? "Text unavailable."
-                : text.Replace("\r\n", "\n").Replace("\n", "\r"),
-            IsReadOnly = true,
-            TextWrapping = TextWrapping.Wrap,
-            FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"),
-            FontSize = 12,
-            MinWidth = 640,
-            Height = 440,
-        };
-        Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(box, "LegalTextBox");
-        ScrollViewer.SetVerticalScrollBarVisibility(box, ScrollBarVisibility.Auto);
-        var dlg = new ContentDialog
-        {
-            RequestedTheme = Dimmy.Windows.Helpers.ThemeHelper.ResolvedElementTheme(),
-            Title = title,
-            Content = box,
-            CloseButtonText = "Close",
-            DefaultButton = ContentDialogButton.Close,
-            XamlRoot = this.Content?.XamlRoot,
-        };
-        await dlg.ShowAsync();
-    }
+    private void ShowNotices_Click(object sender, RoutedEventArgs e) =>
+        LegalTextWindow.ShowFor(1, "Open source notices");
 
     private async void ReleaseNotes_Click(object sender, RoutedEventArgs e)
     {
