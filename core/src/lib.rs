@@ -86,6 +86,7 @@ pub mod parakeet;
 /// itself compiles only on macOS arm64.
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub mod parakeet_fluid;
+pub mod pc_control;
 pub mod preprocess;
 pub mod provider;
 pub mod qwen_asr;

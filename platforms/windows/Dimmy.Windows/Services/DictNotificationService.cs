@@ -150,6 +150,9 @@ public static class DictNotificationService
     /// words are executed as a generate-at-cursor instruction. Saying so
     /// kills the "it just transcribed me" confusion when a selection
     /// silently failed to capture (colleague report, 2026-07-03).</summary>
+    /// <summary>EXPERIMENT: what the PC-actions engine did (or why not).</summary>
+    public static void ShowPcAction(string title, string body) => Show(title, body);
+
     public static void ShowCommandNoSelection()
     {
         Show("Command Mode: no text selected",

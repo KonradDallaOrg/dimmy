@@ -37,6 +37,8 @@ pub const TOGGLE_BOUNCE_MS: u64 = 300;
 pub enum Kind {
     Dictation,
     Command,
+    /// The spoken words drive the PC (open, place, find) instead of being typed.
+    Execute,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

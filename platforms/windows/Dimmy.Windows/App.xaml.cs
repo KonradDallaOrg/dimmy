@@ -737,11 +737,15 @@ public partial class App : Application
         _hotkeyService.HotkeyReleased += OnHotkeyReleased;
         _hotkeyService.CommandHotkeyPressed += OnCommandHotkeyPressed;
         _hotkeyService.CommandHotkeyReleased += OnCommandHotkeyReleased;
+        _hotkeyService.ExecuteHotkeyPressed += OnExecuteHotkeyPressed;
+        _hotkeyService.ExecuteHotkeyReleased += OnExecuteHotkeyReleased;
         _hotkeyService.MeetingHotkeyPressed += OnMeetingHotkeyPressed;
         _hotkeyService.Register(_appViewModel.Shortcut);
         // Optional dedicated command-mode hotkey (empty = disabled). Runs on
         // the same hook, so it inherits toggle/PTT + every combo.
         _hotkeyService.SetCommandShortcut(_uiPrefs.CommandHotkey);
+        // EXPERIMENT (exp/pc-actions): the execute shortcut, Ctrl+Alt+X by default.
+        _hotkeyService.SetExecuteShortcut(_uiPrefs.ExecuteHotkey);
         // Optional meeting start/stop hotkey (empty = disabled). Toggle-only.
         _hotkeyService.SetMeetingShortcut(_uiPrefs.MeetingHotkey);
     }
@@ -984,6 +988,20 @@ public partial class App : Application
     /// (HotkeyService asks HotkeyEdgePolicy with the live mode).</summary>
     private void OnCommandHotkeyReleased() =>
         _dispatcherQueue?.TryEnqueue(async () => await DictationInputAsync(DictationInputKind.Release, Services.SessionKind.Command));
+
+    /// <summary>EXPERIMENT: execute shortcut edges, same session rules as the
+    /// command shortcut.</summary>
+    private void OnExecuteHotkeyPressed() =>
+        _dispatcherQueue?.TryEnqueue(async () => await DictationInputAsync(DictationInputKind.Press, Services.SessionKind.Execute));
+
+    private void OnExecuteHotkeyReleased() =>
+        _dispatcherQueue?.TryEnqueue(async () => await DictationInputAsync(DictationInputKind.Release, Services.SessionKind.Execute));
+
+    public void ReregisterExecuteHotkey(string combo)
+    {
+        try { _hotkeyService?.SetExecuteShortcut(combo); }
+        catch (Exception ex) { Log($"ReregisterExecuteHotkey exc: {ex.Message}", "Hotkey"); }
+    }
 
     /// <summary>Add-to-dictionary handler — fires on the DictHotkey
     /// pump thread, marshals to UI thread to read clipboard and call
@@ -1851,6 +1869,11 @@ public partial class App : Application
             BeginCommandSelectionCapture();
             _appViewModel.CommandOneShot = true;
         }
+        if (kind == Services.SessionKind.Execute)
+        {
+            _appViewModel.ExecuteOneShot = true;
+            DimmyNative.dimmy_pc_prepare();
+        }
         _appViewModel.SuppressRecordingStarted = false;
         var result = DimmyNative.dimmy_start_recording();
         if (result >= 0)
@@ -1871,6 +1894,7 @@ public partial class App : Application
         }
         Services.DictationSession.StartFailed();
         if (kind == Services.SessionKind.Command) _appViewModel.CommandOneShot = false;
+        if (kind == Services.SessionKind.Execute) _appViewModel.ExecuteOneShot = false;
         if (result == -1)
             _appViewModel.SetError("No API key configured");
         else if (result == -7)
@@ -1892,6 +1916,7 @@ public partial class App : Application
             _appViewModel.CommandOneShot = false;
             _pendingCommandSelection = null;
         }
+        _appViewModel.ExecuteOneShot = false;
         _appViewModel.SetState(AppState.Idle);
         PttLog($"{kind}: tap too short to be speech — recording discarded");
     }
@@ -1917,6 +1942,11 @@ public partial class App : Application
             // insert when nothing is selected). Two ways in: the sticky
             // pill-menu toggle (CommandMode) OR a one-shot fired by the
             // dedicated command hotkey (CommandOneShot).
+            if (_appViewModel.ExecuteOneShot)
+            {
+                await StopAndExecute();
+                return;
+            }
             if (_appViewModel.CommandMode || _appViewModel.CommandOneShot)
             {
                 await StopAndCommandTransform();
@@ -2117,6 +2147,56 @@ public partial class App : Application
             // output afterwards. The sticky menu toggle (CommandMode) is
             // left untouched, so it stays on across commands as intended.
             _appViewModel.CommandOneShot = false;
+        }
+    }
+
+    /// <summary>EXPERIMENT (exp/pc-actions): the spoken words drive the PC.
+    /// The core plans and acts (open, place, tile, find files); a
+    /// `type_at_end` step hands back text, which is pasted here with the same
+    /// primitive as dictation, into the window the core just brought forward.</summary>
+    private async Task StopAndExecute()
+    {
+        try
+        {
+            var (spoken, json) = await Services.TranscriptionService.StopAndExecuteAsync();
+            if (spoken == null)
+            {
+                PttLog("Execute: empty transcript");
+                if (_appViewModel.CurrentState != AppState.Error)
+                    _appViewModel.SetState(AppState.Idle);
+                return;
+            }
+            PttLog($"Execute: \"{spoken}\" -> {json}");
+            using var doc = System.Text.Json.JsonDocument.Parse(string.IsNullOrEmpty(json) ? "{}" : json);
+            var root = doc.RootElement;
+            string? Str(string name) =>
+                root.TryGetProperty(name, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String ? v.GetString() : null;
+            var said = Str("said") ?? "";
+            var error = Str("error");
+            var paste = Str("paste");
+            if (!string.IsNullOrEmpty(paste))
+            {
+                await Task.Delay(150);
+                await TextInjectionService.PasteText(paste, _appViewModel.KeepInClipboard);
+            }
+            if (error != null)
+            {
+                Services.DictNotificationService.ShowPcAction("Non fatto", string.IsNullOrEmpty(said) ? error : $"{said} ({error})");
+                _appViewModel.SetError(error);
+                return;
+            }
+            Services.DictNotificationService.ShowPcAction(string.IsNullOrEmpty(said) ? "Fatto" : said, spoken);
+            _appViewModel.SetState(AppState.Completing);
+        }
+        catch (Exception ex)
+        {
+            PttLog($"Execute: EXCEPTION {ex.GetType().Name}: {ex.Message}");
+            _appViewModel.SetError(ex.Message);
+        }
+        finally
+        {
+            _appViewModel.ExecuteOneShot = false;
+            _targetContext = null;
         }
     }
 

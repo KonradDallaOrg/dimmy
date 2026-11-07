@@ -8659,6 +8659,95 @@ pub unsafe extern "C" fn dimmy_hotkey_set_command(combo_ptr: *const c_char) {
     }
 }
 
+/// Set (or clear) the optional "execute" shortcut (PC actions experiment).
+/// Same grammar and semantics as the command shortcut; null/empty disables it.
+///
+/// # Safety
+/// `combo_ptr` must be null or a valid null-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_hotkey_set_execute(combo_ptr: *const c_char) {
+    let combo = if combo_ptr.is_null() {
+        ""
+    } else {
+        CStr::from_ptr(combo_ptr).to_str().unwrap_or("")
+    };
+    crate::hotkey::set_execute_shortcut(combo);
+    crate::log(&format!("[Hotkey] set_execute_shortcut(\"{}\")", combo));
+}
+
+/// The Claude model the PC-actions planner uses: the dictation LLM model.
+fn pc_planner_model() -> String {
+    let m = state()
+        .llm_api_model
+        .lock()
+        .map(|m| m.clone())
+        .unwrap_or_default();
+    if m.is_empty() {
+        crate::DEFAULT_LLM_MODEL.to_string()
+    } else {
+        m
+    }
+}
+
+/// Execute shortcut pressed: start the Claude CLI and read the Start menu
+/// while the user is still talking. Returns at once.
+#[no_mangle]
+pub extern "C" fn dimmy_pc_prepare() {
+    crate::pc_control::prepare(&pc_planner_model());
+}
+
+/// Turn a spoken command into PC actions and run them (experiment).
+/// Writes a JSON outcome `{ok, said, paste, engine, plan_ms, act_ms, error}`;
+/// the host shows `said` on the pill and pastes `paste` when present.
+/// Returns the JSON length, or -1 on a null/invalid argument.
+///
+/// # Safety
+/// `text_ptr` must be a valid null-terminated UTF-8 C string and `out_buf`
+/// must point to `buf_len` writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_pc_execute(
+    text_ptr: *const c_char,
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if text_ptr.is_null() || out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let Ok(text) = CStr::from_ptr(text_ptr).to_str() else {
+        return -1;
+    };
+    let mut out = crate::pc_control::Outcome {
+        engine: "claude".into(),
+        ..Default::default()
+    };
+    let t0 = std::time::Instant::now();
+    match crate::pc_control::plan_with_claude(text, &pc_planner_model()) {
+        Ok(plan) => {
+            out.plan_ms = t0.elapsed().as_millis() as u64;
+            out.said = plan.say.clone();
+            let t1 = std::time::Instant::now();
+            match crate::pc_control::run(&plan) {
+                Ok(paste) => {
+                    out.ok = !plan.steps.is_empty();
+                    out.paste = paste;
+                }
+                Err(e) => out.error = Some(crate::truncate_utf8(&e, 200).to_string()),
+            }
+            out.act_ms = t1.elapsed().as_millis() as u64;
+        }
+        Err(e) => {
+            out.plan_ms = t0.elapsed().as_millis() as u64;
+            out.error = Some(crate::truncate_utf8(&e, 200).to_string());
+        }
+    }
+    log(&format!(
+        "[PcControl] engine={} ok={} plan_ms={} act_ms={} error={:?}",
+        out.engine, out.ok, out.plan_ms, out.act_ms, out.error
+    ));
+    let json = serde_json::to_string(&out).unwrap_or_default();
+    write_to_buf(&json, out_buf, buf_len)
+}
+
 /// Set (or clear) the optional meeting start/stop shortcut. Mirrors
 /// `dimmy_hotkey_set_command`: a null/empty/unparseable combo DISABLES it.
 /// The host treats its `hotkey` event (`binding: "meeting"`) as a
@@ -10281,6 +10370,7 @@ pub extern "C" fn dimmy_dictation_input(input: c_int, kind: c_int, mode: c_int) 
     let kind = match kind {
         0 => Kind::Dictation,
         1 => Kind::Command,
+        2 => Kind::Execute,
         _ => return -1,
     };
     let mode = match mode {

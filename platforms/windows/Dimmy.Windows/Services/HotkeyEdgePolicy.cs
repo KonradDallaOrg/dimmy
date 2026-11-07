@@ -9,5 +9,5 @@ public static class HotkeyEdgePolicy
     /// never for the meeting shortcut: a meeting can't be push-to-talk.
     /// The caller passes the mode as it is NOW, never a copy.</summary>
     public static bool DeliverRelease(string binding, string shortcutMode) =>
-        binding is "dictation" or "command" && shortcutMode == "hold";
+        binding is "dictation" or "command" or "execute" && shortcutMode == "hold";
 }

@@ -96,6 +96,10 @@ public sealed class UiPreferences
     /// Win-only UI knob, hence here and not in config.json.</summary>
     public string CommandHotkey { get; set; } = "";
 
+    /// <summary>EXPERIMENT (exp/pc-actions): the shortcut that sends the spoken
+    /// words to the PC-actions engine (open, place, tile, find files).</summary>
+    public string ExecuteHotkey { get; set; } = "ctrl+alt+x";
+
     /// <summary>Global shortcut that toggles a MEETING recording (start ↔
     /// stop). Default Ctrl+Alt+M. NOT Ctrl+Shift+M — that's Microsoft Teams'
     /// mute toggle (a hard collision for an app used during calls). Toggle-only.

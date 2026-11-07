@@ -176,6 +176,26 @@ public static class TranscriptionService
         return CommandResult.Ok(text.Trim(), spoken);
     }
 
+    /// <summary>EXPERIMENT (exp/pc-actions): stop, transcribe without the
+    /// LLM rewrite, then hand the words to the PC-actions engine.</summary>
+    public static async Task<(string? Spoken, string Json)> StopAndExecuteAsync()
+    {
+        var spoken = await Task.Run(() =>
+        {
+            var buf = new byte[BufSize];
+            int len = DimmyNative.dimmy_stop_recording(buf, buf.Length);
+            return len > 0 ? Encoding.UTF8.GetString(buf, 0, len).Trim() : null;
+        });
+        if (string.IsNullOrEmpty(spoken)) return (null, "");
+        var json = await Task.Run(() =>
+        {
+            var buf = new byte[16 * 1024];
+            int rc = DimmyNative.dimmy_pc_execute(spoken, buf, buf.Length);
+            return rc > 0 ? Encoding.UTF8.GetString(buf, 0, rc) : "";
+        });
+        return (spoken, json);
+    }
+
     /// Threshold-gated background recap. No-op when:
     /// - threshold is 0 (user opted out)
     /// - elapsed < threshold (short dictation, no recap needed)

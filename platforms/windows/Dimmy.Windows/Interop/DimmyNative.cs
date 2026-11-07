@@ -760,6 +760,19 @@ public static class DimmyNative
     public static extern void dimmy_hotkey_set_command(
         [MarshalAs(UnmanagedType.LPUTF8Str)] string combo);
 
+    // EXPERIMENT (exp/pc-actions): the "execute" shortcut sends the spoken
+    // words to the PC-actions engine. Empty combo disables it.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void dimmy_hotkey_set_execute(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string combo);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void dimmy_pc_prepare();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_pc_execute(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string text, byte[] outBuf, int bufLen);
+
     // Optional meeting start/stop hotkey on the same Rust hook. Empty combo
     // disables it. Its event is a TOGGLE (pressed = start/stop).
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]

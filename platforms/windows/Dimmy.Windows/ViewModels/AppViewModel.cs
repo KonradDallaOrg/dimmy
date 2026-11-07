@@ -206,6 +206,11 @@ public partial class AppViewModel : ObservableObject
     /// flipping the persistent menu toggle.</summary>
     [ObservableProperty] private bool _commandOneShot;
 
+    /// <summary>EXPERIMENT (exp/pc-actions): set while a recording started by
+    /// the execute shortcut is in flight; the stop routes the spoken words to
+    /// the PC-actions engine instead of typing them.</summary>
+    [ObservableProperty] private bool _executeOneShot;
+
     /// <summary>If true, pressing the global hotkey while the pill is
     /// hidden re-shows it. If false, the pill stays hidden — recording
     /// status is shown only via the taskbar overlay icon. Default true

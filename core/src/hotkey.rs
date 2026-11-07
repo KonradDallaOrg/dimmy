@@ -217,6 +217,9 @@ static CMD: Binding = Binding::new();
 /// event as a TOGGLE regardless of the global hold/PTT mode — you can't hold a
 /// key for an hour-long meeting.
 static MTNG: Binding = Binding::new();
+/// The optional "execute" shortcut binding (empty = disabled): the spoken
+/// words go to the PC-actions engine instead of being typed.
+static EXEC: Binding = Binding::new();
 
 /// When `true`, the LL keyboard hook consumes (returns 1 for) every event
 /// matching the configured shortcut keys, instead of forwarding to the OS
@@ -517,6 +520,15 @@ pub fn set_meeting_shortcut(combo: &str) {
     }
 }
 
+/// Set (or clear) the optional execute shortcut. Mirrors
+/// `set_command_shortcut`: an empty or unparseable combo DISABLES it.
+pub fn set_execute_shortcut(combo: &str) {
+    match parse_combo(combo) {
+        Some((k1, k2, k3)) => EXEC.set_codes(k1, k2, k3),
+        None => EXEC.clear(),
+    }
+}
+
 /// Tagged keyset of a combo for conflict detection: each modifier group and
 /// the non-modifier key become distinct tokens. `None` for empty/unparseable.
 pub(crate) fn combo_keyset(combo: &str) -> Option<Vec<u32>> {
@@ -598,6 +610,7 @@ pub(crate) enum Which {
     Dictation,
     Command,
     Meeting,
+    Execute,
 }
 
 impl Which {
@@ -606,6 +619,7 @@ impl Which {
             Which::Dictation => "dictation",
             Which::Command => "command",
             Which::Meeting => "meeting",
+            Which::Execute => "execute",
         }
     }
 }
@@ -961,13 +975,14 @@ mod platform {
         // interfere. On a fresh activation, flush the kernel modifier state +
         // arm suppression for THAT binding's keys (the synthetic-release +
         // Start-Menu chord-buster, identical to the single-combo behaviour).
-        for b in [&DICT, &CMD, &MTNG] {
+        for b in [&DICT, &CMD, &MTNG, &EXEC] {
             b.forget_released_keys(vk, is_key_pressed);
         }
         for (which, binding) in [
             (Which::Dictation, &DICT),
             (Which::Command, &CMD),
             (Which::Meeting, &MTNG),
+            (Which::Execute, &EXEC),
         ] {
             let t = binding.process(vk, is_down, is_up);
             if t == Transition::Pressed {
@@ -983,14 +998,19 @@ mod platform {
         if !DICT.combo_active.load(Ordering::SeqCst)
             && !CMD.combo_active.load(Ordering::SeqCst)
             && !MTNG.combo_active.load(Ordering::SeqCst)
+            && !EXEC.combo_active.load(Ordering::SeqCst)
             && DICT.all_released()
             && CMD.all_released()
             && MTNG.all_released()
+            && EXEC.all_released()
         {
             MODIFIER_SUPPRESS.store(false, Ordering::SeqCst);
         }
 
-        let is_combo_key = DICT.matches_key(vk) || CMD.matches_key(vk) || MTNG.matches_key(vk);
+        let is_combo_key = DICT.matches_key(vk)
+            || CMD.matches_key(vk)
+            || MTNG.matches_key(vk)
+            || EXEC.matches_key(vk);
         if is_combo_key && MODIFIER_SUPPRESS.load(Ordering::SeqCst) {
             return 1;
         }
@@ -1292,6 +1312,7 @@ mod platform {
         if !crate::hotkey_recorder::is_active() {
             deliver_edge(Which::Dictation, DICT.process(vk, is_down, is_up));
             deliver_edge(Which::Command, CMD.process(vk, is_down, is_up));
+            deliver_edge(Which::Execute, EXEC.process(vk, is_down, is_up));
         }
 
         event
@@ -1682,6 +1703,25 @@ mod tests {
         assert_eq!(MTNG.process(VK_LCONTROL, true, false), Transition::None);
         assert_eq!(MTNG.process(VK_LSHIFT, true, false), Transition::None);
         assert_eq!(MTNG.process(name_to_vk("o"), true, false), Transition::None);
+    }
+
+    #[test]
+    #[serial]
+    fn execute_shortcut_set_and_clear() {
+        set_execute_shortcut("ctrl+alt+x");
+        assert_eq!(
+            EXEC.key1_codes.load(Ordering::SeqCst),
+            group_to_packed(GROUP_CTRL)
+        );
+        assert_eq!(
+            EXEC.key2_codes.load(Ordering::SeqCst),
+            group_to_packed(GROUP_ALT)
+        );
+        assert_eq!(EXEC.key3_code.load(Ordering::SeqCst), name_to_vk("x"));
+        assert_eq!(Which::Execute.id(), "execute");
+        set_execute_shortcut("");
+        assert_eq!(EXEC.key1_codes.load(Ordering::SeqCst), 0);
+        assert_eq!(EXEC.process(VK_LCONTROL, true, false), Transition::None);
     }
 
     #[test]

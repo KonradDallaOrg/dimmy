@@ -27,6 +27,11 @@ public class HotkeyService : IDisposable
     public event Action? CommandHotkeyPressed;
     public event Action? CommandHotkeyReleased;
 
+    /// <summary>EXPERIMENT: the execute shortcut (PC actions). Same mode rules
+    /// as the command shortcut.</summary>
+    public event Action? ExecuteHotkeyPressed;
+    public event Action? ExecuteHotkeyReleased;
+
     /// <summary>Dedicated meeting start/stop hotkey. TOGGLE-only by design — a
     /// meeting can't be push-to-talk (you can't hold a key for an hour), so
     /// only the pressed edge fires whatever the mode; the
@@ -86,6 +91,13 @@ public class HotkeyService : IDisposable
         Log($"SetCommandShortcut(\"{c}\") via Rust FFI");
     }
 
+    public void SetExecuteShortcut(string? combo)
+    {
+        var c = combo ?? "";
+        DimmyNative.dimmy_hotkey_set_execute(c);
+        Log($"SetExecuteShortcut(\"{c}\") via Rust FFI");
+    }
+
     /// <summary>Set (or clear) the optional meeting start/stop shortcut on the
     /// same Rust hook. Empty/whitespace disables it.</summary>
     public void SetMeetingShortcut(string? combo)
@@ -107,6 +119,7 @@ public class HotkeyService : IDisposable
             {
                 case "dictation": HotkeyPressed?.Invoke(); break;
                 case "command": CommandHotkeyPressed?.Invoke(); break;
+                case "execute": ExecuteHotkeyPressed?.Invoke(); break;
                 case "meeting": MeetingHotkeyPressed?.Invoke(); break;
             }
             return;
@@ -120,6 +133,7 @@ public class HotkeyService : IDisposable
         {
             case "dictation": HotkeyReleased?.Invoke(); break;
             case "command": CommandHotkeyReleased?.Invoke(); break;
+            case "execute": ExecuteHotkeyReleased?.Invoke(); break;
         }
     }
 
