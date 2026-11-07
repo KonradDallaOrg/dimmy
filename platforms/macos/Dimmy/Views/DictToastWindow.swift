@@ -1,44 +1,36 @@
 import AppKit
 import SwiftUI
 
-/// Self-dismissing in-app toast for dictionary feedback. Top-centre of
-/// the active screen; it stays up long enough to read (see
-/// `visibleSeconds`). Bespoke window instead of
-/// `UNUserNotification` because we want immediate visual feedback
-/// inline with the user's flow — UN-pushed notifications are
-/// throttled, batched, and may not surface at all if the user has
-/// Focus mode on. Same rationale as the Win-side `DictToastWindow`.
+/// Short feedback after a hotkey: "added to dictionary", "press Cmd+C
+/// first", "command failed". Drawn as a macOS notification banner (top
+/// right under the menu bar, real behind-window translucency, the app icon
+/// with a small status badge) but shown by Dimmy itself: a system
+/// notification needs a permission prompt, lands in Notification Center and
+/// is hidden by Focus, which is wrong for feedback on a key the user just
+/// pressed.
 ///
-/// Layout note: the toast lives near the top of the screen instead of
-/// the bottom because users normally focus their attention on the top
-/// half of their display (menu bar, browser tabs, document headers).
-/// A bottom-right toast on a 27" screen sits in the dead zone of the
-/// user's vision and gets missed — empirically the #1 complaint from
-/// the first internal test pass.
+/// The first version was a 480x112 slab in the bottom-right corner with a
+/// big coloured symbol and a coloured border; its SwiftUI material sat in a
+/// transparent window, so it blurred nothing and read as flat grey.
 @MainActor
 final class DictToastWindow {
 
-    /// What happened. Drives the icon + accent colour. Title/body text
-    /// is still set by the caller so we can localise + reuse the same
-    /// styled chrome for future variants (e.g. "Removed", "Error").
     enum Kind {
         case added
         case alreadyPresent
         case workflowHint   // user pressed combo without re-copying
         case error          // command-mode failed (no LLM key, etc.)
 
-        var symbolName: String {
+        /// Glyph of the badge on the app icon.
+        var badgeSymbol: String {
             switch self {
-            case .added:          return "checkmark.circle.fill"
-            case .alreadyPresent: return "info.circle.fill"
+            case .added:          return "checkmark"
+            case .alreadyPresent: return "info"
             case .workflowHint:   return "hand.point.up.left.fill"
-            case .error:          return "exclamationmark.triangle.fill"
+            case .error:          return "exclamationmark"
             }
         }
 
-        /// Semantic colour. Resolves correctly in both light and dark
-        /// modes because SwiftUI's named `Color.green` / `.blue` / `.orange`
-        /// adapt to system appearance.
         var accent: Color {
             switch self {
             case .added:          return .green
@@ -49,68 +41,78 @@ final class DictToastWindow {
         }
     }
 
-    private static var current: NSWindow?
+    static let width: CGFloat = 360
+    private static let margin: CGFloat = 12
+    private static let cornerRadius: CGFloat = 16
+
+    private static var current: NSPanel?
     private static var dismissTimer: Timer?
 
     /// Single entry point. Closing any previous toast before showing a
     /// new one prevents toast stacking when the user hammers the
     /// hotkey.
     static func show(kind: Kind, title: String, body: String) {
-        dismissCurrent()
+        dismissCurrent(animated: false)
 
-        let content = DictToastView(kind: kind, title: title, message: body)
-        let host = NSHostingController(rootView: content)
-        let windowSize = NSSize(width: 480, height: 112)
+        let host = NSHostingView(rootView: DictToastView(kind: kind, title: title, message: body))
+        let size = NSSize(width: width, height: ceil(host.fittingSize.height))
 
-        let window = NSWindow(
-            contentRect: NSRect(origin: .zero, size: windowSize),
-            styleMask: [.borderless],
+        let panel = NSPanel(
+            contentRect: NSRect(origin: .zero, size: size),
+            styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
-        // SIGSEGV in -[_NSWindowTransformAnimation dealloc] when close()
-        // races a pending QuartzCore transaction. The window is the only
-        // strong reference holder (we keep it in `current`); letting ARC
-        // free it when we nil that out is safe, the AppKit-managed close
-        // dealloc is not. Same pattern Apple recommends for transient
-        // utility panels.
-        window.isReleasedWhenClosed = false
-        window.contentViewController = host
-        window.isOpaque = false
-        window.backgroundColor = .clear
-        window.hasShadow = true
-        // .statusBar = above .floating, ensures the toast sits on top of
-        // other floating panels (e.g. Spotlight, system pickers).
-        window.level = .statusBar
-        // Survive Mission Control / fullscreen apps so the user still
-        // sees the confirmation even when they're focused elsewhere.
-        window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
-        window.isMovable = false
-        // Don't grab key window status — the user is typing in another
-        // app, their keystrokes must stay there.
-        window.ignoresMouseEvents = false  // still tappable to dismiss
+        panel.isReleasedWhenClosed = false
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        // .statusBar = above .floating, so the toast sits on top of other
+        // floating panels (Spotlight, system pickers).
+        panel.level = .statusBar
+        // Survive Mission Control / fullscreen apps so the user still sees
+        // the confirmation while focused elsewhere.
+        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
+        panel.isMovable = false
+        panel.hidesOnDeactivate = false
 
-        // Bottom-right anchor on the screen containing the mouse — same
-        // corner as macOS Notification Center used to sit, where users
-        // already instinctively look for non-disruptive confirmations.
-        // 24 px margin on both edges keeps it clear of the Dock.
-        if let screen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) })
-            ?? NSScreen.main {
-            let visible = screen.visibleFrame
-            let origin = NSPoint(
-                x: visible.maxX - windowSize.width - 24,
-                y: visible.minY + 24
-            )
-            window.setFrameOrigin(origin)
+        // Translucent like a system banner: the effect view blurs what is
+        // behind the window; its rounded mask also shapes the shadow.
+        let effect = NSVisualEffectView(frame: NSRect(origin: .zero, size: size))
+        effect.material = .popover
+        effect.blendingMode = .behindWindow
+        effect.state = .active
+        effect.wantsLayer = true
+        effect.layer?.cornerRadius = cornerRadius
+        effect.layer?.cornerCurve = .continuous
+        effect.layer?.masksToBounds = true
+        effect.layer?.borderWidth = 0.5
+        effect.layer?.borderColor = NSColor.separatorColor.cgColor
+        host.frame = effect.bounds
+        host.autoresizingMask = [.width, .height]
+        effect.addSubview(host)
+        panel.contentView = effect
+
+        // Top right of the screen with the mouse, under the menu bar: where
+        // macOS shows its own notifications.
+        let screen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? NSScreen.main
+        let visible = screen?.visibleFrame ?? NSRect(origin: .zero, size: size)
+        let final = NSPoint(x: visible.maxX - size.width - margin, y: visible.maxY - size.height - margin)
+        panel.setFrameOrigin(NSPoint(x: final.x + 24, y: final.y))
+        panel.alphaValue = 0
+
+        // orderFrontRegardless = visible WITHOUT becoming key: the user is
+        // typing in another app and must not lose focus to a toast.
+        panel.orderFrontRegardless()
+        panel.invalidateShadow()
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.22
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().setFrameOrigin(final)
+            panel.animator().alphaValue = 1
         }
 
-        // orderFrontRegardless = visible WITHOUT becoming key window.
-        // makeKeyAndOrderFront would steal first-responder, which is
-        // exactly the bug we want to avoid — the user is typing
-        // somewhere else and shouldn't lose focus to a toast.
-        window.orderFrontRegardless()
-
-        current = window
+        current = panel
         dismissTimer = Timer.scheduledTimer(
             withTimeInterval: visibleSeconds(title: title, body: body), repeats: false
         ) { _ in
@@ -152,74 +154,83 @@ final class DictToastWindow {
         show(
             kind: .alreadyPresent,
             title: "“\(word)” already in dictionary",
-            body: "Already on the list — Cmd+C a new selection, then press your hotkey again."
+            body: "Already on the list. Cmd+C a new selection, then press your hotkey again."
         )
     }
 
     /// Fires when the user presses the dict hotkey without re-copying.
     /// Detected via NSPasteboard.changeCount staying identical across
     /// two consecutive presses — see DictHotkeyManager.handleCarbonHotKey.
-    /// Bigger hint than "alreadyPresent" because the root cause is
-    /// different: user just forgot the Cmd+C step.
     static func showWorkflowHint(hotkey: String) {
         show(
             kind: .workflowHint,
             title: "Press Cmd+C first",
-            body: "Without Accessibility, Dimmy reads your clipboard. Steps: select word → Cmd+C → \(hotkey)."
+            body: "Without Accessibility, Dimmy reads your clipboard. Steps: select word, Cmd+C, \(hotkey)."
         )
     }
 
     static func dismissCurrent() {
+        dismissCurrent(animated: true)
+    }
+
+    private static func dismissCurrent(animated: Bool) {
         dismissTimer?.invalidate()
         dismissTimer = nil
-        // orderOut hides the window from the screen. We deliberately
-        // do NOT call close() — with releasedWhenClosed = false it
-        // would be a no-op tear-down, but it still ends up calling
-        // into the AppKit transform-animation cleanup path that
-        // SIGSEGVs against an in-flight QuartzCore transaction.
-        // Nil-ing `current` is the only release we need.
-        current?.orderOut(nil)
+        guard let panel = current else { return }
         current = nil
+        // orderOut, never close(): close() goes through the AppKit
+        // transform-animation teardown that SIGSEGVs against an in-flight
+        // QuartzCore transaction.
+        guard animated else { panel.orderOut(nil); return }
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.18
+            panel.animator().alphaValue = 0
+        }, completionHandler: {
+            Task { @MainActor in panel.orderOut(nil) }
+        })
     }
 }
 
-/// SwiftUI body of the toast. Adapts to the system colour scheme via
-/// the standard `Color` / `material` semantic tokens — no bespoke
-/// palette switch needed on Mac because NSWindow's effectiveAppearance
-/// already propagates light/dark and SwiftUI's adaptive colours
-/// resolve correctly. The Win side has to hand-paint two palettes
-/// because the bespoke transparent backdrop bypasses theme resources.
+/// Content of the banner: the app icon with a status badge, a bold title
+/// and up to three lines of text. Adaptive colours only, so light and dark
+/// follow the system.
 private struct DictToastView: View {
     let kind: DictToastWindow.Kind
     let title: String
     let message: String
 
     var body: some View {
-        HStack(alignment: .center, spacing: 14) {
-            Image(systemName: kind.symbolName)
-                .font(.system(size: 28, weight: .semibold))
-                .foregroundStyle(kind.accent)
-                .frame(width: 36, height: 36)
-            VStack(alignment: .leading, spacing: 4) {
+        HStack(alignment: .top, spacing: 12) {
+            ZStack(alignment: .bottomTrailing) {
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: 34, height: 34)
+                Image(systemName: kind.badgeSymbol)
+                    .font(.system(size: 8, weight: .heavy))
+                    .foregroundStyle(.white)
+                    .frame(width: 16, height: 16)
+                    .background(Circle().fill(kind.accent))
+                    .overlay(Circle().stroke(Color(nsColor: .windowBackgroundColor), lineWidth: 1.5))
+                    .offset(x: 4, y: 4)
+            }
+            VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.primary)
+                    .lineLimit(2)
                 Text(message)
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
-                    .lineLimit(2)
+                    .lineLimit(3)
             }
+            .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 16)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-        .background(.thickMaterial, in: RoundedRectangle(cornerRadius: 14))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14)
-                .stroke(kind.accent.opacity(0.35), lineWidth: 1.5)
-        )
-        .shadow(color: .black.opacity(0.25), radius: 12, x: 0, y: 4)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(width: DictToastWindow.width, alignment: .leading)
+        .contentShape(Rectangle())
         .onTapGesture {
             // Click-to-dismiss for impatient users.
             Task { @MainActor in DictToastWindow.dismissCurrent() }

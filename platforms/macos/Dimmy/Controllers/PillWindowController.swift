@@ -671,7 +671,9 @@ final class DockZoneOverlay {
             case .hidden:
                 panel.orderOut(nil)
             case .near, .active:
-                panel.backgroundColor = Self.color.withAlphaComponent(want == .active ? 0.5 : 0.24)
+                // On the rounded layer, not the window: a window's background
+                // ignores its content view's corner radius.
+                panel.contentView?.layer?.backgroundColor = Self.color.withAlphaComponent(want == .active ? 0.5 : 0.24).cgColor
                 panel.order(.below, relativeTo: pill.windowNumber)
             }
         }
@@ -688,6 +690,7 @@ final class DockZoneOverlay {
         let p = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
                         backing: .buffered, defer: true)
         p.isOpaque = false
+        p.backgroundColor = .clear
         p.hasShadow = false
         p.ignoresMouseEvents = true
         p.level = .floating
