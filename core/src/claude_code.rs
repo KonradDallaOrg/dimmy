@@ -1136,6 +1136,15 @@ fn run_blocking_streaming(
                     // The authoritative answer. `is_error` marks a CLI-level
                     // failure whose `result` is a message, not an answer.
                     if v["is_error"].as_bool() == Some(true) {
+                        // The only place the CLI says why (usage limit, auth):
+                        // stderr stays empty in stream-json mode.
+                        let why: String = v["result"]
+                            .as_str()
+                            .unwrap_or("")
+                            .chars()
+                            .take(200)
+                            .collect();
+                        crate::log(&format!("[ClaudeCode] error result: {}", why));
                         continue;
                     }
                     if let Some(text) = v["result"].as_str() {
