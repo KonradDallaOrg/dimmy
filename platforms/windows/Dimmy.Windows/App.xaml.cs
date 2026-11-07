@@ -1609,25 +1609,22 @@ public partial class App : Application
         var margin = p.TryGetProperty("margin", out var m) && m.ValueKind == System.Text.Json.JsonValueKind.Number ? m.GetDouble() : 0;
         var say = S("say");
         var threshold = p.TryGetProperty("threshold", out var th) && th.ValueKind == System.Text.Json.JsonValueKind.Number ? th.GetDouble() : 0.035;
-        var state = !B("sure") ? "In ascolto"
-            : !B("live_safe") ? "Sicuro: questa aspetta lo Stop"
-            : B("stable") ? "PARTE ORA"
-            : "SICURO: parte appena fai una pausa";
-        var action = intent switch
+        var guess = intent switch
         {
-            "Open" => "Apri app",
-            "Tile" => "Affianca finestre",
-            "Move" => "Sposta finestra",
-            "FindFiles" => "Cerca file",
-            "Minimize" => "Riduci a icona",
-            "Web" => "Apri o cerca un sito",
-            "Browser" => "Comando browser",
-            "Media" => "Musica e volume",
-            "Folder" => "Apri cartella",
-            "Settings" => "Impostazioni",
-            _ => intent,
+            "Open" => "aprire un'app",
+            "Tile" => "affiancare due finestre",
+            "Move" => "spostare una finestra",
+            "FindFiles" => "cercare dei file",
+            "Minimize" => "ridurre a icona una finestra",
+            "Web" => "aprire o cercare un sito",
+            "Browser" => "un comando del browser",
+            "Media" => "musica o volume",
+            "Folder" => "aprire una cartella",
+            "Settings" => "aprire le impostazioni",
+            _ => "",
         };
-        Views.PcLiveWindow.Update(S("text"), action, margin, threshold, say, state);
+        var sureness = threshold > 0 ? margin / threshold : 0;
+        Views.PcLiveWindow.Update(S("text"), say, guess, sureness, B("sure") && !B("live_safe"));
     }
 
     /// <summary>EXPERIMENT (exp/pc-actions): the core already ran the command
@@ -1646,7 +1643,7 @@ public partial class App : Application
             _appViewModel.ExecuteOneShot = false;
             _targetContext = null;
         }
-        Views.PcLiveWindow.Finish(S("say"), ok ? "FATTO mentre parlavi" : $"Non fatto: {S("error")}");
+        Views.PcLiveWindow.Finish(S("say"), ok ? "✓ Fatto mentre parlavi" : $"Non ci sono riuscito: {S("error")}");
         if (ok)
         {
             Services.DictNotificationService.ShowPcAction(S("say"), "Fatto mentre parlavi");
@@ -2241,7 +2238,9 @@ public partial class App : Application
             var paste = Str("paste");
             var engineUsed = Str("engine") ?? "";
             if (engineUsed != "live")
-                Views.PcLiveWindow.Finish(said, error == null ? $"Fatto ({(engineUsed == "e5" ? "modello locale" : "Haiku")})" : "Non fatto");
+                Views.PcLiveWindow.Finish(said, error == null
+                    ? (engineUsed == "e5" ? "✓ Fatto (ho capito da solo)" : "✓ Fatto (ho chiesto a Claude)")
+                    : $"Non ci sono riuscito: {error}");
             if (!string.IsNullOrEmpty(paste))
             {
                 await Task.Delay(150);

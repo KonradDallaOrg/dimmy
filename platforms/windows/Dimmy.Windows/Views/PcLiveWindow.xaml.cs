@@ -17,33 +17,39 @@ namespace Dimmy.Windows.Views;
 public sealed partial class PcLiveWindow : Window
 {
     private const int WidthDip = 380;
-    private const int HeightDip = 236;
+    private const int HeightDip = 210;
     private const int MarginDip = 12;
 
     private static PcLiveWindow? _current;
     private readonly DispatcherTimer _closeTimer;
 
-    /// <summary>The bar is half full at the live threshold: past the middle,
-    /// the router is sure enough to act.</summary>
-    public static void Update(string heard, string intent, double margin, double threshold, string plan, string state)
+    /// <summary>One routed partial. <paramref name="sureness"/> is the
+    /// router's margin over its live threshold: 1 means just sure enough to
+    /// act on its own, so the bar is half full there and "Alta" starts.</summary>
+    public static void Update(string heard, string plan, string guess, double sureness, bool waitsForStop)
     {
         var w = Ensure();
         w.HeardText.Text = string.IsNullOrEmpty(heard) ? "…" : $"\"{heard}\"";
-        w.IntentText.Text = string.IsNullOrEmpty(intent) ? "…" : intent;
-        var full = threshold > 0 ? threshold * 2 : 0.07;
-        w.MarginBar.Value = Math.Clamp(margin / full * 100, 0, 100);
-        w.MarginText.Text = $"{margin:0.000}  (soglia {threshold:0.000})";
-        w.PlanText.Text = string.IsNullOrEmpty(plan) ? "non ancora" : plan;
-        w.StateText.Text = state;
+        w.PlanText.Text = !string.IsNullOrEmpty(plan) ? plan
+            : !string.IsNullOrEmpty(guess) ? $"forse: {guess}…"
+            : "sto ascoltando…";
+        w.SureBar.Value = Math.Clamp(sureness * 50, 0, 100);
+        var high = sureness >= 1 && !string.IsNullOrEmpty(plan);
+        w.SureText.Text = high ? "Alta" : sureness >= 0.6 ? "Media" : "Bassa";
+        w.NextText.Text = !high
+            ? "Continua pure: non ho ancora capito bene"
+            : waitsForStop
+                ? "Azione delicata: premi di nuovo il tasto per farla"
+                : "Fai una pausa e lo faccio";
         w._closeTimer.Stop();
     }
 
     /// <summary>The command ran (or didn't): show it, then close.</summary>
-    public static void Finish(string plan, string state)
+    public static void Finish(string plan, string next)
     {
         var w = Ensure();
         if (!string.IsNullOrEmpty(plan)) w.PlanText.Text = plan;
-        w.StateText.Text = state;
+        w.NextText.Text = next;
         w._closeTimer.Stop();
         w._closeTimer.Start();
     }

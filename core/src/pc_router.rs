@@ -693,12 +693,12 @@ fn route_scored(command: &str, names: &[(String, String)]) -> (Option<Plan>, f32
                     app: apps[0].clone(),
                     side,
                 });
-                say = format!("{say}, {}", side_label(side));
+                say = format!("{say} e lo metto {}", side_label(side));
             }
             Some(Plan { steps, say })
         }
         Intent::Tile if apps.len() == 2 => Some(Plan {
-            say: format!("{} e {} affiancati", apps[0], apps[1]),
+            say: format!("Affianco {} e {}", apps[0], apps[1]),
             steps: vec![Step::Tile {
                 left: apps[0].clone(),
                 right: apps[1].clone(),
@@ -706,14 +706,14 @@ fn route_scored(command: &str, names: &[(String, String)]) -> (Option<Plan>, f32
         }),
         Intent::Move => match (side_of(&w), apps.as_slice()) {
             (Some(side), [app]) => Some(Plan {
-                say: format!("{app}: {}", side_label(side)),
+                say: format!("Sposto {app} {}", side_label(side)),
                 steps: vec![Step::Place {
                     app: app.clone(),
                     side,
                 }],
             }),
             (Some(side), []) if this_window => Some(Plan {
-                say: format!("Finestra: {}", side_label(side)),
+                say: format!("Sposto la finestra {}", side_label(side)),
                 steps: vec![Step::Place {
                     app: String::new(),
                     side,
@@ -722,7 +722,7 @@ fn route_scored(command: &str, names: &[(String, String)]) -> (Option<Plan>, f32
             _ => None,
         },
         Intent::Minimize if apps.len() == 1 => Some(Plan {
-            say: format!("{} ridotto a icona", apps[0]),
+            say: format!("Riduco a icona {}", apps[0]),
             steps: vec![Step::Minimize {
                 app: apps[0].clone(),
             }],
@@ -736,19 +736,52 @@ fn route_scored(command: &str, names: &[(String, String)]) -> (Option<Plan>, f32
             steps: vec![Step::Web { site, query }],
         }),
         Intent::Browser => browser_action_of(&w).map(|a| Plan {
-            say: format!("Browser: {a}"),
+            say: match a {
+                "new_tab" => "Apro una nuova scheda",
+                "close_tab" => "Chiudo la scheda",
+                "reopen_tab" => "Riapro l'ultima scheda chiusa",
+                "back" => "Torno alla pagina precedente",
+                "forward" => "Vado alla pagina successiva",
+                "reload" => "Ricarico la pagina",
+                "next_tab" => "Passo alla scheda successiva",
+                _ => "Passo alla scheda precedente",
+            }
+            .into(),
             steps: vec![Step::Browser { action: a.into() }],
         }),
         Intent::Media => media_action_of(&w).map(|a| Plan {
-            say: format!("Media: {a}"),
+            say: match a {
+                "play_pause" => "Metto in pausa o riprendo",
+                "next" => "Passo al brano successivo",
+                "previous" => "Torno al brano precedente",
+                "volume_up" => "Alzo il volume",
+                "volume_down" => "Abbasso il volume",
+                _ => "Tolgo l'audio",
+            }
+            .into(),
             steps: vec![Step::Media { action: a.into() }],
         }),
         Intent::Folder => folder_of(&w).map(|f| Plan {
-            say: format!("Cartella: {f}"),
+            say: match f {
+                "latest_download" => "Ti mostro l'ultimo file scaricato".to_string(),
+                "downloads" => "Apro la cartella Download".into(),
+                "documents" => "Apro la cartella Documenti".into(),
+                "desktop" => "Apro il Desktop".into(),
+                "pictures" => "Apro la cartella Immagini".into(),
+                "music" => "Apro la cartella Musica".into(),
+                _ => "Apro la cartella Video".into(),
+            },
             steps: vec![Step::OpenFolder { folder: f.into() }],
         }),
         Intent::Settings => settings_of(&w).map(|p| Plan {
-            say: format!("Impostazioni: {p}"),
+            say: match p {
+                "bluetooth" => "Apro le impostazioni Bluetooth",
+                "wifi" => "Apro le impostazioni Wi-Fi",
+                "sound" => "Apro le impostazioni audio",
+                "display" => "Apro le impostazioni dello schermo",
+                _ => "Apro le impostazioni delle notifiche",
+            }
+            .into(),
             steps: vec![Step::Settings { page: p.into() }],
         }),
         Intent::FindFiles => {
@@ -758,8 +791,19 @@ fn route_scored(command: &str, names: &[(String, String)]) -> (Option<Plan>, f32
                 .map(String::as_str)
                 .filter(|t| !STOP.contains(t) && !DATE_WORDS.contains(t) && !FILE_WORDS.contains(t))
                 .collect();
+            let period = match when {
+                When::Today => " di oggi",
+                When::Yesterday => " di ieri",
+                When::ThisWeek => " di questa settimana",
+                When::LastWeek => " della settimana scorsa",
+                When::Any => "",
+            };
             Some(Plan {
-                say: "Cerco i file".into(),
+                say: if query.is_empty() {
+                    format!("Cerco i file{period}")
+                } else {
+                    format!("Cerco \"{}\" tra i file{period}", query.join(" "))
+                },
                 steps: vec![Step::FindFiles {
                     query: query.join(" "),
                     when,
