@@ -3,9 +3,10 @@ using Xunit;
 
 namespace Dimmy.Windows.Tests;
 
-/// The legal window draws a flat, virtualized list built from the core's
-/// blocks. A table must turn into one header item and one item per row,
-/// all sharing the same column proportions so the columns line up.
+/// The legal window draws a flat list built from the core's blocks. A table
+/// turns into one header item and one item per row, all sharing the same
+/// column proportions so the columns line up; a licence text keeps one card,
+/// its hard-wrapped paragraphs reflowed to the window width.
 public class LegalDocumentTests
 {
     private const string Json = """
@@ -13,11 +14,11 @@ public class LegalDocumentTests
          {"t":"paragraph","text":"Dimmy is free software."},
          {"t":"table","header":["Crate","Version","Repository"],
           "rows":[["a","1.0","https://github.com/someone/a-very-long-repository-name-that-goes-on"],["bb","2.0.1","x"]]},
-         {"t":"code","text":"MIT License\n\nCopyright (c) X"}]
+         {"t":"code","text":"MIT License\n\n\nCopyright (c) X"}]
         """;
 
     [Fact]
-    public void Blocks_become_one_item_each_and_a_table_one_item_per_row()
+    public void Blocks_become_items_and_a_table_one_item_per_row()
     {
         var items = LegalDocument.Parse(Json);
         Assert.Equal(new[] { LegalItemKind.Heading, LegalItemKind.Paragraph, LegalItemKind.TableHeader,
@@ -45,5 +46,25 @@ public class LegalDocumentTests
         Assert.Equal(6, c[0]);   // "Crate" is 5: never narrower than 6
         Assert.Equal(7, c[1]);   // "Version"
         Assert.Equal(48, c[2]);  // a long URL is capped
+    }
+
+    [Fact]
+    public void Hard_wrapped_prose_flows_to_the_window_width()
+    {
+        var text = "Permission is hereby granted, free of charge, to any person obtaining a copy\r\n" +
+                   "of this software and associated documentation files (the \"Software\"), to deal\r\n" +
+                   "in the Software without restriction.\r\n\r\nTHE SOFTWARE IS PROVIDED \"AS IS\".";
+        Assert.Equal("Permission is hereby granted, free of charge, to any person obtaining a copy " +
+            "of this software and associated documentation files (the \"Software\"), to deal " +
+            "in the Software without restriction.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\".", LegalDocument.Licence(text));
+    }
+
+    [Fact]
+    public void Lists_indents_and_rules_keep_their_line_breaks()
+    {
+        Assert.Equal("Conditions:\n1. Keep the notice.\n2. Do not misrepresent.",
+            LegalDocument.Licence("  Conditions:\n  1. Keep the notice.\n  2. Do not misrepresent."));
+        Assert.Equal("Section 1\n    indented detail", LegalDocument.Licence("Section 1\n    indented detail"));
+        Assert.Equal("=========\nTitle\n=========", LegalDocument.Licence("=========\nTitle\n========="));
     }
 }

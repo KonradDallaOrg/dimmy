@@ -412,6 +412,14 @@ public partial class App : Application
     {
         Instance = this;
         this.InitializeComponent();
+        // WinUI reports its own failures here (a layout cycle, a bad
+        // resource) and then ends the process with 0xc000027b, which leaves
+        // no managed trace. Log it; Handled stays false, so it still crashes.
+        UnhandledException += (_, e) =>
+        {
+            Program.LogCrash($"Xaml.UnhandledException ({e.Message})", e.Exception);
+            PttLog($"[Crash] Xaml.UnhandledException: {e.Message} | {e.Exception}");
+        };
     }
 
     public void ReloadConfig()

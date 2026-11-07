@@ -135,15 +135,10 @@ public class LegalDialogTests : IDisposable
                 .And(cf.ByClassName("ScrollViewer"))));
         var pattern = scroll.Patterns.Scroll.Pattern;
         Assert.True(pattern.VerticallyScrollable.Value, "the text scrolls");
-        // The content is virtualized: the scroll extent is estimated from
-        // the rows built so far and corrects itself as the jump builds the
-        // real ones, so reaching the end takes a few jumps (measured: 4 on
-        // the notices), like dragging the thumb down twice.
-        for (int i = 0; i < 10 && pattern.VerticalScrollPercent.Value < 99.9; i++)
-        {
-            pattern.SetScrollPercent(-1, 100);
-            Thread.Sleep(500);
-        }
+        // Built once, not virtualized (see LegalTextWindow.xaml): the extent
+        // is exact, so one jump reaches the end.
+        pattern.SetScrollPercent(-1, 100);
+        Thread.Sleep(300);
         Assert.True(pattern.VerticalScrollPercent.Value >= 99.9, "it scrolls to the end");
     }
 }

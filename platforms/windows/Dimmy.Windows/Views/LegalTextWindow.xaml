@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The licence or the open source notices, laid out from the core's blocks.
+  Built once into a plain StackPanel, deliberately NOT virtualized: the rows
+  range from a 30 px table row to a licence card many screens tall, and both
+  virtualizers fail on that mix. ItemsRepeater ended the app with a
+  LayoutCycleException, ListView's ItemsStackPanel span forever in
+  VirtualizationInformation::GetItem (both reproduced 2026-11-07 by jumping
+  the scroll bar). A built tree has no height estimate to get wrong:
+  scrolling only moves it.
+-->
+<Window
+    x:Class="Dimmy.Windows.Views.LegalTextWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <Grid x:Name="Root">
+    <ScrollViewer x:Name="Scroll"
+                  VerticalScrollBarVisibility="Visible"
+                  HorizontalScrollBarVisibility="Disabled">
+      <StackPanel x:Name="Body" Padding="28,20,28,24" />
+    </ScrollViewer>
+  </Grid>
+</Window>
