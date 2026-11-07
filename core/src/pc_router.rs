@@ -10,7 +10,7 @@
 //! Slots without a model: side and date from keywords, app names by fuzzy
 //! match of the command's words against open windows and Start-menu apps.
 
-use crate::pc_control::{name_score, Plan, Side, Step, When};
+use crate::pc_control::{name_score, norm, Plan, Side, Step, When};
 use ort::session::{builder::GraphOptimizationLevel, Session};
 use ort::value::Tensor;
 use std::sync::Mutex;
@@ -25,6 +25,11 @@ enum Intent {
     Move,
     FindFiles,
     Minimize,
+    Web,
+    Browser,
+    Media,
+    Folder,
+    Settings,
 }
 
 const EXAMPLES: &[(Intent, &str)] = &[
@@ -72,7 +77,173 @@ const EXAMPLES: &[(Intent, &str)] = &[
     (Intent::Minimize, "togli di mezzo Excel"),
     (Intent::Minimize, "minimize Slack"),
     (Intent::Minimize, "hide the browser"),
+    (Intent::Web, "naviga su YouTube"),
+    (Intent::Web, "vai su Amazon"),
+    (Intent::Web, "cerca su Google il meteo di domani"),
+    (Intent::Web, "cercami su YouTube un tutorial di Excel"),
+    (Intent::Web, "apri Gmail"),
+    (Intent::Web, "cerca su Wikipedia Leonardo da Vinci"),
+    (Intent::Web, "search YouTube for lo-fi music"),
+    (Intent::Web, "go to Amazon"),
+    (Intent::Web, "google the weather in Milan"),
+    (Intent::Browser, "apri una nuova scheda"),
+    (Intent::Browser, "apri una nuova tab"),
+    (Intent::Browser, "chiudi questa scheda"),
+    (Intent::Browser, "torna indietro"),
+    (Intent::Browser, "vai avanti"),
+    (Intent::Browser, "ricarica la pagina"),
+    (Intent::Browser, "riapri la scheda chiusa"),
+    (Intent::Browser, "scheda successiva"),
+    (Intent::Browser, "new tab"),
+    (Intent::Browser, "go back"),
+    (Intent::Browser, "refresh the page"),
+    (Intent::Media, "metti in pausa"),
+    (Intent::Media, "riprendi la musica"),
+    (Intent::Media, "canzone successiva"),
+    (Intent::Media, "torna alla canzone precedente"),
+    (Intent::Media, "alza il volume"),
+    (Intent::Media, "abbassa il volume"),
+    (Intent::Media, "togli l'audio"),
+    (Intent::Media, "pause the music"),
+    (Intent::Media, "next song"),
+    (Intent::Media, "turn the volume down"),
+    (Intent::Folder, "apri la cartella download"),
+    (Intent::Folder, "aprimi i documenti"),
+    (Intent::Folder, "mostrami l'ultimo file scaricato"),
+    (Intent::Folder, "apri la cartella immagini"),
+    (Intent::Folder, "apri il desktop in esplora file"),
+    (Intent::Folder, "open my downloads folder"),
+    (Intent::Folder, "show me the last download"),
+    (Intent::Settings, "apri le impostazioni bluetooth"),
+    (Intent::Settings, "impostazioni del wifi"),
+    (Intent::Settings, "apri le impostazioni audio"),
+    (Intent::Settings, "impostazioni dello schermo"),
+    (Intent::Settings, "open bluetooth settings"),
+    (Intent::Settings, "open sound settings"),
 ];
+
+const SITES: &[&str] = &[
+    "youtube",
+    "google",
+    "amazon",
+    "wikipedia",
+    "gmail",
+    "maps",
+    "mappe",
+    "netflix",
+    "github",
+    "linkedin",
+    "facebook",
+    "instagram",
+    "spotify",
+    "reddit",
+];
+
+const WEB_STOP: &[&str] = &[
+    "cerca", "cercami", "search", "google", "su", "on", "for", "vai", "naviga", "navika", "apri",
+    "open", "go", "to", "sito", "il", "la", "lo", "i", "le", "un", "una", "di", "del", "della",
+    "in", "me", "mi", "the", "a", "an",
+];
+
+fn web_of(w: &[String]) -> Option<(String, String)> {
+    let site = w.iter().find(|t| SITES.contains(&t.as_str())).cloned();
+    let query: Vec<&str> = w
+        .iter()
+        .map(String::as_str)
+        .filter(|t| !WEB_STOP.contains(t) && !SITES.contains(t))
+        .collect();
+    let searching = w
+        .iter()
+        .any(|t| ["cerca", "cercami", "search", "google"].contains(&t.as_str()));
+    match site {
+        Some(s) => Some((s, query.join(" "))),
+        None if searching && !query.is_empty() => Some(("google".into(), query.join(" "))),
+        None => None,
+    }
+}
+
+fn browser_action_of(w: &[String]) -> Option<&'static str> {
+    let has = |x: &str| w.iter().any(|t| t == x);
+    let tab = has("scheda") || has("tab");
+    if has("riapri") || has("reopen") {
+        Some("reopen_tab")
+    } else if tab && (has("nuova") || has("new")) {
+        Some("new_tab")
+    } else if tab && (has("chiudi") || has("close")) {
+        Some("close_tab")
+    } else if tab && (has("successiva") || has("prossima") || has("next")) {
+        Some("next_tab")
+    } else if tab && (has("precedente") || has("previous")) {
+        Some("previous_tab")
+    } else if has("indietro") || has("back") {
+        Some("back")
+    } else if has("avanti") || has("forward") {
+        Some("forward")
+    } else if has("ricarica") || has("aggiorna") || has("reload") || has("refresh") {
+        Some("reload")
+    } else {
+        None
+    }
+}
+
+fn media_action_of(w: &[String]) -> Option<&'static str> {
+    let has = |x: &str| w.iter().any(|t| t == x);
+    let volume = has("volume");
+    if has("muto") || has("mute") || has("silenzia") || (has("togli") && has("audio")) {
+        Some("mute")
+    } else if volume && (has("alza") || has("su") || has("up") || has("aumenta")) {
+        Some("volume_up")
+    } else if volume && (has("abbassa") || has("giù") || has("down") || has("diminuisci")) {
+        Some("volume_down")
+    } else if has("pausa") || has("pause") || has("play") || has("riprendi") || has("ferma") {
+        Some("play_pause")
+    } else if has("successiva") || has("prossima") || has("next") || has("skip") || has("salta") {
+        Some("next")
+    } else if has("precedente") || has("previous") {
+        Some("previous")
+    } else {
+        None
+    }
+}
+
+fn folder_of(w: &[String]) -> Option<&'static str> {
+    let has = |x: &str| w.iter().any(|t| t == x);
+    let download = has("download") || has("downloads") || has("scaricato") || has("scaricati");
+    if download && (has("ultimo") || has("last") || has("latest")) {
+        Some("latest_download")
+    } else if download {
+        Some("downloads")
+    } else if has("documenti") || has("documents") {
+        Some("documents")
+    } else if has("desktop") || has("scrivania") {
+        Some("desktop")
+    } else if has("immagini") || has("foto") || has("pictures") || has("photos") {
+        Some("pictures")
+    } else if has("musica") || has("music") {
+        Some("music")
+    } else if has("video") || has("videos") {
+        Some("videos")
+    } else {
+        None
+    }
+}
+
+fn settings_of(w: &[String]) -> Option<&'static str> {
+    let has = |x: &str| w.iter().any(|t| t == x);
+    if has("bluetooth") {
+        Some("bluetooth")
+    } else if has("wifi") || (has("wi") && has("fi")) || has("rete") {
+        Some("wifi")
+    } else if has("audio") || has("suono") || has("sound") {
+        Some("sound")
+    } else if has("schermo") || has("display") || has("luminosità") {
+        Some("display")
+    } else if has("notifiche") || has("notifications") {
+        Some("notifications")
+    } else {
+        None
+    }
+}
 
 /// Words that carry the action, place or time, never an app name or a query.
 const STOP: &[&str] = &[
@@ -299,7 +470,7 @@ fn when_of(w: &[String]) -> When {
 /// App names said in the command, in order, matched against `names`
 /// (open windows' processes and titles, Start-menu apps).
 fn apps_in(w: &[String], names: &[(String, String)]) -> Vec<String> {
-    let mut found: Vec<(usize, String)> = Vec::new();
+    let mut found: Vec<(String, String)> = Vec::new();
     let mut i = 0;
     while i < w.len() {
         if STOP.contains(&w[i].as_str()) {
@@ -313,21 +484,26 @@ fn apps_in(w: &[String], names: &[(String, String)]) -> Vec<String> {
                 continue;
             }
             let gram = w[i..i + n].join(" ");
-            let score = names
+            let best = names
                 .iter()
-                .map(|(name, title)| name_score(&gram, name, title))
-                .fold(0.0f32, f32::max);
-            if score >= 0.8 {
-                found.push((i, gram));
-                taken = n;
-                break;
+                .map(|(name, title)| (name_score(&gram, name, title), name))
+                .max_by(|a, b| a.0.total_cmp(&b.0));
+            if let Some((score, name)) = best {
+                if score >= 0.8 {
+                    found.push((gram, name.to_lowercase()));
+                    taken = n;
+                    break;
+                }
             }
         }
         i += taken.max(1);
     }
+    // "Apri Chrom, apri Chrome": two spellings of one app are one app.
     let mut out: Vec<String> = Vec::new();
-    for (_, g) in found {
-        if !out.contains(&g) {
+    let mut targets: Vec<String> = Vec::new();
+    for (g, target) in found {
+        if !targets.contains(&target) {
+            targets.push(target);
             out.push(g);
         }
     }
@@ -551,6 +727,30 @@ fn route_scored(command: &str, names: &[(String, String)]) -> (Option<Plan>, f32
                 app: apps[0].clone(),
             }],
         }),
+        Intent::Web => web_of(&w).map(|(site, query)| Plan {
+            say: if query.is_empty() {
+                format!("Apro {site}")
+            } else {
+                format!("Cerco \"{query}\" su {site}")
+            },
+            steps: vec![Step::Web { site, query }],
+        }),
+        Intent::Browser => browser_action_of(&w).map(|a| Plan {
+            say: format!("Browser: {a}"),
+            steps: vec![Step::Browser { action: a.into() }],
+        }),
+        Intent::Media => media_action_of(&w).map(|a| Plan {
+            say: format!("Media: {a}"),
+            steps: vec![Step::Media { action: a.into() }],
+        }),
+        Intent::Folder => folder_of(&w).map(|f| Plan {
+            say: format!("Cartella: {f}"),
+            steps: vec![Step::OpenFolder { folder: f.into() }],
+        }),
+        Intent::Settings => settings_of(&w).map(|p| Plan {
+            say: format!("Impostazioni: {p}"),
+            steps: vec![Step::Settings { page: p.into() }],
+        }),
         Intent::FindFiles => {
             let when = when_of(&w);
             let query: Vec<&str> = w
@@ -742,6 +942,15 @@ fn same_plan(a: &Plan, b: &Plan) -> bool {
             (Step::Minimize { app: p }, Step::Minimize { app: q }) => app(p, q),
             (Step::Restore { app: p }, Step::Restore { app: q }) => app(p, q),
             (Step::ShowDesktop, Step::ShowDesktop) => true,
+            (Step::Web { site: a, query: p }, Step::Web { site: b, query: q }) => {
+                norm(a) == norm(b) && norm(p) == norm(q)
+            }
+            (Step::Browser { action: a }, Step::Browser { action: b }) => a == b,
+            (Step::Media { action: a }, Step::Media { action: b }) => a == b,
+            (Step::Key { action: a, .. }, Step::Key { action: b, .. }) => a == b,
+            (Step::OpenFolder { folder: a }, Step::OpenFolder { folder: b }) => a == b,
+            (Step::Settings { page: a }, Step::Settings { page: b }) => a == b,
+            (Step::Screenshot, Step::Screenshot) => true,
             _ => false,
         })
 }
@@ -820,7 +1029,7 @@ mod tests {
             ("apri teams e mettilo a sinistra", Open),
             ("lancia Spotify", Open),
             ("aprimi il browser", Open),
-            ("vai su youtube", Open),
+            ("vai su youtube", Web),
             ("fammi partire excel", Open),
             ("open Outlook", Open),
             ("start Visual Studio Code", Open),
@@ -848,6 +1057,19 @@ mod tests {
             ("trova la fattura di ottobre", FindFiles),
             ("find the files I edited yesterday", FindFiles),
             ("where is the budget spreadsheet from last week", FindFiles),
+            ("Puoi aprirmi Teams?", Open),
+            ("Nascondi notepad", Minimize),
+            ("riduci a icona Outlook", Minimize),
+            ("Apri una nuova scheda", Browser),
+            ("Apri una nuova tab", Browser),
+            ("torna alla pagina precedente", Browser),
+            ("Naviga su YouTube", Web),
+            ("cerca su YouTube la ricetta della carbonara", Web),
+            ("metti in pausa la musica", Media),
+            ("prossima canzone", Media),
+            ("alza il volume", Media),
+            ("apri la cartella download", Folder),
+            ("apri le impostazioni del bluetooth", Settings),
         ];
         let mut r = Router::load().expect("set DIMMY_PC_ROUTER_DIR");
         let (mut ok, mut sure_wrong, mut passed) = (0, 0, 0);
@@ -895,6 +1117,44 @@ mod tests {
             &place("chrome", Side::Right),
             &place("excel", Side::Right)
         ));
+    }
+
+    #[test]
+    fn new_actions_read_their_slot_from_keywords() {
+        assert_eq!(
+            web_of(&words("naviga su YouTube")),
+            Some(("youtube".into(), String::new()))
+        );
+        assert_eq!(
+            web_of(&words("cerca su Google il meteo di domani")),
+            Some(("google".into(), "meteo domani".into()))
+        );
+        assert_eq!(
+            browser_action_of(&words("apri una nuova tab")),
+            Some("new_tab")
+        );
+        assert_eq!(browser_action_of(&words("torna indietro")), Some("back"));
+        assert_eq!(
+            media_action_of(&words("abbassa il volume")),
+            Some("volume_down")
+        );
+        assert_eq!(
+            media_action_of(&words("metti in pausa")),
+            Some("play_pause")
+        );
+        assert_eq!(
+            folder_of(&words("mostrami l'ultimo file scaricato")),
+            Some("latest_download")
+        );
+        assert_eq!(
+            settings_of(&words("apri le impostazioni bluetooth")),
+            Some("bluetooth")
+        );
+        assert_eq!(
+            apps_in(&words("Apri Chrom apri Chrome"), &names()),
+            vec!["chrom"],
+            "two spellings of one app are one app"
+        );
     }
 
     #[test]

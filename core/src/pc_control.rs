@@ -40,6 +40,33 @@ pub enum Step {
     Restore { app: String },
     /// Minimise everything (Win+D).
     ShowDesktop,
+    /// Open a site, or search on one, in the default browser.
+    Web {
+        #[serde(default)]
+        site: String,
+        #[serde(default)]
+        query: String,
+    },
+    /// A key for the front-most browser: new_tab, close_tab, reopen_tab,
+    /// back, forward, reload, next_tab, previous_tab.
+    Browser { action: String },
+    /// A media key: play_pause, next, previous, volume_up, volume_down, mute.
+    Media { action: String },
+    /// An editing key in the named (or front) app: new_line, select_all,
+    /// copy, paste, undo, redo, top, bottom, save.
+    Key {
+        #[serde(default)]
+        app: String,
+        action: String,
+    },
+    /// A user folder in Explorer: downloads, documents, desktop, pictures,
+    /// music, videos; latest_download SELECTS the newest download, never
+    /// opens it (a downloaded program must not start by voice).
+    OpenFolder { folder: String },
+    /// A Windows Settings page: bluetooth, wifi, sound, display, notifications.
+    Settings { page: String },
+    /// Windows' screen snip (Win+Shift+S).
+    Screenshot,
     /// Put the cursor at the end of the app's document and paste `text` there.
     TypeAtEnd {
         #[serde(default)]
@@ -96,10 +123,54 @@ pub struct Outcome {
 /// each one is undone with a click. Writing text is not one of them.
 pub fn live_safe(plan: &Plan) -> bool {
     !plan.steps.is_empty()
-        && plan
-            .steps
-            .iter()
-            .all(|s| !matches!(s, Step::TypeAtEnd { .. }))
+        && plan.steps.iter().all(|s| match s {
+            Step::TypeAtEnd { .. } | Step::Key { .. } => false,
+            Step::Browser { action } => action != "close_tab",
+            _ => true,
+        })
+}
+
+fn percent_encode(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+/// The address for a `web` step. Known sites search on themselves; any
+/// other words become a Google search.
+pub fn web_url(site: &str, query: &str) -> Option<String> {
+    let site = norm(site);
+    let q = percent_encode(query.trim());
+    let has_q = !query.trim().is_empty();
+    let url = match site.as_str() {
+        "youtube" if has_q => format!("https://www.youtube.com/results?search_query={q}"),
+        "youtube" => "https://www.youtube.com".into(),
+        "amazon" if has_q => format!("https://www.amazon.it/s?k={q}"),
+        "amazon" => "https://www.amazon.it".into(),
+        "wikipedia" if has_q => format!("https://it.wikipedia.org/w/index.php?search={q}"),
+        "wikipedia" => "https://it.wikipedia.org".into(),
+        "gmail" => "https://mail.google.com".into(),
+        "maps" | "mappe" if has_q => format!("https://www.google.com/maps/search/{q}"),
+        "maps" | "mappe" => "https://www.google.com/maps".into(),
+        "netflix" | "github" | "linkedin" | "facebook" | "instagram" | "spotify" | "reddit"
+            if !has_q =>
+        {
+            format!("https://www.{site}.com")
+        }
+        "google" | "" if has_q => format!("https://www.google.com/search?q={q}"),
+        "google" => "https://www.google.com".into(),
+        _ if has_q => format!(
+            "https://www.google.com/search?q={}",
+            percent_encode(&format!("{site} {}", query.trim()))
+        ),
+        _ => format!("https://www.google.com/search?q={}", percent_encode(&site)),
+    };
+    Some(url)
 }
 
 /// Parse the model's answer: a JSON object, possibly wrapped in a code fence.
@@ -116,7 +187,7 @@ pub fn parse_plan(raw: &str) -> Result<Plan, String> {
 // ── App names ────────────────────────────────────────────────────────
 
 /// Lowercase letters and digits only: "Notepad++" and "notepad" compare.
-fn norm(s: &str) -> String {
+pub fn norm(s: &str) -> String {
     s.chars()
         .filter(|c| c.is_alphanumeric())
         .flat_map(|c| c.to_lowercase())
@@ -217,6 +288,13 @@ fn planner_prompt(command: &str, windows: &[String]) -> String {
          {{\"do\":\"minimize\",\"app\":\"<app>\"}}  send it to the taskbar (also: hide, lower, abbassa, nascondi)\n\
          {{\"do\":\"restore\",\"app\":\"<app>\"}}  bring a minimised window back\n\
          {{\"do\":\"show_desktop\"}}  minimise everything\n\
+         {{\"do\":\"web\",\"site\":\"youtube|google|amazon|wikipedia|maps|gmail|<site>\",\"query\":\"<search words, may be empty>\"}}  open or search a site in the browser\n\
+         {{\"do\":\"browser\",\"action\":\"new_tab|close_tab|reopen_tab|back|forward|reload|next_tab|previous_tab\"}}\n\
+         {{\"do\":\"media\",\"action\":\"play_pause|next|previous|volume_up|volume_down|mute\"}}\n\
+         {{\"do\":\"key\",\"app\":\"<app, may be empty>\",\"action\":\"new_line|select_all|copy|paste|undo|redo|top|bottom|save\"}}\n\
+         {{\"do\":\"open_folder\",\"folder\":\"downloads|documents|desktop|pictures|music|videos|latest_download\"}}\n\
+         {{\"do\":\"settings\",\"page\":\"bluetooth|wifi|sound|display|notifications\"}}\n\
+         {{\"do\":\"screenshot\"}}\n\
          {{\"do\":\"find_files\",\"query\":\"<words, may be empty>\",\"when\":\"any|today|yesterday|this_week|last_week\"}}\n\
          {{\"do\":\"type_at_end\",\"app\":\"<app>\",\"text\":\"<text to write>\"}}  cursor to the end of the document, write the text\n\
          Rules: only these actions. Use the app names as the user said them, or the name from the open windows list. \
@@ -471,6 +549,32 @@ mod hands {
         }
     }
 
+    /// Arrows, Home/End, Insert/Delete and Win are extended keys.
+    fn key_flags(vk: u8) -> u32 {
+        u32::from(matches!(vk, 0x21..=0x28 | 0x2D | 0x2E | 0x5B))
+    }
+
+    /// Press `keys` in order, release them in reverse.
+    fn chord(keys: &[u8]) {
+        unsafe {
+            for &k in keys {
+                keybd_event(k, MapVirtualKeyW(k as u32, 0) as u8, key_flags(k), 0);
+            }
+            for &k in keys.iter().rev() {
+                keybd_event(k, MapVirtualKeyW(k as u32, 0) as u8, key_flags(k) | 2, 0);
+            }
+        }
+    }
+
+    /// Hand a URL, a shell: folder or a ms-settings: page to Windows.
+    fn shell_open(target: &str) -> Result<Option<String>, String> {
+        std::process::Command::new("explorer.exe")
+            .arg(target)
+            .spawn()
+            .map(|_| None)
+            .map_err(|e| e.to_string())
+    }
+
     fn bring_forward(h: Hwnd) {
         unsafe {
             if IsIconic(h) != 0 {
@@ -641,10 +745,115 @@ mod hands {
                 None
             }),
             Step::ShowDesktop => {
-                tap(0x5B, false); // Win
-                tap(0x44, false); // D
-                tap(0x44, true);
-                tap(0x5B, true);
+                chord(&[0x5B, 0x44]); // Win+D
+                Ok(None)
+            }
+            Step::Web { site, query } => {
+                let url = super::web_url(site, query).ok_or("niente da aprire")?;
+                crate::log(&format!("[PcControl] web {url}"));
+                shell_open(&url)
+            }
+            Step::Browser { action } => {
+                let keys: &[u8] = match action.as_str() {
+                    "new_tab" => &[0x11, 0x54],
+                    "close_tab" => &[0x11, 0x57],
+                    "reopen_tab" => &[0x11, 0x10, 0x54],
+                    "back" => &[0x12, 0x25],
+                    "forward" => &[0x12, 0x27],
+                    "reload" => &[0x74],
+                    "next_tab" => &[0x11, 0x09],
+                    "previous_tab" => &[0x11, 0x10, 0x09],
+                    other => return Err(format!("azione browser sconosciuta: {other}")),
+                };
+                let w = open_windows()
+                    .into_iter()
+                    .find(|w| {
+                        ["chrome", "msedge", "firefox", "brave", "opera", "vivaldi"]
+                            .iter()
+                            .any(|b| w.process.eq_ignore_ascii_case(b))
+                    })
+                    .ok_or("nessun browser aperto")?;
+                bring_forward(w.hwnd);
+                std::thread::sleep(std::time::Duration::from_millis(120));
+                chord(keys);
+                Ok(None)
+            }
+            Step::Media { action } => {
+                let (vk, times) = match action.as_str() {
+                    "play_pause" => (0xB3, 1),
+                    "next" => (0xB0, 1),
+                    "previous" => (0xB1, 1),
+                    "volume_up" => (0xAF, 5),
+                    "volume_down" => (0xAE, 5),
+                    "mute" => (0xAD, 1),
+                    other => return Err(format!("azione media sconosciuta: {other}")),
+                };
+                for _ in 0..times {
+                    chord(&[vk]);
+                }
+                Ok(None)
+            }
+            Step::Key { app, action } => {
+                let keys: &[u8] = match action.as_str() {
+                    "new_line" => &[0x0D],
+                    "select_all" => &[0x11, 0x41],
+                    "copy" => &[0x11, 0x43],
+                    "paste" => &[0x11, 0x56],
+                    "undo" => &[0x11, 0x5A],
+                    "redo" => &[0x11, 0x59],
+                    "top" => &[0x11, 0x24],
+                    "bottom" => &[0x11, 0x23],
+                    "save" => &[0x11, 0x53],
+                    other => return Err(format!("tasto sconosciuto: {other}")),
+                };
+                if !app.trim().is_empty() {
+                    bring_forward(need(app)?.hwnd);
+                    std::thread::sleep(std::time::Duration::from_millis(120));
+                }
+                chord(keys);
+                Ok(None)
+            }
+            Step::OpenFolder { folder } => {
+                if folder == "latest_download" {
+                    let dir =
+                        std::path::PathBuf::from(std::env::var("USERPROFILE").unwrap_or_default())
+                            .join("Downloads");
+                    let newest = std::fs::read_dir(&dir)
+                        .map_err(|e| e.to_string())?
+                        .filter_map(Result::ok)
+                        .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+                        .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())
+                        .ok_or("nessun file in Download")?;
+                    return std::process::Command::new("explorer.exe")
+                        .arg(format!("/select,{}", newest.path().display()))
+                        .spawn()
+                        .map(|_| None)
+                        .map_err(|e| e.to_string());
+                }
+                let shell = match folder.as_str() {
+                    "downloads" => "shell:Downloads",
+                    "documents" => "shell:Personal",
+                    "desktop" => "shell:Desktop",
+                    "pictures" => "shell:My Pictures",
+                    "music" => "shell:My Music",
+                    "videos" => "shell:My Video",
+                    other => return Err(format!("cartella sconosciuta: {other}")),
+                };
+                shell_open(shell)
+            }
+            Step::Settings { page } => {
+                let uri = match page.as_str() {
+                    "bluetooth" => "ms-settings:bluetooth",
+                    "wifi" => "ms-settings:network-wifi",
+                    "sound" => "ms-settings:sound",
+                    "display" => "ms-settings:display",
+                    "notifications" => "ms-settings:notifications",
+                    other => return Err(format!("impostazione sconosciuta: {other}")),
+                };
+                shell_open(uri)
+            }
+            Step::Screenshot => {
+                chord(&[0x5B, 0x10, 0x53]); // Win+Shift+S
                 Ok(None)
             }
             Step::TypeAtEnd { app, text } => {
@@ -716,6 +925,41 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn web_steps_build_the_right_address() {
+        assert_eq!(
+            web_url("youtube", "lo-fi beats").unwrap(),
+            "https://www.youtube.com/results?search_query=lo-fi%20beats"
+        );
+        assert_eq!(web_url("YouTube", "").unwrap(), "https://www.youtube.com");
+        assert_eq!(
+            web_url("", "meteo milano").unwrap(),
+            "https://www.google.com/search?q=meteo%20milano"
+        );
+        assert_eq!(web_url("gmail", "").unwrap(), "https://mail.google.com");
+    }
+
+    #[test]
+    fn live_runs_only_what_a_click_undoes() {
+        let one = |s: Step| Plan {
+            say: String::new(),
+            steps: vec![s],
+        };
+        assert!(live_safe(&one(Step::Media {
+            action: "play_pause".into()
+        })));
+        assert!(live_safe(&one(Step::Browser {
+            action: "new_tab".into()
+        })));
+        assert!(!live_safe(&one(Step::Browser {
+            action: "close_tab".into()
+        })));
+        assert!(!live_safe(&one(Step::Key {
+            app: String::new(),
+            action: "paste".into()
+        })));
     }
 
     #[test]
