@@ -1017,12 +1017,34 @@ fn route_scored(command: &str, names: &[(String, String)]) -> (Option<Plan>, f32
     };
     drop(g);
     let detail = format!("intent={intent:?} p={margin:.3}");
+    let apps = apps_in(&words(command), names);
+    let plan = plan_for(intent, command, names);
+    match plan {
+        Some(p) => (Some(p), margin, detail),
+        None => (
+            None,
+            margin,
+            format!("{detail} apps={apps:?}: slots incomplete"),
+        ),
+    }
+}
+
+/// The plan an intent's slots allow. Moving or minimising acts on a window
+/// that is open: a Start-menu name there would launch an app nobody asked
+/// for ("ingrandisci a tutto scher…" once opened the on-screen keyboard).
+fn plan_for(intent: Intent, command: &str, names: &[(String, String)]) -> Option<Plan> {
     let w = words(command);
     let apps = apps_in(&w, names);
+    let open: Vec<(String, String)> = names
+        .iter()
+        .filter(|(_, title)| !title.is_empty())
+        .cloned()
+        .collect();
+    let open_apps = apps_in(&w, &open);
     let this_window = w
         .windows(2)
         .any(|p| (p[0] == "questa" && p[1] == "finestra") || (p[0] == "this" && p[1] == "window"));
-    let plan = match intent {
+    match intent {
         Intent::Open if apps.len() == 1 => {
             let mut steps = vec![Step::Open {
                 app: apps[0].clone(),
@@ -1044,7 +1066,7 @@ fn route_scored(command: &str, names: &[(String, String)]) -> (Option<Plan>, f32
                 right: apps[1].clone(),
             }],
         }),
-        Intent::Move => match (side_of(&w), apps.as_slice()) {
+        Intent::Move => match (side_of(&w), open_apps.as_slice()) {
             (Some(side), [app]) => Some(Plan {
                 say: format!("Sposto {app} {}", side_label(side)),
                 steps: vec![Step::Place {
@@ -1061,10 +1083,10 @@ fn route_scored(command: &str, names: &[(String, String)]) -> (Option<Plan>, f32
             }),
             _ => None,
         },
-        Intent::Minimize if apps.len() == 1 => Some(Plan {
-            say: format!("Riduco a icona {}", apps[0]),
+        Intent::Minimize if open_apps.len() == 1 => Some(Plan {
+            say: format!("Riduco a icona {}", open_apps[0]),
             steps: vec![Step::Minimize {
-                app: apps[0].clone(),
+                app: open_apps[0].clone(),
             }],
         }),
         Intent::Web => web_of(&w).map(|(site, query)| Plan {
@@ -1151,14 +1173,6 @@ fn route_scored(command: &str, names: &[(String, String)]) -> (Option<Plan>, f32
             })
         }
         _ => None,
-    };
-    match plan {
-        Some(p) => (Some(p), margin, detail),
-        None => (
-            None,
-            margin,
-            format!("{detail} apps={apps:?}: slots incomplete"),
-        ),
     }
 }
 
@@ -1665,6 +1679,28 @@ mod tests {
             vec!["chrom"],
             "two spellings of one app are one app"
         );
+    }
+
+    #[test]
+    fn moving_acts_only_on_an_open_window() {
+        let names = vec![
+            ("Notepad++".to_string(), "nuovo 1 - Notepad++".to_string()),
+            ("Tastiera su schermo".to_string(), String::new()),
+        ];
+        let plan = |i, c| plan_for(i, c, &names).map(|p| p.steps);
+        assert_eq!(plan(Intent::Move, "ingrandisci a tutto scher"), None);
+        assert_eq!(
+            plan(Intent::Minimize, "riduci a icona tastiera su schermo"),
+            None
+        );
+        assert_eq!(
+            plan(Intent::Move, "ingrandisci notepad++"),
+            Some(vec![Step::Place {
+                app: "notepad++".into(),
+                side: Side::Full
+            }])
+        );
+        assert!(plan(Intent::Open, "apri tastiera su schermo").is_some());
     }
 
     #[test]

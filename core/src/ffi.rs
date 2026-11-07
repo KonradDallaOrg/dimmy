@@ -8724,18 +8724,11 @@ pub unsafe extern "C" fn dimmy_hotkey_set_execute(combo_ptr: *const c_char) {
     crate::log(&format!("[Hotkey] set_execute_shortcut(\"{}\")", combo));
 }
 
-/// The Claude model the PC-actions planner uses: the dictation LLM model.
+/// The Claude model the PC-actions planner uses: Haiku, the fastest.
 fn pc_planner_model() -> String {
-    let m = state()
-        .llm_api_model
-        .lock()
-        .map(|m| m.clone())
-        .unwrap_or_default();
-    if m.is_empty() {
-        crate::DEFAULT_LLM_MODEL.to_string()
-    } else {
-        m
-    }
+    // The planner always runs on the Claude CLI, so it never follows the
+    // dictation LLM: with a Groq model there the CLI refused every plan.
+    "haiku".to_string()
 }
 
 /// 1 when the local PC-command router model is on disk, 0 when not, -1 when
