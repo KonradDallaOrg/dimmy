@@ -848,6 +848,9 @@ pub extern "C" fn dimmy_init() -> c_int {
     match result {
         Ok(rc) => {
             write_init_trace(&format!("P_OK: dimmy_init returning {}", rc));
+            if rc == 0 {
+                warm_local_stt(state());
+            }
             rc
         }
         Err(payload) => {
@@ -862,6 +865,68 @@ pub extern "C" fn dimmy_init() -> c_int {
             -1
         }
     }
+}
+
+/// Which local dictation backend to load at startup, if any.
+fn local_stt_to_warm<'a>(stt_mode: &str, backend: &'a str) -> Option<&'a str> {
+    if stt_mode != "local" {
+        return None;
+    }
+    match backend {
+        "nemotron" => None,
+        "" => Some("whisper"),
+        b => Some(b),
+    }
+}
+
+/// Load the local dictation model on a background thread right after init.
+/// The first dictation after a start used to pay the cold load (~5 s with
+/// Parakeet on Windows, measured 2026-11-07) while its chunks queued up.
+/// One second of silence through the backend's own path loads and caches
+/// the model; the text is discarded and an empty result still counts.
+fn warm_local_stt(st: &AppState) {
+    let stt_mode = st.stt_mode.lock().map(|s| s.clone()).unwrap_or_default();
+    let backend = st
+        .local_stt_backend
+        .lock()
+        .map(|s| s.clone())
+        .unwrap_or_default();
+    let Some(backend) = local_stt_to_warm(&stt_mode, &backend).map(str::to_string) else {
+        return;
+    };
+    let language = st.language.lock().map(|l| l.clone()).unwrap_or_default();
+    let whisper_model = st.local_model.lock().map(|m| m.clone()).unwrap_or_default();
+    std::thread::spawn(move || {
+        let started = std::time::Instant::now();
+        let silence = vec![0.0f32; 16_000];
+        let outcome: Result<(), String> = match backend.as_str() {
+            "parakeet" => crate::parakeet::warmup().map_err(|e| e.to_string()),
+            "qwen" => crate::qwen_asr::transcribe(&silence, &qwen_asr_variant(), &language)
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            "whistle" => crate::whistle::transcribe(&silence, &language, &[])
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            _ => match crate::local_stt::transcribe_local(
+                &crate::local_stt::model_path(&whisper_model),
+                &silence,
+                &language,
+                "",
+            ) {
+                Ok(_) | Err(crate::error::TranscribeError::Empty) => Ok(()),
+                Err(e) => Err(e.to_string()),
+            },
+        };
+        log(&format!(
+            "[Warmup] local STT {} in {} ms: {}",
+            backend,
+            started.elapsed().as_millis(),
+            match &outcome {
+                Ok(()) => "ready".to_string(),
+                Err(e) => crate::truncate_utf8(e, 200).to_string(),
+            }
+        ));
+    });
 }
 
 /// Shut down: stop audio, save config and clean up.
@@ -12207,6 +12272,19 @@ pub(crate) mod tests {
     use super::*;
     use serial_test::serial;
     use std::ffi::c_char;
+
+    #[test]
+    fn init_warms_the_dictation_backend_only_when_dictation_is_local() {
+        assert_eq!(local_stt_to_warm("local", "parakeet"), Some("parakeet"));
+        assert_eq!(local_stt_to_warm("local", "whisper"), Some("whisper"));
+        assert_eq!(local_stt_to_warm("local", "qwen"), Some("qwen"));
+        assert_eq!(local_stt_to_warm("local", "whistle"), Some("whistle"));
+        // An empty backend means whisper everywhere else in the core.
+        assert_eq!(local_stt_to_warm("local", ""), Some("whisper"));
+        // Nemotron builds its recognizer per session and frees it after 10 min idle.
+        assert_eq!(local_stt_to_warm("local", "nemotron"), None);
+        assert_eq!(local_stt_to_warm("cloud", "parakeet"), None);
+    }
 
     // ── back-to-back meetings ────────────────────────────────────
 
