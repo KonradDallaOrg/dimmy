@@ -37,6 +37,35 @@ threshold; "out-of-scope run" = a non-command it would execute.
 - Option: e5-base raises "decided surely" from 22% to ~35% at zero sure
   mistakes, for ~25 ms per partial and a ~280 MB download.
 
+### Which encoder (same classifier, same set; `scripts/dev/pc_router_models.py`)
+
+| Model | Size | Right | Decided live, no mistake | ms/command |
+|---|---|---|---|---|
+| **multilingual-e5-small** (shipped) | 118M | 81% | 29% | 14 |
+| multilingual-e5-base | 278M | 83% | 40% | 25 |
+| BGE-M3 | 568M | 85% | 53% | 76 |
+| LaBSE | 472M | 84% | 18% | 33 |
+| paraphrase-multilingual-MiniLM | 118M | 76% | 8% | 12 |
+| Model2Vec potion-multilingual (static) | 128M | 76% | 18% | 0.6 |
+
+gte-multilingual-base failed to load; EmbeddingGemma needs a Hugging Face
+login (gated) and was not measured. The pattern itself (embeddings + a
+classifier + an LLM fallback) is the one aurelio semantic-router, NeMo
+Guardrails and SetFit use; PC-command assistants (Home Assistant, Rhasspy,
+Talon, Windows voice access, Atticus) put exact rules/templates first, which
+is what the app-commands layer below does.
+
+## Commands of the app in front
+
+At the shortcut, the foreground window's commands are read while the user
+talks: the Win32 menu (Notepad++: 130 enabled items in ~1 ms) or UI
+Automation controls when there is no menu (Chrome: 62 in ~120 ms). A spoken
+phrase that names one clearly (word-overlap F1 ≥ 0.85, clear lead) runs it
+before anything else; otherwise the 12 closest go to Claude. Disabled items
+are skipped; names that delete, send, close, quit, buy or sign out are
+refused; app commands never run live. Not covered yet: web apps in WebView2 /
+Electron (new Outlook, Teams), whose accessibility tree stays empty.
+
 ## Our actions
 
 | Action | Example (it / en) | Status | Live |
