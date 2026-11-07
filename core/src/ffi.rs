@@ -52,9 +52,9 @@ fn retire_streamer() {
             "[Stream] retiring a leftover {} streamer",
             old.label()
         ));
-        std::thread::spawn(move || {
-            let _ = old.stop();
-        });
+        // On the caller thread on purpose: done in the background it went
+        // on emitting after the caller had moved on.
+        let _ = old.stop();
     }
 }
 
