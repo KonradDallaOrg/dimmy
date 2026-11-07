@@ -8839,8 +8839,8 @@ pub extern "C" fn dimmy_pc_prepare() {
 }
 
 /// Turn a spoken command into PC actions and run them (experiment).
-/// Writes a JSON outcome `{ok, said, paste, engine, plan_ms, act_ms, error}`;
-/// the host shows `said` on the pill and pastes `paste` when present.
+/// Writes a JSON outcome `{ok, said, paste, engine, help, plan_ms, act_ms, error}`;
+/// the host shows `said` on the pill, pastes `paste` and shows `help` when present.
 /// Returns the JSON length, or -1 on a null/invalid argument.
 ///
 /// # Safety
@@ -8872,6 +8872,18 @@ pub unsafe extern "C" fn dimmy_pc_execute(
         out.engine = "live".into();
         out.said = "Già fatto mentre parlavi".into();
         log("[PcControl] engine=live: already run on a partial, the stop does nothing");
+        let json = serde_json::to_string(&out).unwrap_or_default();
+        return write_to_buf(&json, out_buf, buf_len);
+    }
+    if crate::pc_help::is_help_request(text) {
+        #[cfg(feature = "pc-router")]
+        crate::pc_router::shadow_finish(None);
+        out.ok = true;
+        out.engine = "help".into();
+        out.said = "Ecco cosa puoi dire".into();
+        out.help = Some(crate::pc_help::help_now());
+        out.plan_ms = t0.elapsed().as_millis() as u64;
+        log("[PcControl] engine=help: listed what can be said");
         let json = serde_json::to_string(&out).unwrap_or_default();
         return write_to_buf(&json, out_buf, buf_len);
     }

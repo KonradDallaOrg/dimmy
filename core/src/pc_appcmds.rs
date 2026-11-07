@@ -214,6 +214,32 @@ pub fn candidates(spoken: &str, n: usize) -> (String, Vec<String>) {
     (snap.process.clone(), labels)
 }
 
+/// The front app and a few of its safe commands, short names first, to show
+/// as examples of what can be said.
+pub fn examples(n: usize) -> Option<(String, Vec<String>)> {
+    let g = SNAPSHOT.lock().unwrap_or_else(|e| e.into_inner());
+    let snap = g.as_ref()?;
+    let names = examples_of(&snap.cmds, n);
+    (!names.is_empty()).then(|| (snap.process.clone(), names))
+}
+
+fn examples_of(cmds: &[AppCommand], n: usize) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for words in 1..=3 {
+        for c in cmds.iter().filter(|c| !c.risky) {
+            let name = c.name.trim();
+            if out.len() < n
+                && name.split_whitespace().count() == words
+                && name.chars().any(char::is_alphabetic)
+                && !out.iter().any(|o| o.eq_ignore_ascii_case(name))
+            {
+                out.push(name.to_string());
+            }
+        }
+    }
+    out
+}
+
 pub fn find(label: &str) -> Option<AppCommand> {
     let g = SNAPSHOT.lock().unwrap_or_else(|e| e.into_inner());
     let snap = g.as_ref()?;
@@ -509,6 +535,33 @@ mod tests {
         assert_eq!(
             split_label("Stampa subito!"),
             ("Stampa subito!".to_string(), String::new())
+        );
+    }
+
+    #[test]
+    fn the_examples_are_safe_short_and_unique() {
+        let mk = |name: &str| AppCommand {
+            label: format!("Menu > {name}"),
+            name: name.into(),
+            shortcut: String::new(),
+            risky: is_risky(name),
+            target: Target::Control { hwnd: 0 },
+        };
+        let cmds: Vec<AppCommand> = [
+            "Elimina",
+            "Salva tutto",
+            "Trova",
+            "trova",
+            "…",
+            "Mostra la barra degli strumenti",
+            "Stampa",
+        ]
+        .iter()
+        .map(|n| mk(n))
+        .collect();
+        assert_eq!(
+            examples_of(&cmds, 3),
+            vec!["Trova".to_string(), "Stampa".into(), "Salva tutto".into()]
         );
     }
 

@@ -2292,6 +2292,13 @@ public partial class App : Application
             var error = Str("error");
             var paste = Str("paste");
             var engineUsed = Str("engine") ?? "";
+            var help = Str("help");
+            if (!string.IsNullOrEmpty(help))
+            {
+                Views.PcLiveWindow.ShowHelp(help);
+                _appViewModel.SetState(AppState.Idle);
+                return;
+            }
             if (engineUsed != "live")
                 Views.PcLiveWindow.Finish(said, error == null
                     ? (engineUsed == "e5" ? "✓ Fatto (ho capito da solo)"

@@ -18,6 +18,8 @@ public sealed partial class PcLiveWindow : Window
 {
     private const int WidthDip = 380;
     private const int HeightDip = 210;
+    private const int HelpHeightDip = 330;
+    private int _heightDip = HeightDip;
     private const int MarginDip = 12;
 
     private static PcLiveWindow? _current;
@@ -29,6 +31,11 @@ public sealed partial class PcLiveWindow : Window
     public static void Update(string heard, string plan, string guess, double sureness, bool waitsForStop)
     {
         var w = Ensure();
+        if (w.HelpText.Visibility == Visibility.Visible)
+        {
+            w.Close();
+            w = Ensure();
+        }
         w.HeardText.Text = string.IsNullOrEmpty(heard) ? "…" : $"\"{heard}\"";
         w.PlanText.Text = !string.IsNullOrEmpty(plan) ? plan
             : !string.IsNullOrEmpty(guess) ? $"forse: {guess}…"
@@ -54,6 +61,23 @@ public sealed partial class PcLiveWindow : Window
         w._closeTimer.Start();
     }
 
+    /// <summary>"Cosa posso dire?": the examples instead of the live rows,
+    /// a taller card that stays longer; a tap closes it.</summary>
+    public static void ShowHelp(string text)
+    {
+        var w = Ensure();
+        foreach (var e in new FrameworkElement[] { w.HeardLabel, w.HeardText, w.PlanLabel, w.PlanText, w.SureLabel, w.SureRow })
+            e.Visibility = Visibility.Collapsed;
+        w.HelpText.Text = text;
+        w.HelpText.Visibility = Visibility.Visible;
+        w.NextText.Text = "Premi il tasto dei comandi e dì quello che vuoi";
+        w._heightDip = HelpHeightDip;
+        w.Place();
+        w._closeTimer.Stop();
+        w._closeTimer.Interval = TimeSpan.FromSeconds(25);
+        w._closeTimer.Start();
+    }
+
     private static PcLiveWindow Ensure()
     {
         if (_current != null) return _current;
@@ -72,6 +96,7 @@ public sealed partial class PcLiveWindow : Window
         Root.Loaded += (_, _) => Place();
         _closeTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(4) };
         _closeTimer.Tick += (_, _) => Close();
+        Root.Tapped += (_, _) => { if (HelpText.Visibility == Visibility.Visible) Close(); };
         Closed += (_, _) =>
         {
             _closeTimer.Stop();
@@ -108,7 +133,7 @@ public sealed partial class PcLiveWindow : Window
         var area = DisplayArea.GetFromPoint(new global::Windows.Graphics.PointInt32(cursor.X, cursor.Y), DisplayAreaFallback.Primary);
         var work = area.WorkArea;
         int w = (int)Math.Round(WidthDip * scale);
-        int h = (int)Math.Round(HeightDip * scale);
+        int h = (int)Math.Round(_heightDip * scale);
         int m = (int)Math.Round(MarginDip * scale);
         appWindow.MoveAndResize(new global::Windows.Graphics.RectInt32(work.X + work.Width - w - m, work.Y + m, w, h));
     }

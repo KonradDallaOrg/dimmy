@@ -117,6 +117,8 @@ pub struct Outcome {
     pub engine: String,
     /// Why the local router answered or passed (intent, margin, slots).
     pub router: Option<String>,
+    /// "Cosa posso dire?": the examples to show; nothing was run.
+    pub help: Option<String>,
     pub plan_ms: u64,
     pub act_ms: u64,
     pub error: Option<String>,
@@ -363,6 +365,32 @@ pub fn known_names() -> Vec<(String, String)> {
             .map(|n| (n, String::new())),
     );
     v
+}
+
+/// The open apps by the name a person would say, once each, Dimmy left out.
+pub fn open_app_names() -> Vec<String> {
+    let mut v: Vec<String> = Vec::new();
+    for w in hands::open_windows() {
+        let name = say_name(&w.process, &w.title);
+        if !name.is_empty()
+            && !w.process.eq_ignore_ascii_case("Dimmy.Windows")
+            && !v.iter().any(|n| n.eq_ignore_ascii_case(&name))
+        {
+            v.push(name);
+        }
+    }
+    v
+}
+
+/// "Documento1 - Word" says "Word": the last part of a title is usually the
+/// app. A long last part is a page or a file, so the process name is used.
+fn say_name(process: &str, title: &str) -> String {
+    let last = title.rsplit(" - ").next().unwrap_or("").trim();
+    if title.contains(" - ") && (2..=20).contains(&last.chars().count()) {
+        last.to_string()
+    } else {
+        process.to_string()
+    }
 }
 
 /// The executable name (no extension) of a process, for the app-commands log.
@@ -966,6 +994,16 @@ mod hands {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_app_is_named_as_a_person_says_it() {
+        assert_eq!(say_name("WINWORD", "Documento1 - Word"), "Word");
+        assert_eq!(say_name("Spotify", "Spotify Premium"), "Spotify");
+        assert_eq!(
+            say_name("chrome", "Una pagina - con un titolo molto lungo davvero"),
+            "chrome"
+        );
+    }
 
     #[test]
     fn a_plan_parses_even_inside_a_code_fence() {

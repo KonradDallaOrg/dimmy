@@ -27,16 +27,19 @@
       <TextBlock Text="Dimmy · Comando vocale" Style="{StaticResource DimmyCaption}" VerticalAlignment="Center" />
     </StackPanel>
 
-    <TextBlock Grid.Row="1" Text="Hai detto" Style="{StaticResource DimmySecondary}" />
+    <TextBlock Grid.Row="1" Grid.RowSpan="3" Grid.ColumnSpan="2" x:Name="HelpText" Style="{StaticResource DimmyBody}"
+               TextWrapping="Wrap" Visibility="Collapsed" />
+
+    <TextBlock Grid.Row="1" x:Name="HeardLabel" Text="Hai detto" Style="{StaticResource DimmySecondary}" />
     <TextBlock Grid.Row="1" Grid.Column="1" x:Name="HeardText" Style="{StaticResource DimmyBody}"
                TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" />
 
-    <TextBlock Grid.Row="2" Text="Farò" Style="{StaticResource DimmySecondary}" />
+    <TextBlock Grid.Row="2" x:Name="PlanLabel" Text="Farò" Style="{StaticResource DimmySecondary}" />
     <TextBlock Grid.Row="2" Grid.Column="1" x:Name="PlanText" Style="{StaticResource DimmyBody}"
                TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" />
 
-    <TextBlock Grid.Row="3" Text="Sicurezza" Style="{StaticResource DimmySecondary}" VerticalAlignment="Center" />
-    <Grid Grid.Row="3" Grid.Column="1" ColumnSpacing="10">
+    <TextBlock Grid.Row="3" x:Name="SureLabel" Text="Sicurezza" Style="{StaticResource DimmySecondary}" VerticalAlignment="Center" />
+    <Grid Grid.Row="3" x:Name="SureRow" Grid.Column="1" ColumnSpacing="10">
       <Grid.ColumnDefinitions>
         <ColumnDefinition Width="*" />
         <ColumnDefinition Width="52" />
