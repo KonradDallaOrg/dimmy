@@ -79,6 +79,8 @@ pub struct Outcome {
     pub said: String,
     pub paste: Option<String>,
     pub engine: String,
+    /// Why the local router answered or passed (intent, margin, slots).
+    pub router: Option<String>,
     pub plan_ms: u64,
     pub act_ms: u64,
     pub error: Option<String>,
@@ -220,12 +222,30 @@ pub fn plan_with_claude(command: &str, model: &str) -> Result<Plan, String> {
     parse_plan(&raw)
 }
 
-/// Start the Claude CLI and refresh the Start-menu list while the user talks.
+/// Start the Claude CLI, load the local router and read the Start menu
+/// while the user talks.
 pub fn prepare(model: &str) {
     crate::claude_code::prewarm(model);
+    #[cfg(feature = "pc-router")]
+    crate::pc_router::warm();
     std::thread::spawn(|| {
         let _ = hands::start_apps();
     });
+}
+
+/// Names a command can mention: open windows (process, title), then the
+/// Start-menu apps (name, "").
+pub fn known_names() -> Vec<(String, String)> {
+    let mut v: Vec<(String, String)> = hands::open_windows()
+        .into_iter()
+        .map(|w| (w.process, w.title))
+        .collect();
+    v.extend(
+        hands::start_app_names()
+            .into_iter()
+            .map(|n| (n, String::new())),
+    );
+    v
 }
 
 /// Run a plan, step by step; stop at the first step that fails.
@@ -365,6 +385,10 @@ mod hands {
     pub struct StartApp {
         pub name: String,
         pub app_id: String,
+    }
+
+    pub fn start_app_names() -> Vec<String> {
+        start_apps().into_iter().map(|a| a.name).collect()
     }
 
     static START_APPS: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
@@ -611,6 +635,10 @@ mod hands {
     }
 
     pub fn start_apps() -> Vec<()> {
+        Vec::new()
+    }
+
+    pub fn start_app_names() -> Vec<String> {
         Vec::new()
     }
 

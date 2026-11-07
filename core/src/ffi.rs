@@ -8721,7 +8721,31 @@ pub unsafe extern "C" fn dimmy_pc_execute(
         ..Default::default()
     };
     let t0 = std::time::Instant::now();
-    match crate::pc_control::plan_with_claude(text, &pc_planner_model()) {
+    // DIMMY_PC_ENGINE: "auto" (default: local router, Claude when unsure),
+    // "e5" (local only), "claude" (Claude only).
+    let engine = std::env::var("DIMMY_PC_ENGINE").unwrap_or_else(|_| "auto".into());
+    #[cfg(feature = "pc-router")]
+    let local: Option<crate::pc_control::Plan> = if engine == "claude" {
+        None
+    } else {
+        let (plan, detail) = crate::pc_router::route(text, &crate::pc_control::known_names());
+        out.router = Some(detail);
+        plan
+    };
+    #[cfg(not(feature = "pc-router"))]
+    let local: Option<crate::pc_control::Plan> = None;
+    let planned = match local {
+        Some(plan) => {
+            out.engine = "e5".into();
+            Ok(plan)
+        }
+        None if engine == "e5" => Err(format!(
+            "the local router passed ({})",
+            out.router.clone().unwrap_or_default()
+        )),
+        None => crate::pc_control::plan_with_claude(text, &pc_planner_model()),
+    };
+    match planned {
         Ok(plan) => {
             out.plan_ms = t0.elapsed().as_millis() as u64;
             out.said = plan.say.clone();
@@ -8741,8 +8765,8 @@ pub unsafe extern "C" fn dimmy_pc_execute(
         }
     }
     log(&format!(
-        "[PcControl] engine={} ok={} plan_ms={} act_ms={} error={:?}",
-        out.engine, out.ok, out.plan_ms, out.act_ms, out.error
+        "[PcControl] engine={} router={:?} ok={} plan_ms={} act_ms={} error={:?}",
+        out.engine, out.router, out.ok, out.plan_ms, out.act_ms, out.error
     ));
     let json = serde_json::to_string(&out).unwrap_or_default();
     write_to_buf(&json, out_buf, buf_len)
