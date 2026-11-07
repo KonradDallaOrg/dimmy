@@ -62,7 +62,7 @@ pub enum When {
     LastWeek,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Plan {
     #[serde(default)]
     pub steps: Vec<Step>,
@@ -227,7 +227,10 @@ pub fn plan_with_claude(command: &str, model: &str) -> Result<Plan, String> {
 pub fn prepare(model: &str) {
     crate::claude_code::prewarm(model);
     #[cfg(feature = "pc-router")]
-    crate::pc_router::warm();
+    {
+        crate::pc_router::warm();
+        crate::pc_router::shadow_begin();
+    }
     std::thread::spawn(|| {
         let _ = hands::start_apps();
     });

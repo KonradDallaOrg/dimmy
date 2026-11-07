@@ -453,22 +453,29 @@ pub fn warm() {
 /// A plan when the router is sure, else `None` (the caller asks Claude).
 /// `detail` says why, for the log.
 pub fn route(command: &str, names: &[(String, String)]) -> (Option<Plan>, String) {
+    let (plan, margin, detail) = route_scored(command, names);
+    if margin < MIN_MARGIN {
+        return (None, format!("{detail} below {MIN_MARGIN}"));
+    }
+    (plan, detail)
+}
+
+/// The plan the slots allow (whatever the margin), the margin, and why.
+fn route_scored(command: &str, names: &[(String, String)]) -> (Option<Plan>, f32, String) {
     let mut g = ROUTER.lock().unwrap_or_else(|e| e.into_inner());
     if g.is_none() {
         match Router::load() {
             Ok(r) => *g = Some(r),
-            Err(e) => return (None, format!("e5 unavailable: {e}")),
+            Err(e) => return (None, 0.0, format!("e5 unavailable: {e}")),
         }
     }
     let r = g.as_mut().expect("just loaded");
     let (intent, margin) = match r.classify(command) {
         Ok(x) => x,
-        Err(e) => return (None, format!("e5 error: {e}")),
+        Err(e) => return (None, 0.0, format!("e5 error: {e}")),
     };
+    drop(g);
     let detail = format!("intent={intent:?} margin={margin:.3}");
-    if margin < MIN_MARGIN {
-        return (None, format!("{detail} below {MIN_MARGIN}"));
-    }
     let w = words(command);
     let apps = apps_in(&w, names);
     let this_window = w
@@ -531,9 +538,145 @@ pub fn route(command: &str, names: &[(String, String)]) -> (Option<Plan>, String
         _ => None,
     };
     match plan {
-        Some(p) => (Some(p), detail),
-        None => (None, format!("{detail} apps={apps:?}: slots incomplete")),
+        Some(p) => (Some(p), margin, detail),
+        None => (
+            None,
+            margin,
+            format!("{detail} apps={apps:?}: slots incomplete"),
+        ),
     }
+}
+
+// -- Shadow mode: would a live partial have been enough? --------------
+//
+// While an execute session records, every partial transcript is routed and
+// the result kept. Nothing is executed. When the command runs for real, the
+// log says, per candidate rule, when it would have fired, on which words,
+// and whether its plan matches the one that ran.
+
+/// Stricter than `MIN_MARGIN`: acting before the user is done must be surer.
+const LIVE_MARGIN: f32 = 0.05;
+
+struct Obs {
+    ms: u128,
+    text: String,
+    plan: Option<Plan>,
+    margin: f32,
+}
+
+struct Shadow {
+    started: std::time::Instant,
+    obs: Vec<Obs>,
+}
+
+static SHADOW: Mutex<Option<Shadow>> = Mutex::new(None);
+
+pub fn shadow_begin() {
+    *SHADOW.lock().unwrap_or_else(|e| e.into_inner()) = Some(Shadow {
+        started: std::time::Instant::now(),
+        obs: Vec::new(),
+    });
+}
+
+/// A partial transcript arrived. Only an execute session that is still
+/// recording is observed; the routing runs off the caller thread.
+pub fn shadow_observe(cumulative: &str) {
+    use crate::dictation_session::{Kind, Phase};
+    if !matches!(
+        crate::dictation_session::phase(),
+        Phase::Recording {
+            kind: Kind::Execute,
+            ..
+        }
+    ) {
+        return;
+    }
+    let text = cumulative.trim().to_string();
+    let ms = {
+        let g = SHADOW.lock().unwrap_or_else(|e| e.into_inner());
+        match g.as_ref() {
+            Some(s) if !text.is_empty() && s.obs.last().map(|o| o.text != text).unwrap_or(true) => {
+                s.started.elapsed().as_millis()
+            }
+            _ => return,
+        }
+    };
+    std::thread::spawn(move || {
+        let (plan, margin, _) = route_scored(&text, &crate::pc_control::known_names());
+        if let Some(s) = SHADOW.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+            s.obs.push(Obs {
+                ms,
+                text,
+                plan,
+                margin,
+            });
+            s.obs.sort_by_key(|o| o.ms);
+        }
+    });
+}
+
+fn same_plan(a: &Plan, b: &Plan) -> bool {
+    let app = |x: &str, y: &str| {
+        x.is_empty() || y.is_empty() || name_score(x, y, "") >= 0.8 || name_score(y, x, "") >= 0.8
+    };
+    a.steps.len() == b.steps.len()
+        && a.steps.iter().zip(&b.steps).all(|(x, y)| match (x, y) {
+            (Step::Open { app: p }, Step::Open { app: q }) => app(p, q),
+            (Step::Focus { app: p }, Step::Focus { app: q }) => app(p, q),
+            (Step::Place { app: p, side: s }, Step::Place { app: q, side: t }) => {
+                s == t && app(p, q)
+            }
+            (
+                Step::Tile {
+                    left: l1,
+                    right: r1,
+                },
+                Step::Tile {
+                    left: l2,
+                    right: r2,
+                },
+            ) => app(l1, l2) && app(r1, r2),
+            (Step::FindFiles { when: w1, .. }, Step::FindFiles { when: w2, .. }) => w1 == w2,
+            (Step::TypeAtEnd { .. }, Step::TypeAtEnd { .. }) => true,
+            _ => false,
+        })
+}
+
+/// The command ran with `final_plan`: log what each live rule would have done.
+pub fn shadow_finish(final_plan: Option<&Plan>) {
+    let Some(s) = SHADOW.lock().unwrap_or_else(|e| e.into_inner()).take() else {
+        return;
+    };
+    let now = s.started.elapsed().as_millis();
+    let sure = |o: &Obs| o.plan.is_some() && o.margin >= LIVE_MARGIN;
+    let first_sure = s.obs.iter().find(|o| sure(o));
+    let first_stable = s.obs.windows(2).find(|w| {
+        sure(&w[0])
+            && sure(&w[1])
+            && same_plan(w[0].plan.as_ref().unwrap(), w[1].plan.as_ref().unwrap())
+    });
+    let verdict = |o: Option<&Obs>| match (o, final_plan) {
+        (None, _) => "never".to_string(),
+        (Some(o), Some(f)) => format!(
+            "at {} ms ({} ms before execute) on {:?}: {}",
+            o.ms,
+            now.saturating_sub(o.ms),
+            o.text,
+            if same_plan(o.plan.as_ref().unwrap(), f) {
+                "SAME plan"
+            } else {
+                "DIFFERENT plan"
+            }
+        ),
+        (Some(o), None) => format!("at {} ms on {:?}: final had no plan", o.ms, o.text),
+    };
+    crate::log(&format!(
+        "[PcShadow] partials={} sure: {} | sure+stable: {} | final={:?}",
+        s.obs.len(),
+        verdict(first_sure),
+        verdict(first_stable.map(|w| &w[1])),
+        final_plan.map(|p| &p.steps)
+    ));
 }
 
 fn side_label(s: Side) -> &'static str {
@@ -625,6 +768,29 @@ mod tests {
             sure_wrong, 0,
             "a confident wrong action moves the wrong window"
         );
+    }
+
+    #[test]
+    fn the_shadow_verdict_compares_actions_not_spellings() {
+        let place = |app: &str, side| Plan {
+            say: String::new(),
+            steps: vec![Step::Place {
+                app: app.into(),
+                side,
+            }],
+        };
+        assert!(same_plan(
+            &place("Notepad++", Side::Right),
+            &place("notepad", Side::Right)
+        ));
+        assert!(!same_plan(
+            &place("notepad", Side::Right),
+            &place("notepad", Side::Left)
+        ));
+        assert!(!same_plan(
+            &place("chrome", Side::Right),
+            &place("excel", Side::Right)
+        ));
     }
 
     #[test]

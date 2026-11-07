@@ -1185,6 +1185,8 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
                     "engine": engine_label,
                 })
                 .to_string();
+                #[cfg(feature = "pc-router")]
+                crate::pc_router::shadow_observe(cumulative);
                 emit_event("stt_chunk", &payload);
             });
         let streamer = if provider == Provider::OpenAI {
@@ -1298,6 +1300,8 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
                     "engine": engine,
                 })
                 .to_string();
+                #[cfg(feature = "pc-router")]
+                crate::pc_router::shadow_observe(cumulative);
                 emit_event("stt_chunk", &payload);
             },
         );
@@ -1367,6 +1371,8 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
                     "engine": engine,
                 })
                 .to_string();
+                #[cfg(feature = "pc-router")]
+                crate::pc_router::shadow_observe(cumulative);
                 emit_event("stt_chunk", &payload);
             });
         // Both chunked modes require `is_local`, so the route decision here
@@ -8745,6 +8751,8 @@ pub unsafe extern "C" fn dimmy_pc_execute(
         )),
         None => crate::pc_control::plan_with_claude(text, &pc_planner_model()),
     };
+    #[cfg(feature = "pc-router")]
+    crate::pc_router::shadow_finish(planned.as_ref().ok());
     match planned {
         Ok(plan) => {
             out.plan_ms = t0.elapsed().as_millis() as u64;

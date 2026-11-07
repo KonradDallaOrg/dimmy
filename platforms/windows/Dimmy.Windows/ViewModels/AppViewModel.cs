@@ -604,7 +604,10 @@ public partial class AppViewModel : ObservableObject
                         // stop. That is exactly how the OpenAI engine shipped
                         // broken on 2026-08-05 — the core was working and the
                         // text had nowhere to go.
-                        if (engine == "deepgram" || engine == "openai" || engine == "local-stream")
+                        // An execute session (PC command) is never typed: the
+                        // words are an instruction, not text for the document.
+                        if ((engine == "deepgram" || engine == "openai" || engine == "local-stream")
+                            && !ExecuteOneShot)
                         {
                             StreamingDictationActive = true;
                             var backspace = payload.TryGetProperty("backspace", out var bs) ? bs.GetInt32() : 0;
