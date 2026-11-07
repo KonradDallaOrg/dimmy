@@ -779,8 +779,15 @@ public static class DimmyNative
     public static extern int dimmy_pc_router_select(
         [MarshalAs(UnmanagedType.LPUTF8Str)] string id);
 
+    /// 1 on disk, 0 not, -1 no local router in this build. Downloads go
+    /// through dimmy_model_download_enqueue("pc-router:" + id).
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
-    public static extern int dimmy_pc_router_download();
+    public static extern int dimmy_pc_router_model_present(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string id);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_pc_router_size_mb(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string id);
 
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_pc_execute(

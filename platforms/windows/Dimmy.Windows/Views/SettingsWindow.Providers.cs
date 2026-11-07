@@ -551,6 +551,8 @@ public sealed partial class SettingsWindow
             if (filename == "whistle") return Interop.DimmyNative.dimmy_whistle_status() == 1;
             if (filename == "nemotron") return Interop.DimmyNative.dimmy_nemotron_status() == 1;
             if (filename == "nemotron-f32") return Interop.DimmyNative.dimmy_nemotron_full_status() == 1;
+            if (filename.StartsWith("pc-router:", StringComparison.Ordinal))
+                return Interop.DimmyNative.dimmy_pc_router_model_present(filename.Substring(10)) == 1;
             // Qwen3-ASR rows are tagged, not bare filenames: they end in .gguf
             // like the LLM models do, and without the prefix the check below
             // would ask the LLM catalog about an STT model and always say no.

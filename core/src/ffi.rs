@@ -8785,42 +8785,49 @@ pub extern "C" fn dimmy_pc_router_warm() {
     crate::pc_router::warm();
 }
 
-/// Download the local PC-command router (~129 MB). BLOCKING: call from a
-/// background thread. Progress as `pc_router_download_progress` events
-/// (`{"downloaded":N,"total":N}`). 0 ready, -1 failed (an `error` event says
-/// why), -2 this build has no local router.
+/// 1 when this encoder ("e5-small", "e5-base", "bge-m3") is on disk, 0 when
+/// not or unknown, -1 when this build has no local router. Downloads go
+/// through the download center as `pc-router:<encoder>`.
+///
+/// # Safety
+/// `id_ptr` must be a valid null-terminated UTF-8 C string.
 #[no_mangle]
-pub extern "C" fn dimmy_pc_router_download() -> c_int {
+pub unsafe extern "C" fn dimmy_pc_router_model_present(id_ptr: *const c_char) -> c_int {
+    if id_ptr.is_null() {
+        return 0;
+    }
     #[cfg(feature = "pc-router")]
     {
-        let Ok(rt) = tokio::runtime::Runtime::new() else {
-            return -1;
+        let Ok(id) = CStr::from_ptr(id_ptr).to_str() else {
+            return 0;
         };
-        const EMIT_EVERY: u64 = 1 << 20;
-        let last = std::sync::atomic::AtomicU64::new(0);
-        let result = rt.block_on(crate::pc_router::download(|done, total| {
-            let prev = last.load(std::sync::atomic::Ordering::Relaxed);
-            if done.saturating_sub(prev) >= EMIT_EVERY || done >= total {
-                last.store(done, std::sync::atomic::Ordering::Relaxed);
-                emit_event(
-                    "pc_router_download_progress",
-                    &format!(r#"{{"downloaded":{},"total":{}}}"#, done, total),
-                );
-            }
-        }));
-        match result {
-            Ok(()) => 0,
-            Err(e) => {
-                let msg: String = e.chars().take(200).collect();
-                log(&format!("[PcRouter download] {}", msg));
-                emit_event("error", &message_error_payload(&msg));
-                -1
-            }
-        }
+        crate::pc_router::find(id).is_some_and(crate::pc_router::spec_present) as c_int
     }
     #[cfg(not(feature = "pc-router"))]
     {
-        -2
+        -1
+    }
+}
+
+/// Download size of one encoder in MB, 0 when unknown or not in this build.
+///
+/// # Safety
+/// `id_ptr` must be a valid null-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_pc_router_size_mb(id_ptr: *const c_char) -> c_int {
+    if id_ptr.is_null() {
+        return 0;
+    }
+    #[cfg(feature = "pc-router")]
+    {
+        let Ok(id) = CStr::from_ptr(id_ptr).to_str() else {
+            return 0;
+        };
+        crate::pc_router::find(id).map_or(0, |m| m.size_mb as c_int)
+    }
+    #[cfg(not(feature = "pc-router"))]
+    {
+        0
     }
 }
 

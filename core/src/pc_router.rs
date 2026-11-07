@@ -648,8 +648,37 @@ pub fn select(id: &str) -> bool {
 }
 
 pub fn model_present() -> bool {
-    let spec = selected();
+    spec_present(selected())
+}
+
+/// An encoder by id ("e5-small", "e5-base", "bge-m3").
+pub fn find(id: &str) -> Option<&'static ModelSpec> {
+    MODELS.iter().find(|m| m.id == id)
+}
+
+pub fn spec_present(spec: &ModelSpec) -> bool {
     model_dir(spec).is_some_and(|dir| files_present(&dir, spec))
+}
+
+/// The files of one encoder on disk, for the download center's delete.
+pub fn spec_files(spec: &ModelSpec) -> Vec<std::path::PathBuf> {
+    let Some(dir) = model_dir(spec) else {
+        return Vec::new();
+    };
+    spec.files
+        .iter()
+        .map(|(_, name, _)| dir.join(name))
+        .collect()
+}
+
+/// Drop the loaded router when it runs on this encoder, so Windows lets its
+/// files go.
+pub fn unload(spec: &ModelSpec) {
+    let mut r = ROUTER.lock().unwrap_or_else(|e| e.into_inner());
+    if r.as_ref().is_some_and(|r| r.spec.id == spec.id) {
+        *r = None;
+        crate::log(&format!("[PcRouter] unloaded {}", spec.id));
+    }
 }
 
 fn files_present(dir: &std::path::Path, spec: &ModelSpec) -> bool {
@@ -660,10 +689,10 @@ fn files_present(dir: &std::path::Path, spec: &ModelSpec) -> bool {
     })
 }
 
-/// Download the selected encoder. Resumable; every file is checked against
-/// its pinned SHA-256 and deleted on mismatch, so a retry starts clean.
-pub async fn download(progress: impl Fn(u64, u64)) -> Result<(), String> {
-    let spec = selected();
+/// Download one encoder; the download center calls it. Resumable; every
+/// file is checked against its pinned SHA-256 and deleted on mismatch, so a
+/// retry starts clean.
+pub async fn download(spec: &ModelSpec, progress: impl Fn(u64, u64)) -> Result<(), String> {
     let dir = model_dir(spec).ok_or("config dir unknown")?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("create {:?}: {e}", dir))?;
     let client = reqwest::Client::builder()
@@ -950,13 +979,14 @@ pub fn warm() {
         let t = std::time::Instant::now();
         match Router::load() {
             Ok(r) => {
-                *ROUTER.lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
                 crate::log(&format!(
-                    "[PcRouter] e5 ready in {} ms",
+                    "[PcRouter] {} ready in {} ms",
+                    r.spec.id,
                     t.elapsed().as_millis()
                 ));
+                *ROUTER.lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
             }
-            Err(e) => crate::log(&format!("[PcRouter] e5 unavailable: {e}")),
+            Err(e) => crate::log(&format!("[PcRouter] {} unavailable: {e}", selected().id)),
         }
         LOADING.store(false, SeqCst);
     });

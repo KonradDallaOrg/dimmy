@@ -749,8 +749,9 @@ public partial class App : Application
         // EXPERIMENT (exp/pc-actions): the execute shortcut, Ctrl+Alt+X by default.
         _hotkeyService.SetExecuteShortcut(_uiPrefs.PcCommandsEnabled ? _uiPrefs.ExecuteHotkey : "");
         // The local router takes a few seconds to load: do it now, not on the first command.
-        DimmyNative.dimmy_pc_router_select(string.IsNullOrEmpty(_uiPrefs.PcRouterModel) ? "e5-small" : _uiPrefs.PcRouterModel);
-        if (_uiPrefs.PcCommandsEnabled) DimmyNative.dimmy_pc_router_warm();
+        DimmyNative.dimmy_pc_router_select(PcRouterModelId);
+        Services.ModelDownloadCenter.Instance.Changed += OnPcRouterDownloadChanged;
+        if (_uiPrefs.PcCommandsEnabled) EnsurePcRouter(announce: false);
         // Optional meeting start/stop hotkey (empty = disabled). Toggle-only.
         _hotkeyService.SetMeetingShortcut(_uiPrefs.MeetingHotkey);
     }
@@ -1003,26 +1004,12 @@ public partial class App : Application
         _dispatcherQueue?.TryEnqueue(async () => await DictationInputAsync(DictationInputKind.Release, Services.SessionKind.Execute));
 
     /// <summary>EXPERIMENT: turn voice PC commands on or off. On: bind the
-    /// shortcut and fetch the local router model if it is missing (Claude
-    /// decides alone until it is there). Off: unbind the shortcut.</summary>
+    /// shortcut and make sure the local router model is there (Claude decides
+    /// alone until it is). Off: unbind the shortcut.</summary>
     public void SetPcCommandsEnabled(bool on, string combo)
     {
         ReregisterExecuteHotkey(on ? combo : "");
-        if (!on) return;
-        if (DimmyNative.dimmy_pc_router_status() != 0)
-        {
-            DimmyNative.dimmy_pc_router_warm();
-            return;
-        }
-        Services.DictNotificationService.ShowPcAction("Comandi vocali per il PC", "Scarico il modello locale. Nel frattempo i comandi li decide Claude.");
-        var dq = _dispatcherQueue;
-        _ = Task.Run(() =>
-        {
-            int rc = DimmyNative.dimmy_pc_router_download();
-            if (rc == 0) DimmyNative.dimmy_pc_router_warm();
-            dq?.TryEnqueue(() => Services.DictNotificationService.ShowPcAction("Comandi vocali per il PC",
-                rc == 0 ? "Modello locale pronto: i comandi semplici partono subito." : "Download del modello non riuscito: riprova spegnendo e riaccendendo l'opzione."));
-        });
+        if (on) EnsurePcRouter(announce: true);
     }
 
     /// <summary>EXPERIMENT: switch the local router's encoder; fetch it if it is
@@ -1030,8 +1017,41 @@ public partial class App : Application
     public void SetPcRouterModel(string id, bool enabled)
     {
         DimmyNative.dimmy_pc_router_select(id);
-        if (!enabled) return;
-        SetPcCommandsEnabled(true, _uiPrefs.ExecuteHotkey ?? "");
+        if (enabled) EnsurePcRouter(announce: true);
+    }
+
+    private string PcRouterModelId =>
+        string.IsNullOrEmpty(_uiPrefs.PcRouterModel) ? "e5-small" : _uiPrefs.PcRouterModel;
+
+    /// <summary>Load the selected encoder, or queue its download in the download
+    /// center (Providers → On-device shows it, resumes it, deletes it).
+    /// OnPcRouterDownloadChanged loads it when the download is done.</summary>
+    private void EnsurePcRouter(bool announce)
+    {
+        var id = PcRouterModelId;
+        if (DimmyNative.dimmy_pc_router_model_present(id) == 1)
+        {
+            DimmyNative.dimmy_pc_router_warm();
+            return;
+        }
+        if (DimmyNative.dimmy_model_download_enqueue("pc-router:" + id) < 0) return;
+        if (announce)
+            Services.DictNotificationService.ShowPcAction("Comandi vocali per il PC",
+                "Scarico il modello locale (Providers → On-device). Nel frattempo i comandi li decide Claude.");
+    }
+
+    private void OnPcRouterDownloadChanged(Services.ModelDownloadJob job)
+    {
+        if (!_uiPrefs.PcCommandsEnabled || job.Id != "pc-router:" + PcRouterModelId) return;
+        if (job.State == "done")
+        {
+            DimmyNative.dimmy_pc_router_warm();
+            Services.DictNotificationService.ShowPcAction("Comandi vocali per il PC", "Modello locale pronto: i comandi semplici partono subito.");
+        }
+        else if (job.State == "failed")
+        {
+            Services.DictNotificationService.ShowPcAction("Comandi vocali per il PC", "Download del modello non riuscito: riprova da Providers → On-device.");
+        }
     }
 
     public void ReregisterExecuteHotkey(string combo)
