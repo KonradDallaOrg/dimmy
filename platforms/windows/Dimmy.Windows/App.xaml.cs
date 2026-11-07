@@ -2264,7 +2264,9 @@ public partial class App : Application
             var engineUsed = Str("engine") ?? "";
             if (engineUsed != "live")
                 Views.PcLiveWindow.Finish(said, error == null
-                    ? (engineUsed == "e5" ? "✓ Fatto (ho capito da solo)" : "✓ Fatto (ho chiesto a Claude)")
+                    ? (engineUsed == "e5" ? "✓ Fatto (ho capito da solo)"
+                        : engineUsed == "app" ? "✓ Fatto (comando dell'app)"
+                        : "✓ Fatto (ho chiesto a Claude)")
                     : $"Non ci sono riuscito: {error}");
             if (!string.IsNullOrEmpty(paste))
             {

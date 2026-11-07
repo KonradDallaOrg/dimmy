@@ -67,6 +67,9 @@ pub enum Step {
     Settings { page: String },
     /// Windows' screen snip (Win+Shift+S).
     Screenshot,
+    /// One of the commands the app in front offers (its menu or its controls),
+    /// by the label listed to the planner.
+    AppCommand { label: String },
     /// Put the cursor at the end of the app's document and paste `text` there.
     TypeAtEnd {
         #[serde(default)]
@@ -124,7 +127,7 @@ pub struct Outcome {
 pub fn live_safe(plan: &Plan) -> bool {
     !plan.steps.is_empty()
         && plan.steps.iter().all(|s| match s {
-            Step::TypeAtEnd { .. } | Step::Key { .. } => false,
+            Step::TypeAtEnd { .. } | Step::Key { .. } | Step::AppCommand { .. } => false,
             Step::Browser { action } => action != "close_tab",
             _ => true,
         })
@@ -276,7 +279,16 @@ fn best<'a, T>(spoken: &str, items: &'a [T], key: impl Fn(&T) -> (&str, &str)) -
 
 // ── Brain: Haiku ─────────────────────────────────────────────────────
 
-fn planner_prompt(command: &str, windows: &[String]) -> String {
+fn planner_prompt(command: &str, windows: &[String], app: &str, app_cmds: &[String]) -> String {
+    let app_part = if app_cmds.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\nCommands the app in front ({app}) offers, most likely first. To run one, use \
+             {{\"do\":\"app_command\",\"label\":\"<the label exactly as listed, without the shortcut>\"}}:\n{}\n",
+            app_cmds.join("\n")
+        )
+    };
     format!(
         "You turn a spoken command into actions on a Windows PC. Reply with ONE JSON object and nothing else.\n\
          Schema: {{\"steps\": [...], \"say\": \"<one short sentence in the command's language saying what you did>\"}}\n\
@@ -300,9 +312,10 @@ fn planner_prompt(command: &str, windows: &[String]) -> String {
          Rules: only these actions. Use the app names as the user said them, or the name from the open windows list. \
          \"this window\" / \"questa finestra\" means the first window in the list. If the command asks for something \
          outside these actions, reply {{\"steps\": [], \"say\": \"<what you cannot do>\"}}.\n\
-         Open windows, front-most first (process: title):\n{}\n\n\
+         Open windows, front-most first (process: title):\n{}\n{}\n\
          Command: {}",
         windows.join("\n"),
+        app_part,
         command
     )
 }
@@ -314,7 +327,8 @@ pub fn plan_with_claude(command: &str, model: &str) -> Result<Plan, String> {
         .take(25)
         .map(|w| format!("{}: {}", w.process, w.title))
         .collect();
-    let prompt = planner_prompt(command, &windows);
+    let (app, app_cmds) = crate::pc_appcmds::candidates(command, 12);
+    let prompt = planner_prompt(command, &windows, &app, &app_cmds);
     let raw =
         crate::claude_code::run_blocking(&prompt, model, std::time::Duration::from_secs(30), true)
             .map_err(|e| e.to_string())?;
@@ -325,6 +339,7 @@ pub fn plan_with_claude(command: &str, model: &str) -> Result<Plan, String> {
 /// while the user talks.
 pub fn prepare(model: &str) {
     crate::claude_code::prewarm(model);
+    crate::pc_appcmds::capture_foreground();
     #[cfg(feature = "pc-router")]
     {
         crate::pc_router::warm();
@@ -348,6 +363,12 @@ pub fn known_names() -> Vec<(String, String)> {
             .map(|n| (n, String::new())),
     );
     v
+}
+
+/// The executable name (no extension) of a process, for the app-commands log.
+#[cfg(target_os = "windows")]
+pub fn process_name_of(pid: u32) -> String {
+    hands::process_name_of(pid)
 }
 
 /// Run a plan, step by step; stop at the first step that fails.
@@ -485,6 +506,10 @@ mod hands {
             title: String::from_utf16_lossy(&buf[..n as usize]),
         });
         1
+    }
+
+    pub fn process_name_of(pid: u32) -> String {
+        process_name(pid)
     }
 
     /// Top-level windows a user would call by name, front-most first.
@@ -886,6 +911,17 @@ mod hands {
             Step::Screenshot => {
                 chord(&[0x5B, 0x10, 0x53]); // Win+Shift+S
                 Ok(None)
+            }
+            Step::AppCommand { label } => {
+                let cmd = crate::pc_appcmds::find(label)
+                    .ok_or(format!("l'app non ha il comando \"{label}\""))?;
+                if cmd.risky {
+                    return Err(format!(
+                        "\"{}\" è un comando delicato: non lo eseguo a voce",
+                        cmd.name
+                    ));
+                }
+                crate::pc_appcmds::run(&cmd).map(|_| None)
             }
             Step::TypeAtEnd { app, text } => {
                 let w = need(app)?;

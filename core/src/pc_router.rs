@@ -1151,6 +1151,7 @@ fn same_plan(a: &Plan, b: &Plan) -> bool {
             (Step::OpenFolder { folder: a }, Step::OpenFolder { folder: b }) => a == b,
             (Step::Settings { page: a }, Step::Settings { page: b }) => a == b,
             (Step::Screenshot, Step::Screenshot) => true,
+            (Step::AppCommand { label: a }, Step::AppCommand { label: b }) => a == b,
             _ => false,
         })
 }

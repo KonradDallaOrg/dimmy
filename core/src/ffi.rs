@@ -8846,6 +8846,48 @@ pub unsafe extern "C" fn dimmy_pc_execute(
     // DIMMY_PC_ENGINE: "auto" (default: local router, Claude when unsure),
     // "e5" (local only), "claude" (Claude only).
     let engine = std::env::var("DIMMY_PC_ENGINE").unwrap_or_else(|_| "auto".into());
+    // A command the app in front offers, named clearly: rules first.
+    match crate::pc_appcmds::best(text) {
+        crate::pc_appcmds::Match::Run(cmd) => {
+            out.engine = "app".into();
+            out.said = format!("{} ({})", cmd.name, cmd.label);
+            let t1 = std::time::Instant::now();
+            let plan = crate::pc_control::Plan {
+                say: out.said.clone(),
+                steps: vec![crate::pc_control::Step::AppCommand {
+                    label: cmd.label.clone(),
+                }],
+            };
+            #[cfg(feature = "pc-router")]
+            crate::pc_router::shadow_finish(Some(&plan));
+            match crate::pc_control::run(&plan) {
+                Ok(_) => out.ok = true,
+                Err(e) => out.error = Some(crate::truncate_utf8(&e, 200).to_string()),
+            }
+            out.plan_ms = t0.elapsed().as_millis() as u64;
+            out.act_ms = t1.elapsed().as_millis() as u64;
+            log(&format!(
+                "[PcControl] engine=app \"{}\" ok={} error={:?}",
+                cmd.label, out.ok, out.error
+            ));
+            let json = serde_json::to_string(&out).unwrap_or_default();
+            return write_to_buf(&json, out_buf, buf_len);
+        }
+        crate::pc_appcmds::Match::Refused(cmd) => {
+            out.engine = "app".into();
+            out.error = Some(format!(
+                "\"{}\" è un comando delicato: non lo eseguo a voce",
+                cmd.name
+            ));
+            log(&format!(
+                "[PcControl] engine=app refused risky \"{}\"",
+                cmd.label
+            ));
+            let json = serde_json::to_string(&out).unwrap_or_default();
+            return write_to_buf(&json, out_buf, buf_len);
+        }
+        crate::pc_appcmds::Match::None => {}
+    }
     #[cfg(feature = "pc-router")]
     let local: Option<crate::pc_control::Plan> = if engine == "claude" {
         None

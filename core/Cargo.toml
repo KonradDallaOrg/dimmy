@@ -445,6 +445,9 @@ windows = { version = "0.62", features = [
     "Win32_Devices_FunctionDiscovery",
     "Win32_UI_Shell_PropertiesSystem",
     "Win32_Graphics_Dxgi",
+    # EXPERIMENT (exp/pc-actions): read and invoke the controls of the app in front.
+    "Win32_UI_Accessibility",
+    "Win32_System_Ole",
 ] }
 
 # statvfs / sysctl / sysinfo for `dimmy-setup check` (free disk, RAM).
