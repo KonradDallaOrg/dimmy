@@ -1349,8 +1349,39 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
         *slot = Some(std::time::Instant::now());
     }
 
+    prewarm_claude_for_dictation(st);
+
     emit_event("recording_started", "{}");
     0
+}
+
+/// Start the `claude` CLI now when this dictation will end in a subscription
+/// rewrite, so its startup overlaps the user's speech. Same model resolution
+/// as `dimmy_process_with_llm`, or the prewarmed process goes unused.
+fn prewarm_claude_for_dictation(st: &AppState) {
+    let read = |m: &Mutex<String>| m.lock().map(|s| s.clone()).unwrap_or_default();
+    let llm_mode = read(&st.llm_mode);
+    let auth_method = read(&st.llm_auth_method);
+    let llm_url = read(&st.llm_api_url);
+    let translate_to = read(&st.llm_translate_to);
+    let inputs = crate::claude_code::PrewarmInputs {
+        llm_mode: &llm_mode,
+        auth_method: &auth_method,
+        llm_url: &llm_url,
+        llm_enabled: st.llm_enabled.lock().map(|e| *e).unwrap_or(false),
+        translate_to: &translate_to,
+        has_app_rules: st.app_rules.lock().map(|r| !r.is_empty()).unwrap_or(false),
+    };
+    if !crate::claude_code::should_prewarm(&inputs) {
+        return;
+    }
+    let model = read(&st.llm_api_model);
+    let model = if model.is_empty() {
+        crate::DEFAULT_LLM_MODEL.to_string()
+    } else {
+        model
+    };
+    crate::claude_code::prewarm(&model);
 }
 
 /// Stop recording and get transcript. Returns transcript length, or negative on error.

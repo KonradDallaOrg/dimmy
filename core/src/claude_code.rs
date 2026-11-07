@@ -46,7 +46,7 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::RwLock;
 use std::time::Duration;
 
@@ -978,29 +978,10 @@ pub fn run_blocking(
     Ok(text)
 }
 
-/// Same contract as `run_blocking`, but reads the CLI's `stream-json`
-/// output as it arrives so the host can show progress.
-///
-/// Two deliberate choices:
-///
-/// 1. **The answer comes from the `result` line, not from the deltas.**
-///    `stream-json` ends with `{"type":"result","result":"<full text>"}`,
-///    which is exactly as authoritative as today's `--output-format text`.
-///    The `stream_event` deltas drive the UI only, so a bug in delta
-///    parsing can dull the progress display but can never corrupt a recap.
-/// 2. **Thinking deltas ride their own phase.** They are the model's
-///    private deliberation; folding them into the answer would put them in
-///    the user's recap. Same contract as the Anthropic SSE reader.
-fn run_blocking_streaming(
-    binary: &Path,
-    prompt: &str,
-    model: &str,
-    timeout: Duration,
-    quick: bool,
-) -> Result<String, ClaudeCodeError> {
-    use std::io::{BufRead, BufReader};
-
-    let lean = lean_args(cli_help(binary));
+/// The `claude --print` command for a streaming call. `json_input` makes
+/// it wait for one stream-json user message on stdin, which is how a
+/// prewarmed process is started before the prompt exists.
+fn streaming_command(binary: &Path, model: &str, quick: bool, json_input: bool) -> Command {
     let mut cmd = Command::new(binary);
     cmd.arg("--print");
     cmd.arg("--output-format");
@@ -1008,7 +989,11 @@ fn run_blocking_streaming(
     // stream-json refuses to emit without --verbose under --print.
     cmd.arg("--verbose");
     cmd.arg("--include-partial-messages");
-    cmd.args(lean);
+    if json_input {
+        cmd.arg("--input-format");
+        cmd.arg("stream-json");
+    }
+    cmd.args(lean_args(cli_help(binary)));
     if quick {
         cmd.args(quick_args(cli_help(binary)));
         cmd.env(QUICK_ENV.0, QUICK_ENV.1);
@@ -1027,23 +1012,168 @@ fn run_blocking_streaming(
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x08000000);
     }
+    cmd
+}
 
+fn stream_json_user_message(prompt: &str) -> String {
+    let msg = serde_json::json!({
+        "type": "user",
+        "message": { "role": "user", "content": prompt },
+    });
+    format!("{}\n", msg)
+}
+
+/// What the hotkey knows about the coming dictation's LLM step.
+#[derive(Clone, Copy)]
+pub struct PrewarmInputs<'a> {
+    pub llm_mode: &'a str,
+    pub auth_method: &'a str,
+    pub llm_url: &'a str,
+    pub llm_enabled: bool,
+    pub translate_to: &'a str,
+    pub has_app_rules: bool,
+}
+
+/// True when the dictation that is starting will most likely end in a
+/// `claude` CLI rewrite. Errs towards yes on app rules (they are resolved
+/// only at stop): a prewarm that goes unused costs a waiting process, no quota.
+pub fn should_prewarm(i: &PrewarmInputs) -> bool {
+    let other_cli =
+        crate::codex::is_codex_url(i.llm_url) || crate::gemini_cli::is_gemini_cli_url(i.llm_url);
+    let via_claude_cli =
+        !other_cli && (i.auth_method == "subscription" || is_claude_code_url(i.llm_url));
+    let translating = !i.translate_to.is_empty() && i.translate_to != "none";
+    i.llm_mode != "local" && via_claude_cli && (i.llm_enabled || translating || i.has_app_rules)
+}
+
+/// A `claude` process started at hotkey-down, waiting for its one prompt.
+/// One process per dictation, so no context ever carries over.
+struct Warm {
+    child: Child,
+    model: String,
+    born: std::time::Instant,
+}
+
+static WARM: std::sync::Mutex<Option<Warm>> = std::sync::Mutex::new(None);
+
+/// A waiting CLI is cheap but not free (~200 MB); past this it is retired.
+const WARM_MAX_AGE: Duration = Duration::from_secs(600);
+
+impl Warm {
+    fn usable_for(&mut self, model: &str) -> bool {
+        self.model == model
+            && self.born.elapsed() < WARM_MAX_AGE
+            && matches!(self.child.try_wait(), Ok(None))
+    }
+
+    /// Closing stdin lets the CLI exit on its own; killing it could cut a
+    /// write to the user's ~/.claude.json short.
+    fn retire(mut self) {
+        drop(self.child.stdin.take());
+        std::thread::spawn(move || {
+            let _ = self.child.wait_with_output();
+        });
+    }
+}
+
+/// Start the CLI for a dictation that is about to need it, so its ~0.85 s
+/// startup runs while the user is still talking. Returns at once: the
+/// binary lookup and `--help` probe happen on a thread of their own.
+pub fn prewarm(model: &str) {
+    let model = model.to_string();
+    std::thread::spawn(move || {
+        let Some(binary) = detect_binary() else {
+            return;
+        };
+        if !has_credentials() || !cli_supports_partial_messages(&binary) {
+            return;
+        }
+        let Ok(mut slot) = WARM.lock() else {
+            return;
+        };
+        if let Some(w) = slot.as_mut() {
+            if w.usable_for(&model) {
+                return;
+            }
+        }
+        if let Some(old) = slot.take() {
+            old.retire();
+        }
+        match streaming_command(&binary, &model, true, true).spawn() {
+            Ok(child) => {
+                crate::log(&format!("[ClaudeCode] prewarmed model={:?}", model));
+                *slot = Some(Warm {
+                    child,
+                    model,
+                    born: std::time::Instant::now(),
+                });
+            }
+            Err(e) => crate::log(&format!("[ClaudeCode] prewarm spawn failed: {}", e)),
+        }
+    });
+}
+
+fn take_warm(model: &str) -> Option<Warm> {
+    let mut slot = WARM.lock().ok()?;
+    let mut w = slot.take()?;
+    if w.usable_for(model) {
+        Some(w)
+    } else {
+        w.retire();
+        None
+    }
+}
+
+/// Same contract as `run_blocking`, but reads the CLI's `stream-json`
+/// output as it arrives so the host can show progress.
+///
+/// Three deliberate choices:
+///
+/// 1. **The answer comes from the `result` line, not from the deltas.**
+///    `stream-json` ends with `{"type":"result","result":"<full text>"}`,
+///    which is exactly as authoritative as today's `--output-format text`.
+///    The `stream_event` deltas drive the UI only, so a bug in delta
+///    parsing can dull the progress display but can never corrupt a recap.
+/// 2. **Thinking deltas ride their own phase.** They are the model's
+///    private deliberation; folding them into the answer would put them in
+///    the user's recap. Same contract as the Anthropic SSE reader.
+/// 3. **The answer returns as soon as the result line arrives.** The CLI
+///    then needs ~0.75 s to shut down; it does so on a reaper thread
+///    instead of in front of the user's paste.
+fn run_blocking_streaming(
+    binary: &Path,
+    prompt: &str,
+    model: &str,
+    timeout: Duration,
+    quick: bool,
+) -> Result<String, ClaudeCodeError> {
+    use std::io::{BufRead, BufReader};
+
+    let warm = if quick { take_warm(model) } else { None };
+    let warm_age_ms = warm.as_ref().map(|w| w.born.elapsed().as_millis());
     crate::log(&format!(
-        "[ClaudeCode] spawn (streaming) binary={:?} model={:?} prompt_chars={} lean={} quick={}",
+        "[ClaudeCode] spawn (streaming) binary={:?} model={:?} prompt_chars={} lean={} quick={} warm_age_ms={:?}",
         binary,
         model,
         prompt.len(),
-        !lean.is_empty(),
-        quick
+        !lean_args(cli_help(binary)).is_empty(),
+        quick,
+        warm_age_ms
     ));
 
     let spawned_at = std::time::Instant::now();
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| ClaudeCodeError::Spawn(format!("{}", e)))?;
+    let (mut child, payload) = match warm {
+        Some(w) => (w.child, stream_json_user_message(prompt)),
+        None => (
+            streaming_command(binary, model, quick, false)
+                .spawn()
+                .map_err(|e| ClaudeCodeError::Spawn(format!("{}", e)))?,
+            prompt.to_string(),
+        ),
+    };
 
     if let Some(mut stdin) = child.stdin.take() {
-        if let Err(e) = stdin.write_all(prompt.as_bytes()) {
+        if let Err(e) = stdin.write_all(payload.as_bytes()) {
             let _ = child.kill();
             return Err(ClaudeCodeError::Spawn(format!("stdin write: {}", e)));
         }
@@ -1062,12 +1192,13 @@ fn run_blocking_streaming(
             return Err(ClaudeCodeError::Spawn("no stdout handle".into()));
         }
     };
-    let collected = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
-    let collected_writer = std::sync::Arc::clone(&collected);
+    // Some(text) = the answer; None = stdout ended without one.
+    let (answer_tx, answer_rx) = std::sync::mpsc::channel::<Option<String>>();
     let timing = std::sync::Arc::new(std::sync::Mutex::new(StreamTiming::default()));
     let timing_writer = std::sync::Arc::clone(&timing);
     let reader = std::thread::spawn(move || {
         let mut started = false;
+        let mut answered = false;
         let mark = |f: fn(&mut StreamTiming) -> &mut Option<u128>| {
             if let Ok(mut t) = timing_writer.lock() {
                 let slot = f(&mut t);
@@ -1148,42 +1279,64 @@ fn run_blocking_streaming(
                         continue;
                     }
                     if let Some(text) = v["result"].as_str() {
-                        if let Ok(mut guard) = collected_writer.lock() {
-                            *guard = text.to_string();
+                        if !text.is_empty() && !answered {
+                            answered = true;
+                            if started {
+                                crate::llm::emit_recap_stream_event("end", "");
+                            }
+                            let _ = answer_tx.send(Some(text.to_string()));
                         }
                     }
                 }
                 _ => {}
             }
         }
-        if started {
-            crate::llm::emit_recap_stream_event("end", "");
+        if !answered {
+            if started {
+                crate::llm::emit_recap_stream_event("end", "");
+            }
+            let _ = answer_tx.send(None);
         }
     });
 
-    // Identical deadline policy to run_blocking: 100 ms polling, kill on
-    // expiry. Killing the child closes stdout, which ends the reader.
-    let deadline = std::time::Instant::now() + timeout;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_status)) => break,
-            Ok(None) => {
-                if std::time::Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = reader.join();
-                    return Err(ClaudeCodeError::Timeout);
-                }
-                std::thread::sleep(Duration::from_millis(100));
-            }
-            Err(e) => {
-                let _ = child.kill();
-                let _ = reader.join();
-                return Err(ClaudeCodeError::Spawn(format!("wait: {}", e)));
-            }
+    let answer = match answer_rx.recv_timeout(timeout) {
+        Ok(a) => a,
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            // Killing the child closes stdout, which ends the reader.
+            let _ = child.kill();
+            let _ = reader.join();
+            return Err(ClaudeCodeError::Timeout);
         }
-    }
-    let _ = reader.join();
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => None,
+    };
 
+    if let Some(text) = answer {
+        let answered_ms = spawned_at.elapsed().as_millis();
+        std::thread::spawn(move || {
+            let _ = reader.join();
+            let _ = child.wait_with_output();
+        });
+        let t = timing.lock().map(|t| t.clone()).unwrap_or_default();
+        crate::log(&format!(
+            "[ClaudeCode] success (streaming) prompt_chars={} response_chars={} \
+             warm_age_ms={:?} first_line_ms={:?} first_text_ms={:?} result_ms={:?} answered_ms={} \
+             cli_ms={:?} api_ms={:?} tokens_in={:?} five_hour={:?}",
+            prompt.len(),
+            text.len(),
+            warm_age_ms,
+            t.first_line_ms,
+            t.first_text_ms,
+            t.result_ms,
+            answered_ms,
+            t.cli_ms,
+            t.api_ms,
+            t.tokens_in,
+            t.five_hour
+        ));
+        return Ok(text);
+    }
+
+    let _ = reader.join();
     let output = child
         .wait_with_output()
         .map_err(|e| ClaudeCodeError::Spawn(format!("collect: {}", e)))?;
@@ -1200,37 +1353,12 @@ fn run_blocking_streaming(
             stderr_excerpt: excerpt,
         });
     }
-
-    let text = collected
-        .lock()
-        .map(|g| g.clone())
-        .unwrap_or_else(|_| String::new());
-    if text.is_empty() {
-        // Exit 0 but no result line: treat as a failure rather than hand
-        // back an empty recap that reads as a successful one.
-        return Err(ClaudeCodeError::NonZeroExit {
-            code: 0,
-            stderr_excerpt: "stream-json produced no result line".into(),
-        });
-    }
-    let exit_ms = spawned_at.elapsed().as_millis();
-    let t = timing.lock().map(|t| t.clone()).unwrap_or_default();
-    crate::log(&format!(
-        "[ClaudeCode] success (streaming) prompt_chars={} response_chars={} \
-         first_line_ms={:?} first_text_ms={:?} result_ms={:?} exit_ms={} \
-         cli_ms={:?} api_ms={:?} tokens_in={:?} five_hour={:?}",
-        prompt.len(),
-        text.len(),
-        t.first_line_ms,
-        t.first_text_ms,
-        t.result_ms,
-        exit_ms,
-        t.cli_ms,
-        t.api_ms,
-        t.tokens_in,
-        t.five_hour
-    ));
-    Ok(text)
+    // Exit 0 but no result line: treat as a failure rather than hand
+    // back an empty recap that reads as a successful one.
+    Err(ClaudeCodeError::NonZeroExit {
+        code: 0,
+        stderr_excerpt: "stream-json produced no result line".into(),
+    })
 }
 
 /// Where a streaming call spends its time, all in ms since the spawn
@@ -1440,6 +1568,65 @@ Options:
         // 12 of 13 saved dictations carried a thinking block: a 117-char
         // answer cost 614 output tokens and ~7 s before the first word.
         assert_eq!(QUICK_ENV, ("MAX_THINKING_TOKENS", "0"));
+    }
+
+    #[test]
+    fn prewarm_only_when_the_dictation_will_reach_the_claude_cli() {
+        let base = PrewarmInputs {
+            llm_mode: "cloud",
+            auth_method: "subscription",
+            llm_url: "https://api.anthropic.com/v1/messages",
+            llm_enabled: true,
+            translate_to: "",
+            has_app_rules: false,
+        };
+        assert!(should_prewarm(&base));
+        assert!(should_prewarm(&PrewarmInputs {
+            llm_enabled: false,
+            translate_to: "en",
+            ..base
+        }));
+        assert!(should_prewarm(&PrewarmInputs {
+            llm_enabled: false,
+            has_app_rules: true,
+            ..base
+        }));
+        assert!(!should_prewarm(&PrewarmInputs {
+            llm_enabled: false,
+            ..base
+        }));
+        assert!(!should_prewarm(&PrewarmInputs {
+            llm_enabled: false,
+            translate_to: "none",
+            ..base
+        }));
+        assert!(!should_prewarm(&PrewarmInputs {
+            llm_mode: "local",
+            ..base
+        }));
+        assert!(!should_prewarm(&PrewarmInputs {
+            auth_method: "api_key",
+            ..base
+        }));
+        assert!(should_prewarm(&PrewarmInputs {
+            auth_method: "api_key",
+            llm_url: "claude-code://default",
+            ..base
+        }));
+        assert!(!should_prewarm(&PrewarmInputs {
+            llm_url: "codex://default",
+            ..base
+        }));
+    }
+
+    #[test]
+    fn a_prewarmed_cli_gets_the_prompt_as_one_stream_json_user_message() {
+        let line = stream_json_user_message("ciao \"Marco\"\nriga due");
+        assert!(line.ends_with('\n'));
+        let v: serde_json::Value = serde_json::from_str(line.trim_end()).unwrap();
+        assert_eq!(v["type"], "user");
+        assert_eq!(v["message"]["role"], "user");
+        assert_eq!(v["message"]["content"], "ciao \"Marco\"\nriga due");
     }
 
     #[test]
