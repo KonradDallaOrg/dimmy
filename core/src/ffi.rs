@@ -31,6 +31,33 @@ static CHUNKED: Mutex<Option<crate::chunked_stt::ChunkedTranscriber>> = Mutex::n
 /// same contract as CHUNKED.
 static STREAMING: Mutex<Option<ActiveStreamer>> = Mutex::new(None);
 
+/// One number per dictation. A live-text callback carries the number of the
+/// dictation that started it and drops its text once that is no longer the
+/// current one: a streamer left running (cancelled, replaced) must never
+/// type into the user's document. Every word came out three times after two
+/// cancelled sessions had left their Nemotron streamers reading the mic
+/// (2026-11-07).
+static DICTATION_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn dictation_is_current(gen: u64) -> bool {
+    DICTATION_GEN.load(std::sync::atomic::Ordering::SeqCst) == gen
+}
+
+/// Stop a streamer off the caller thread (it joins its worker and flushes
+/// the tail); its text is discarded, and any it still emits is dropped by
+/// the generation check.
+fn retire_streamer() {
+    if let Some(old) = STREAMING.lock().ok().and_then(|mut slot| slot.take()) {
+        log(&format!(
+            "[Stream] retiring a leftover {} streamer",
+            old.label()
+        ));
+        std::thread::spawn(move || {
+            let _ = old.stop();
+        });
+    }
+}
+
 /// The realtime cloud engine owning the current dictation.
 ///
 /// One slot, not one static per engine: the two are mutually exclusive by
@@ -1134,6 +1161,9 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
     // NOT hijack streaming when the user picked a LOCAL backend — otherwise
     // local typing never fires (the "non va" report, 2026-06-06).
     let streaming_on = st.streaming_dictation.lock().map(|b| *b).unwrap_or(false);
+    // A new dictation: earlier live text is dead from here on.
+    let gen = DICTATION_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    retire_streamer();
     let use_kr = st.use_keyring.lock().map(|k| *k).unwrap_or(false);
     // Engine selection. Derived from the STT provider the user already picked,
     // so "I chose OpenAI for voice input" means OpenAI here too — no second
@@ -1178,6 +1208,9 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
         };
         let on_chunk: Arc<crate::deepgram_stream::StreamCallback> =
             Arc::new(move |delta: &str, cumulative: &str, is_final: bool| {
+                if !dictation_is_current(gen) {
+                    return;
+                }
                 let payload = serde_json::json!({
                     "delta": delta,
                     "cumulative": cumulative,
@@ -1288,6 +1321,9 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
         };
         let on_chunk: Arc<crate::nemotron::ChunkCallback> = Arc::new(
             move |backspace: usize, delta: &str, cumulative: &str, is_final: bool| {
+                if !dictation_is_current(gen) {
+                    return;
+                }
                 // `backspace`: characters the host deletes before typing
                 // `delta` (a word the engine corrected). Absent elsewhere.
                 let payload = serde_json::json!({
@@ -1352,6 +1388,9 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
         let typing = local_typing;
         let on_chunk: Arc<crate::chunked_stt::ChunkCallback> =
             Arc::new(move |delta: &str, cumulative: &str, is_final: bool| {
+                if !dictation_is_current(gen) {
+                    return;
+                }
                 // Typing mode: prefix a space so cursor-injected segments
                 // don't run together — the chunked delta carries no leading
                 // space (cumulative inserts one between segments).
@@ -2332,6 +2371,10 @@ pub extern "C" fn dimmy_cancel_recording() {
     if let Some(ct) = CHUNKED.lock().ok().and_then(|mut slot| slot.take()) {
         let _ = ct.stop();
     }
+    // The realtime streamer too (Nemotron, Deepgram, OpenAI): left running it
+    // kept transcribing the mic into every later dictation.
+    DICTATION_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    retire_streamer();
     emit_event("recording_cancelled", "{}");
 
     crate::telemetry::track(crate::telemetry::Event::TranscriptionCancelled { audio_secs });
@@ -12272,6 +12315,19 @@ pub(crate) mod tests {
     use super::*;
     use serial_test::serial;
     use std::ffi::c_char;
+
+    #[test]
+    #[serial]
+    fn live_text_from_an_older_dictation_is_dropped() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let gen = DICTATION_GEN.fetch_add(1, SeqCst) + 1;
+        assert!(dictation_is_current(gen));
+        // A cancel, or the next dictation, moves the number on.
+        DICTATION_GEN.fetch_add(1, SeqCst);
+        assert!(!dictation_is_current(gen));
+        // Nothing left in the slot: retiring is a no-op, not a panic.
+        retire_streamer();
+    }
 
     #[test]
     fn init_warms_the_dictation_backend_only_when_dictation_is_local() {
