@@ -775,6 +775,13 @@
                                          Shortcut="{Binding MeetingHotkey, Mode=TwoWay}" />
               </controls:SettingCard>
               <controls:SettingCard Glyph="&#xE7C4;"
+                                    Label="Voice PC commands (experimental)"
+                                    InfoTip="Experimental, Windows only. Turn it on to control the PC by voice with its own shortcut: open apps, place windows, search the web, browser and media keys, folders, settings. A small local model (about 130 MB, downloaded once) handles the simple commands while you talk; Claude handles the rest. Nothing is deleted, sent or bought.">
+                <ToggleSwitch IsOn="{Binding PcCommandsEnabled, Mode=TwoWay}"
+                              Style="{StaticResource CompactToggleSwitch}" />
+              </controls:SettingCard>
+              <controls:SettingCard Glyph="&#xE7C4;"
+                                    IsEnabled="{Binding PcCommandsEnabled}"
                                     Label="PC commands shortcut (experimental)"
                                     InfoTip="Experimental. Say what the PC should do instead of dictating: open an app, put a window on the left or right, side by side or full screen, move it to the other monitor, find yesterday's files, write something at the end of a document. Nothing is deleted or sent. Follows the same Push-to-Talk or Toggle mode as your dictation shortcut.">
                 <controls:ShortcutEditor x:Name="ExecuteShortcutEditor" Target="execute" AllowClear="True"

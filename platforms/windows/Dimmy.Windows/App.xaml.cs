@@ -747,7 +747,9 @@ public partial class App : Application
         // the same hook, so it inherits toggle/PTT + every combo.
         _hotkeyService.SetCommandShortcut(_uiPrefs.CommandHotkey);
         // EXPERIMENT (exp/pc-actions): the execute shortcut, Ctrl+Alt+X by default.
-        _hotkeyService.SetExecuteShortcut(_uiPrefs.ExecuteHotkey);
+        _hotkeyService.SetExecuteShortcut(_uiPrefs.PcCommandsEnabled ? _uiPrefs.ExecuteHotkey : "");
+        // The local router takes ~3 s to load: do it now, not on the first command.
+        if (_uiPrefs.PcCommandsEnabled) DimmyNative.dimmy_pc_router_warm();
         // Optional meeting start/stop hotkey (empty = disabled). Toggle-only.
         _hotkeyService.SetMeetingShortcut(_uiPrefs.MeetingHotkey);
     }
@@ -998,6 +1000,29 @@ public partial class App : Application
 
     private void OnExecuteHotkeyReleased() =>
         _dispatcherQueue?.TryEnqueue(async () => await DictationInputAsync(DictationInputKind.Release, Services.SessionKind.Execute));
+
+    /// <summary>EXPERIMENT: turn voice PC commands on or off. On: bind the
+    /// shortcut and fetch the local router model if it is missing (Claude
+    /// decides alone until it is there). Off: unbind the shortcut.</summary>
+    public void SetPcCommandsEnabled(bool on, string combo)
+    {
+        ReregisterExecuteHotkey(on ? combo : "");
+        if (!on) return;
+        if (DimmyNative.dimmy_pc_router_status() != 0)
+        {
+            DimmyNative.dimmy_pc_router_warm();
+            return;
+        }
+        Services.DictNotificationService.ShowPcAction("Comandi vocali per il PC", "Scarico il modello locale (circa 130 MB). Nel frattempo i comandi li decide Claude.");
+        var dq = _dispatcherQueue;
+        _ = Task.Run(() =>
+        {
+            int rc = DimmyNative.dimmy_pc_router_download();
+            if (rc == 0) DimmyNative.dimmy_pc_router_warm();
+            dq?.TryEnqueue(() => Services.DictNotificationService.ShowPcAction("Comandi vocali per il PC",
+                rc == 0 ? "Modello locale pronto: i comandi semplici partono subito." : "Download del modello non riuscito: riprova spegnendo e riaccendendo l'opzione."));
+        });
+    }
 
     public void ReregisterExecuteHotkey(string combo)
     {

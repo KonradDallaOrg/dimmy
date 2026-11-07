@@ -1,11 +1,15 @@
 //! Local intent router for PC commands — EXPERIMENT (branch `exp/pc-actions`).
 //!
-//! multilingual-e5-small (int8 ONNX, ~118 MB) embeds the spoken command and a
-//! handful of hand-written examples per action; the nearest example decides
-//! the action. Measured offline on 33 Italian/English commands: 29 right at
-//! ~18 ms CPU, and the 4 misses had a margin of 0.01-0.02 between the first
-//! and the second action. So: below `MIN_MARGIN`, or when a slot can't be
-//! filled, the router answers `None` and the command goes to Claude.
+//! multilingual-e5-small (int8 ONNX, ~118 MB) embeds the spoken command; a
+//! softmax classifier trained at load on ~400 examples
+//! (`assets/pc-router-examples.json`, an explicit "none" class included)
+//! picks the action with a probability. Measured 2026-11-07 on 326 commands
+//! written independently (69% Italian, 68 out of scope): 81% right overall,
+//! and at p >= 0.60 no wrong action and no out-of-scope line executed
+//! (22% of the commands decided that surely); at p >= 0.50, 1 mistake in 111.
+//! Embedding nearest-example routing reached 56%, Laya (a decision model)
+//! 34%, e5 then Laya 44%. Below `MIN_PROB`, on "none", or when a slot can't
+//! be filled, the router answers `None` and the command goes to Claude.
 //!
 //! Slots without a model: side and date from keywords, app names by fuzzy
 //! match of the command's words against open windows and Start-menu apps.
@@ -16,7 +20,8 @@ use ort::value::Tensor;
 use std::sync::Mutex;
 use tokenizers::Tokenizer;
 
-const MIN_MARGIN: f32 = 0.03;
+/// After the stop the local plan runs at this probability, else Claude decides.
+const MIN_PROB: f32 = 0.50;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Intent {
@@ -30,97 +35,123 @@ enum Intent {
     Media,
     Folder,
     Settings,
+    /// Not a PC command: dictation, a question, an unsupported request.
+    None,
 }
 
-const EXAMPLES: &[(Intent, &str)] = &[
-    (Intent::Open, "apri Word"),
-    (Intent::Open, "avvia Chrome"),
-    (Intent::Open, "fai partire Outlook"),
-    (Intent::Open, "apri la calcolatrice"),
-    (Intent::Open, "apri gmail nel browser"),
-    (Intent::Open, "voglio Slack"),
-    (Intent::Open, "open Notepad"),
-    (Intent::Open, "launch Teams"),
-    (Intent::Open, "bring up the calculator"),
-    (Intent::Tile, "affianca Excel e il browser"),
-    (
-        Intent::Tile,
-        "metti una accanto all'altra la chat e la mail",
-    ),
-    (Intent::Tile, "dividi lo schermo in due"),
-    (Intent::Tile, "Word a sinistra e Chrome a destra"),
-    (Intent::Tile, "metti le due finestre affiancate"),
-    (Intent::Tile, "tile Outlook and Teams"),
-    (Intent::Tile, "show these two windows next to each other"),
-    (Intent::Tile, "snap two windows side by side"),
-    (Intent::Move, "sposta Word a sinistra"),
-    (Intent::Move, "porta la finestra a destra"),
-    (Intent::Move, "ingrandisci Chrome"),
-    (Intent::Move, "metti Teams a tutto schermo"),
-    (Intent::Move, "manda Spotify sul secondo schermo"),
-    (Intent::Move, "sposta questa finestra sul portatile"),
-    (Intent::Move, "maximize Excel"),
-    (Intent::Move, "move Teams to the left"),
-    (Intent::Move, "put this on the second monitor"),
-    (Intent::FindFiles, "cerca i file che ho modificato oggi"),
-    (Intent::FindFiles, "trova il contratto di Bianchi"),
-    (Intent::FindFiles, "dov'è il file del bilancio"),
-    (Intent::FindFiles, "cerca le foto di ieri"),
-    (Intent::FindFiles, "trovami l'excel delle spese"),
-    (Intent::FindFiles, "mostrami i documenti recenti"),
-    (Intent::FindFiles, "search my files for the invoice"),
-    (Intent::FindFiles, "find the report I saved this morning"),
-    (Intent::Minimize, "riduci a icona Word"),
-    (Intent::Minimize, "abbassa Outlook"),
-    (Intent::Minimize, "nascondi Chrome"),
-    (Intent::Minimize, "manda Teams nella barra"),
-    (Intent::Minimize, "togli di mezzo Excel"),
-    (Intent::Minimize, "minimize Slack"),
-    (Intent::Minimize, "hide the browser"),
-    (Intent::Web, "naviga su YouTube"),
-    (Intent::Web, "vai su Amazon"),
-    (Intent::Web, "cerca su Google il meteo di domani"),
-    (Intent::Web, "cercami su YouTube un tutorial di Excel"),
-    (Intent::Web, "apri Gmail"),
-    (Intent::Web, "cerca su Wikipedia Leonardo da Vinci"),
-    (Intent::Web, "search YouTube for lo-fi music"),
-    (Intent::Web, "go to Amazon"),
-    (Intent::Web, "google the weather in Milan"),
-    (Intent::Browser, "apri una nuova scheda"),
-    (Intent::Browser, "apri una nuova tab"),
-    (Intent::Browser, "chiudi questa scheda"),
-    (Intent::Browser, "torna indietro"),
-    (Intent::Browser, "vai avanti"),
-    (Intent::Browser, "ricarica la pagina"),
-    (Intent::Browser, "riapri la scheda chiusa"),
-    (Intent::Browser, "scheda successiva"),
-    (Intent::Browser, "new tab"),
-    (Intent::Browser, "go back"),
-    (Intent::Browser, "refresh the page"),
-    (Intent::Media, "metti in pausa"),
-    (Intent::Media, "riprendi la musica"),
-    (Intent::Media, "canzone successiva"),
-    (Intent::Media, "torna alla canzone precedente"),
-    (Intent::Media, "alza il volume"),
-    (Intent::Media, "abbassa il volume"),
-    (Intent::Media, "togli l'audio"),
-    (Intent::Media, "pause the music"),
-    (Intent::Media, "next song"),
-    (Intent::Media, "turn the volume down"),
-    (Intent::Folder, "apri la cartella download"),
-    (Intent::Folder, "aprimi i documenti"),
-    (Intent::Folder, "mostrami l'ultimo file scaricato"),
-    (Intent::Folder, "apri la cartella immagini"),
-    (Intent::Folder, "apri il desktop in esplora file"),
-    (Intent::Folder, "open my downloads folder"),
-    (Intent::Folder, "show me the last download"),
-    (Intent::Settings, "apri le impostazioni bluetooth"),
-    (Intent::Settings, "impostazioni del wifi"),
-    (Intent::Settings, "apri le impostazioni audio"),
-    (Intent::Settings, "impostazioni dello schermo"),
-    (Intent::Settings, "open bluetooth settings"),
-    (Intent::Settings, "open sound settings"),
-];
+impl Intent {
+    fn from_key(k: &str) -> Option<Self> {
+        Some(match k {
+            "open" => Intent::Open,
+            "tile" => Intent::Tile,
+            "move" => Intent::Move,
+            "find_files" => Intent::FindFiles,
+            "minimize" => Intent::Minimize,
+            "web" => Intent::Web,
+            "browser" => Intent::Browser,
+            "media" => Intent::Media,
+            "folder" => Intent::Folder,
+            "settings" => Intent::Settings,
+            "none" => Intent::None,
+            _ => return None,
+        })
+    }
+}
+
+/// The training examples, compiled in. Keys are intents; `_comment` is skipped.
+fn examples() -> Vec<(Intent, String)> {
+    let doc: serde_json::Value =
+        serde_json::from_str(include_str!("../assets/pc-router-examples.json"))
+            .expect("pc-router-examples.json is valid JSON (a unit test checks it)");
+    let mut out = Vec::new();
+    for (k, v) in doc.as_object().expect("an object of intent -> examples") {
+        let Some(intent) = Intent::from_key(k) else {
+            continue;
+        };
+        for t in v
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|x| x.as_str())
+        {
+            out.push((intent, t.to_string()));
+        }
+    }
+    out
+}
+
+/// Multinomial logistic regression (softmax) on unit-length embeddings, full
+/// batch, Adam. Same model as the offline bench (sklearn, C=8): L2 weight
+/// 1/(C·n). Returns (weights [classes × dim], bias [classes]).
+fn train_softmax(x: &[Vec<f32>], y: &[usize], classes: usize) -> (Vec<f32>, Vec<f32>) {
+    assert!(!x.is_empty() && x.len() == y.len(), "one label per example");
+    assert!(y.iter().all(|&c| c < classes), "labels in range");
+    let (n, dim) = (x.len(), x[0].len());
+    let l2 = 1.0 / (8.0 * n as f32);
+    let (lr, b1, b2, eps) = (0.05f32, 0.9f32, 0.999f32, 1e-8f32);
+    let mut w = vec![0f32; classes * dim];
+    let mut b = vec![0f32; classes];
+    let (mut mw, mut vw) = (vec![0f32; w.len()], vec![0f32; w.len()]);
+    let (mut mb, mut vb) = (vec![0f32; classes], vec![0f32; classes]);
+    let mut gw = vec![0f32; w.len()];
+    let mut gb = vec![0f32; classes];
+    let mut p = vec![0f32; classes];
+    for step in 1..=400 {
+        gw.iter_mut().for_each(|g| *g = 0.0);
+        gb.iter_mut().for_each(|g| *g = 0.0);
+        for (xi, &yi) in x.iter().zip(y) {
+            softmax_into(&w, &b, xi, &mut p);
+            for c in 0..classes {
+                let d = (p[c] - f32::from(c == yi)) / n as f32;
+                gb[c] += d;
+                let row = &mut gw[c * dim..(c + 1) * dim];
+                for (g, xv) in row.iter_mut().zip(xi) {
+                    *g += d * xv;
+                }
+            }
+        }
+        for (g, wv) in gw.iter_mut().zip(&w) {
+            *g += l2 * wv;
+        }
+        let (c1, c2) = (1.0 - b1.powi(step), 1.0 - b2.powi(step));
+        for i in 0..w.len() {
+            mw[i] = b1 * mw[i] + (1.0 - b1) * gw[i];
+            vw[i] = b2 * vw[i] + (1.0 - b2) * gw[i] * gw[i];
+            w[i] -= lr * (mw[i] / c1) / ((vw[i] / c2).sqrt() + eps);
+        }
+        for i in 0..classes {
+            mb[i] = b1 * mb[i] + (1.0 - b1) * gb[i];
+            vb[i] = b2 * vb[i] + (1.0 - b2) * gb[i] * gb[i];
+            b[i] -= lr * (mb[i] / c1) / ((vb[i] / c2).sqrt() + eps);
+        }
+    }
+    assert!(
+        w.iter().chain(&b).all(|v| v.is_finite()),
+        "training stayed finite"
+    );
+    (w, b)
+}
+
+fn softmax_into(w: &[f32], b: &[f32], x: &[f32], out: &mut [f32]) {
+    let dim = x.len();
+    for (c, o) in out.iter_mut().enumerate() {
+        *o = b[c]
+            + w[c * dim..(c + 1) * dim]
+                .iter()
+                .zip(x)
+                .map(|(a, v)| a * v)
+                .sum::<f32>();
+    }
+    let max = out.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    let mut sum = 0.0;
+    for o in out.iter_mut() {
+        *o = (*o - max).exp();
+        sum += *o;
+    }
+    for o in out.iter_mut() {
+        *o /= sum;
+    }
+}
 
 const SITES: &[&str] = &[
     "youtube",
@@ -510,11 +541,78 @@ fn apps_in(w: &[String], names: &[(String, String)]) -> Vec<String> {
     out
 }
 
+/// multilingual-e5-small int8, pinned to a revision; each file to its SHA-256.
+const HF_BASE: &str =
+    "https://huggingface.co/Xenova/multilingual-e5-small/resolve/761b726dd34fb83930e26aab4e9ac3899aa1fa78";
+const FILES: [(&str, &str, &str); 2] = [
+    (
+        "onnx/model_quantized.onnx",
+        "model_quantized.onnx",
+        "f80102d3f2a1229f387d3c81909990d8945513e347b0eab049f7de3c6f98c193",
+    ),
+    (
+        "tokenizer.json",
+        "tokenizer.json",
+        "0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39",
+    ),
+];
+pub const MODEL_SIZE_MB: u32 = 129;
+
+pub fn model_present() -> bool {
+    let Some(dir) = model_dir() else {
+        return false;
+    };
+    FILES.iter().all(|(_, name, _)| {
+        std::fs::metadata(dir.join(name))
+            .map(|m| m.is_file() && m.len() > 0)
+            .unwrap_or(false)
+    })
+}
+
+/// Download the router model. Resumable; every file is checked against its
+/// pinned SHA-256 and deleted on mismatch, so a retry starts clean.
+pub async fn download(progress: impl Fn(u64, u64)) -> Result<(), String> {
+    let dir = model_dir().ok_or("config dir unknown")?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create {:?}: {e}", dir))?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(1800))
+        .build()
+        .map_err(|e| format!("http client: {e}"))?;
+    let total: u64 = MODEL_SIZE_MB as u64 * 1024 * 1024;
+    let mut base: u64 = 0;
+    for (remote, name, sha) in FILES {
+        let dest = dir.join(name);
+        if crate::download::verify_file(&dest, &[], Some(sha)).is_ok() {
+            base += std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
+            progress(base, total);
+            continue;
+        }
+        let _ = std::fs::remove_file(&dest);
+        let url = format!("{HF_BASE}/{remote}");
+        crate::log(&format!("[PcRouter] downloading {name}"));
+        crate::download::download_resumable(&client, &url, &dest, &[], |done, _| {
+            progress(base + done, total)
+        })
+        .await
+        .map_err(|e| format!("{name}: {e}"))?;
+        if let Err(e) = crate::download::verify_file(&dest, &[], Some(sha)) {
+            let _ = std::fs::remove_file(&dest);
+            return Err(format!("{name}: {e}"));
+        }
+        base += std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
+        progress(base, total);
+    }
+    assert!(model_present(), "both files must exist after a download");
+    Ok(())
+}
+
 struct Router {
     session: Session,
     tok: Tokenizer,
-    examples: Vec<(Intent, Vec<f32>)>,
     needs_token_types: bool,
+    classes: Vec<Intent>,
+    w: Vec<f32>,
+    b: Vec<f32>,
 }
 
 static ROUTER: Mutex<Option<Router>> = Mutex::new(None);
@@ -545,14 +643,37 @@ impl Router {
         let mut r = Router {
             session,
             tok,
-            examples: Vec::new(),
             needs_token_types,
+            classes: Vec::new(),
+            w: Vec::new(),
+            b: Vec::new(),
         };
-        let mut ex = Vec::with_capacity(EXAMPLES.len());
-        for (intent, text) in EXAMPLES {
-            ex.push((*intent, r.embed(text)?));
+        let ex = examples();
+        let t_embed = std::time::Instant::now();
+        let mut classes: Vec<Intent> = Vec::new();
+        let (mut x, mut y) = (Vec::with_capacity(ex.len()), Vec::with_capacity(ex.len()));
+        for (intent, text) in &ex {
+            let c = match classes.iter().position(|k| k == intent) {
+                Some(c) => c,
+                None => {
+                    classes.push(*intent);
+                    classes.len() - 1
+                }
+            };
+            x.push(r.embed(text)?);
+            y.push(c);
         }
-        r.examples = ex;
+        let embed_ms = t_embed.elapsed().as_millis();
+        let t_train = std::time::Instant::now();
+        let (w, b) = train_softmax(&x, &y, classes.len());
+        crate::log(&format!(
+            "[PcRouter] {} examples embedded in {embed_ms} ms, classifier trained in {} ms",
+            x.len(),
+            t_train.elapsed().as_millis()
+        ));
+        r.classes = classes;
+        r.w = w;
+        r.b = b;
         Ok(r)
     }
 
@@ -611,36 +732,36 @@ impl Router {
         Ok(v)
     }
 
-    /// (best intent, margin to the runner-up intent)
+    /// (most likely intent, its probability)
     fn classify(&mut self, text: &str) -> Result<(Intent, f32), String> {
         let q = self.embed(text)?;
-        let mut best: Vec<(Intent, f32)> = Vec::new();
-        for (intent, e) in &self.examples {
-            let sim: f32 = q.iter().zip(e).map(|(a, b)| a * b).sum();
-            match best.iter_mut().find(|(i, _)| i == intent) {
-                Some(slot) => slot.1 = slot.1.max(sim),
-                None => best.push((*intent, sim)),
-            }
-        }
-        best.sort_by(|a, b| b.1.total_cmp(&a.1));
-        Ok((
-            best[0].0,
-            best[0].1 - best.get(1).map(|x| x.1).unwrap_or(0.0),
-        ))
+        let mut p = vec![0f32; self.classes.len()];
+        softmax_into(&self.w, &self.b, &q, &mut p);
+        let (k, prob) = p
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.total_cmp(b.1))
+            .map(|(k, v)| (k, *v))
+            .expect("at least one class");
+        assert!((0.0..=1.0001).contains(&prob), "a probability");
+        Ok((self.classes[k], prob))
     }
 }
 
-/// Load the model in the background (the execute shortcut was just pressed).
+static LOADING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Load the model in the background, once. The lock is taken only to install
+/// the loaded router, so a command arriving meanwhile is never held up.
 pub fn warm() {
+    use std::sync::atomic::Ordering::SeqCst;
+    if ROUTER.lock().unwrap_or_else(|e| e.into_inner()).is_some() || LOADING.swap(true, SeqCst) {
+        return;
+    }
     std::thread::spawn(|| {
-        let mut g = ROUTER.lock().unwrap_or_else(|e| e.into_inner());
-        if g.is_some() {
-            return;
-        }
         let t = std::time::Instant::now();
         match Router::load() {
             Ok(r) => {
-                *g = Some(r);
+                *ROUTER.lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
                 crate::log(&format!(
                     "[PcRouter] e5 ready in {} ms",
                     t.elapsed().as_millis()
@@ -648,6 +769,7 @@ pub fn warm() {
             }
             Err(e) => crate::log(&format!("[PcRouter] e5 unavailable: {e}")),
         }
+        LOADING.store(false, SeqCst);
     });
 }
 
@@ -655,8 +777,8 @@ pub fn warm() {
 /// `detail` says why, for the log.
 pub fn route(command: &str, names: &[(String, String)]) -> (Option<Plan>, String) {
     let (plan, margin, detail) = route_scored(command, names);
-    if margin < MIN_MARGIN {
-        return (None, format!("{detail} below {MIN_MARGIN}"));
+    if margin < MIN_PROB {
+        return (None, format!("{detail} below {MIN_PROB}"));
     }
     (plan, detail)
 }
@@ -664,19 +786,18 @@ pub fn route(command: &str, names: &[(String, String)]) -> (Option<Plan>, String
 /// The plan the slots allow (whatever the margin), the margin, and why.
 fn route_scored(command: &str, names: &[(String, String)]) -> (Option<Plan>, f32, String) {
     let mut g = ROUTER.lock().unwrap_or_else(|e| e.into_inner());
-    if g.is_none() {
-        match Router::load() {
-            Ok(r) => *g = Some(r),
-            Err(e) => return (None, 0.0, format!("e5 unavailable: {e}")),
-        }
-    }
-    let r = g.as_mut().expect("just loaded");
+    // Never load on a command's path (~3 s): this one goes to Claude.
+    let Some(r) = g.as_mut() else {
+        drop(g);
+        warm();
+        return (None, 0.0, "e5 not loaded yet".into());
+    };
     let (intent, margin) = match r.classify(command) {
         Ok(x) => x,
         Err(e) => return (None, 0.0, format!("e5 error: {e}")),
     };
     drop(g);
-    let detail = format!("intent={intent:?} margin={margin:.3}");
+    let detail = format!("intent={intent:?} p={margin:.3}");
     let w = words(command);
     let apps = apps_in(&w, names);
     let this_window = w
@@ -829,9 +950,10 @@ fn route_scored(command: &str, names: &[(String, String)]) -> (Option<Plan>, f32
 // log says, per candidate rule, when it would have fired, on which words,
 // and whether its plan matches the one that ran.
 
-/// A little stricter than `MIN_MARGIN`: acting before the user is done.
-/// On the 42-command golden set no wrong command got past 0.03.
-const LIVE_MARGIN: f32 = 0.035;
+/// Stricter than `MIN_PROB`: acting before the user is done. On the
+/// independent 326-command set nothing wrong, and no out-of-scope line, got
+/// past 0.60.
+const LIVE_PROB: f32 = 0.60;
 
 /// A sure plan runs once no new words have come for this long: Nemotron
 /// sends a partial only when the words change, so a pause is the only
@@ -902,7 +1024,7 @@ fn try_fire(ms: u128, why: &str) {
         let ready = !s.fired
             && s.obs.last().is_some_and(|o| {
                 o.ms == ms
-                    && o.margin >= LIVE_MARGIN
+                    && o.margin >= LIVE_PROB
                     && o.plan.as_ref().is_some_and(crate::pc_control::live_safe)
             });
         if !ready {
@@ -951,12 +1073,12 @@ pub fn shadow_observe(cumulative: &str) {
     };
     std::thread::spawn(move || {
         let (plan, margin, detail) = route_scored(&text, &crate::pc_control::known_names());
-        let sure = plan.is_some() && margin >= LIVE_MARGIN;
+        let sure = plan.is_some() && margin >= LIVE_PROB;
         let mut stable = false;
         if let Some(s) = SHADOW.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
             stable = sure
                 && s.obs.last().is_some_and(|prev| {
-                    prev.margin >= LIVE_MARGIN
+                    prev.margin >= LIVE_PROB
                         && prev
                             .plan
                             .as_ref()
@@ -977,7 +1099,7 @@ pub fn shadow_observe(cumulative: &str) {
             "text": text,
             "detail": detail,
             "margin": margin,
-            "threshold": LIVE_MARGIN,
+            "threshold": LIVE_PROB,
             "quiet_ms": LIVE_QUIET_MS,
             "say": plan.as_ref().map(|p| p.say.clone()),
             "sure": sure,
@@ -1039,7 +1161,7 @@ pub fn shadow_finish(final_plan: Option<&Plan>) {
         return;
     };
     let now = s.started.elapsed().as_millis();
-    let sure = |o: &Obs| o.plan.is_some() && o.margin >= LIVE_MARGIN;
+    let sure = |o: &Obs| o.plan.is_some() && o.margin >= LIVE_PROB;
     let first_sure = s.obs.iter().find(|o| sure(o));
     let first_stable = s.obs.windows(2).find(|w| {
         sure(&w[0])
@@ -1096,81 +1218,114 @@ mod tests {
         .collect()
     }
 
-    /// `DIMMY_PC_ROUTER_DIR=<dir with model_quantized.onnx + tokenizer.json>
-    /// cargo test --release --lib --features pc-router golden -- --ignored --nocapture`
     #[test]
-    #[ignore]
-    fn golden_commands_route_like_the_offline_measurement() {
-        use Intent::*;
-        let gold: &[(&str, Intent)] = &[
-            ("apri Teams", Open),
-            ("apri teams e mettilo a sinistra", Open),
-            ("lancia Spotify", Open),
-            ("aprimi il browser", Open),
-            ("vai su youtube", Web),
-            ("fammi partire excel", Open),
-            ("open Outlook", Open),
-            ("start Visual Studio Code", Open),
-            ("affianca Teams e Outlook", Tile),
-            ("metti Chrome e Word uno accanto all'altro", Tile),
-            ("dividi lo schermo tra la mail e il calendario", Tile),
-            ("affianca le finestre", Tile),
-            ("put Slack and Chrome side by side", Tile),
-            ("split the screen between Excel and the browser", Tile),
-            ("sposta Chrome a destra", Move),
-            ("metti questa finestra a sinistra", Move),
-            ("massimizza Word", Move),
-            ("porta Teams sull'altro monitor", Move),
-            ("metti outlook a schermo intero", Move),
-            ("move this window to the right", Move),
-            ("send Spotify to the other screen", Move),
-            ("trova i file di ieri", FindFiles),
-            ("cerca il preventivo di Rossi", FindFiles),
-            ("trovami i pdf che ho scaricato oggi", FindFiles),
-            (
-                "dove ho messo la presentazione della settimana scorsa",
-                FindFiles,
-            ),
-            ("cerca i documenti modificati questa settimana", FindFiles),
-            ("trova la fattura di ottobre", FindFiles),
-            ("find the files I edited yesterday", FindFiles),
-            ("where is the budget spreadsheet from last week", FindFiles),
-            ("Puoi aprirmi Teams?", Open),
-            ("Nascondi notepad", Minimize),
-            ("riduci a icona Outlook", Minimize),
-            ("Apri una nuova scheda", Browser),
-            ("Apri una nuova tab", Browser),
-            ("torna alla pagina precedente", Browser),
-            ("Naviga su YouTube", Web),
-            ("cerca su YouTube la ricetta della carbonara", Web),
-            ("metti in pausa la musica", Media),
-            ("prossima canzone", Media),
-            ("alza il volume", Media),
-            ("apri la cartella download", Folder),
-            ("apri le impostazioni del bluetooth", Settings),
-        ];
-        let mut r = Router::load().expect("set DIMMY_PC_ROUTER_DIR");
-        let (mut ok, mut sure_wrong, mut passed) = (0, 0, 0);
-        let mut ms = Vec::new();
-        for (text, want) in gold {
-            let t = std::time::Instant::now();
-            let (got, margin) = r.classify(text).unwrap();
-            ms.push(t.elapsed().as_secs_f64() * 1000.0);
-            let sure = margin >= MIN_MARGIN;
-            ok += usize::from(got == *want);
-            sure_wrong += usize::from(got != *want && sure);
-            passed += usize::from(!sure);
-            println!(
-                "{} {:>5.1}ms m={margin:.3} {got:?} | {text}",
-                if got == *want { "OK " } else { "BAD" },
-                ms.last().unwrap()
+    fn the_examples_asset_trains_every_intent() {
+        let ex = examples();
+        for key in [
+            "open",
+            "tile",
+            "move",
+            "minimize",
+            "find_files",
+            "web",
+            "browser",
+            "media",
+            "folder",
+            "settings",
+            "none",
+        ] {
+            let i = Intent::from_key(key).unwrap();
+            assert!(
+                ex.iter().filter(|(k, _)| *k == i).count() >= 20,
+                "{key} needs examples"
             );
         }
+    }
+
+    #[test]
+    fn softmax_training_separates_and_gives_probabilities() {
+        let x = vec![
+            vec![1.0, 0.0, 0.0],
+            vec![0.9, 0.1, 0.0],
+            vec![0.0, 1.0, 0.0],
+            vec![0.1, 0.9, 0.0],
+            vec![0.0, 0.0, 1.0],
+            vec![0.0, 0.1, 0.9],
+        ];
+        let y = vec![0, 0, 1, 1, 2, 2];
+        let (w, b) = train_softmax(&x, &y, 3);
+        let mut p = vec![0f32; 3];
+        for (xi, &yi) in x.iter().zip(&y) {
+            softmax_into(&w, &b, xi, &mut p);
+            assert!((p.iter().sum::<f32>() - 1.0).abs() < 1e-4);
+            let best = p
+                .iter()
+                .enumerate()
+                .max_by(|a, b| a.1.total_cmp(b.1))
+                .unwrap()
+                .0;
+            assert_eq!(best, yi);
+        }
+    }
+
+    /// The real model against the independent test set:
+    /// `DIMMY_PC_ROUTER_DIR=<model dir> DIMMY_PC_TESTSET=<pc_testset.jsonl>
+    /// cargo test --release --lib --features pc-router independent -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn the_independent_set_routes_like_the_offline_bench() {
+        let path = std::env::var("DIMMY_PC_TESTSET").expect("set DIMMY_PC_TESTSET");
+        let trained: std::collections::HashSet<String> = examples()
+            .into_iter()
+            .map(|(_, t)| t.to_lowercase())
+            .collect();
+        let mut r = Router::load().expect("set DIMMY_PC_ROUTER_DIR");
+        let (mut n, mut ok, mut ms) = (0usize, 0usize, Vec::new());
+        let at = |thr: f32, rows: &[(Intent, Intent, f32)]| {
+            let sure: Vec<_> = rows
+                .iter()
+                .filter(|(g, _, p)| *g != Intent::None && *p >= thr)
+                .collect();
+            let wrong = sure.iter().filter(|(g, w, _)| g != w).count();
+            let fa = sure.iter().filter(|(_, w, _)| *w == Intent::None).count();
+            let inscope = rows.iter().filter(|(_, w, _)| *w != Intent::None).count();
+            let right = sure.iter().filter(|(g, w, _)| g == w).count();
+            println!(
+                "p >= {thr:.2}: sure {} wrong {wrong} (out-of-scope run {fa}) coverage {:.1}%",
+                sure.len(),
+                100.0 * right as f64 / inscope.max(1) as f64
+            );
+            (wrong, fa)
+        };
+        let mut rows = Vec::new();
+        for line in std::fs::read_to_string(&path).unwrap().lines() {
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            let text = v["text"].as_str().unwrap_or("");
+            if text.is_empty() || trained.contains(&text.to_lowercase()) {
+                continue;
+            }
+            let want = Intent::from_key(v["intent"].as_str().unwrap_or("")).unwrap();
+            let t = std::time::Instant::now();
+            let (got, p) = r.classify(text).unwrap();
+            ms.push(t.elapsed().as_secs_f64() * 1000.0);
+            n += 1;
+            ok += usize::from(got == want);
+            rows.push((got, want, p));
+        }
         ms.sort_by(f64::total_cmp);
-        println!("right {ok}/{}  wrong-but-sure {sure_wrong}  passed to Claude {passed}  median {:.1} ms", gold.len(), ms[ms.len() / 2]);
-        assert_eq!(
-            sure_wrong, 0,
-            "a confident wrong action moves the wrong window"
+        println!(
+            "right {ok}/{n} ({:.1}%), median {:.1} ms",
+            100.0 * ok as f64 / n as f64,
+            ms[ms.len() / 2]
+        );
+        at(MIN_PROB, &rows);
+        let (wrong, fa) = at(LIVE_PROB, &rows);
+        assert!(ok as f64 / n as f64 >= 0.75, "the classifier regressed");
+        assert!(
+            wrong <= 1 && fa == 0,
+            "the live threshold must not act wrongly"
         );
     }
 

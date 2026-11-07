@@ -142,6 +142,7 @@ public partial class SettingsViewModel : ObservableObject
     /// <summary>EXPERIMENT (exp/pc-actions): the execute shortcut. Persisted
     /// to UiPreferences.ExecuteHotkey.</summary>
     [ObservableProperty] private string _executeHotkey = "";
+    [ObservableProperty] private bool _pcCommandsEnabled;
     [ObservableProperty] private string _shortcut = "Win+Alt";
     [ObservableProperty] private string _shortcutMode = "toggle";
     [ObservableProperty] private string? _selectedDevice;

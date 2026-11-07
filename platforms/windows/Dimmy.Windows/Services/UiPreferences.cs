@@ -100,6 +100,10 @@ public sealed class UiPreferences
     /// words to the PC-actions engine (open, place, tile, find files).</summary>
     public string ExecuteHotkey { get; set; } = "ctrl+alt+x";
 
+    /// <summary>EXPERIMENT (exp/pc-actions): voice PC commands are off until
+    /// the user turns them on; off, the execute shortcut is not bound.</summary>
+    public bool PcCommandsEnabled { get; set; }
+
     /// <summary>Global shortcut that toggles a MEETING recording (start ↔
     /// stop). Default Ctrl+Alt+M. NOT Ctrl+Shift+M — that's Microsoft Teams'
     /// mute toggle (a hard collision for an app used during calls). Toggle-only.

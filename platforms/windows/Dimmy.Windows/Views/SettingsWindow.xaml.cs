@@ -255,6 +255,7 @@ public sealed partial class SettingsWindow : Window
             ViewModel.CommandHotkey = prefs.CommandHotkey ?? "";
             ViewModel.MeetingHotkey = prefs.MeetingHotkey ?? "";
             ViewModel.ExecuteHotkey = prefs.ExecuteHotkey ?? "";
+            ViewModel.PcCommandsEnabled = prefs.PcCommandsEnabled;
             RefreshHome();
         }
         catch { }
@@ -318,8 +319,16 @@ public sealed partial class SettingsWindow : Window
                     var prefs = Services.UiPreferences.Load();
                     prefs.ExecuteHotkey = exe;
                     prefs.Save();
-                    App.Instance?.ReregisterExecuteHotkey(exe);
+                    if (prefs.PcCommandsEnabled) App.Instance?.ReregisterExecuteHotkey(exe);
                     App.Log($"execute hotkey updated to '{exe}'", "Hotkey");
+                }
+                else if (e.PropertyName == nameof(ViewModel.PcCommandsEnabled))
+                {
+                    var prefs = Services.UiPreferences.Load();
+                    prefs.PcCommandsEnabled = ViewModel.PcCommandsEnabled;
+                    prefs.Save();
+                    App.Instance?.SetPcCommandsEnabled(ViewModel.PcCommandsEnabled, prefs.ExecuteHotkey ?? "");
+                    App.Log($"pc commands enabled = {ViewModel.PcCommandsEnabled}", "Hotkey");
                 }
                 else if (e.PropertyName == nameof(ViewModel.MeetingHotkey))
                 {

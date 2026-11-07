@@ -770,6 +770,15 @@ public static class DimmyNative
     public static extern void dimmy_pc_prepare();
 
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_pc_router_status();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void dimmy_pc_router_warm();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_pc_router_download();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_pc_execute(
         [MarshalAs(UnmanagedType.LPUTF8Str)] string text, byte[] outBuf, int bufLen);
 
