@@ -1391,11 +1391,44 @@ pub fn save_config_file(cfg: &AppConfig) {
         if let Some(b) = cfg.window_anchor_bottom {
             json["window_anchor_bottom"] = serde_json::json!(b);
         }
-        let _ = std::fs::write(
-            &path,
-            serde_json::to_string_pretty(&json).unwrap_or_default(),
-        );
+        let body = serde_json::to_string_pretty(&json).unwrap_or_default();
+        if let Err(e) = write_atomic(&path, body.as_bytes()) {
+            log(&format!("[config] save failed: {e}"));
+        }
     }
+}
+
+/// Replace `path` with `bytes` so a crash or power loss mid-write leaves
+/// either the old file or the new one, never a truncated mix: write a
+/// sibling temp file, flush it to disk, rename it over the target.
+/// `std::fs::rename` replaces an existing target on Windows too
+/// (MoveFileExW + MOVEFILE_REPLACE_EXISTING).
+pub fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let name = path
+        .file_name()
+        .ok_or_else(|| std::io::Error::other("write_atomic: path has no file name"))?;
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let tmp = path.with_file_name(format!(
+        "{}.{}.{}.tmp",
+        name.to_string_lossy(),
+        std::process::id(),
+        seq
+    ));
+    let written = (|| {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+        drop(f);
+        std::fs::rename(&tmp, path)
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written?;
+    assert!(!tmp.exists(), "write_atomic: temp file left behind");
+    Ok(())
 }
 
 /// Load non-sensitive config from file. Missing LLM fields use defaults (backward compatible).
@@ -2594,6 +2627,48 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
             .map_err(|e| e.to_string())?,
         app_rules: state.app_rules.lock().map_err(|e| e.to_string())?.clone(),
     })
+}
+
+#[cfg(test)]
+mod write_atomic_tests {
+    use super::*;
+
+    #[test]
+    fn replaces_an_existing_file_and_leaves_no_temp_behind() {
+        let dir = std::env::temp_dir().join(format!("dimmy-atomic-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("config.json");
+        std::fs::write(&path, "{\"old\":true, \"long\":\"padding padding\"}").expect("seed");
+        write_atomic(&path, b"{\"new\":1}").expect("write");
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), "{\"new\":1}");
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .expect("ls")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name() != "config.json")
+            .collect();
+        assert!(leftovers.is_empty(), "left behind: {leftovers:?}");
+        write_atomic(&dir.join("fresh.json"), b"x").expect("create");
+        assert_eq!(std::fs::read(dir.join("fresh.json")).expect("read"), b"x");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_write_keeps_the_old_file() {
+        let dir = std::env::temp_dir().join(format!("dimmy-atomic-fail-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        // A directory where the file should be: the rename must fail and the
+        // directory (standing in for the old config) must survive.
+        let target = dir.join("config.json");
+        std::fs::create_dir_all(target.join("keep")).expect("blocker");
+        assert!(write_atomic(&target, b"{}").is_err());
+        assert!(target.join("keep").is_dir());
+        assert_eq!(
+            std::fs::read_dir(&dir).expect("ls").count(),
+            1,
+            "temp left behind"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 #[cfg(test)]
