@@ -32,11 +32,12 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use base64::Engine;
-use futures_util::{SinkExt, StreamExt};
-use tokio_tungstenite::connect_async;
+use futures_util::StreamExt;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
+
+use crate::stream_bounds;
 
 /// How often the sender loop drains newly-captured audio to the socket.
 /// Matches the Deepgram streamer so both engines feel identical to the user.
@@ -181,7 +182,7 @@ impl OpenAiStreamer {
         let final_text = Arc::new(Mutex::new(String::new()));
 
         let cancel_w = cancel.clone();
-        let final_w = final_text.clone();
+        let committed = final_text.clone();
         let handle = thread::Builder::new()
             .name("openai-stream".into())
             .spawn(move || {
@@ -196,7 +197,6 @@ impl OpenAiStreamer {
                         return;
                     }
                 };
-                let committed = Arc::new(Mutex::new(String::new()));
                 let result = rt.block_on(run_stream(
                     audio_buffer,
                     device_sample_rate,
@@ -217,9 +217,6 @@ impl OpenAiStreamer {
                 // run_stream, so it fires exactly once on both the clean and
                 // the error/early-return paths.
                 on_chunk("", &final_txt, true);
-                if let Ok(mut s) = final_w.lock() {
-                    *s = final_txt;
-                }
             })
             .expect("spawn openai-stream thread");
 
@@ -231,11 +228,16 @@ impl OpenAiStreamer {
     }
 
     /// Signal the worker to flush the trailing audio, close the socket and
-    /// exit. Joins and returns the final cumulative transcript.
+    /// exit. Returns the final cumulative transcript; the join is bounded
+    /// by [`crate::stream_bounds::STOP_JOIN_TIMEOUT`].
     pub fn stop(mut self) -> String {
         self.cancel.store(true, Ordering::SeqCst);
         if let Some(h) = self.handle.take() {
-            let _ = h.join();
+            crate::stream_bounds::join_worker(
+                h,
+                crate::stream_bounds::STOP_JOIN_TIMEOUT,
+                "oai-stream",
+            );
         }
         self.final_text
             .lock()
@@ -275,9 +277,7 @@ async fn run_stream(
         // against the live endpoint 2026-08-04.
     }
 
-    let (ws, _resp) = connect_async(request)
-        .await
-        .map_err(|e| format!("connect failed: {e}"))?;
+    let ws = stream_bounds::connect(request, &cancel, stream_bounds::CONNECT_TIMEOUT).await?;
     crate::log("[oai-stream] websocket connected");
     let (mut write, mut read) = ws.split();
 
@@ -285,8 +285,7 @@ async fn run_stream(
     // wire format, which model to run and what context to bias with.
     let session =
         compose_session_update(&model, &language, &prompt, &keywords, REQUIRED_INPUT_RATE);
-    write
-        .send(Message::Text(session))
+    stream_bounds::send(&mut write, Message::Text(session))
         .await
         .map_err(|e| format!("session.update failed: {e}"))?;
 
@@ -445,7 +444,7 @@ async fn run_stream(
                 quiet_ticks = 0;
             }
             let frame = compose_audio_append(&slice, device_sample_rate);
-            if let Err(e) = write.send(Message::Text(frame)).await {
+            if let Err(e) = stream_bounds::send(&mut write, Message::Text(frame)).await {
                 crate::log(&format!("[oai-stream] send error: {e}"));
                 break;
             }
@@ -456,7 +455,7 @@ async fn run_stream(
         let due = (quiet_ticks >= PAUSE_TICKS && uncommitted_ms >= MIN_COMMIT_MS)
             || uncommitted_ms >= MAX_COMMIT_MS;
         if due {
-            if let Err(e) = write.send(Message::Text(commit_frame())).await {
+            if let Err(e) = stream_bounds::send(&mut write, Message::Text(commit_frame())).await {
                 crate::log(&format!("[oai-stream] commit error: {e}"));
                 break;
             }
@@ -470,12 +469,8 @@ async fn run_stream(
     let tail = drain_new_samples(&audio_buffer, &mut last_sent);
     if !tail.is_empty() {
         uncommitted_ms += (tail.len() * 1000) / device_sample_rate as usize;
-        let _ = write
-            .send(Message::Text(compose_audio_append(
-                &tail,
-                device_sample_rate,
-            )))
-            .await;
+        let frame = compose_audio_append(&tail, device_sample_rate);
+        let _ = stream_bounds::send(&mut write, Message::Text(frame)).await;
     }
     // Close the final turn — but only if there IS one. When the user stops
     // just after a pause the loop has already committed everything, and a
@@ -484,7 +479,7 @@ async fn run_stream(
     // log of a perfectly healthy session, which is exactly the kind of noise
     // that costs an hour the next time something really is wrong.
     if uncommitted_ms >= MIN_COMMIT_MS {
-        let _ = write.send(Message::Text(commit_frame())).await;
+        let _ = stream_bounds::send(&mut write, Message::Text(commit_frame())).await;
     }
 
     // Bounded window for the trailing `completed` events. The single terminal

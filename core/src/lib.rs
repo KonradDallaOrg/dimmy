@@ -97,6 +97,7 @@ pub mod setup_prefs;
 pub mod silero;
 #[cfg(feature = "sim-audio")]
 pub mod sim_audio;
+pub mod stream_bounds;
 pub mod telegram;
 pub mod telemetry;
 pub mod transcribe;

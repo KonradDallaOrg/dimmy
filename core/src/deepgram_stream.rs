@@ -33,11 +33,12 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use futures_util::{SinkExt, StreamExt};
-use tokio_tungstenite::connect_async;
+use futures_util::StreamExt;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
+
+use crate::stream_bounds;
 
 /// How often the sender loop drains newly-captured audio out to the socket.
 /// 100 ms keeps the wire chunk in Deepgram's happy range (20-250 ms) while
@@ -87,7 +88,7 @@ impl DeepgramStreamer {
         let final_text = Arc::new(Mutex::new(String::new()));
 
         let cancel_w = cancel.clone();
-        let final_w = final_text.clone();
+        let committed = final_text.clone();
         let handle = thread::Builder::new()
             .name("deepgram-stream".into())
             .spawn(move || {
@@ -106,7 +107,6 @@ impl DeepgramStreamer {
                         return;
                     }
                 };
-                let committed = Arc::new(Mutex::new(String::new()));
                 let result = rt.block_on(run_stream(
                     audio_buffer,
                     device_sample_rate,
@@ -126,9 +126,6 @@ impl DeepgramStreamer {
                 // drain. Lives here (not in run_stream) so it fires on both
                 // the clean and the error/early-return paths exactly once.
                 on_chunk("", &final_txt, true);
-                if let Ok(mut s) = final_w.lock() {
-                    *s = final_txt;
-                }
             })
             .expect("spawn deepgram-stream thread");
 
@@ -140,12 +137,16 @@ impl DeepgramStreamer {
     }
 
     /// Signal the worker to flush the trailing audio, close the socket and
-    /// exit. Joins and returns the final cumulative transcript. Bounded by
-    /// [`DRAIN_TIMEOUT`].
+    /// exit. Returns the final cumulative transcript; the join is bounded
+    /// by [`crate::stream_bounds::STOP_JOIN_TIMEOUT`].
     pub fn stop(mut self) -> String {
         self.cancel.store(true, Ordering::SeqCst);
         if let Some(h) = self.handle.take() {
-            let _ = h.join();
+            crate::stream_bounds::join_worker(
+                h,
+                crate::stream_bounds::STOP_JOIN_TIMEOUT,
+                "dg-stream",
+            );
         }
         self.final_text
             .lock()
@@ -174,9 +175,7 @@ async fn run_stream(
         .map_err(|e| format!("bad auth header: {e}"))?;
     request.headers_mut().insert("Authorization", auth);
 
-    let (ws, _resp) = connect_async(request)
-        .await
-        .map_err(|e| format!("connect failed: {e}"))?;
+    let ws = stream_bounds::connect(request, &cancel, stream_bounds::CONNECT_TIMEOUT).await?;
     crate::log("[dg-stream] websocket connected");
     let (mut write, mut read) = ws.split();
 
@@ -238,7 +237,7 @@ async fn run_stream(
         if !slice.is_empty() {
             let pcm_16k = downsample_if_needed(&slice, device_sample_rate);
             let bytes = pcm_f32_to_i16le(&pcm_16k);
-            if let Err(e) = write.send(Message::Binary(bytes)).await {
+            if let Err(e) = stream_bounds::send(&mut write, Message::Binary(bytes)).await {
                 crate::log(&format!("[dg-stream] send error: {e}"));
                 break;
             }
@@ -250,13 +249,13 @@ async fn run_stream(
     let tail = drain_new_samples(&audio_buffer, &mut last_sent);
     if !tail.is_empty() {
         let pcm_16k = downsample_if_needed(&tail, device_sample_rate);
-        let _ = write
-            .send(Message::Binary(pcm_f32_to_i16le(&pcm_16k)))
-            .await;
+        let _ = stream_bounds::send(&mut write, Message::Binary(pcm_f32_to_i16le(&pcm_16k))).await;
     }
-    let _ = write
-        .send(Message::Text("{\"type\":\"CloseStream\"}".to_string()))
-        .await;
+    let _ = stream_bounds::send(
+        &mut write,
+        Message::Text("{\"type\":\"CloseStream\"}".to_string()),
+    )
+    .await;
 
     // Give the reader a bounded window to deliver the trailing finals.
     // The single terminal `is_final` emit happens in the worker thread
@@ -372,6 +371,36 @@ pub fn parse_dg_message(json: &str) -> Option<(String, bool)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stop_returns_while_the_server_never_finishes_the_handshake() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let base = format!("ws://{}/v1/listen", listener.local_addr().expect("addr"));
+        let finals = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let f = finals.clone();
+        let streamer = DeepgramStreamer::start(
+            Arc::new(Mutex::new(vec![0.1; 16_000])),
+            16_000,
+            "key".into(),
+            String::new(),
+            base,
+            String::new(),
+            Arc::new(move |_d: &str, _c: &str, is_final: bool| {
+                if is_final {
+                    f.fetch_add(1, Ordering::SeqCst);
+                }
+            }),
+        );
+        let (_conn, _) = listener.accept().expect("accept");
+        let started = std::time::Instant::now();
+        assert_eq!(streamer.stop(), "");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "stop took {:?}",
+            started.elapsed()
+        );
+        assert_eq!(finals.load(Ordering::SeqCst), 1, "one terminal is_final");
+    }
 
     #[test]
     fn pcm16_clamps_and_handles_non_finite() {
