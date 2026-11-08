@@ -870,7 +870,9 @@ public static class DimmyNative
 
     /// <summary>For getters that truncate silently and reject a null probe:
     /// a result that fills the buffer may be cut, so retry with a larger one.
-    /// Returns null past 16 MB rather than hand back a cut string.</summary>
+    /// The core never cuts a UTF-8 character, so a cut result can stop up to
+    /// 3 bytes short of bufLen - 1. Returns null past 16 MB rather than hand
+    /// back a cut string.</summary>
     internal static string? ReadGrowing(Func<byte[], int, int> ffiCall)
     {
         for (int size = 1 << 16; size <= 1 << 24; size <<= 2)
@@ -878,7 +880,7 @@ public static class DimmyNative
             var buf = new byte[size];
             int len = ffiCall(buf, size);
             if (len < 0) return null;
-            if (len < size - 1) return System.Text.Encoding.UTF8.GetString(buf, 0, len);
+            if (len < size - 4) return System.Text.Encoding.UTF8.GetString(buf, 0, len);
         }
         return null;
     }

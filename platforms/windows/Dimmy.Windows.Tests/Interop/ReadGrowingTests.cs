@@ -12,11 +12,13 @@ namespace Dimmy.Windows.Tests;
 /// </summary>
 public class ReadGrowingTests
 {
-    // Mimics the core's write_to_buf: copy what fits, NUL-terminate, return the count.
+    // Mimics the core's write_to_buf: copy what fits without cutting a UTF-8
+    // character, NUL-terminate, return the count.
     private static System.Func<byte[], int, int> Core(string value) => (buf, len) =>
     {
         var bytes = Encoding.UTF8.GetBytes(value);
         int n = System.Math.Min(bytes.Length, len - 1);
+        while (n < bytes.Length && n > 0 && (bytes[n] & 0xC0) == 0x80) n--;
         System.Array.Copy(bytes, buf, n);
         buf[n] = 0;
         return n;
@@ -40,6 +42,15 @@ public class ReadGrowingTests
     {
         var exact = new string('y', (1 << 16) - 1);
         Assert.Equal(exact, DimmyNative.ReadGrowing(Core(exact)));
+    }
+
+    [Fact]
+    public void Snapshot_cut_before_a_multibyte_character_is_retried_not_returned_cut()
+    {
+        // The core stops short of a character it cannot fit whole, so a cut
+        // result can be up to 3 bytes below bufLen - 1.
+        var cut = new string('z', (1 << 16) - 3) + "€" + "tail";
+        Assert.Equal(cut, DimmyNative.ReadGrowing(Core(cut)));
     }
 
     [Fact]
