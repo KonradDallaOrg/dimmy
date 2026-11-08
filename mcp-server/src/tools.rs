@@ -284,9 +284,7 @@ async fn get_meeting(args: serde_json::Value, cfg: &Config) -> Result<serde_json
         .get("id")
         .and_then(|v| v.as_str())
         .ok_or_else(|| Error::invalid_params("missing `id`"))?;
-    validate_meeting_id(id)?;
-
-    let dir = cfg.meetings_dir().join(id);
+    let dir = meeting_dir(&cfg.meetings_dir(), id)?;
     if tokio::fs::metadata(&dir).await.is_err() {
         return Ok(text_result_error(&format!("Meeting `{}` not found.", id)));
     }
@@ -330,13 +328,12 @@ async fn save_recap(args: serde_json::Value, cfg: &Config) -> Result<serde_json:
         .get("markdown")
         .and_then(|v| v.as_str())
         .ok_or_else(|| Error::invalid_params("missing `markdown`"))?;
-    validate_meeting_id(id)?;
+    let dir = meeting_dir(&cfg.meetings_dir(), id)?;
 
     if markdown.is_empty() {
         return Err(Error::invalid_params("markdown cannot be empty"));
     }
 
-    let dir = cfg.meetings_dir().join(id);
     if tokio::fs::metadata(&dir).await.is_err() {
         return Ok(text_result_error(&format!(
             "Meeting `{}` not found. Cannot save recap.",
@@ -486,19 +483,34 @@ async fn get_recent_dictations(
 // ── Helpers ──────────────────────────────────────────────────────────
 
 /// Reject path-traversal attempts on the meeting id. The id is the
-/// directory name; anything containing `..` or `/` could escape the
-/// meetings root and read arbitrary files. Defensive belt-and-braces
-/// — Claude is a remote model and the id comes from its tool call.
+/// directory name and comes from a remote model's tool call, so only
+/// `[A-Za-z0-9._-]` is allowed and never a leading `.`: a denylist missed
+/// `C:x` (a drive-relative path that `join` lets replace the base on
+/// Windows) and `x:stream` (an NTFS alternate data stream).
 fn validate_meeting_id(id: &str) -> Result<(), Error> {
     if id.is_empty() {
         return Err(Error::invalid_params("id cannot be empty"));
     }
-    if id.contains("..") || id.contains('/') || id.contains('\\') || id.contains('\0') {
+    let plain = id
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'));
+    if !plain || id.starts_with('.') {
         return Err(Error::invalid_params(
-            "id must be a plain directory name (no path separators or traversal)",
+            "id must be a plain directory name ([A-Za-z0-9._-], no leading dot)",
         ));
     }
     Ok(())
+}
+
+/// The meeting's directory under `base`, refusing any id that would
+/// leave it.
+fn meeting_dir(base: &std::path::Path, id: &str) -> Result<std::path::PathBuf, Error> {
+    validate_meeting_id(id)?;
+    let dir = base.join(id);
+    if !dir.starts_with(base) || dir.parent() != Some(base) {
+        return Err(Error::invalid_params("id escapes the meetings folder"));
+    }
+    Ok(dir)
 }
 
 /// A `meta.json` timestamp as local-time ISO 8601, or "" when absent.
@@ -654,6 +666,21 @@ mod tests {
         assert!(validate_meeting_id("").is_err());
         assert!(validate_meeting_id("163c8b5b-19a9-4129-98a5-b4a4e53f7436").is_ok());
         assert!(validate_meeting_id("20260520T211149-uuid").is_ok());
+        assert!(validate_meeting_id("C:evil").is_err());
+        assert!(validate_meeting_id("id:stream").is_err());
+        assert!(validate_meeting_id(".hidden").is_err());
+        assert!(validate_meeting_id(".").is_err());
+        assert!(validate_meeting_id("a b").is_err());
+        assert!(validate_meeting_id("caffè").is_err());
+        assert!(validate_meeting_id("v1.2_x-y").is_ok());
+    }
+
+    #[test]
+    fn meeting_dir_stays_under_the_base() {
+        let base = std::env::temp_dir().join("dimmy-meetings");
+        assert_eq!(meeting_dir(&base, "abc-1").unwrap(), base.join("abc-1"));
+        assert!(meeting_dir(&base, "C:evil").is_err());
+        assert!(meeting_dir(&base, "../x").is_err());
     }
 
     #[test]
