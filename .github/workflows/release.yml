@@ -160,6 +160,17 @@ jobs:
           # `<sparkle:channel>prerelease</sparkle:channel>` tag.
           prerelease: ${{ contains(github.ref_name, '-') }}
 
+      # Sentry release + commit association. Never blocks the release:
+      # continue-on-error, and sentry.sh exits 0 on any failure or with no
+      # token. The name it computes is the one the binary reports
+      # (scripts/ci/test_sentry.sh pins it to sentry_release()).
+      - name: Sentry release + commits
+        continue-on-error: true
+        shell: bash
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: bash scripts/ci/sentry.sh release
+
   # ── macOS Native Build ─────────────────────────────────────────────
   build-macos:
     name: Build macOS Native
@@ -490,6 +501,15 @@ jobs:
               build \
               CODE_SIGN_IDENTITY="-"
           fi
+
+      # Debug symbols for Sentry: the app dSYM, which dsymutil fills from the
+      # Rust static lib's line tables too. The dSYM is uploaded, never shipped.
+      - name: Upload debug symbols to Sentry
+        continue-on-error: true
+        shell: bash
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: bash scripts/ci/sentry.sh upload platforms/macos/build/derived/Build/Products/Release/*.dSYM
 
       - name: Bundle llama.cpp dylibs
         run: |
@@ -1260,6 +1280,10 @@ jobs:
           REM "Restore production DLL" step puts it back after the gate.
           copy /Y "D:\t\release\dimmy_lib.dll" "D:\t\dimmy_lib.prod.dll"
           if errorlevel 1 exit /b 1
+          REM The PDB too: Sentry symbolicates against it, and the gate
+          REM rebuild overwrites it with one whose debug ID no shipped DLL has.
+          copy /Y "D:\t\release\dimmy_lib.pdb" "D:\t\dimmy_lib.prod.pdb"
+          if errorlevel 1 exit /b 1
 
       - name: Install lavapipe (software Vulkan) so the whisper gate covers the GPU path
         # v0.6.71-rc9 passed the whisper gate below and then crashed 0xc000001d
@@ -1353,6 +1377,8 @@ jobs:
         run: |
           copy /Y "D:\t\dimmy_lib.prod.dll" "D:\t\release\dimmy_lib.dll"
           if errorlevel 1 exit /b 1
+          copy /Y "D:\t\dimmy_lib.prod.pdb" "D:\t\release\dimmy_lib.pdb"
+          if errorlevel 1 exit /b 1
 
       - name: Store prebuilt core DLL to cache
         if: env.DLL_REUSED != '1'
@@ -1369,6 +1395,17 @@ jobs:
           DIMMY_TELEGRAM_API_HASH: ${{ secrets.DIMMY_TELEGRAM_API_HASH }}
           FEAT: "local-stt-vulkan,local-llm-vulkan,local-stt-parakeet,denoise-gtcrn,license-client,telegram,local-stt-qwen"
         run: scripts/dev/dll-cache.sh store win-x64 "$FEAT" "D:/t/release/dimmy_lib.dll" || true
+
+      # Debug symbols for Sentry: the PDB carries the line tables, the DLL the
+      # unwind info. The PDB is uploaded, never shipped ("Prepare distribution"
+      # deletes *.pdb). A reused DLL has no PDB here; its symbols went up with
+      # the build that stored it, and sentry.sh uploads what exists.
+      - name: Upload debug symbols to Sentry
+        continue-on-error: true
+        shell: bash
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: bash scripts/ci/sentry.sh upload D:/t/release/dimmy_lib.dll D:/t/release/dimmy_lib.pdb
 
       - name: Gate — reject AVX-512 in dimmy_lib.dll
         shell: pwsh

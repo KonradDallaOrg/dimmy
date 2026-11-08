@@ -36,6 +36,9 @@ pub const BUILD_ID: &str = env!("DIMMY_BUILD_ID");
 /// `CARGO_PKG_VERSION` alone gave every rc of 0.6.73 the same release and
 /// made an abort impossible to attribute to a build — see
 /// `build.rs::resolve_build_id`.
+///
+/// `scripts/ci/sentry.sh` computes the same name in CI to attach symbols
+/// and commits; change both together (`scripts/ci/test_sentry.sh`).
 fn sentry_release(version: &str, build_id: &str) -> String {
     let build_id = build_id.trim();
     if build_id.is_empty() || build_id == "local" {
