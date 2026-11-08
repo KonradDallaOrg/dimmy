@@ -236,7 +236,7 @@ public sealed partial class CommandWizardWindow : Window
     {
         try
         {
-            var json = DimmyNative.ReadBuffer(DimmyNative.dimmy_get_config_json, 65536);
+            var json = DimmyNative.ConfigJson();
             if (string.IsNullOrEmpty(json)) return ("cloud", "");
             using var doc = System.Text.Json.JsonDocument.Parse(json);
             var root = doc.RootElement;

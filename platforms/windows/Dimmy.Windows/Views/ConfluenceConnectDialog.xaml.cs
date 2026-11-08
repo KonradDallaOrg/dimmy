@@ -388,10 +388,9 @@ public sealed partial class ConfluenceConnectDialog : ContentDialog
         var map = new Dictionary<string, string>();
         try
         {
-            var buf = new byte[1 << 16];
-            int n = DimmyNative.dimmy_get_config_json(buf, buf.Length);
-            if (n <= 0) return map;
-            using var doc = JsonDocument.Parse(Encoding.UTF8.GetString(buf, 0, n));
+            var cfgJson = DimmyNative.ConfigJson();
+            if (string.IsNullOrEmpty(cfgJson)) return map;
+            using var doc = JsonDocument.Parse(cfgJson);
             foreach (var prop in doc.RootElement.EnumerateObject())
             {
                 map[prop.Name] = prop.Value.ValueKind switch

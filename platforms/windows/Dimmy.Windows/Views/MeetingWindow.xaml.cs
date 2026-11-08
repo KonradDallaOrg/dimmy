@@ -524,10 +524,9 @@ public sealed partial class MeetingWindow : Window
     {
         try
         {
-            var buf = new byte[1 << 14];
-            int n = Interop.DimmyNative.dimmy_get_config_json(buf, buf.Length);
-            if (n <= 0) return true;
-            using var doc = JsonDocument.Parse(System.Text.Encoding.UTF8.GetString(buf, 0, n));
+            var cfgJson = Interop.DimmyNative.ConfigJson();
+            if (string.IsNullOrEmpty(cfgJson)) return true;
+            using var doc = JsonDocument.Parse(cfgJson);
             return !doc.RootElement.TryGetProperty("meeting_generate_recap", out var el)
                    || el.ValueKind != System.Text.Json.JsonValueKind.False;
         }
@@ -2900,10 +2899,9 @@ public sealed partial class MeetingWindow : Window
         // would see all-false and Auto would never pick a premium model.
         try
         {
-            var buf = new byte[1 << 14];
-            int n = Interop.DimmyNative.dimmy_get_config_json(buf, buf.Length);
-            if (n <= 0) return "";
-            using var doc = JsonDocument.Parse(System.Text.Encoding.UTF8.GetString(buf, 0, n));
+            var cfgJson = Interop.DimmyNative.ConfigJson();
+            if (string.IsNullOrEmpty(cfgJson)) return "";
+            using var doc = JsonDocument.Parse(cfgJson);
             var root = doc.RootElement;
 
             // 1. Explicit override (migrate stale ids).

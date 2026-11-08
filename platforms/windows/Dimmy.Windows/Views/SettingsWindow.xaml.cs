@@ -1514,7 +1514,7 @@ public sealed partial class SettingsWindow : Window
         // config + waiting for Rust to round-trip.
         try
         {
-            var ffiJson = DimmyNative.ReadBuffer(DimmyNative.dimmy_get_config_json, 16384);
+            var ffiJson = DimmyNative.ConfigJson();
             if (!string.IsNullOrEmpty(ffiJson))
             {
                 using var doc = System.Text.Json.JsonDocument.Parse(ffiJson);
@@ -2689,7 +2689,7 @@ public sealed partial class SettingsWindow : Window
     {
         try
         {
-            var ffiJson = DimmyNative.ReadBuffer(DimmyNative.dimmy_get_config_json, 16384);
+            var ffiJson = DimmyNative.ConfigJson();
             if (string.IsNullOrEmpty(ffiJson)) return;
             using var doc = System.Text.Json.JsonDocument.Parse(ffiJson);
             _sttKeyByProvider.Clear();
@@ -5047,8 +5047,7 @@ public sealed partial class SettingsWindow : Window
         {
             try
             {
-                var json = Interop.DimmyNative.ReadBuffer(
-                    Interop.DimmyNative.dimmy_get_config_json, 16384);
+                var json = Interop.DimmyNative.ConfigJson();
                 if (!string.IsNullOrEmpty(json))
                 {
                     using var doc = System.Text.Json.JsonDocument.Parse(json);

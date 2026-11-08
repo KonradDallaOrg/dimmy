@@ -1633,7 +1633,7 @@ public partial class App : Application
         if (string.IsNullOrEmpty(json))
         {
             PttLog("LoadConfig: file empty/missing, falling back to FFI");
-            try { json = DimmyNative.ReadBuffer(DimmyNative.dimmy_get_config_json, 16384); }
+            try { json = DimmyNative.ConfigJson(); }
             catch (Exception ex) { PttLog($"LoadConfig: FFI error: {ex.Message}"); }
         }
 

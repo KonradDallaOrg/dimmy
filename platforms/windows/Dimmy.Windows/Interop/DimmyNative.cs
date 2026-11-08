@@ -861,6 +861,28 @@ public static class DimmyNative
         return System.Text.Encoding.UTF8.GetString(buf, 0, len);
     }
 
+    /// <summary>The core's config snapshot. Read every <c>dimmy_get_config_json</c>
+    /// through this: the core truncates silently at the buffer size, and the
+    /// snapshot (prompts, dictionary, app rules, device list) outgrows any
+    /// fixed buffer — a truncated snapshot fails to parse and the caller falls
+    /// back to defaults.</summary>
+    public static string? ConfigJson() => ReadGrowing(dimmy_get_config_json);
+
+    /// <summary>For getters that truncate silently and reject a null probe:
+    /// a result that fills the buffer may be cut, so retry with a larger one.
+    /// Returns null past 16 MB rather than hand back a cut string.</summary>
+    internal static string? ReadGrowing(Func<byte[], int, int> ffiCall)
+    {
+        for (int size = 1 << 16; size <= 1 << 24; size <<= 2)
+        {
+            var buf = new byte[size];
+            int len = ffiCall(buf, size);
+            if (len < 0) return null;
+            if (len < size - 1) return System.Text.Encoding.UTF8.GetString(buf, 0, len);
+        }
+        return null;
+    }
+
     /// <summary>Marshal the event callback JSON pointer to a C# string.</summary>
     public static string? MarshalEventJson(IntPtr jsonPtr)
     {

@@ -117,10 +117,8 @@ public partial class AppViewModel : ObservableObject
     {
         try
         {
-            var buf = new byte[8192];
-            int n = Interop.DimmyNative.dimmy_get_config_json(buf, buf.Length);
-            if (n <= 0) return;
-            var json = System.Text.Encoding.UTF8.GetString(buf, 0, n);
+            var json = Interop.DimmyNative.ConfigJson();
+            if (string.IsNullOrEmpty(json)) return;
             using var doc = System.Text.Json.JsonDocument.Parse(json);
             if (!doc.RootElement.TryGetProperty("call_detect_excluded_apps", out var arr)
                 || arr.ValueKind != System.Text.Json.JsonValueKind.Array)
