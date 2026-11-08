@@ -198,6 +198,17 @@ jobs:
           draft: true
           prerelease: true
 
+      # Sentry release + commit association. Never blocks the release:
+      # continue-on-error, and sentry.sh exits 0 on any failure or with no
+      # token. The name it computes is the one the binary reports
+      # (scripts/ci/test_sentry.sh pins it to sentry_release()).
+      - name: Sentry release + commits
+        continue-on-error: true
+        shell: bash
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: bash scripts/ci/sentry.sh release
+
   # ── macOS Native Build (parallel with Windows + rust-check) ─────────
   build-macos:
     name: Build macOS Native
@@ -356,6 +367,15 @@ jobs:
             CURRENT_PROJECT_VERSION="$VERSION" \
             build \
             CODE_SIGN_IDENTITY="-"
+
+      # Debug symbols for Sentry: the app dSYM, which dsymutil fills from the
+      # Rust static lib's line tables too. The dSYM is uploaded, never shipped.
+      - name: Upload debug symbols to Sentry
+        continue-on-error: true
+        shell: bash
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: bash scripts/ci/sentry.sh upload platforms/macos/build/derived/Build/Products/Release/*.dSYM
 
       - name: Bundle llama.cpp dylibs
         run: |
@@ -750,6 +770,17 @@ jobs:
             throw "dimmy_lib.dll linked with MSVC $major.$minor. Known whisper.cpp Vulkan codegen bug in <14.50. Aborting release."
           }
           exit 0
+
+      # Debug symbols for Sentry: the PDB carries the line tables, the DLL the
+      # unwind info. The PDB is uploaded, never shipped ("Prepare distribution"
+      # deletes *.pdb). A reused DLL has no PDB here; its symbols went up with
+      # the build that stored it, and sentry.sh uploads what exists.
+      - name: Upload debug symbols to Sentry
+        continue-on-error: true
+        shell: bash
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: bash scripts/ci/sentry.sh upload D:/t/release/dimmy_lib.dll D:/t/release/dimmy_lib.pdb
 
       - name: Setup .NET
         uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
