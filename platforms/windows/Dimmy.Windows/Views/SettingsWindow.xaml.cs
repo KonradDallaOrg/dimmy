@@ -1477,27 +1477,18 @@ public sealed partial class SettingsWindow : Window
 
     private void LoadConfig()
     {
-        // Read from config.json file first — it has all fields including UI-only ones.
-        // Cartella DEVE matchare quella che il Rust core usa: prod →
-        // `dimmy/`, staging-flavor → `dimmy-staging/`. Hardcoding
-        // "dimmy" qui faceva sì che un binario con
-        // DIMMY_BUILD_FLAVOR=staging leggesse dalla cartella prod, poi
-        // sovrascrivesse la cartella staging con UI state vuoto via
-        // dimmy_set_config_json — silently distruggendo `app_rules`,
-        // `user_dict`, ecc. salvati dal Rust. Burned 2026-05-12.
-        string? fileJson = null;
-        try
-        {
-            var path = System.IO.Path.Combine(Services.BuildInfo.ConfigDirPath, "config.json");
-            if (System.IO.File.Exists(path))
-                fileJson = System.IO.File.ReadAllText(path);
-        }
-        catch { }
+        // The core's snapshot holds every persisted field plus the
+        // runtime-only ones (has_*_key, devices). Never read config.json
+        // here: the file can lag the core's state, and a save built from a
+        // stale read overwrites the newer values.
+        string? ffiJson = null;
+        try { ffiJson = DimmyNative.ConfigJson(); }
+        catch (Exception ex) { App.Log($"LoadConfig: FFI error: {ex.Message}", "Settings"); }
 
-        if (!string.IsNullOrEmpty(fileJson) && !ViewModel.LoadFromJson(fileJson))
+        if (string.IsNullOrEmpty(ffiJson) || !ViewModel.LoadFromJson(ffiJson))
         {
             _configLoadFailed = true;
-            App.Log("LoadConfig: config.json could not be parsed — Settings stays read-only so defaults are never saved over it", "Settings");
+            App.Log("LoadConfig: the core config could not be read — Settings stays read-only so defaults are never saved over it", "Settings");
         }
 
         // Win-only UI prefs live outside config.json (CLAUDE.md
@@ -1521,7 +1512,6 @@ public sealed partial class SettingsWindow : Window
         // config + waiting for Rust to round-trip.
         try
         {
-            var ffiJson = DimmyNative.ConfigJson();
             if (!string.IsNullOrEmpty(ffiJson))
             {
                 using var doc = System.Text.Json.JsonDocument.Parse(ffiJson);

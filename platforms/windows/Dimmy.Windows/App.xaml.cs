@@ -1618,24 +1618,11 @@ public partial class App : Application
 
     private void LoadConfigIntoViewModel()
     {
-        // Always read from config.json file — it's the complete source of truth.
+        // The core's snapshot, never config.json: it holds every persisted
+        // field and cannot lag the core's in-memory state.
         string? json = null;
-        try
-        {
-            var path = Path.Combine(Services.BuildInfo.ConfigDirPath, "config.json");
-            PttLog($"LoadConfig: looking for {path}, exists={File.Exists(path)}");
-            if (File.Exists(path))
-                json = File.ReadAllText(path);
-        }
-        catch (Exception ex) { PttLog($"LoadConfig: file read error: {ex.Message}"); }
-
-        // Fallback to FFI if file not found
-        if (string.IsNullOrEmpty(json))
-        {
-            PttLog("LoadConfig: file empty/missing, falling back to FFI");
-            try { json = DimmyNative.ConfigJson(); }
-            catch (Exception ex) { PttLog($"LoadConfig: FFI error: {ex.Message}"); }
-        }
+        try { json = DimmyNative.ConfigJson(); }
+        catch (Exception ex) { PttLog($"LoadConfig: FFI error: {ex.Message}"); }
 
         if (json == null) { PttLog("LoadConfig: no config available"); return; }
 

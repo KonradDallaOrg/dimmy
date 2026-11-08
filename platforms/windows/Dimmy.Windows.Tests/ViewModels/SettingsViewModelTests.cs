@@ -59,6 +59,37 @@ public class SettingsViewModelTests
     }
 
     [Fact]
+    public void LoadFromJson_accepts_the_core_getter_snapshot()
+    {
+        // Shape of dimmy_get_config_json: nulls for unset options, the
+        // devices array, and runtime-only keys next to the persisted ones.
+        var vm = new SettingsViewModel();
+        var ok = vm.LoadFromJson("""
+        {
+            "language": "it",
+            "llm_style": "correct",
+            "llm_tone": "none",
+            "selected_device": null,
+            "analytics_consent": null,
+            "crash_reports_consent": null,
+            "devices": ["Mic A", "Mic B"],
+            "input_gain": 1.0,
+            "loopback_gain": 1.0,
+            "meeting_chunk_secs": 30.0,
+            "stats_total_speaking_secs": 12.5,
+            "app_rules": [],
+            "has_key": true,
+            "has_llm_groq_key": false,
+            "has_notion_token": false
+        }
+        """);
+        Assert.True(ok);
+        Assert.Equal("it", vm.Language);
+        Assert.Equal("correct", vm.LlmStyle);
+        Assert.Equal(100, vm.InputGainPercent);
+    }
+
+    [Fact]
     public void ToJson_ProducesValidJson()
     {
         var vm = new SettingsViewModel();
