@@ -41,7 +41,7 @@ Public surface re-exports + the analytics enable/disable toggles. Two independen
 - `client::set_enabled` (PostHog analytics)
 - `sentry_pipeline::set_enabled` (Sentry crash reports)
 
-Both default to `true`. The C# host calls `dimmy_telemetry_set_enabled` / `dimmy_telemetry_set_crash_enabled` when the user flips the Settings → Privacy toggles.
+Both are off until the saved consent says yes (opt-in since 0.7.14). The C# host calls `dimmy_telemetry_set_enabled` / `dimmy_telemetry_set_crash_enabled` when the user flips the Settings → Privacy toggles.
 
 ### `core/src/telemetry/events.rs`
 The typed event taxonomy (single source of truth). Every event is a variant of the `Event` enum with explicit property fields. There is **no** free-string event API — adding a new event requires adding a variant.
@@ -154,14 +154,55 @@ A dedicated single-worker tokio runtime (lazy-init on first send). Most FFI entr
 Wrapper around the `sentry` crate (v0.47, default-features = false, explicit `native-tls` to avoid the rustls/CryptoProvider static-init crash that bricked V8/V11/V12 on WindowsAppSDK + Velopack).
 
 #### What gets sent to Sentry
-- **Manual `capture_error(category, message)`** — called from:
-  - `dimmy_stop_recording` failure paths (`category` = error_category from STT failure)
-  - `dimmy_process_with_llm` failure paths
+
+Only for users who said yes to crash reports (opt-in since 0.7.14). Nothing
+below runs before `apply_consent` turns the pipeline on.
+
+- **Handled failures — `telemetry::report(Subsystem, kind, engine, detail)`**
+  (`core/src/telemetry/report.rs`). The one way in for an error that is caught
+  and logged. `(subsystem, kind, engine)` is the Sentry **fingerprint** and the
+  issue title (`meeting/finalize_failed`, `local_engine/create_state_failed/whisper_gpu`),
+  so one failure is exactly one issue. Tags: `subsystem`, `error_category`
+  (= kind), `provider` (= engine). `detail` goes in the `detail` extra through
+  the prose + secret + account-name filters. Level `warning` for
+  environmental kinds (`network`, `timeout`, `auth`, `rate_limit`,
+  `too_large`, `not_logged_in`, `not_installed`, `offline`, `cancelled`),
+  `error` otherwise. At most 3 events per fingerprint per process.
+  - Call sites: dictation STT, dictation LLM, recap, command mode, meeting
+    (start, chunk STT on the transcription thread, finalize, STT-thread spawn,
+    join timeout, capture buffers taken, re-transcribe/diarize/write), audio
+    (no device, config, sample format, stream build, stream error callback,
+    loopback), AEC build, file load / decode, history WAV save, keystore save,
+    config save, autostart, Notion / Confluence / calendar / Telegram /
+    Claude Desktop install, Windows hotkey hook, whisper `create_state`,
+    Nemotron F32 download.
+  - **Never from `meeting.rs::worker_loop`** (THE AUDIO RULE). A capture-loop
+    failure is reported after the sinks are finalized; the source guard
+    `the_capture_loop_never_calls_the_host_or_telemetry` forbids
+    `telemetry::report(` inside the loop.
+  - A subscription CLI exit code arrives as `LlmError::Api { status: <100 }`;
+    it is reported as kind `cli_exit`, not as "HTTP 1".
+- **Failure events mirrored from `track()`** (`report::failure_of`): a PostHog
+  event that already says something failed also goes to Sentry —
+  `model.download_completed{success:false}`, `license.activation_failed`,
+  `license.refresh_failed`, `meeting.stop_timeout`,
+  `meeting.transcription_behind`, low capture ratios, `loopback_rate_mismatch`,
+  failed recap / file load / Notion send, `error.gpu_crash`, failed Claude Code /
+  Codex / Gemini CLI invocations. `transcription.failed` / `llm.failed` are not
+  mirrored: their call sites report with the message.
+- **Host exceptions — `dimmy_telemetry_capture_host_exception(host, source, type, frames, fatal)`**.
+  Windows: `Helpers/CrashReporter.cs` (AppDomain + XAML unhandled = fatal,
+  `TaskScheduler.UnobservedTaskException`, update check / apply, meeting recap,
+  command pipe) and a UI-thread hang watchdog (5 s, once per hang, Release
+  only, suspend-aware). macOS: `AppDelegate.swift` NSException handler (fatal)
+  and `HangWatchdog`; fatal signals write `last_abort.txt` for the next launch.
+  Sent: exception type, source slug, frames (`function`, file NAME, line).
+  Never the exception message. Throttled like `report`.
 - **Manual `capture_feedback(kind, message, email)`** — called from `dimmy_telemetry_capture_feedback` (UI Settings → Send feedback).
 - **Auto: panic hook** via the `panic` feature of the `sentry` crate. Captures every Rust panic and ships it as a Fatal event.
-- **Native aborts** (`abort_report.rs`): a SIGABRT handler writes `last_abort.txt` in the config folder with the free memory in MB, and the next launch sends it as `error_category=native_abort`. Nothing else is in it.
+- **Native aborts** (`abort_report.rs`): a SIGABRT handler writes `last_abort.txt` in the config folder with the free memory in MB, and the next launch sends it as `native/abort`. Nothing else is in it. The report waits for `apply_consent`: `telemetry::init` runs before the config is read, and from 0.7.14 to this fix it found Sentry still off and dropped every abort.
 - **Auto: contexts + backtraces** via the `contexts` and `backtrace` features. OS / device / runtime metadata, `attach_stacktrace = true`.
-- **Auto: breadcrumbs** ring buffer, capped at 50 (`max_breadcrumbs: 50`). HTTP/console breadcrumbs only — `crate::log` calls do NOT yet feed Sentry breadcrumbs (Phase 3b candidate).
+- **Auto: breadcrumbs** ring buffer, capped at 20 (`max_breadcrumbs: 20`). HTTP/console breadcrumbs only — `crate::log` calls do NOT yet feed Sentry breadcrumbs (Phase 3b candidate).
 
 #### Defenses
 - `before_send` hook scrubs:

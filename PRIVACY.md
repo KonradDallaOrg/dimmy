@@ -209,6 +209,21 @@ Environment variables, server name, host name and user name are removed. Some
 error messages name a file; your account name is removed from the path before
 sending (`C:\Users\<USER>\...`).
 
+Errors that Dimmy handles without crashing are also sent, so that they can be
+fixed: for example a download that fails, a meeting file that cannot be
+finished, a microphone stream that stops, or a recap that fails. Each one
+sends the part of the app (`meeting`, `audio`, `download`, …), a fixed error
+type, the provider or engine name, and the error message with the same
+filters. Dimmy sends each type of error at most three times per session. It
+never sends the microphone name or the text of a transcript, a prompt or a
+recap.
+
+If the Windows or macOS app itself crashes, stops answering for 5 seconds, or
+has an error in an important task (update, recap), it sends the error type,
+where it happened and the stack trace (function names and source file names).
+It does not send the error message, because that text can contain file
+names or your text.
+
 ### Feedback
 
 **Settings → Send feedback** sends the text you type to Sentry, and your

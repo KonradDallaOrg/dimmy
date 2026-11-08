@@ -46,9 +46,9 @@ use dimmy_lib::ffi::{
     dimmy_meeting_save_post_process, dimmy_model_catalog_json, dimmy_model_delete,
     dimmy_model_download_cancel, dimmy_model_download_enqueue, dimmy_model_download_snapshot_json,
     dimmy_push_loopback_audio, dimmy_set_app_context, dimmy_set_config_json,
-    dimmy_set_loopback_sample_rate, dimmy_terms_version, dimmy_third_party_notices,
-    dimmy_transcribe_file, dimmy_user_dict_add, dimmy_user_dict_list_json, dimmy_user_dict_remove,
-    dimmy_whistle_size_mb, dimmy_whistle_status,
+    dimmy_set_loopback_sample_rate, dimmy_telemetry_capture_host_exception, dimmy_terms_version,
+    dimmy_third_party_notices, dimmy_transcribe_file, dimmy_user_dict_add,
+    dimmy_user_dict_list_json, dimmy_user_dict_remove, dimmy_whistle_size_mb, dimmy_whistle_status,
 };
 
 // ── Fixture wiring (lifted from ffi_e2e to stay self-contained) ──────
@@ -125,6 +125,50 @@ fn set_config(json: &str) {
 }
 
 // ── Tests: app context ─────────────────────────────────────────────────
+
+#[test]
+#[serial]
+fn host_exception_round_trip_never_crashes_and_reports_no_dsn() {
+    let host = CString::new("windows").unwrap();
+    let source = CString::new("unobserved_task").unwrap();
+    let ty = CString::new("System.InvalidOperationException").unwrap();
+    let frames = CString::new(
+        "Dimmy.Windows.App.OnLaunched	App.xaml.cs	42
+",
+    )
+    .unwrap();
+    // Test builds embed no DSN, so the honest answer is "not configured".
+    let rc = unsafe {
+        dimmy_telemetry_capture_host_exception(
+            host.as_ptr(),
+            source.as_ptr(),
+            ty.as_ptr(),
+            frames.as_ptr(),
+            0,
+        )
+    };
+    assert_eq!(rc, -3);
+    let rc = unsafe {
+        dimmy_telemetry_capture_host_exception(
+            host.as_ptr(),
+            source.as_ptr(),
+            ty.as_ptr(),
+            std::ptr::null(),
+            1,
+        )
+    };
+    assert_eq!(rc, -3);
+    let rc = unsafe {
+        dimmy_telemetry_capture_host_exception(
+            std::ptr::null(),
+            source.as_ptr(),
+            ty.as_ptr(),
+            std::ptr::null(),
+            0,
+        )
+    };
+    assert_eq!(rc, -1);
+}
 
 #[test]
 #[serial]

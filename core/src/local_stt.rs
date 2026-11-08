@@ -1145,6 +1145,16 @@ mod whisper_cache {
             }
             let state = state_result.map_err(|e| {
                 crate::log(&format!("[LocalSTT] create_state returned error: {}", e));
+                crate::telemetry::report(
+                    crate::telemetry::Subsystem::LocalEngine,
+                    "create_state_failed",
+                    if using_gpu {
+                        "whisper_gpu"
+                    } else {
+                        "whisper_cpu"
+                    },
+                    &e.to_string(),
+                );
                 crate::error::TranscribeError::LocalModel(format!("failed to create state: {}", e))
             })?;
             *guard = Some(CachedModel {

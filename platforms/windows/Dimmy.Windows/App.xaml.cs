@@ -419,7 +419,10 @@ public partial class App : Application
         {
             Program.LogCrash($"Xaml.UnhandledException ({e.Message})", e.Exception);
             PttLog($"[Crash] Xaml.UnhandledException: {e.Message} | {e.Exception}");
+            Helpers.CrashReporter.Report(e.Exception, "xaml_unhandled", fatal: true);
         };
+        Helpers.CrashReporter.StartHangWatchdog(
+            Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread());
     }
 
     public void ReloadConfig()

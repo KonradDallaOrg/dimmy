@@ -21,10 +21,18 @@ pub mod abort_report;
 pub mod client;
 pub mod events;
 pub mod identity;
+pub mod report;
 pub mod sanitize;
 pub mod sentry_pipeline;
 
 pub use events::Event;
+pub use report::{report, Subsystem};
+
+/// The abort the previous launch left, held until the saved consent is
+/// applied: `init` runs before the config is read, so reporting it there
+/// found Sentry still off and dropped every one (since 0.7.14, when
+/// crash reports became opt-in).
+static PENDING_ABORT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
 /// Initialise both pipelines. Idempotent. Call once from FFI init.
 pub fn init() {
@@ -41,7 +49,9 @@ pub fn init() {
         crate::log(&format!(
             "[telemetry] previous launch ended in a {previous}"
         ));
-        capture_error("native_abort", "", &previous);
+        if let Ok(mut slot) = PENDING_ABORT.lock() {
+            *slot = Some(previous);
+        }
     }
 }
 
@@ -49,6 +59,9 @@ pub fn init() {
 /// blocks the caller, never panics, never logs at the user-facing
 /// level. Drops silently if disabled, no API key, or no tokio runtime.
 pub fn track(event: Event) {
+    if let Some((subsystem, kind, engine)) = report::failure_of(&event) {
+        report(subsystem, &kind, engine, "");
+    }
     client::track(event);
 }
 
@@ -65,6 +78,10 @@ pub fn apply_consent(analytics: Option<bool>, crash_reports: Option<bool>) {
     let (a, c) = consent_flags(analytics, crash_reports);
     set_enabled(a);
     set_crash_enabled(c);
+    let previous = PENDING_ABORT.lock().ok().and_then(|mut slot| slot.take());
+    if let Some(previous) = previous {
+        report(Subsystem::Native, "abort", "", &report::slug(&previous));
+    }
 }
 
 fn consent_flags(analytics: Option<bool>, crash_reports: Option<bool>) -> (bool, bool) {
@@ -115,10 +132,16 @@ pub fn has_compiled_dsn() -> bool {
     sentry_pipeline::has_compiled_dsn()
 }
 
-/// Capture an error that already happened (e.g. from an Event::Error*
-/// variant). Best-effort, silent.
-pub fn capture_error(category: &str, provider: &str, message: &str) {
-    sentry_pipeline::capture_error(category, provider, message);
+/// Capture an exception the host UI caught. See
+/// `sentry_pipeline::capture_host_exception`.
+pub fn capture_host_exception(
+    host: &str,
+    source: &str,
+    exception_type: &str,
+    frames: &str,
+    fatal: bool,
+) -> i32 {
+    sentry_pipeline::capture_host_exception(host, source, exception_type, frames, fatal)
 }
 
 /// Block until queued crash reports are sent (2 s cap). Call this from
@@ -137,7 +160,14 @@ pub fn capture_feedback(kind: &str, message: &str, email: Option<&str>) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::consent_flags;
+    use super::{apply_consent, consent_flags, PENDING_ABORT};
+
+    #[test]
+    fn a_pending_abort_is_handled_once_consent_is_known() {
+        *PENDING_ABORT.lock().unwrap() = Some("native abort".into());
+        apply_consent(None, None);
+        assert!(PENDING_ABORT.lock().unwrap().is_none());
+    }
 
     #[test]
     fn nothing_is_sent_before_an_answer() {

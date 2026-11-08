@@ -79,6 +79,7 @@ public sealed class CommandPipeServer : IDisposable
                 catch (Exception ex)
                 {
                     System.Diagnostics.Debug.WriteLine($"[CommandPipe] handler threw: {ex.Message}");
+                    Helpers.CrashReporter.Report(ex, "command_pipe_handler");
                 }
             }
             catch (OperationCanceledException) { break; }

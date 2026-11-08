@@ -992,6 +992,18 @@ public static class DimmyNative
         [MarshalAs(UnmanagedType.LPUTF8Str)] string message,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string? email);
 
+    /// Send a host exception to Sentry (crash-report consent only). Never
+    /// pass the exception message. `frames` is `function\tfile\tline`
+    /// per line, innermost first; may be null. Returns 1 sent, -1 bad
+    /// input, -2 no consent, -3 no DSN. See Helpers/CrashReporter.cs.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_telemetry_capture_host_exception(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string host,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string source,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string exceptionType,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? frames,
+        int fatal);
+
     /// Track a typed event by name with a JSON property object.
     /// `name` is the stable event name ("meeting.recap_completed",
     /// "pill.style_scrolled", etc.). `propsJson` is a JSON object with

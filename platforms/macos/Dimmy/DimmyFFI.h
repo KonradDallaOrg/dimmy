@@ -289,6 +289,17 @@ int32_t dimmy_telemetry_reset_anonymous_id(void);
 /// Full telemetry status as JSON. Returns bytes written, or -1.
 int32_t dimmy_telemetry_status(char * _Nonnull out_buf, int32_t buf_len);
 
+/// Send a host exception to Sentry (crash-report consent only). NEVER pass
+/// the exception reason: it can carry paths and user text. `frames` is one
+/// `function\tfile\tline` per line, innermost first, and may be NULL.
+/// `fatal` = 1 blocks up to 2 s so the event leaves before the process dies.
+/// Returns 1 sent, -1 bad input, -2 no consent, -3 no DSN.
+int32_t dimmy_telemetry_capture_host_exception(const char * _Nonnull host,
+                                               const char * _Nonnull source,
+                                               const char * _Nonnull exception_type,
+                                               const char * _Nullable frames,
+                                               int32_t fatal);
+
 // ── Autostart ──────────────────────────────────────────────────────
 
 int32_t dimmy_autostart_is_enabled(void);

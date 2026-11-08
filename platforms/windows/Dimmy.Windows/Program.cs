@@ -26,7 +26,14 @@ public static class Program
     public static void Main(string[] args)
     {
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+        {
             LogCrash("AppDomain.UnhandledException", e.ExceptionObject as Exception);
+            Helpers.CrashReporter.Report(e.ExceptionObject as Exception, "appdomain_unhandled", fatal: true);
+        };
+        // A faulted task nobody awaited: the process lives on, the failure
+        // was invisible.
+        System.Threading.Tasks.TaskScheduler.UnobservedTaskException += (_, e) =>
+            Helpers.CrashReporter.Report(e.Exception, "unobserved_task");
 
         RotateIfOversized();
 

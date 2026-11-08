@@ -281,6 +281,180 @@ pub fn capture_error(category: &str, provider: &str, message: &str) {
 #[cfg(not(feature = "telemetry-sentry"))]
 pub fn capture_error(_category: &str, _provider: &str, _message: &str) {}
 
+/// Send one `telemetry::report` failure. `fingerprint` is
+/// `[subsystem, kind, engine?]`, already slugged, and is both the grouping
+/// key and the title. `detail` goes in the `detail` extra, which
+/// `scrub_event` runs through the prose and secret filters.
+#[cfg(feature = "telemetry-sentry")]
+pub fn capture_failure(subsystem: &str, fingerprint: &[String], warning: bool, detail: &str) {
+    if !is_enabled() || !has_compiled_dsn() {
+        return;
+    }
+    assert!(fingerprint.len() >= 2, "subsystem and kind are required");
+    let title = fingerprint.join("/");
+    let detail = scrub_message(detail);
+    let fp: Vec<&str> = fingerprint.iter().map(String::as_str).collect();
+    sentry::with_scope(
+        |scope| {
+            scope.set_fingerprint(Some(&fp));
+            scope.set_tag("subsystem", subsystem);
+            scope.set_tag("error_category", &fingerprint[1]);
+            if let Some(engine) = fingerprint.get(2) {
+                scope.set_tag("provider", engine);
+            }
+            if !detail.is_empty() {
+                scope.set_extra("detail", detail.clone().into());
+            }
+        },
+        || {
+            let level = if warning {
+                sentry::Level::Warning
+            } else {
+                sentry::Level::Error
+            };
+            sentry::capture_message(&title, level);
+        },
+    );
+}
+
+#[cfg(not(feature = "telemetry-sentry"))]
+pub fn capture_failure(_subsystem: &str, _fingerprint: &[String], _warning: bool, _detail: &str) {}
+
+/// One stack frame a host UI sends: `function \t file \t line`, innermost
+/// first. Only the file NAME is kept, so a dev build's `C:\Users\…` source
+/// path never leaves the machine.
+#[cfg(feature = "telemetry-sentry")]
+fn host_frames(frames: &str) -> Vec<sentry::protocol::Frame> {
+    const MAX_FRAMES: usize = 64;
+    let mut out: Vec<sentry::protocol::Frame> = frames
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .take(MAX_FRAMES)
+        .map(|line| {
+            let mut parts = line.split('\t');
+            let function = parts.next().unwrap_or("").trim();
+            let file = parts.next().unwrap_or("").trim();
+            let lineno = parts.next().and_then(|n| n.trim().parse::<u64>().ok());
+            let function =
+                crate::telemetry::sanitize::scrub_user_paths(crate::truncate_utf8(function, 200));
+            let filename = file
+                .rsplit(['/', '\\'])
+                .next()
+                .filter(|f| !f.is_empty())
+                .map(str::to_string);
+            sentry::protocol::Frame {
+                in_app: Some(function.contains("Dimmy")),
+                function: Some(function),
+                filename,
+                lineno,
+                ..Default::default()
+            }
+        })
+        .collect();
+    // Sentry wants the outermost frame first.
+    out.reverse();
+    out
+}
+
+/// An exception the Windows or macOS host caught at its top level (or
+/// swallowed somewhere it matters). No exception MESSAGE: .NET and AppKit
+/// messages carry file paths, device names and user text. The type, where
+/// it was caught and the stack are what a fix needs.
+///
+/// Returns 1 sent, -2 no consent, -3 no DSN.
+#[cfg(feature = "telemetry-sentry")]
+pub fn capture_host_exception(
+    host: &str,
+    source: &str,
+    exception_type: &str,
+    frames: &str,
+    fatal: bool,
+) -> i32 {
+    if !has_compiled_dsn() {
+        return -3;
+    }
+    if !is_enabled() {
+        return -2;
+    }
+    let source = crate::telemetry::report::slug(source);
+    if !crate::telemetry::report::allowed(&format!("host/{host}/{source}/{exception_type}")) {
+        return 1;
+    }
+    let ty: String = exception_type
+        .trim()
+        .chars()
+        .take(120)
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '+' | '`' | '-' | ':') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let ty = if ty.is_empty() {
+        "UnknownException".to_string()
+    } else {
+        ty
+    };
+    let frames = host_frames(frames);
+    let stacktrace = if frames.is_empty() {
+        None
+    } else {
+        Some(sentry::protocol::Stacktrace {
+            frames,
+            ..Default::default()
+        })
+    };
+    let event = sentry::protocol::Event {
+        level: if fatal {
+            sentry::Level::Fatal
+        } else {
+            sentry::Level::Error
+        },
+        exception: vec![sentry::protocol::Exception {
+            ty,
+            value: Some(source.clone()),
+            stacktrace,
+            mechanism: Some(sentry::protocol::Mechanism {
+                ty: source.clone(),
+                handled: Some(!fatal),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }]
+        .into(),
+        ..Default::default()
+    };
+    let host = crate::telemetry::report::slug(host);
+    sentry::with_scope(
+        |scope| {
+            scope.set_tag("subsystem", "host");
+            scope.set_tag("host", &host);
+            scope.set_tag("error_category", &source);
+        },
+        || {
+            sentry::capture_event(event);
+        },
+    );
+    if fatal {
+        // The host is about to die; the async transport would never send.
+        let _ = flush_pending();
+    }
+    1
+}
+
+#[cfg(not(feature = "telemetry-sentry"))]
+pub fn capture_host_exception(
+    _host: &str,
+    _source: &str,
+    _exception_type: &str,
+    _frames: &str,
+    _fatal: bool,
+) -> i32 {
+    -3
+}
+
 /// Capture user-submitted feedback (from Settings → Send feedback or
 /// the post-crash dialog).
 ///
@@ -501,7 +675,7 @@ fn redact_prose(s: &str) -> String {
 fn keep_or_redact(s: &str) -> String {
     // Empty / one-token → safe; usually a category enum.
     let trimmed = s.trim();
-    if trimmed.len() <= 24 {
+    if trimmed.len() <= 24 || is_identifier_text(trimmed) {
         return trimmed.to_string();
     }
     // Whitelist patterns that are common in our error messages but
@@ -542,6 +716,17 @@ fn keep_or_redact(s: &str) -> String {
     } else {
         "<redacted: prose content>".to_string()
     }
+}
+
+/// A `telemetry::report` title such as `local_engine/model_load/parakeet`.
+/// No whitespace and only identifier characters: it cannot be a sentence,
+/// so the prose filter has nothing to protect.
+#[cfg(feature = "telemetry-sentry")]
+fn is_identifier_text(s: &str) -> bool {
+    s.len() <= 160
+        && s.chars().all(|c| {
+            c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '/' | '.' | '-')
+        })
 }
 
 /// Keep a panic payload instead of redacting it as prose.
@@ -604,9 +789,22 @@ fn scrub_event(
     // anti-leak policy. Extras can carry arbitrary key/value strings
     // and the panic integration may attach `payload` containing
     // whatever was in scope. Allowlist: provider, mode, category.
-    event
-        .extra
-        .retain(|k, _v| matches!(k.as_str(), "provider" | "mode" | "error_category"));
+    event.extra.retain(|k, _v| {
+        matches!(
+            k.as_str(),
+            "provider" | "mode" | "error_category" | "detail"
+        )
+    });
+    // `detail` is the one free-text extra (from `telemetry::report`): the
+    // same secret + prose filter as the message.
+    if let Some(v) = event.extra.get_mut("detail") {
+        let s = v.as_str().unwrap_or("").to_string();
+        *v = if looks_like_secret(&s) {
+            "<redacted: looked like a secret>".into()
+        } else {
+            redact_prose(&s).into()
+        };
+    }
 
     // Walk message payloads — defense in depth: looks_like_secret
     // catches API keys, redact_prose catches free-form user content.
@@ -773,6 +971,70 @@ mod tests {
         assert_eq!(
             scrubbed_exception_value("panic", "token sk-proj-abc123def456ghi789"),
             "<redacted: looked like a secret>"
+        );
+    }
+
+    #[cfg(feature = "telemetry-sentry")]
+    #[test]
+    fn a_report_title_survives_and_its_detail_is_scrubbed() {
+        let mut event = sentry::protocol::Event {
+            message: Some("local_engine/model_load/parakeet".to_string()),
+            ..Default::default()
+        };
+        event.extra.insert(
+            "detail".into(),
+            "the user said the quarterly numbers looked wrong to him".into(),
+        );
+        event
+            .extra
+            .insert("device".into(), "Microfono (Realtek)".into());
+        let out = scrub_event(event).expect("kept");
+        assert_eq!(
+            out.message.as_deref(),
+            Some("local_engine/model_load/parakeet")
+        );
+        assert_eq!(
+            out.extra.get("detail").and_then(|v| v.as_str()),
+            Some("<redacted: prose content>")
+        );
+        assert!(
+            !out.extra.contains_key("device"),
+            "unknown extras are dropped"
+        );
+    }
+
+    #[cfg(feature = "telemetry-sentry")]
+    #[test]
+    fn identifier_text_is_not_mistaken_for_prose_and_prose_is_not_identifier_text() {
+        assert!(is_identifier_text("meeting/chunk_stt_failed/whisper"));
+        assert!(!is_identifier_text("the meeting failed"));
+        assert!(!is_identifier_text(r"C:\Users\mario"));
+    }
+
+    #[cfg(feature = "telemetry-sentry")]
+    #[test]
+    fn host_frames_keep_the_file_name_only_and_put_the_caller_first() {
+        let frames = host_frames(
+            "Dimmy.Windows.Services.UpdateService.Check\tC:\\Users\\konra\\code\\UpdateService.cs\t88\n\
+             System.Threading.Tasks.Task.Run\t\t\n",
+        );
+        assert_eq!(frames.len(), 2);
+        assert_eq!(
+            frames[1].function.as_deref(),
+            Some("Dimmy.Windows.Services.UpdateService.Check")
+        );
+        assert_eq!(frames[1].filename.as_deref(), Some("UpdateService.cs"));
+        assert_eq!(frames[1].lineno, Some(88));
+        assert_eq!(frames[1].in_app, Some(true));
+        assert_eq!(frames[0].in_app, Some(false));
+        assert_eq!(frames[0].filename, None);
+    }
+
+    #[test]
+    fn host_exception_without_dsn_reports_not_configured() {
+        assert_eq!(
+            capture_host_exception("windows", "unobserved_task", "System.Exception", "", false),
+            -3
         );
     }
 

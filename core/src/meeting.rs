@@ -1390,6 +1390,17 @@ struct SttOutcome {
 /// has drained.
 /// Returns the per-speaker accumulators joined as a fallback transcript,
 /// used only when transcripts.txt cannot be read back at stop.
+/// A meeting window that failed to transcribe. Transcription thread only:
+/// never call this from `worker_loop`.
+fn report_chunk_error(engine: &'static str, message: &str) {
+    crate::telemetry::report(
+        crate::telemetry::Subsystem::Meeting,
+        crate::telemetry::sanitize::error_category(message, None),
+        engine,
+        message,
+    );
+}
+
 fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx) -> SttOutcome {
     use std::io::Write as _;
 
@@ -1480,6 +1491,7 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
                         Ok(t) => (t, None),
                         Err(e) => {
                             crate::log(&format!("[Meeting] cloud STT error: {}", e));
+                            report_chunk_error("cloud", &e.to_string());
                             (String::new(), None)
                         }
                     }
@@ -1501,6 +1513,7 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
                     Ok((t, ts)) => (t, Some(crate::diarize::parakeet_words(&ts, 0.0))),
                     Err(e) => {
                         crate::log(&format!("[Meeting] parakeet error: {}", e));
+                        report_chunk_error("parakeet", &e.to_string());
                         (String::new(), None)
                     }
                 }
@@ -1509,6 +1522,7 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
                     Ok(t) => (t, None),
                     Err(e) => {
                         crate::log(&format!("[Meeting] parakeet error: {}", e));
+                        report_chunk_error("parakeet", &e.to_string());
                         (String::new(), None)
                     }
                 }
@@ -1521,6 +1535,7 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
                 ),
                 Err(e) => {
                     crate::log(&format!("[Meeting] whistle error: {}", e));
+                    report_chunk_error("whistle", &e.to_string());
                     (String::new(), None)
                 }
             }
@@ -1538,6 +1553,7 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
                         Ok((t, words)) => (t, Some(words)),
                         Err(e) => {
                             crate::log(&format!("[Meeting] whisper error: {}", e));
+                            report_chunk_error("whisper", &e.to_string());
                             (String::new(), None)
                         }
                     }
@@ -1552,6 +1568,7 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
                         Ok(t) => (t, None),
                         Err(e) => {
                             crate::log(&format!("[Meeting] whisper error: {}", e));
+                            report_chunk_error("whisper", &e.to_string());
                             (String::new(), None)
                         }
                     }
@@ -2552,7 +2569,31 @@ fn worker_loop(
         }
     }
 
+    // Sentry only from here on: the sinks are final, so a report that waits
+    // on a lock can no longer cost a sample (THE AUDIO RULE).
+    if finalize_error.is_some() {
+        crate::telemetry::report(
+            crate::telemetry::Subsystem::Meeting,
+            "finalize_failed",
+            "",
+            finalize_error.as_deref().unwrap_or(""),
+        );
+    }
+    if stt_handle.is_none() {
+        crate::telemetry::report(
+            crate::telemetry::Subsystem::Meeting,
+            "stt_thread_spawn_failed",
+            "",
+            "",
+        );
+    }
     if lost_claim {
+        crate::telemetry::report(
+            crate::telemetry::Subsystem::Meeting,
+            "capture_buffers_taken",
+            "",
+            "",
+        );
         crate::log(
             "[Meeting] a newer meeting took over the capture buffers before this one \
              finished — stopped touching them; this meeting's audio up to here is on disk",
@@ -2599,6 +2640,12 @@ fn worker_loop(
                 (String::new(), false)
             }
             BoundedJoin::TimedOut => {
+                crate::telemetry::report(
+                    crate::telemetry::Subsystem::Meeting,
+                    "stt_join_timeout",
+                    "",
+                    "",
+                );
                 crate::log(
                     "[Meeting] transcription thread still busy at stop — abandoning it;                      the recording and everything transcribed so far are already on disk",
                 );
@@ -3649,7 +3696,12 @@ mod audio_never_blocked {
         let src = include_str!("meeting.rs");
         let start = src.find("fn worker_loop(").expect("worker_loop");
         let end = start + src[start..].find("ORDER MATTERS").expect("end of the loop");
-        for call in ["emit_event(", "telemetry::track("] {
+        for call in [
+            "emit_event(",
+            "telemetry::track(",
+            "telemetry::report(",
+            "report_chunk_error(",
+        ] {
             assert!(
                 !src[start..end].contains(call),
                 "the capture loop calls {call} again"
