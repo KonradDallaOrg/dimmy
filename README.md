@@ -27,16 +27,7 @@
   <a href="CONTRIBUTING.md"><strong>Contribute</strong></a>
 </p>
 
-<table>
-  <tr>
-    <th>Windows</th>
-    <th>macOS</th>
-  </tr>
-  <tr>
-    <td width="50%" align="center"><picture><source media="(prefers-color-scheme: light)" srcset="docs/readme/pill-states-windows-light.gif"><img src="docs/readme/pill-states-windows-dark.gif" alt="The Dimmy pill on Windows: idle, hover, recording with timer, transcribing, processing, done"></picture></td>
-    <td width="50%" align="center"><picture><source media="(prefers-color-scheme: light)" srcset="docs/readme/pill-states-mac-light.gif"><img src="docs/readme/pill-states-mac-dark.gif" alt="The Dimmy pill on macOS: idle, hover, recording with timer, transcribing, processing, done"></picture></td>
-  </tr>
-</table>
+<p align="center"><picture><source media="(prefers-color-scheme: light)" srcset="docs/readme/pill-states-windows-light.gif"><img src="docs/readme/pill-states-windows-dark.gif" alt="The Dimmy pill on Windows: idle, hover, recording with timer, transcribing, processing, done"></picture></p>
 
 Press a shortcut and speak. A small pill shows that Dimmy listens. Release the keys, and the text goes into the app that has focus. Dimmy can also record a whole call and write a recap.
 
@@ -48,26 +39,16 @@ The pill stays on top of your other windows. Drag it to a corner or to the middl
 
 <table>
   <tr>
-    <th>Drag and dock (Windows)</th>
-    <th>Docked in a corner (Windows)</th>
+    <th>Docked in a corner</th>
+    <th>Docked on a side, vertical</th>
   </tr>
   <tr>
-    <td rowspan="5" width="260" align="center" valign="top"><picture><source media="(prefers-color-scheme: light)" srcset="docs/readme/pill-dock-windows-light.gif"><img src="docs/readme/pill-dock-windows-dark.gif" width="249" alt="A real drag of the pill on Windows: the dock zones appear, the pill snaps to the middle of the right edge and turns vertical, then snaps back into the bottom-right corner"></picture></td>
-    <td align="center"><picture><source media="(prefers-color-scheme: light)" srcset="docs/readme/pill-corner-windows-light.png"><img src="docs/readme/pill-corner-windows-dark.png" alt="The recording pill docked in the bottom-right corner on Windows, with the timer and the stop button"></picture></td>
-  </tr>
-  <tr>
-    <th>Docked on a side, vertical (Windows, macOS)</th>
-  </tr>
-  <tr>
-    <td align="center"><picture><source media="(prefers-color-scheme: light)" srcset="docs/readme/pill-side-windows-light.png"><img src="docs/readme/pill-side-windows-dark.png" alt="The vertical recording pill on the right edge on Windows"></picture>&nbsp;&nbsp;&nbsp;<picture><source media="(prefers-color-scheme: light)" srcset="docs/readme/pill-side-mac-light.png"><img src="docs/readme/pill-side-mac-dark.png" alt="The vertical recording pill on the left edge on macOS"></picture></td>
-  </tr>
-  <tr>
-    <th>Settings → Pill overlay (Windows)</th>
-  </tr>
-  <tr>
-    <td align="center"><picture><source media="(prefers-color-scheme: light)" srcset="docs/readme/settings-win-pill-light.png"><img src="docs/readme/settings-win-pill-dark.png" width="520" alt="The Pill overlay page in Windows Settings: position grid, border style, waveform style"></picture></td>
+    <td align="center" valign="middle"><picture><source media="(prefers-color-scheme: light)" srcset="docs/readme/pill-corner-windows-light.png"><img src="docs/readme/pill-corner-windows-dark.png" alt="The recording pill docked in the bottom-right corner, with the timer and the stop button"></picture></td>
+    <td align="center"><picture><source media="(prefers-color-scheme: light)" srcset="docs/readme/pill-side-windows-light.png"><img src="docs/readme/pill-side-windows-dark.png" alt="The vertical recording pill on the right edge"></picture></td>
   </tr>
 </table>
+
+<p align="center"><picture><source media="(prefers-color-scheme: light)" srcset="docs/readme/settings-win-pill-light.png"><img src="docs/readme/settings-win-pill-dark.png" width="520" alt="The Pill overlay page in Windows Settings: position grid, border style, waveform style"></picture><br><sub>Settings → Pill overlay</sub></p>
 
 ## Features
 
