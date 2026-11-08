@@ -33,8 +33,8 @@
     <th>macOS</th>
   </tr>
   <tr>
-    <td width="50%" align="center"><img src="docs/readme/pill-states-windows.gif" alt="The Dimmy pill on Windows: idle, hover, recording with timer, transcribing, processing, done"></td>
-    <td width="50%" align="center"><img src="docs/readme/pill-states-mac.gif" alt="The Dimmy pill on macOS: idle, hover, recording with timer, transcribing, processing, done"></td>
+    <td width="50%" align="center"><picture><source media="(prefers-color-scheme: light)" srcset="docs/readme/pill-states-windows-light.gif"><img src="docs/readme/pill-states-windows-dark.gif" alt="The Dimmy pill on Windows: idle, hover, recording with timer, transcribing, processing, done"></picture></td>
+    <td width="50%" align="center"><picture><source media="(prefers-color-scheme: light)" srcset="docs/readme/pill-states-mac-light.gif"><img src="docs/readme/pill-states-mac-dark.gif" alt="The Dimmy pill on macOS: idle, hover, recording with timer, transcribing, processing, done"></picture></td>
   </tr>
 </table>
 
@@ -44,7 +44,7 @@ The name is pronounced "Dimi", from the Italian *dimmi*, "tell me".
 
 ## The pill
 
-The pill stays on top of your other windows. Drag it to a corner or to the middle of a screen edge, and it snaps there. On the left and right edges it turns vertical. While you drag, the zones where it can dock show on the screen. Point at the pill to open it: the recording view then shows the time (mm:ss) and a stop button.
+The pill stays on top of your other windows. Drag it to a corner or to the middle of a screen edge, and it snaps there. On the left and right edges it turns vertical. While you drag, the zones where it can dock show on the screen. Point at the pill to open it: the recording view then shows the time (mm:ss) and a stop button. Border style, waveform style and the default position are in **Settings → Pill overlay**.
 
 <table>
   <tr>
@@ -52,22 +52,22 @@ The pill stays on top of your other windows. Drag it to a corner or to the middl
     <th>Docked in a corner (Windows)</th>
   </tr>
   <tr>
-    <td rowspan="3" width="40%" align="center" valign="top"><img src="docs/readme/pill-dock-windows.gif" alt="A real drag of the pill on Windows: the dock zones appear, the pill snaps to the right edge and turns vertical, then snaps to the top-right corner"></td>
-    <td align="center"><img src="docs/readme/pill-corner-windows.png" alt="The recording pill docked in the bottom-right corner on Windows, with the timer and the stop button"></td>
+    <td rowspan="5" width="260" align="center" valign="top"><picture><source media="(prefers-color-scheme: light)" srcset="docs/readme/pill-dock-windows-light.gif"><img src="docs/readme/pill-dock-windows-dark.gif" width="249" alt="A real drag of the pill on Windows: the dock zones appear, the pill snaps to the middle of the right edge and turns vertical, then snaps back into the bottom-right corner"></picture></td>
+    <td align="center"><picture><source media="(prefers-color-scheme: light)" srcset="docs/readme/pill-corner-windows-light.png"><img src="docs/readme/pill-corner-windows-dark.png" alt="The recording pill docked in the bottom-right corner on Windows, with the timer and the stop button"></picture></td>
   </tr>
   <tr>
-    <th>Docked on a side, vertical (Windows | macOS)</th>
+    <th>Docked on a side, vertical (Windows, macOS)</th>
   </tr>
   <tr>
-    <td align="center"><img src="docs/readme/pill-side-windows.png" height="250" alt="The vertical recording pill on the right edge on Windows"> <img src="docs/readme/pill-side-mac.png" height="241" alt="The vertical recording pill on the left edge on macOS"></td>
+    <td align="center"><picture><source media="(prefers-color-scheme: light)" srcset="docs/readme/pill-side-windows-light.png"><img src="docs/readme/pill-side-windows-dark.png" alt="The vertical recording pill on the right edge on Windows"></picture>&nbsp;&nbsp;&nbsp;<picture><source media="(prefers-color-scheme: light)" srcset="docs/readme/pill-side-mac-light.png"><img src="docs/readme/pill-side-mac-dark.png" alt="The vertical recording pill on the left edge on macOS"></picture></td>
+  </tr>
+  <tr>
+    <th>Settings → Pill overlay (Windows)</th>
+  </tr>
+  <tr>
+    <td align="center"><picture><source media="(prefers-color-scheme: light)" srcset="docs/readme/settings-win-pill-light.png"><img src="docs/readme/settings-win-pill-dark.png" width="520" alt="The Pill overlay page in Windows Settings: position grid, border style, waveform style"></picture></td>
   </tr>
 </table>
-
-Border style, waveform style and the default position are in **Settings → Pill overlay**.
-
-<p align="center">
-  <img src="docs/readme/settings-win-pill.png" width="560" alt="The Pill overlay page in Windows Settings: position grid, border style, waveform style">
-</p>
 
 ## Features
 
