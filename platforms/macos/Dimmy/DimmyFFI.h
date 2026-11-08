@@ -280,6 +280,18 @@ int32_t dimmy_telemetry_set_enabled(int32_t enabled);
 int32_t dimmy_telemetry_is_crash_enabled(void);
 int32_t dimmy_telemetry_set_crash_enabled(int32_t enabled);
 
+/// 1 exactly once per native crash from the previous launch that waits for
+/// the user's answer (crash reports off): show the dialog now. 0 = nothing.
+int32_t dimmy_crash_report_prompt(void);
+
+/// The answer: send 1 = send that one report, 0 = delete it.
+/// Returns 1 sent, 0 deleted, -1 nothing pending.
+int32_t dimmy_crash_report_resolve(int32_t send);
+
+/// Localized dialog words. kind: title | body | send | dont_send | always.
+int32_t dimmy_crash_report_text(const char * _Nonnull kind, const char * _Nonnull lang,
+                                char * _Nonnull out_buf, int32_t buf_len);
+
 /// Anonymous distinct_id used by PostHog. Returns bytes written, or -1.
 int32_t dimmy_telemetry_anonymous_id(char * _Nonnull out_buf, int32_t buf_len);
 
