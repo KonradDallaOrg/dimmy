@@ -335,11 +335,9 @@ fn fill_random(buf: &mut [u8]) {
     #[cfg(unix)]
     {
         use std::io::Read;
-        if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
-            let _ = f.read_exact(buf);
-            return;
-        }
-        panic!("Cannot open /dev/urandom for random bytes");
+        // A nonce that is not random reuses CTR keystream: fail, never fall back.
+        let mut f = std::fs::File::open("/dev/urandom").expect("Cannot open /dev/urandom");
+        f.read_exact(buf).expect("Cannot read /dev/urandom");
     }
     #[cfg(windows)]
     {
@@ -519,62 +517,112 @@ fn keys_file_path() -> Option<PathBuf> {
     crate::config_dir_path().map(|p| p.join("keys.enc"))
 }
 
-/// Load the key-value map from the encrypted JSON file.
-fn load_local_store(master: &[u8; 32]) -> HashMap<String, String> {
-    let path = match keys_file_path() {
-        Some(p) => p,
-        None => return HashMap::new(),
-    };
-    let data = match std::fs::read_to_string(&path) {
-        Ok(d) => d,
-        Err(_) => return HashMap::new(),
-    };
-    let map: HashMap<String, String> = match serde_json::from_str(&data) {
-        Ok(m) => m,
-        Err(_) => return HashMap::new(),
-    };
+/// What `keys.enc` holds for this machine key.
+#[derive(Default)]
+struct LocalStore {
+    plain: HashMap<String, String>,
+    /// Entries whose MAC fails under the current machine key, kept as the
+    /// raw ciphertext. The key is derived from USERNAME / HOSTNAME, so a
+    /// renamed account or host makes every entry undecryptable until the
+    /// old names come back; dropping them on the next save would delete
+    /// the keys for good.
+    sealed: HashMap<String, String>,
+}
 
-    // Decrypt values
-    let mut result = HashMap::new();
-    for (name, encrypted) in &map {
-        match decrypt_value(master, encrypted) {
+fn load_local_store(master: &[u8; 32]) -> LocalStore {
+    match keys_file_path() {
+        Some(p) => load_store_file(&p, master),
+        None => LocalStore::default(),
+    }
+}
+
+fn load_store_file(path: &std::path::Path, master: &[u8; 32]) -> LocalStore {
+    let mut out = LocalStore::default();
+    let Ok(data) = std::fs::read_to_string(path) else {
+        return out;
+    };
+    let Ok(map) = serde_json::from_str::<HashMap<String, String>>(&data) else {
+        return out;
+    };
+    for (name, encrypted) in map {
+        match decrypt_value(master, &encrypted) {
             Ok(plain) => {
-                result.insert(name.clone(), plain);
+                out.plain.insert(name, plain);
             }
             Err(e) => {
-                crate::log(&format!("WARNING: failed to decrypt key '{}': {}", name, e));
+                crate::log(&format!(
+                    "WARNING: failed to decrypt key '{}': {} (kept as is)",
+                    name, e
+                ));
+                out.sealed.insert(name, encrypted);
             }
         }
     }
-    result
+    out
 }
 
-/// Save the key-value map to the encrypted JSON file.
-fn save_local_store(master: &[u8; 32], store: &HashMap<String, String>) -> Result<(), String> {
+fn save_local_store(
+    master: &[u8; 32],
+    store: &HashMap<String, String>,
+    sealed: &HashMap<String, String>,
+) -> Result<(), String> {
     let path = keys_file_path().ok_or("Cannot determine config directory")?;
+    write_store_file(&path, master, store, sealed)
+}
+
+/// Encrypt `store`, add the `sealed` entries back unchanged (a name in
+/// `store` wins), and replace the file atomically. The temp file is created
+/// 0600 on Unix, so the ciphertext is never readable by others.
+fn write_store_file(
+    path: &std::path::Path,
+    master: &[u8; 32],
+    store: &HashMap<String, String>,
+    sealed: &HashMap<String, String>,
+) -> Result<(), String> {
+    use std::io::Write;
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
 
-    // Encrypt all values
-    let mut encrypted: HashMap<String, String> = HashMap::new();
+    let mut encrypted: HashMap<String, String> = sealed
+        .iter()
+        .filter(|(name, _)| !store.contains_key(*name))
+        .map(|(n, v)| (n.clone(), v.clone()))
+        .collect();
+    let kept_sealed = encrypted.len();
     for (name, plain) in store {
         encrypted.insert(name.clone(), encrypt_value(master, plain.as_bytes()));
     }
+    assert_eq!(
+        encrypted.len(),
+        store.len() + kept_sealed,
+        "write_store_file: an entry went missing"
+    );
 
     let json = serde_json::to_string_pretty(&encrypted)
         .map_err(|e| format!("JSON serialize error: {}", e))?;
 
-    // Write atomically via temp file
     let tmp_path = path.with_extension("enc.tmp");
-    std::fs::write(&tmp_path, &json).map_err(|e| format!("Failed to write key file: {}", e))?;
-    std::fs::rename(&tmp_path, &path).map_err(|e| format!("Failed to rename key file: {}", e))?;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts
+        .open(&tmp_path)
+        .map_err(|e| format!("Failed to write key file: {}", e))?;
+    f.write_all(json.as_bytes())
+        .and_then(|_| f.sync_all())
+        .map_err(|e| format!("Failed to write key file: {}", e))?;
+    drop(f);
+    std::fs::rename(&tmp_path, path).map_err(|e| format!("Failed to rename key file: {}", e))?;
 
-    // Set restrictive permissions on Unix
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
     }
 
     Ok(())
@@ -587,6 +635,8 @@ pub struct KeyStore {
     machine_key: [u8; 32],
     /// Cached decrypted local store (avoids re-reading file on every load_key)
     local_cache: Mutex<HashMap<String, String>>,
+    /// See [`LocalStore::sealed`]. Written back on every save.
+    sealed: Mutex<HashMap<String, String>>,
 }
 
 impl Default for KeyStore {
@@ -598,11 +648,18 @@ impl Default for KeyStore {
 impl KeyStore {
     pub fn new() -> Self {
         let machine_key = derive_machine_key();
-        let local_cache = load_local_store(&machine_key);
+        let local = load_local_store(&machine_key);
         Self {
             machine_key,
-            local_cache: Mutex::new(local_cache),
+            local_cache: Mutex::new(local.plain),
+            sealed: Mutex::new(local.sealed),
         }
+    }
+
+    fn persist(&self, cache: &HashMap<String, String>) -> Result<(), String> {
+        let mut sealed = self.sealed.lock().map_err(|e| e.to_string())?;
+        sealed.retain(|name, _| !cache.contains_key(name));
+        save_local_store(&self.machine_key, cache, &sealed)
     }
 
     /// Save a key. Always uses local encrypted file (no OS popups, no admin needed).
@@ -621,12 +678,15 @@ impl KeyStore {
         // would be a silent no-op (the provider stays in the filtered pickers).
         if key.is_empty() {
             cache.remove(&name);
-            save_local_store(&self.machine_key, &cache)?;
+            if let Ok(mut sealed) = self.sealed.lock() {
+                sealed.remove(&name);
+            }
+            self.persist(&cache)?;
             crate::log(&format!("Key removed from local encrypted store: {}", name));
             return Ok(());
         }
         cache.insert(name.clone(), key.to_string());
-        save_local_store(&self.machine_key, &cache)?;
+        self.persist(&cache)?;
         crate::log(&format!("Key saved to local encrypted store: {}", name));
         Ok(())
     }
@@ -648,7 +708,7 @@ impl KeyStore {
                 // Auto-migrate: save to local so next load is faster
                 if let Ok(mut cache) = self.local_cache.lock() {
                     cache.insert(name.clone(), key.clone());
-                    let _ = save_local_store(&self.machine_key, &cache);
+                    let _ = self.persist(&cache);
                 }
                 return Some(key);
             }
@@ -706,7 +766,7 @@ impl KeyStore {
                 }
             }
             if migrated > 0 {
-                save_local_store(&self.machine_key, &cache)?;
+                self.persist(&cache)?;
             }
         }
 
@@ -726,8 +786,10 @@ impl KeyStore {
 
     /// Refresh local cache from disk (useful after external changes).
     pub fn reload_local_cache(&self) {
-        if let Ok(mut cache) = self.local_cache.lock() {
-            *cache = load_local_store(&self.machine_key);
+        if let (Ok(mut cache), Ok(mut sealed)) = (self.local_cache.lock(), self.sealed.lock()) {
+            let local = load_local_store(&self.machine_key);
+            *cache = local.plain;
+            *sealed = local.sealed;
         }
     }
 
@@ -805,6 +867,67 @@ mod tests {
     }
 
     #[test]
+    fn entries_another_machine_key_wrote_survive_a_save() {
+        let dir = std::env::temp_dir().join(format!("dimmy-keystore-{}", std::process::id()));
+        let path = dir.join("keys.enc");
+        let old_key = [7u8; 32];
+        let new_key = [9u8; 32];
+        let mut before = HashMap::new();
+        before.insert("stt_groq".to_string(), "gsk-old".to_string());
+        before.insert("llm_openai".to_string(), "sk-old".to_string());
+        write_store_file(&path, &old_key, &before, &HashMap::new()).expect("seed");
+
+        // The environment changed: nothing decrypts, nothing is dropped.
+        let now = load_store_file(&path, &new_key);
+        assert!(now.plain.is_empty());
+        assert_eq!(now.sealed.len(), 2);
+
+        let mut added = HashMap::new();
+        added.insert("stt_deepgram".to_string(), "dg-new".to_string());
+        write_store_file(&path, &new_key, &added, &now.sealed).expect("save");
+
+        let back = load_store_file(&path, &old_key);
+        assert_eq!(
+            back.plain.get("stt_groq").map(String::as_str),
+            Some("gsk-old")
+        );
+        assert_eq!(
+            back.plain.get("llm_openai").map(String::as_str),
+            Some("sk-old")
+        );
+        assert_eq!(
+            back.sealed.len(),
+            1,
+            "the new entry is sealed under the old key"
+        );
+        let fresh = load_store_file(&path, &new_key);
+        assert_eq!(
+            fresh.plain.get("stt_deepgram").map(String::as_str),
+            Some("dg-new")
+        );
+
+        // A name saved again replaces its sealed copy.
+        let mut replaced = fresh.plain.clone();
+        replaced.insert("stt_groq".to_string(), "gsk-new".to_string());
+        write_store_file(&path, &new_key, &replaced, &fresh.sealed).expect("replace");
+        let last = load_store_file(&path, &new_key);
+        assert_eq!(
+            last.plain.get("stt_groq").map(String::as_str),
+            Some("gsk-new")
+        );
+        assert_eq!(last.sealed.len(), 1, "only llm_openai is left sealed");
+        assert_eq!(last.plain.len(), 2);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).expect("meta").permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn has_key_treats_empty_as_absent() {
         // Regression: "Remove key" clears a provider by saving an empty value.
         // has_key must then report the provider as having NO key, otherwise the
@@ -818,6 +941,7 @@ mod tests {
         let store = KeyStore {
             machine_key: derive_machine_key(),
             local_cache: Mutex::new(empty),
+            sealed: Mutex::new(HashMap::new()),
         };
         assert!(
             !store.has_key(KeyringScope::Stt(Provider::Groq), false),
@@ -830,6 +954,7 @@ mod tests {
         let store = KeyStore {
             machine_key: derive_machine_key(),
             local_cache: Mutex::new(real),
+            sealed: Mutex::new(HashMap::new()),
         };
         assert!(
             store.has_key(KeyringScope::Stt(Provider::Groq), false),
