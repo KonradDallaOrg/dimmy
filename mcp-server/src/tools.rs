@@ -211,7 +211,7 @@ async fn get_recent_meetings(
             .unwrap_or(std::time::UNIX_EPOCH);
         entries.push((path, mtime));
     }
-    entries.sort_by(|a, b| b.1.cmp(&a.1));
+    entries.sort_by_key(|e| std::cmp::Reverse(e.1));
     entries.truncate(limit);
 
     let mut summaries = Vec::with_capacity(entries.len());
