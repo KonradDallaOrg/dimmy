@@ -492,10 +492,9 @@ public static class DimmyNative
     ///   { "process_name": "slack.exe", "bundle_id": "", "wm_class": "" }
     /// Pass any subset of keys; missing ones default to empty string.
     /// Returns 0 on success, non-zero on parse error.
-    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl,
-        CharSet = CharSet.Ansi, BestFitMapping = false, ThrowOnUnmappableChar = true)]
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_set_app_context(
-        [MarshalAs(UnmanagedType.LPStr)] string json);
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string json);
 
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern void dimmy_clear_app_context();
@@ -1294,11 +1293,15 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_claude_desktop_status(byte[] outBuf, int bufLen);
 
-    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
-    public static extern int dimmy_claude_desktop_install(string binaryPath, string versionPtr);
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_claude_desktop_install(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string binaryPath,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string versionPtr);
 
-    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
-    public static extern int dimmy_claude_desktop_refresh(string binaryPath, string versionPtr);
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_claude_desktop_refresh(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string binaryPath,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string versionPtr);
 
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_claude_desktop_uninstall();
