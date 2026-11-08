@@ -19,19 +19,36 @@
 
 <p align="center">
   <a href="https://dimmy.app"><strong>Website</strong></a> ·
+  <a href="https://github.com/KonradDallaOrg/dimmy"><strong>GitHub</strong></a> ·
+  <a href="https://huggingface.co/KonradDallaOrg"><strong>Hugging Face</strong></a> ·
   <a href="https://github.com/KonradDallaOrg/dimmy/releases/latest"><strong>Download</strong></a> ·
   <a href="https://dimmy.app/install.md"><strong>Install with your AI</strong></a> ·
   <a href="PRIVACY.md"><strong>Privacy</strong></a> ·
   <a href="CONTRIBUTING.md"><strong>Contribute</strong></a>
 </p>
 
-<p align="center">
-  <img src="docs/readme/pill-states.gif" width="680" alt="The Dimmy pill on Windows: idle, recording, transcribing, processing, done">
-</p>
+<p align="center"><picture><source media="(prefers-color-scheme: light)" srcset="docs/readme/pill-states-windows-light.gif"><img src="docs/readme/pill-states-windows-dark.gif" alt="The Dimmy pill on Windows: idle, hover, recording with timer, transcribing, processing, done"></picture></p>
 
 Press a shortcut and speak. A small pill shows that Dimmy listens. Release the keys, and the text goes into the app that has focus. Dimmy can also record a whole call and write a recap.
 
 The name is pronounced "Dimi", from the Italian *dimmi*, "tell me".
+
+## The pill
+
+The pill stays on top of your other windows. Drag it to a corner or to the middle of a screen edge, and it snaps there. On the left and right edges it turns vertical. While you drag, the zones where it can dock show on the screen. Point at the pill to open it: the recording view then shows the time (mm:ss) and a stop button. Border style, waveform style and the default position are in **Settings → Pill overlay**.
+
+<table>
+  <tr>
+    <th>Docked in a corner</th>
+    <th>Docked on a side, vertical</th>
+  </tr>
+  <tr>
+    <td align="center" valign="middle"><picture><source media="(prefers-color-scheme: light)" srcset="docs/readme/pill-corner-windows-light.png"><img src="docs/readme/pill-corner-windows-dark.png" alt="The recording pill docked in the bottom-right corner, with the timer and the stop button"></picture></td>
+    <td align="center"><picture><source media="(prefers-color-scheme: light)" srcset="docs/readme/pill-side-windows-light.png"><img src="docs/readme/pill-side-windows-dark.png" alt="The vertical recording pill on the right edge"></picture></td>
+  </tr>
+</table>
+
+<p align="center"><picture><source media="(prefers-color-scheme: light)" srcset="docs/readme/settings-win-pill-light.png"><img src="docs/readme/settings-win-pill-dark.png" width="520" alt="The Pill overlay page in Windows Settings: position grid, border style, waveform style"></picture><br><sub>Settings → Pill overlay</sub></p>
 
 ## Features
 
@@ -227,6 +244,12 @@ macOS: run `scripts/dev/preflight-mac.sh`. It builds the Rust static library, ru
 ## Acknowledgements
 
 [whisper.cpp](https://github.com/ggerganov/whisper.cpp) and [llama.cpp](https://github.com/ggerganov/llama.cpp) (Georgi Gerganov and contributors), [NVIDIA Parakeet and Nemotron](https://huggingface.co/nvidia), [Qwen3-ASR](https://huggingface.co/Qwen), [ONNX Runtime](https://onnxruntime.ai/), [cpal](https://github.com/RustAudio/cpal), [nnnoiseless](https://github.com/jneem/nnnoiseless), [dagc](https://github.com/audiojs/dagc) and [Velopack](https://velopack.io/). Third-party licences: [`core/assets/THIRD_PARTY_NOTICES.md`](core/assets/THIRD_PARTY_NOTICES.md).
+
+## Links
+
+- Website: [dimmy.app](https://dimmy.app)
+- Source code: [github.com/KonradDallaOrg/dimmy](https://github.com/KonradDallaOrg/dimmy)
+- Hugging Face: [huggingface.co/KonradDallaOrg](https://huggingface.co/KonradDallaOrg). This organisation keeps pinned mirrors of the speech and language models that Dimmy can download. Today the app downloads the full-precision Nemotron model from it. It downloads the other models from their upstream repositories, at pinned revisions where the code pins one.
 
 ## Support and contact
 
