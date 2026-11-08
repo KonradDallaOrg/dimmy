@@ -1930,25 +1930,29 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
         let provider = Provider::from_url(&api_url);
         let max_bytes = provider.max_file_bytes();
 
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            crate::transcribe::transcribe_chunked(
-                &api_url,
-                &api_model,
-                &cloud_key,
-                processed,
-                &language,
-                &prompt,
-                max_bytes,
-                Some(&|current, total| {
-                    emit_event(
-                        "chunk_progress",
-                        &format!(r#"{{"current":{},"total":{}}}"#, current, total),
-                    );
-                }),
-            )
-            .await
-        })
+        match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt.block_on(async {
+                crate::transcribe::transcribe_chunked(
+                    &api_url,
+                    &api_model,
+                    &cloud_key,
+                    processed,
+                    &language,
+                    &prompt,
+                    max_bytes,
+                    Some(&|current, total| {
+                        emit_event(
+                            "chunk_progress",
+                            &format!(r#"{{"current":{},"total":{}}}"#, current, total),
+                        );
+                    }),
+                )
+                .await
+            }),
+            Err(e) => Err(crate::error::TranscribeError::Network(format!(
+                "could not start the async runtime: {e}"
+            ))),
+        }
     };
 
     // Save debug metadata + transcript
@@ -7566,7 +7570,9 @@ pub unsafe extern "C" fn dimmy_download_model(filename_ptr: *const c_char) -> c_
     }
 
     let fname_clone = filename.clone();
-    let rt = tokio::runtime::Runtime::new().unwrap();
+    let Ok(rt) = tokio::runtime::Runtime::new() else {
+        return -1;
+    };
     let result = rt.block_on(crate::local_stt::download_model(
         &filename,
         move |downloaded, total| {
@@ -7815,7 +7821,9 @@ pub unsafe extern "C" fn dimmy_download_llm_model(filename_ptr: *const c_char) -
     }
 
     let fname_clone = filename.clone();
-    let rt = tokio::runtime::Runtime::new().unwrap();
+    let Ok(rt) = tokio::runtime::Runtime::new() else {
+        return -1;
+    };
     let result = rt.block_on(crate::local_llm::download_model(
         &filename,
         move |downloaded, total| {
