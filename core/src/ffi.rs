@@ -1568,6 +1568,12 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
         );
         if waited >= max_wait_ms {
             log("[StopRec] WARNING: timed out waiting for audio samples");
+            crate::telemetry::report(
+                crate::telemetry::Subsystem::Audio,
+                "stop_samples_timeout",
+                "",
+                "",
+            );
         }
     }
 
@@ -2184,6 +2190,12 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
                                                 "[History] WAV save failed for row #{}: {}",
                                                 id, e
                                             ));
+                                            crate::telemetry::report(
+                                                crate::telemetry::Subsystem::History,
+                                                "wav_save_failed",
+                                                "",
+                                                "",
+                                            );
                                         }
                                     }
                                 }
@@ -2269,7 +2281,12 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
                 provider: provider_static,
                 error_category: category,
             });
-            crate::telemetry::capture_error(category, provider_static, &err_msg);
+            crate::telemetry::report(
+                crate::telemetry::Subsystem::Stt,
+                category,
+                provider_static,
+                &err_msg,
+            );
 
             write_to_buf("", out_buf, buf_len)
         }
@@ -2349,6 +2366,17 @@ fn llm_http_status(err: &crate::error::LlmError) -> Option<u16> {
     match err {
         crate::error::LlmError::Api { status, .. } => Some(*status),
         _ => None,
+    }
+}
+
+/// The Sentry kind of an LLM failure. A subscription CLI that exits
+/// non-zero comes back as `LlmError::Api` with the EXIT CODE in `status`,
+/// so it read as "HTTP 1" / `client_error` in Sentry: three issues nobody
+/// could act on (RUST-N/S/T). No HTTP status is below 100.
+fn llm_report_kind(err: &crate::error::LlmError, category: &'static str) -> &'static str {
+    match err {
+        crate::error::LlmError::Api { status, .. } if *status < 100 => "cli_exit",
+        _ => category,
     }
 }
 
@@ -4291,7 +4319,12 @@ pub unsafe extern "C" fn dimmy_process_with_llm(
                 provider: llm_provider_static,
                 error_category: category,
             });
-            crate::telemetry::capture_error(category, llm_provider_static, &err_msg);
+            crate::telemetry::report(
+                crate::telemetry::Subsystem::Llm,
+                llm_report_kind(&e, category),
+                llm_provider_static,
+                &err_msg,
+            );
             // `source` is what promotes this from a pill flash to a toast
             // the user can actually read. See `error_event_payload`.
             emit_event(
@@ -4384,6 +4417,12 @@ pub unsafe extern "C" fn dimmy_command_transform(
             Ok(text) => write_to_buf(text.trim(), out_buf, buf_len),
             Err(e) => {
                 log(&format!("[CmdMode] local transform failed: {}", e));
+                crate::telemetry::report(
+                    crate::telemetry::Subsystem::Command,
+                    "local_failed",
+                    "local",
+                    &e.to_string(),
+                );
                 -2
             }
         };
@@ -4449,6 +4488,12 @@ pub unsafe extern "C" fn dimmy_command_transform(
         Ok(rt) => rt,
         Err(e) => {
             log(&format!("[CmdMode] runtime create failed: {}", e));
+            crate::telemetry::report(
+                crate::telemetry::Subsystem::Command,
+                "runtime_build_failed",
+                "",
+                "",
+            );
             return -5;
         }
     };
@@ -4465,6 +4510,15 @@ pub unsafe extern "C" fn dimmy_command_transform(
         Err(e) => {
             let err_msg = format!("{}", e);
             log(&format!("[CmdMode] cloud transform failed: {}", err_msg));
+            crate::telemetry::report(
+                crate::telemetry::Subsystem::Command,
+                llm_report_kind(
+                    &e,
+                    crate::telemetry::sanitize::error_category(&err_msg, llm_http_status(&e)),
+                ),
+                crate::telemetry::sanitize::provider_from_url(&api_url),
+                &err_msg,
+            );
             emit_event(
                 "error",
                 &format!(
@@ -4696,6 +4750,12 @@ pub unsafe extern "C" fn dimmy_meeting_start(out_buf: *mut c_char, buf_len: c_in
         Ok(s) => s,
         Err(e) => {
             log(&format!("[Meeting] start failed: {}", e));
+            crate::telemetry::report(
+                crate::telemetry::Subsystem::Meeting,
+                "start_failed",
+                "",
+                &e.to_string(),
+            );
             // Best-effort: stop the audio we just started so the next
             // Start doesn't error on "already running".
             let _ = st
@@ -5806,18 +5866,25 @@ pub unsafe extern "C" fn dimmy_claude_desktop_install(
     // looked in `dimmy/meetings`, found nothing, and recaps written by Claude
     // (incl. the meeting title) landed in a phantom dir the app never reads.
     let namespace = crate::config_dir_name();
-    match crate::claude_desktop::install_extension(
+    let (rc, kind) = match crate::claude_desktop::install_extension(
         std::path::Path::new(path_str),
         version_str,
         namespace,
     ) {
-        Ok(_) => 0,
-        Err(crate::claude_desktop::InstallError::NoExtensionsRoot) => -1,
-        Err(crate::claude_desktop::InstallError::BinaryMissing) => -2,
-        Err(crate::claude_desktop::InstallError::CopyFailed(_)) => -3,
-        Err(crate::claude_desktop::InstallError::WriteFailed(_)) => -4,
-        Err(crate::claude_desktop::InstallError::ParseFailed(_)) => -5,
-    }
+        Ok(_) => return 0,
+        Err(crate::claude_desktop::InstallError::NoExtensionsRoot) => (-1, "no_extensions_root"),
+        Err(crate::claude_desktop::InstallError::BinaryMissing) => (-2, "binary_missing"),
+        Err(crate::claude_desktop::InstallError::CopyFailed(_)) => (-3, "copy_failed"),
+        Err(crate::claude_desktop::InstallError::WriteFailed(_)) => (-4, "write_failed"),
+        Err(crate::claude_desktop::InstallError::ParseFailed(_)) => (-5, "parse_failed"),
+    };
+    crate::telemetry::report(
+        crate::telemetry::Subsystem::Integration,
+        kind,
+        "claude_desktop",
+        "",
+    );
+    rc
 }
 
 /// Update the installed Claude Desktop extension when it is older than
@@ -6126,6 +6193,12 @@ pub unsafe extern "C" fn dimmy_confluence_send_recap(
         }
         Err(e) => {
             log(&format!("[Confluence] recap send failed: {}", e));
+            crate::telemetry::report(
+                crate::telemetry::Subsystem::Integration,
+                crate::telemetry::sanitize::error_category(&e.to_string(), None),
+                "confluence",
+                &e.to_string(),
+            );
             serde_json::json!({ "ok": false, "error": e.to_string() })
         }
     };
@@ -6273,6 +6346,12 @@ pub unsafe extern "C" fn dimmy_save_llm_provider_key(
                 provider.as_str(),
                 e
             ));
+            crate::telemetry::report(
+                crate::telemetry::Subsystem::Keystore,
+                "save_failed",
+                provider.as_str(),
+                &e.to_string(),
+            );
             -2
         }
     }
@@ -6504,6 +6583,12 @@ pub unsafe extern "C" fn dimmy_notion_send_recap(
         }
         Err(e) => {
             log(&format!("[Notion] send failed: {}", e));
+            crate::telemetry::report(
+                crate::telemetry::Subsystem::Integration,
+                crate::telemetry::sanitize::error_category(&e.to_string(), None),
+                "notion",
+                &e.to_string(),
+            );
             serde_json::json!({
                 "ok": false,
                 "error": format!("{}", e),
@@ -6712,6 +6797,12 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
                     "[LlmRaw] local failed: {}",
                     crate::truncate_utf8(&msg, 200)
                 ));
+                crate::telemetry::report(
+                    crate::telemetry::Subsystem::Recap,
+                    "local_failed",
+                    "local",
+                    &msg,
+                );
                 local_failure_rc(&msg)
             }
         };
@@ -6962,7 +7053,12 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
                 crate::telemetry::sanitize::provider_from_url(&effective_url);
             let category =
                 crate::telemetry::sanitize::error_category(&display_short, llm_http_status(&e));
-            crate::telemetry::capture_error(category, provider_static, &display_short);
+            crate::telemetry::report(
+                crate::telemetry::Subsystem::Recap,
+                llm_report_kind(&e, category),
+                provider_static,
+                &display_short,
+            );
             emit_event(
                 "error",
                 &error_event_payload("recap", &display_short, provider_static, category),
@@ -8258,6 +8354,12 @@ pub extern "C" fn dimmy_nemotron_full_download() -> c_int {
         Ok(()) => 0,
         Err(e) => {
             log(&format!("[Nemotron] F32 download failed: {e}"));
+            crate::telemetry::report(
+                crate::telemetry::Subsystem::Download,
+                "failed",
+                "nemotron_f32",
+                &e.to_string(),
+            );
             -1
         }
     }
@@ -9287,6 +9389,12 @@ pub unsafe extern "C" fn dimmy_decode_audio_to_wav(
         Ok(s) => s,
         Err(e) => {
             log(&format!("[DecodeToWav] decode failed: {}", e));
+            crate::telemetry::report(
+                crate::telemetry::Subsystem::FileLoad,
+                "decode_failed",
+                "",
+                &e.to_string(),
+            );
             return -2;
         }
     };
@@ -9479,6 +9587,12 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
         Ok(s) => s,
         Err(e) => {
             log(&format!("[FileLoad] open failed: {}", e));
+            crate::telemetry::report(
+                crate::telemetry::Subsystem::FileLoad,
+                "open_failed",
+                "",
+                &e.to_string(),
+            );
             return -2;
         }
     };
@@ -9597,6 +9711,12 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
             });
         if let Some(e) = failed {
             log(&format!("[FileLoad] cloud transcribe failed: {}", e));
+            crate::telemetry::report(
+                crate::telemetry::Subsystem::FileLoad,
+                crate::telemetry::sanitize::error_category(&e.to_string(), None),
+                "cloud",
+                &e.to_string(),
+            );
             return -8;
         }
         if decoded == 0 {
@@ -9724,6 +9844,12 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
                     "[FileLoad] chunk {} at {:.0}s failed: {}",
                     idx, chunk_offset_secs, e
                 ));
+                crate::telemetry::report(
+                    crate::telemetry::Subsystem::FileLoad,
+                    "chunk_failed",
+                    "local",
+                    &e.to_string(),
+                );
             }
         }
         emit_progress(end_secs, s, idx);
@@ -9998,6 +10124,12 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
             Ok(s) => s,
             Err(e) => {
                 log(&format!("[Retranscribe] decode {} failed: {}", band, e));
+                crate::telemetry::report(
+                    crate::telemetry::Subsystem::Meeting,
+                    "retranscribe_decode_failed",
+                    "",
+                    &e.to_string(),
+                );
                 continue;
             }
         };
@@ -10215,6 +10347,12 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
                 }
                 Err(e) => {
                     log(&format!("[Retranscribe] diarize {} failed: {}", band, e));
+                    crate::telemetry::report(
+                        crate::telemetry::Subsystem::Meeting,
+                        "diarize_failed",
+                        "",
+                        &e.to_string(),
+                    );
                     false
                 }
             }
@@ -10236,6 +10374,12 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
     lines.extend(diar_lines);
     if let Err(e) = crate::diarize::save_speakers(dir_path, &speakers) {
         log(&format!("[Retranscribe] write speakers.json failed: {}", e));
+        crate::telemetry::report(
+            crate::telemetry::Subsystem::Meeting,
+            "speakers_write_failed",
+            "",
+            &e.to_string(),
+        );
     }
 
     // Interleave the two bands by time (stable so mic precedes system on ties).
@@ -10258,6 +10402,12 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
             "[Retranscribe] write transcripts.txt failed: {}",
             e
         ));
+        crate::telemetry::report(
+            crate::telemetry::Subsystem::Meeting,
+            "transcript_write_failed",
+            "",
+            &e.to_string(),
+        );
         return -3;
     }
     log(&format!(
@@ -10568,6 +10718,56 @@ pub unsafe extern "C" fn dimmy_telemetry_capture_feedback(
     crate::telemetry::capture_feedback(kind, message, email) as c_int
 }
 
+/// Send an exception the host UI caught to Sentry (crash-report consent
+/// only). Unhandled exceptions, unobserved tasks, swallowed exceptions in
+/// paths that matter, and UI-thread hangs.
+///
+/// `host_ptr`: `windows` | `macos` | `linux`.
+/// `source_ptr`: where it was caught, a slug (`appdomain_unhandled`,
+///   `unobserved_task`, `ui_hang`, `update_check`, …).
+/// `type_ptr`: the exception type name (`System.NullReferenceException`).
+/// `frames_ptr`: may be null. One frame per line, innermost first,
+///   `function \t file \t line`. Only the file name is kept.
+/// `fatal`: 1 when the process is about to die; the call then blocks up
+///   to 2 s so the event is sent.
+///
+/// NEVER pass the exception message: it carries paths and user text.
+///
+/// Returns 1 sent · -1 invalid input · -2 no consent · -3 no DSN.
+///
+/// # Safety
+/// All non-null pointers must be valid null-terminated UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_telemetry_capture_host_exception(
+    host_ptr: *const c_char,
+    source_ptr: *const c_char,
+    type_ptr: *const c_char,
+    frames_ptr: *const c_char,
+    fatal: c_int,
+) -> c_int {
+    if host_ptr.is_null() || source_ptr.is_null() || type_ptr.is_null() {
+        return -1;
+    }
+    let (Ok(host), Ok(source), Ok(ty)) = (
+        CStr::from_ptr(host_ptr).to_str(),
+        CStr::from_ptr(source_ptr).to_str(),
+        CStr::from_ptr(type_ptr).to_str(),
+    ) else {
+        return -1;
+    };
+    let frames = if frames_ptr.is_null() {
+        ""
+    } else {
+        CStr::from_ptr(frames_ptr).to_str().unwrap_or("")
+    };
+    // Reached from crash handlers: a panic here would turn one crash into
+    // an abort that loses the report.
+    std::panic::catch_unwind(|| {
+        crate::telemetry::capture_host_exception(host, source, ty, frames, fatal == 1)
+    })
+    .unwrap_or(-1) as c_int
+}
+
 // ── Typed telemetry dispatcher (host-driven events) ──────────────
 //
 // Many events fire from UI surfaces that Rust doesn't see directly:
@@ -10876,6 +11076,12 @@ pub extern "C" fn dimmy_autostart_set_enabled(enabled: c_int) -> c_int {
         }
         Err(e) => {
             log(&format!("[autostart] set failed: {}", e));
+            crate::telemetry::report(
+                crate::telemetry::Subsystem::Config,
+                "autostart_failed",
+                "",
+                &e.to_string(),
+            );
             -1
         }
     }
@@ -13008,6 +13214,20 @@ pub(crate) mod tests {
     /// leg under "unknown", because the status was thrown away before the
     /// call. 413 gets its own category so the hint can name both causes
     /// without anyone reading the response body.
+    #[test]
+    fn a_cli_exit_code_is_not_reported_as_an_http_status() {
+        let exit = crate::error::LlmError::Api {
+            status: 1,
+            body: String::new(),
+        };
+        assert_eq!(llm_report_kind(&exit, "client_error"), "cli_exit");
+        let http = crate::error::LlmError::Api {
+            status: 400,
+            body: String::new(),
+        };
+        assert_eq!(llm_report_kind(&http, "client_error"), "client_error");
+    }
+
     #[test]
     fn llm_http_status_reaches_the_category() {
         let too_large = crate::error::LlmError::Api {
@@ -15159,6 +15379,12 @@ pub unsafe extern "C" fn dimmy_calendar_candidates(
         }
         Err(e) => {
             log(&format!("[Calendar] fetch failed: {}", e));
+            crate::telemetry::report(
+                crate::telemetry::Subsystem::Integration,
+                crate::telemetry::sanitize::error_category(&e.to_string(), None),
+                "calendar",
+                &e.to_string(),
+            );
             serde_json::json!({ "ok": false, "error": format!("{}", e) }).to_string()
         }
     };

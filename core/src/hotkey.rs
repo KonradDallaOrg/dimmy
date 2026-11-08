@@ -1003,6 +1003,12 @@ mod platform {
             let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_proc), 0, 0);
             if hook == 0 {
                 log_fn("ERROR: Failed to install keyboard hook");
+                crate::telemetry::report(
+                    crate::telemetry::Subsystem::Hotkey,
+                    "hook_install_failed",
+                    "windows",
+                    "",
+                );
                 return;
             }
             HOOK_HANDLE.store(hook, Ordering::SeqCst);

@@ -181,6 +181,8 @@ fn notify_audio_stream_error(stream_role: &str, format: &str, err: &cpal::Stream
         stream_role, format, kind
     );
     crate::ffi::emit_event("audio.stream_error", &payload);
+    // No detail: a backend error can name the device.
+    crate::telemetry::report(crate::telemetry::Subsystem::Audio, kind, stream_role, "");
 }
 
 /// Sample rate (Hz) of the currently active cpal mic stream. Set to
@@ -942,6 +944,12 @@ pub fn spawn_audio_thread(
                             }
                             None => {
                                 crate::log("[Audio] ERROR: No usable audio device for the requested source");
+                                crate::telemetry::report(
+                                    crate::telemetry::Subsystem::Audio,
+                                    "no_device",
+                                    "",
+                                    "",
+                                );
                                 continue;
                             }
                         };
@@ -971,6 +979,12 @@ pub fn spawn_audio_thread(
                                     "[Audio] ERROR: Failed to get primary config: {}",
                                     e
                                 ));
+                                crate::telemetry::report(
+                                    crate::telemetry::Subsystem::Audio,
+                                    "primary_config_failed",
+                                    "",
+                                    "",
+                                );
                                 continue;
                             }
                         };
@@ -1204,6 +1218,12 @@ pub fn spawn_audio_thread(
                                     "[Audio] ERROR: Unsupported sample format: {:?}",
                                     config.sample_format()
                                 ));
+                                crate::telemetry::report(
+                                    crate::telemetry::Subsystem::Audio,
+                                    "unsupported_sample_format",
+                                    "",
+                                    "",
+                                );
                                 // Tell the USER too — without a stream this
                                 // recording captures pure silence and before
                                 // 2026-07-02 the only trace was dimmy.log.
@@ -1229,6 +1249,12 @@ pub fn spawn_audio_thread(
                                     "[Audio] ERROR: Failed to build primary stream: {}",
                                     e
                                 ));
+                                crate::telemetry::report(
+                                    crate::telemetry::Subsystem::Audio,
+                                    "primary_stream_build_failed",
+                                    "",
+                                    "",
+                                );
                                 continue;
                             }
                         }
@@ -2059,6 +2085,12 @@ fn build_secondary_stream(
                     "[Audio] Secondary loopback default_output_config failed: {}",
                     e
                 ));
+                crate::telemetry::report(
+                    crate::telemetry::Subsystem::Audio,
+                    "loopback_config_failed",
+                    "",
+                    "",
+                );
                 return None;
             }
         }
@@ -2075,6 +2107,12 @@ fn build_secondary_stream(
             }
             Err(e) => {
                 crate::log(&format!("[Audio] Secondary config failed: {}", e));
+                crate::telemetry::report(
+                    crate::telemetry::Subsystem::Audio,
+                    "secondary_config_failed",
+                    "",
+                    "",
+                );
                 return None;
             }
         }
@@ -2324,6 +2362,12 @@ fn build_secondary_stream(
         Ok(s) => Some(s),
         Err(e) => {
             crate::log(&format!("[Audio] Secondary build failed: {}", e));
+            crate::telemetry::report(
+                crate::telemetry::Subsystem::Audio,
+                "secondary_build_failed",
+                "",
+                "",
+            );
             None
         }
     }

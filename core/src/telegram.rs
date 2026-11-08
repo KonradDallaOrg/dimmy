@@ -409,6 +409,12 @@ mod imp {
                     Ok(rt) => rt,
                     Err(e) => {
                         crate::log(&format!("[Telegram] runtime build failed: {e}"));
+                        crate::telemetry::report(
+                            crate::telemetry::Subsystem::Integration,
+                            "runtime_build_failed",
+                            "telegram",
+                            "",
+                        );
                         if let Ok(mut g) = TX.lock() {
                             *g = None;
                         }

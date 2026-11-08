@@ -1302,6 +1302,12 @@ pub fn save_config_file(cfg: &AppConfig) {
         let body = serde_json::to_string_pretty(&json).unwrap_or_default();
         if let Err(e) = write_atomic(&path, body.as_bytes()) {
             log(&format!("[config] save failed: {e}"));
+            crate::telemetry::report(
+                crate::telemetry::Subsystem::Config,
+                "save_failed",
+                "",
+                &e.to_string(),
+            );
         }
     }
 }
