@@ -813,32 +813,17 @@ enum MeetingPostProcessService {
         return ""
     }
 
-    /// `llm_mode` from the on-disk config, same direct-read pattern as
-    /// `currentLlmApiUrl()` so it works off the main actor.
+    /// `llm_mode` from the core's config snapshot (never config.json, which
+    /// can lag the core). Works off the main actor, like `pickRecapModel()`.
     fileprivate static func currentLlmMode() -> String {
-        guard let cfgURL = DimmyCore.shared.configDirURL?
-            .appendingPathComponent("config.json"),
-              let data = try? Data(contentsOf: cfgURL),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let mode = json["llm_mode"] as? String
-        else { return "" }
-        return mode
+        DimmyCore.shared.getConfig()?["llm_mode"] as? String ?? ""
     }
 
-    /// Read `llm_api_url` from the on-disk config so the telemetry
-    /// provider bucket reflects whatever's currently selected. Same
-    /// "read config.json directly" pattern as `pickRecapModel()` so
-    /// we can call this from non-MainActor contexts without a hop.
-    /// Empty string on any failure — the bucket helper degrades to
-    /// "unset" which the Rust dispatcher allow-lists.
+    /// `llm_api_url` from the core's config snapshot, so the telemetry
+    /// provider bucket reflects whatever's currently selected. Empty string
+    /// on any failure — the bucket helper degrades to "unset" which the
+    /// Rust dispatcher allow-lists.
     fileprivate static func currentLlmApiUrl() -> String {
-        guard let cfgURL = DimmyCore.shared.configDirURL?
-            .appendingPathComponent("config.json")
-        else { return "" }
-        guard let data = try? Data(contentsOf: cfgURL),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let url = json["llm_api_url"] as? String
-        else { return "" }
-        return url
+        DimmyCore.shared.getConfig()?["llm_api_url"] as? String ?? ""
     }
 }

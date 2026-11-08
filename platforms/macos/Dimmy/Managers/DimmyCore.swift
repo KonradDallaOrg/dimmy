@@ -47,6 +47,10 @@ final class DimmyCore {
     /// the History page showed empty.
     private static let historyBufferSize: Int32 = 4 << 20
 
+    /// Config snapshot (4 MB). It carries the prompts, the dictionary and
+    /// the app rules, and a cut snapshot parses as nothing.
+    private static let configBufferSize: Int32 = 4 << 20
+
     private init() {}
 
     /// True once `initialize()` has returned success. FFI calls panic
@@ -196,7 +200,7 @@ final class DimmyCore {
 
     /// Get full config as parsed JSON dictionary.
     func getConfig() -> [String: Any]? {
-        let bufLen = Self.bufferSize
+        let bufLen = Self.configBufferSize
         let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
         defer { buffer.deallocate() }
         buffer[0] = 0

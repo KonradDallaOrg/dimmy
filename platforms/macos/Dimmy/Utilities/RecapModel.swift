@@ -10,7 +10,7 @@ import Foundation
 // Together, Fireworks, OpenRouter) we keep their configured model —
 // those are usually the right call already.
 //
-// `pickRecapModel` reads `config.json` directly (instead of round-
+// `pickRecapModel` reads the core's config snapshot (instead of round-
 // tripping AppState) so it can be called from non-MainActor contexts
 // like the auto-recap worker thread without paying for a hop back.
 // It checks the user's `recap_model_override` first; if empty, falls
