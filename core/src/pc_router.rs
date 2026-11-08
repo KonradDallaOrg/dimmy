@@ -1556,18 +1556,28 @@ fn live_prob() -> f32 {
 /// "done" signal there is (a second identical partial never arrives).
 const LIVE_QUIET_MS: u64 = 600;
 
+/// Any other command is complete after this long without new words: it then
+/// goes the whole way (app commands, router, Claude), or is dropped.
+const SEGMENT_QUIET_MS: u64 = 1500;
+
 struct Obs {
     ms: u128,
+    /// The words after the last command, the ones this partial adds.
     text: String,
+    /// Words of the whole session transcript at this partial.
+    words: usize,
     plan: Option<Plan>,
     margin: f32,
 }
 
 struct Shadow {
     started: std::time::Instant,
+    /// Partials since the last command.
     obs: Vec<Obs>,
-    /// A live rule already ran the command: the stop must not run it again.
-    fired: bool,
+    /// Words of the session transcript already used by a command, or dropped.
+    used: usize,
+    /// Commands handled while the user talked (run, failed or dropped).
+    handled: u32,
 }
 
 /// Live execution is on unless DIMMY_PC_LIVE=0.
@@ -1577,22 +1587,26 @@ fn live_enabled() -> bool {
         .unwrap_or(true)
 }
 
-/// True once a live partial ran the command in this session.
-pub fn live_fired() -> bool {
-    SHADOW
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .as_ref()
-        .is_some_and(|s| s.fired)
+/// The words the stop still has to run, once the session handled a command
+/// (empty: nothing left). None: no command ran, the stop runs the transcript.
+pub fn session_rest() -> Option<String> {
+    let g = SHADOW.lock().unwrap_or_else(|e| e.into_inner());
+    let s = g.as_ref()?;
+    (s.handled > 0).then(|| s.obs.last().map(|o| o.text.clone()).unwrap_or_default())
 }
 
 static SHADOW: Mutex<Option<Shadow>> = Mutex::new(None);
+
+/// Commands of one session run one at a time, in the order they were said:
+/// "apri Notepad++" must be done before "salva tutto" looks for its menu.
+static RUN: Mutex<()> = Mutex::new(());
 
 pub fn shadow_begin() {
     *SHADOW.lock().unwrap_or_else(|e| e.into_inner()) = Some(Shadow {
         started: std::time::Instant::now(),
         obs: Vec::new(),
-        fired: false,
+        used: 0,
+        handled: 0,
     });
 }
 
@@ -1607,48 +1621,68 @@ fn recording_execute() -> bool {
     )
 }
 
-/// Run the plan of the partial observed at `ms` if it is still the newest
-/// one, sure, harmless, and nothing ran yet. The claim is taken under the
-/// lock, so the stop path (which checks `live_fired`) never runs it twice.
-fn try_fire(ms: u128, why: &str) {
-    if !live_enabled() || !recording_execute() {
-        return;
+/// The words a partial adds after the `used` ones, and its word count.
+/// None when it adds nothing (Nemotron may also revise words it sent).
+fn segment(cumulative: &str, used: usize) -> Option<(String, usize)> {
+    let w: Vec<&str> = cumulative.split_whitespace().collect();
+    (w.len() > used).then(|| (w[used..].join(" "), w.len()))
+}
+
+/// Take the partial observed at `ms` as a finished command, if it is still
+/// the newest one: its words are used from now on, the next command starts
+/// after them. `live_only` takes it only when its plan is sure and harmless.
+fn claim(s: &mut Shadow, ms: u128, live_only: bool) -> Option<(String, Option<Plan>)> {
+    let o = s.obs.last().filter(|o| o.ms == ms)?;
+    let sure = o.margin >= live_prob() && o.plan.as_ref().is_some_and(crate::pc_control::live_safe);
+    if live_only && !sure {
+        return None;
     }
-    let claimed = {
-        let mut g = SHADOW.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(s) = g.as_mut() else { return };
-        let ready = !s.fired
-            && s.obs.last().is_some_and(|o| {
-                o.ms == ms
-                    && o.margin >= live_prob()
-                    && o.plan.as_ref().is_some_and(crate::pc_control::live_safe)
-            });
-        if !ready {
-            return;
-        }
-        s.fired = true;
-        let o = s.obs.last().expect("ready implies an observation");
-        (
-            o.plan.clone().expect("ready implies a plan"),
-            o.text.clone(),
-        )
-    };
-    let (plan, text) = claimed;
+    let taken = (o.text.clone(), o.plan.clone().filter(|_| sure));
+    assert!(
+        o.words > s.used,
+        "a partial is observed only when it adds words"
+    );
+    s.used = o.words;
+    s.handled += 1;
+    s.obs.clear();
+    Some(taken)
+}
+
+/// Run what a claim took, after the commands before it, then read the
+/// window in front again: the next command may be for the app just opened.
+fn run_claimed(text: String, plan: Option<Plan>, why: &str) {
+    let _order = RUN.lock().unwrap_or_else(|e| e.into_inner());
     let t = std::time::Instant::now();
-    let result = crate::pc_control::run(&plan);
+    let (out, ran) = match plan {
+        Some(p) => {
+            let r = crate::pc_control::run(&p);
+            let out = crate::pc_control::Outcome {
+                ok: r.is_ok(),
+                said: p.say.clone(),
+                paste: r.as_ref().ok().cloned().flatten(),
+                engine: "live".into(),
+                error: r.err().map(|e| crate::truncate_utf8(&e, 200).to_string()),
+                ..Default::default()
+            };
+            (out, Some(p))
+        }
+        // Claude only for two words or more: one word that no rule knows
+        // is more often a cut word or a noise than a command.
+        None => crate::ffi::pc_execute_text(&text, text.split_whitespace().count() >= 2),
+    };
     crate::log(&format!(
-        "[PcLive] fired ({why}) at {ms} ms on {text:?}: {:?} -> {:?} in {} ms",
-        plan.steps,
-        result.as_ref().map(|_| "ok"),
+        "[PcLive] {why} on {text:?}: {:?} ok={} error={:?} in {} ms",
+        ran.as_ref().map(|p| &p.steps),
+        out.ok,
+        out.error,
         t.elapsed().as_millis()
     ));
-    let fired = serde_json::json!({
-        "say": plan.say,
-        "text": text,
-        "ok": result.is_ok(),
-        "error": result.err(),
-    });
+    let mut fired = serde_json::to_value(&out).unwrap_or_default();
+    fired["text"] = text.into();
+    fired["say"] = out.said.clone().into();
     crate::ffi::emit_event("pc_live_fired", &fired.to_string());
+    std::thread::sleep(std::time::Duration::from_millis(700));
+    crate::pc_appcmds::capture_foreground();
 }
 
 /// A partial transcript arrived. Only an execute session that is still
@@ -1657,15 +1691,16 @@ pub fn shadow_observe(cumulative: &str) {
     if !recording_execute() {
         return;
     }
-    let text = cumulative.trim().to_string();
-    let ms = {
+    let (ms, text, words) = {
         let g = SHADOW.lock().unwrap_or_else(|e| e.into_inner());
-        match g.as_ref() {
-            Some(s) if !text.is_empty() && s.obs.last().map(|o| o.text != text).unwrap_or(true) => {
-                s.started.elapsed().as_millis()
-            }
-            _ => return,
+        let Some(s) = g.as_ref() else { return };
+        let Some((text, words)) = segment(cumulative, s.used) else {
+            return;
+        };
+        if s.obs.last().is_some_and(|o| o.text == text) {
+            return;
         }
+        (s.started.elapsed().as_millis(), text, words)
     };
     std::thread::spawn(move || {
         let (plan, margin, detail) = route_scored(&text, &crate::pc_control::known_names());
@@ -1687,6 +1722,7 @@ pub fn shadow_observe(cumulative: &str) {
             s.obs.push(Obs {
                 ms,
                 text: text.clone(),
+                words,
                 plan: plan.clone(),
                 margin,
             });
@@ -1706,13 +1742,30 @@ pub fn shadow_observe(cumulative: &str) {
             "live_safe": plan.as_ref().is_some_and(crate::pc_control::live_safe),
         });
         crate::ffi::emit_event("pc_live", &payload.to_string());
-        if stable {
-            try_fire(ms, "stable");
-        } else if sure {
+        if !live_enabled() {
+            return;
+        }
+        let mut waited = 0;
+        if !stable {
+            waited = LIVE_QUIET_MS;
             std::thread::sleep(std::time::Duration::from_millis(LIVE_QUIET_MS));
-            try_fire(ms, "pause");
+        }
+        if let Some((text, plan)) = take(ms, true) {
+            return run_claimed(text, plan, if stable { "stable" } else { "pause" });
+        }
+        std::thread::sleep(std::time::Duration::from_millis(SEGMENT_QUIET_MS - waited));
+        if let Some((text, plan)) = take(ms, false) {
+            run_claimed(text, plan, "segment end");
         }
     });
+}
+
+fn take(ms: u128, live_only: bool) -> Option<(String, Option<Plan>)> {
+    if !recording_execute() {
+        return None;
+    }
+    let mut g = SHADOW.lock().unwrap_or_else(|e| e.into_inner());
+    claim(g.as_mut()?, ms, live_only)
 }
 
 fn same_plan(a: &Plan, b: &Plan) -> bool {
@@ -2079,6 +2132,63 @@ mod tests {
         }
         eprintln!("basic took {taken}/{total}, wrong {wrong}");
         assert_eq!(wrong, 0);
+    }
+
+    #[test]
+    fn a_session_runs_each_command_on_its_own_words() {
+        assert_eq!(
+            segment("apri Notepad++", 0),
+            Some(("apri Notepad++".into(), 2))
+        );
+        assert_eq!(
+            segment("apri Notepad++ salva tutto", 2),
+            Some(("salva tutto".into(), 4))
+        );
+        assert_eq!(segment("apri Notepad++", 2), None);
+        let mut s = Shadow {
+            started: std::time::Instant::now(),
+            obs: Vec::new(),
+            used: 0,
+            handled: 0,
+        };
+        let sure = Plan {
+            say: String::new(),
+            steps: vec![Step::Media {
+                action: "play_pause".into(),
+            }],
+        };
+        let obs = |ms, text: &str, words, plan: Option<Plan>, margin| Obs {
+            ms,
+            text: text.into(),
+            words,
+            plan,
+            margin,
+        };
+        s.obs.push(obs(10, "pausa", 1, Some(sure.clone()), 1.0));
+        assert!(
+            claim(&mut s, 9, true).is_none(),
+            "an older partial is not taken"
+        );
+        let (text, plan) = claim(&mut s, 10, true).unwrap();
+        assert_eq!((text.as_str(), plan.is_some()), ("pausa", true));
+        assert_eq!((s.used, s.handled, s.obs.len()), (1, 1, 0));
+        // Not sure: the pause leaves it, the end of the command takes it.
+        s.obs.push(obs(20, "salva tutto", 3, None, 0.2));
+        assert!(claim(&mut s, 20, true).is_none());
+        let (text, plan) = claim(&mut s, 20, false).unwrap();
+        assert_eq!((text.as_str(), plan.is_none()), ("salva tutto", true));
+        assert_eq!(s.used, 3);
+        s.obs.push(obs(30, "e chiudi", 5, None, 0.1));
+        *SHADOW.lock().unwrap() = Some(s);
+        assert_eq!(session_rest().as_deref(), Some("e chiudi"));
+        *SHADOW.lock().unwrap() = None;
+        shadow_begin();
+        assert_eq!(
+            session_rest(),
+            None,
+            "no command ran: the stop runs the transcript"
+        );
+        *SHADOW.lock().unwrap() = None;
     }
 
     #[test]

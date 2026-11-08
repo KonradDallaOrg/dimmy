@@ -46,7 +46,7 @@ public sealed partial class PcLiveWindow : Window
         w.NextText.Text = !high
             ? "Continua pure: non ho ancora capito bene"
             : waitsForStop
-                ? "Azione delicata: premi di nuovo il tasto per farla"
+                ? "La faccio quando smetti di parlare"
                 : "Fai una pausa e lo faccio";
         w._closeTimer.Stop();
     }

@@ -8851,34 +8851,59 @@ pub unsafe extern "C" fn dimmy_pc_execute(
     let Ok(text) = CStr::from_ptr(text_ptr).to_str() else {
         return -1;
     };
+    let text = text.to_string();
+    // Commands already ran while the user talked: only the words after the
+    // last one are left. Running the whole transcript would repeat them.
+    #[cfg(feature = "pc-router")]
+    let text = match crate::pc_router::session_rest() {
+        None => text,
+        Some(rest) if rest.trim().is_empty() => {
+            crate::pc_router::shadow_finish(None);
+            let out = crate::pc_control::Outcome {
+                ok: true,
+                engine: "live".into(),
+                said: "Sessione chiusa".into(),
+                ..Default::default()
+            };
+            log("[PcControl] engine=live: the session ran its commands, nothing is left");
+            let json = serde_json::to_string(&out).unwrap_or_default();
+            return write_to_buf(&json, out_buf, buf_len);
+        }
+        Some(rest) => {
+            log(&format!(
+                "[PcControl] session: the stop runs the {} words left",
+                rest.split_whitespace().count()
+            ));
+            rest
+        }
+    };
+    let (out, _plan) = pc_execute_text(&text, true);
+    #[cfg(feature = "pc-router")]
+    crate::pc_router::shadow_finish(_plan.as_ref());
+    let json = serde_json::to_string(&out).unwrap_or_default();
+    write_to_buf(&json, out_buf, buf_len)
+}
+
+/// One spoken command, start to end: "cosa posso dire?", a command of the
+/// app in front, the local router, then Claude (only when `allow_claude`).
+/// Returns the outcome and the plan that ran, if any.
+pub(crate) fn pc_execute_text(
+    text: &str,
+    allow_claude: bool,
+) -> (crate::pc_control::Outcome, Option<crate::pc_control::Plan>) {
     let mut out = crate::pc_control::Outcome {
         engine: "claude".into(),
         ..Default::default()
     };
     let t0 = std::time::Instant::now();
-    // A live partial already ran this command: running it again from the
-    // final transcript would undo or repeat it.
-    #[cfg(feature = "pc-router")]
-    if crate::pc_router::live_fired() {
-        crate::pc_router::shadow_finish(None);
-        out.ok = true;
-        out.engine = "live".into();
-        out.said = "Già fatto mentre parlavi".into();
-        log("[PcControl] engine=live: already run on a partial, the stop does nothing");
-        let json = serde_json::to_string(&out).unwrap_or_default();
-        return write_to_buf(&json, out_buf, buf_len);
-    }
     if crate::pc_help::is_help_request(text) {
-        #[cfg(feature = "pc-router")]
-        crate::pc_router::shadow_finish(None);
         out.ok = true;
         out.engine = "help".into();
         out.said = "Ecco cosa puoi dire".into();
         out.help = Some(crate::pc_help::help_now());
         out.plan_ms = t0.elapsed().as_millis() as u64;
         log("[PcControl] engine=help: listed what can be said");
-        let json = serde_json::to_string(&out).unwrap_or_default();
-        return write_to_buf(&json, out_buf, buf_len);
+        return (out, None);
     }
     // DIMMY_PC_ENGINE: "auto" (default: local router, Claude when unsure),
     // "e5" (local only), "claude" (Claude only).
@@ -8895,8 +8920,6 @@ pub unsafe extern "C" fn dimmy_pc_execute(
                     label: cmd.label.clone(),
                 }],
             };
-            #[cfg(feature = "pc-router")]
-            crate::pc_router::shadow_finish(Some(&plan));
             match crate::pc_control::run(&plan) {
                 Ok(_) => out.ok = true,
                 Err(e) => out.error = Some(crate::truncate_utf8(&e, 200).to_string()),
@@ -8907,8 +8930,7 @@ pub unsafe extern "C" fn dimmy_pc_execute(
                 "[PcControl] engine=app \"{}\" ok={} error={:?}",
                 cmd.label, out.ok, out.error
             ));
-            let json = serde_json::to_string(&out).unwrap_or_default();
-            return write_to_buf(&json, out_buf, buf_len);
+            return (out, Some(plan));
         }
         crate::pc_appcmds::Match::Refused(cmd) => {
             out.engine = "app".into();
@@ -8920,8 +8942,7 @@ pub unsafe extern "C" fn dimmy_pc_execute(
                 "[PcControl] engine=app refused risky \"{}\"",
                 cmd.label
             ));
-            let json = serde_json::to_string(&out).unwrap_or_default();
-            return write_to_buf(&json, out_buf, buf_len);
+            return (out, None);
         }
         crate::pc_appcmds::Match::None => {}
     }
@@ -8940,14 +8961,13 @@ pub unsafe extern "C" fn dimmy_pc_execute(
             out.engine = "e5".into();
             Ok(plan)
         }
-        None if engine == "e5" => Err(format!(
-            "the local router passed ({})",
+        None if engine == "e5" || !allow_claude => Err(format!(
+            "non ho capito ({})",
             out.router.clone().unwrap_or_default()
         )),
         None => crate::pc_control::plan_with_claude(text, &pc_planner_model()),
     };
-    #[cfg(feature = "pc-router")]
-    crate::pc_router::shadow_finish(planned.as_ref().ok());
+    let mut ran = None;
     match planned {
         Ok(plan) => {
             out.plan_ms = t0.elapsed().as_millis() as u64;
@@ -8961,6 +8981,7 @@ pub unsafe extern "C" fn dimmy_pc_execute(
                 Err(e) => out.error = Some(crate::truncate_utf8(&e, 200).to_string()),
             }
             out.act_ms = t1.elapsed().as_millis() as u64;
+            ran = Some(plan);
         }
         Err(e) => {
             out.plan_ms = t0.elapsed().as_millis() as u64;
@@ -8971,8 +8992,7 @@ pub unsafe extern "C" fn dimmy_pc_execute(
         "[PcControl] engine={} router={:?} ok={} plan_ms={} act_ms={} error={:?}",
         out.engine, out.router, out.ok, out.plan_ms, out.act_ms, out.error
     ));
-    let json = serde_json::to_string(&out).unwrap_or_default();
-    write_to_buf(&json, out_buf, buf_len)
+    (out, ran)
 }
 
 /// Set (or clear) the optional meeting start/stop shortcut. Mirrors

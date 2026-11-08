@@ -1657,6 +1657,7 @@ public partial class App : Application
     private void OnPcLive(System.Text.Json.JsonElement p)
     {
         if (!_appViewModel.ExecuteOneShot) return;
+        RestartPcSessionTimeout();
         string S(string n) => p.TryGetProperty(n, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String ? v.GetString() ?? "" : "";
         bool B(string n) => p.TryGetProperty(n, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.True;
         var detail = S("detail");
@@ -1682,32 +1683,60 @@ public partial class App : Application
         Views.PcLiveWindow.Update(S("text"), say, guess, sureness, B("sure") && !B("live_safe"));
     }
 
-    /// <summary>EXPERIMENT (exp/pc-actions): the core already ran the command
-    /// from a live partial. End the recording without transcribing (a stop
-    /// that raced it is skipped in the core) and say what was done.</summary>
-    private void OnPcLiveFired(System.Text.Json.JsonElement p)
+    /// <summary>EXPERIMENT (exp/pc-actions): the core ran one command of the
+    /// open session (or dropped words it did not understand). The recording
+    /// goes on: the next command is said without pressing the key again.
+    /// Pressing it closes the session.</summary>
+    private async void OnPcLiveFired(System.Text.Json.JsonElement p)
     {
         string S(string n) => p.TryGetProperty(n, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String ? v.GetString() ?? "" : "";
         var ok = p.TryGetProperty("ok", out var o) && o.ValueKind == System.Text.Json.JsonValueKind.True;
-        PttLog($"Execute LIVE: \"{S("text")}\" -> {S("say")} ok={ok} {S("error")}");
-        if (_appViewModel.ExecuteOneShot && Services.DictationSession.IsRecording)
+        PttLog($"Execute LIVE: \"{S("text")}\" -> {S("said")} ok={ok} {S("error")}");
+        RestartPcSessionTimeout();
+        var help = S("help");
+        if (help.Length > 0)
         {
-            _appViewModel.SuppressRecordingStarted = true;
-            DimmyNative.dimmy_cancel_recording();
-            Services.DictationSession.Cancel();
-            _appViewModel.ExecuteOneShot = false;
-            _targetContext = null;
+            Views.PcLiveWindow.ShowHelp(help);
+            return;
         }
-        Views.PcLiveWindow.Finish(S("say"), ok ? "✓ Fatto mentre parlavi" : $"Non ci sono riuscito: {S("error")}");
-        if (ok)
+        const string next = "Dimmi il prossimo comando, o premi il tasto per chiudere";
+        Views.PcLiveWindow.Finish(S("said"), ok ? $"✓ Fatto. {next}" : $"Non fatto: {S("error")}. {next}");
+        Services.DictNotificationService.ShowPcAction(ok ? S("said") : "Non fatto", ok ? S("text") : S("error"));
+        var paste = S("paste");
+        if (ok && paste.Length > 0)
         {
-            Services.DictNotificationService.ShowPcAction(S("say"), "Fatto mentre parlavi");
-            _appViewModel.SetState(AppState.Completing);
+            await Task.Delay(150);
+            await TextInjectionService.PasteText(paste, _appViewModel.KeepInClipboard);
         }
-        else
+    }
+
+    /// <summary>An open command session with nothing said for this long closes
+    /// itself, so the microphone is not left on. Restarted by every partial
+    /// and every command: a timeout, not a poll.</summary>
+    private static readonly TimeSpan PcSessionIdle = TimeSpan.FromSeconds(60);
+    private DispatcherTimer? _pcSessionTimer;
+
+    private void RestartPcSessionTimeout()
+    {
+        if (_pcSessionTimer == null)
         {
-            _appViewModel.SetError(S("error"));
+            _pcSessionTimer = new DispatcherTimer { Interval = PcSessionIdle };
+            _pcSessionTimer.Tick += (_, _) =>
+            {
+                _pcSessionTimer.Stop();
+                if (!_appViewModel.ExecuteOneShot || !Services.DictationSession.IsRecording) return;
+                PttLog("Execute: session idle for 60 s, closing it");
+                _appViewModel.SuppressRecordingStarted = true;
+                DimmyNative.dimmy_cancel_recording();
+                Services.DictationSession.Cancel();
+                _appViewModel.ExecuteOneShot = false;
+                _targetContext = null;
+                _appViewModel.SetState(AppState.Idle);
+                Views.PcLiveWindow.Finish("", "Sessione chiusa: nessun comando da un minuto");
+            };
         }
+        _pcSessionTimer.Stop();
+        _pcSessionTimer.Start();
     }
 
     /// <summary>Type one finalised streaming-dictation segment at the
@@ -1989,6 +2018,7 @@ public partial class App : Application
         {
             _appViewModel.ExecuteOneShot = true;
             DimmyNative.dimmy_pc_prepare();
+            RestartPcSessionTimeout();
         }
         _appViewModel.SuppressRecordingStarted = false;
         var result = DimmyNative.dimmy_start_recording();
@@ -2299,7 +2329,10 @@ public partial class App : Application
                 _appViewModel.SetState(AppState.Idle);
                 return;
             }
-            if (engineUsed != "live")
+            _pcSessionTimer?.Stop();
+            if (engineUsed == "live")
+                Views.PcLiveWindow.Finish("", said);
+            else
                 Views.PcLiveWindow.Finish(said, error == null
                     ? (engineUsed == "e5" ? "✓ Fatto (ho capito da solo)"
                         : engineUsed == "app" ? "✓ Fatto (comando dell'app)"
