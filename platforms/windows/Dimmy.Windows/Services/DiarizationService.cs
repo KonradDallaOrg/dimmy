@@ -16,11 +16,9 @@ public static class DiarizationService
     {
         try
         {
-            var buf = new byte[1 << 14];
-            int n = DimmyNative.dimmy_get_config_json(buf, buf.Length);
-            if (n <= 0) return false;
-            using var doc = System.Text.Json.JsonDocument.Parse(
-                System.Text.Encoding.UTF8.GetString(buf, 0, n));
+            var cfgJson = DimmyNative.ConfigJson();
+            if (string.IsNullOrEmpty(cfgJson)) return false;
+            using var doc = System.Text.Json.JsonDocument.Parse(cfgJson);
             // Local STT only: re-transcribing with a cloud provider would
             // upload the whole meeting a second time. There, labels come from
             // an explicit "Regenerate transcript" instead.

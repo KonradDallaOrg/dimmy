@@ -16,7 +16,7 @@ public static class StatsConsent
     {
         try
         {
-            var json = DimmyNative.ReadBuffer(DimmyNative.dimmy_get_config_json, 65536);
+            var json = DimmyNative.ConfigJson();
             if (string.IsNullOrEmpty(json)) return false;
             using var doc = JsonDocument.Parse(json);
             return !doc.RootElement.TryGetProperty("analytics_consent", out var v)

@@ -190,10 +190,9 @@ public static class MeetingPostProcessService
     {
         try
         {
-            var buf = new byte[1 << 14];
-            int n = DimmyNative.dimmy_get_config_json(buf, buf.Length);
-            if (n <= 0) return false;
-            var json = System.Text.Encoding.UTF8.GetString(buf, 0, n);
+            var cfgJson = DimmyNative.ConfigJson();
+            if (string.IsNullOrEmpty(cfgJson)) return false;
+            var json = cfgJson;
             using var doc = System.Text.Json.JsonDocument.Parse(json);
             return doc.RootElement.TryGetProperty("notion_auto_send", out var el)
                 && el.GetBoolean();
@@ -275,10 +274,9 @@ public static class MeetingPostProcessService
     {
         try
         {
-            var buf = new byte[1 << 14];
-            int n = DimmyNative.dimmy_get_config_json(buf, buf.Length);
-            if (n <= 0) return "";
-            var json = System.Text.Encoding.UTF8.GetString(buf, 0, n);
+            var cfgJson = DimmyNative.ConfigJson();
+            if (string.IsNullOrEmpty(cfgJson)) return "";
+            var json = cfgJson;
             using var doc = System.Text.Json.JsonDocument.Parse(json);
             return doc.RootElement.TryGetProperty(key, out var el) ? el.GetString() ?? "" : "";
         }
@@ -289,10 +287,9 @@ public static class MeetingPostProcessService
     {
         try
         {
-            var buf = new byte[1 << 14];
-            int n = DimmyNative.dimmy_get_config_json(buf, buf.Length);
-            if (n <= 0) return "";
-            var json = System.Text.Encoding.UTF8.GetString(buf, 0, n);
+            var cfgJson = DimmyNative.ConfigJson();
+            if (string.IsNullOrEmpty(cfgJson)) return "";
+            var json = cfgJson;
             using var doc = System.Text.Json.JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("llm_api_url", out var el))
                 return el.GetString() ?? "";

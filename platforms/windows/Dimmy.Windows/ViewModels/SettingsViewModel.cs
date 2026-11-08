@@ -157,6 +157,16 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool _callDetectEnabled = true;
     [ObservableProperty] private bool _callDetectAutoRecord;
     public ObservableCollection<string> CallDetectExcludedApps { get; } = new();
+
+    /// The core adds an exclusion on its own when the user picks "Never" on
+    /// the call nudge. An open Settings window must take the core's list,
+    /// or its next save sends the old list back and drops the new entry.
+    public void ReplaceCallDetectExcludedApps(IEnumerable<string> apps)
+    {
+        var fresh = apps.ToList();
+        CallDetectExcludedApps.Clear();
+        foreach (var a in fresh) CallDetectExcludedApps.Add(a);
+    }
     [ObservableProperty] private bool _saveAudioInHistory = false;
     [ObservableProperty] private int _historyAudioKeepDays = 30;
     [ObservableProperty] private int _historyAudioMaxMb = 5_000;
@@ -537,7 +547,10 @@ public partial class SettingsViewModel : ObservableObject
     /// are designed to prevent).
     private string ToJsonFull() => ToJson(includeNotion: true, includeLlm: true, includeRecap: true);
 
-    public void LoadFromJson(string json)
+    /// <summary>False when the JSON could not be read. The caller must then
+    /// not save: every field still holds its default, and a save would send
+    /// those defaults to the core as the user's config.</summary>
+    public bool LoadFromJson(string json)
     {
         try
         {
@@ -764,8 +777,12 @@ public partial class SettingsViewModel : ObservableObject
             }
 
             _snapshotJson = ToJsonFull();
+            return true;
         }
-        catch (JsonException) { }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+        {
+            return false;
+        }
     }
 
     /// Replace the input-device list with a fresh enumeration. The selection

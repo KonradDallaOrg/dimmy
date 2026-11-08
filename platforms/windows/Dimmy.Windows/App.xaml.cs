@@ -1618,24 +1618,11 @@ public partial class App : Application
 
     private void LoadConfigIntoViewModel()
     {
-        // Always read from config.json file — it's the complete source of truth.
+        // The core's snapshot, never config.json: it holds every persisted
+        // field and cannot lag the core's in-memory state.
         string? json = null;
-        try
-        {
-            var path = Path.Combine(Services.BuildInfo.ConfigDirPath, "config.json");
-            PttLog($"LoadConfig: looking for {path}, exists={File.Exists(path)}");
-            if (File.Exists(path))
-                json = File.ReadAllText(path);
-        }
-        catch (Exception ex) { PttLog($"LoadConfig: file read error: {ex.Message}"); }
-
-        // Fallback to FFI if file not found
-        if (string.IsNullOrEmpty(json))
-        {
-            PttLog("LoadConfig: file empty/missing, falling back to FFI");
-            try { json = DimmyNative.ReadBuffer(DimmyNative.dimmy_get_config_json, 16384); }
-            catch (Exception ex) { PttLog($"LoadConfig: FFI error: {ex.Message}"); }
-        }
+        try { json = DimmyNative.ConfigJson(); }
+        catch (Exception ex) { PttLog($"LoadConfig: FFI error: {ex.Message}"); }
 
         if (json == null) { PttLog("LoadConfig: no config available"); return; }
 
@@ -2317,8 +2304,10 @@ public partial class App : Application
         {
             DimmyNative.dimmy_call_signal_response(appId, "never");
             // Rust persisted the exclusion to disk via save_config_file.
-            // Refresh the VM's mirror so Settings reflects it immediately.
-            _appViewModel.RefreshCallDetectExclusions();
+            // Refresh the VM's mirror, and the open Settings window's list:
+            // that is the list Settings saves.
+            if (_appViewModel.RefreshCallDetectExclusions())
+                _settingsWindow?.ViewModel.ReplaceCallDetectExcludedApps(_appViewModel.CallDetectExcludedApps);
         }
         catch (Exception ex)
         {
@@ -2771,14 +2760,33 @@ public partial class App : Application
         }
     }
 
-    public async void QuitApp() => await QuitAsync();
+    public async void QuitApp() => await QuitSafelyAsync();
 
     /// <summary>Sync facade for callers that can't await (tray menu
     /// callback delegate, jump-list command pipe). Fire-and-forget —
     /// the UI thread continues normally while the async path tears
     /// services down. Equivalent to QuitApp(); the rename keeps the
     /// public surface intuitive for external callers.</summary>
-    private void Quit() => _ = QuitAsync();
+    private void Quit() => _ = QuitSafelyAsync();
+
+    private bool _coreShutDown;
+
+    /// <summary>QuitApp is async void: an exception from the teardown would
+    /// crash the process instead of quitting it. Log it, and still finish the
+    /// quit the user asked for, so no half-disposed app stays running.</summary>
+    private async Task QuitSafelyAsync()
+    {
+        try
+        {
+            await QuitAsync();
+        }
+        catch (Exception ex)
+        {
+            Log($"QuitAsync EXC: {ex}", "App");
+            try { if (!_coreShutDown) DimmyNative.dimmy_shutdown(); } catch { }
+            try { Exit(); } catch (Exception exitEx) { Log($"Exit EXC: {exitEx.Message}", "App"); }
+        }
+    }
 
     private async Task QuitAsync()
     {
@@ -2833,6 +2841,7 @@ public partial class App : Application
         catch { }
 
         DimmyNative.dimmy_shutdown();
+        _coreShutDown = true;
 
         _singleInstanceMutex?.ReleaseMutex();
         _singleInstanceMutex?.Dispose();

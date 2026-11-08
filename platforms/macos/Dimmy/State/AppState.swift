@@ -1041,6 +1041,10 @@ final class AppState: ObservableObject {
     /// renderers that hold their own buffer) can observe a primitive
     /// counter and re-render. Same pattern as `liveCaptionTick`.
     @Published var meetingChunkTick: Int = 0
+    /// Increments by 1 each time a history row is written or changed outside
+    /// the History page (dictation saved, enhanced text backfilled, file
+    /// load). The History page reloads on it instead of polling the core.
+    @Published var historyTick: Int = 0
     @Published var lastTranscript: String = ""
     @Published var lastError: String?
     @Published var hotkeyStatus: HotkeyStatus = .uninstalled

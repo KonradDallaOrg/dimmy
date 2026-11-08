@@ -59,6 +59,37 @@ public class SettingsViewModelTests
     }
 
     [Fact]
+    public void LoadFromJson_accepts_the_core_getter_snapshot()
+    {
+        // Shape of dimmy_get_config_json: nulls for unset options, the
+        // devices array, and runtime-only keys next to the persisted ones.
+        var vm = new SettingsViewModel();
+        var ok = vm.LoadFromJson("""
+        {
+            "language": "it",
+            "llm_style": "correct",
+            "llm_tone": "none",
+            "selected_device": null,
+            "analytics_consent": null,
+            "crash_reports_consent": null,
+            "devices": ["Mic A", "Mic B"],
+            "input_gain": 1.0,
+            "loopback_gain": 1.0,
+            "meeting_chunk_secs": 30.0,
+            "stats_total_speaking_secs": 12.5,
+            "app_rules": [],
+            "has_key": true,
+            "has_llm_groq_key": false,
+            "has_notion_token": false
+        }
+        """);
+        Assert.True(ok);
+        Assert.Equal("it", vm.Language);
+        Assert.Equal("correct", vm.LlmStyle);
+        Assert.Equal(100, vm.InputGainPercent);
+    }
+
+    [Fact]
     public void ToJson_ProducesValidJson()
     {
         var vm = new SettingsViewModel();
@@ -561,6 +592,42 @@ public class SettingsViewModelTests
         Assert.Equal("Dots", vm.WaveformStyle);
         Assert.Equal("Top Left", vm.OverlayPosition);
         Assert.True(vm.KeepInClipboard);
+    }
+
+    // Settings auto-saves only when the load succeeded. A load that failed
+    // quietly left every field at its default, and the next auto-save sent
+    // those defaults to the core as the user's whole config.
+    [Theory]
+    [InlineData("{ \"language\": \"it\", ")]   // cut mid-write
+    [InlineData("not json")]
+    [InlineData("{\"language\": 5}")]          // wrong type: GetString throws
+    public void LoadFromJson_reports_failure_on_unreadable_config(string json)
+    {
+        var vm = new SettingsViewModel();
+        Assert.False(vm.LoadFromJson(json));
+    }
+
+    // "Never" on the call nudge adds an exclusion in the core while Settings
+    // is open. The open window must save the core's list, not the one it
+    // loaded, or the new exclusion is dropped on the next save.
+    [Fact]
+    public void Replaced_exclusion_list_is_the_one_saved()
+    {
+        var vm = new SettingsViewModel();
+        vm.LoadFromJson("{\"call_detect_excluded_apps\":[\"teams\"]}");
+        vm.ReplaceCallDetectExcludedApps(new[] { "teams", "zoom" });
+        var saved = System.Text.Json.JsonDocument.Parse(vm.ToJson()).RootElement
+            .GetProperty("call_detect_excluded_apps");
+        Assert.Equal(new[] { "teams", "zoom" },
+            System.Linq.Enumerable.Select(saved.EnumerateArray(), e => e.GetString()));
+    }
+
+    [Fact]
+    public void LoadFromJson_reports_success_on_valid_config()
+    {
+        var vm = new SettingsViewModel();
+        Assert.True(vm.LoadFromJson("{\"language\":\"it\"}"));
+        Assert.Equal("it", vm.Language);
     }
 
     [Fact]

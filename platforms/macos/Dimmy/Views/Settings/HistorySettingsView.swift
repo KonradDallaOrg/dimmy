@@ -13,7 +13,6 @@ struct HistorySettingsView: View {
     @State private var transcripts: [HistoryEntry] = []
     @State private var stats: [String: Any]?
     @State private var selected: HistoryEntry?
-    @State private var refreshTimer: Timer?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -42,16 +41,12 @@ struct HistorySettingsView: View {
         .onAppear {
             loadTranscripts()
             loadStats()
-            refreshTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { _ in
-                Task { @MainActor in
-                    self.loadTranscripts()
-                    self.loadStats()
-                }
-            }
         }
-        .onDisappear {
-            refreshTimer?.invalidate()
-            refreshTimer = nil
+        // No polling (CLAUDE.md): reload when a row is written elsewhere.
+        // Search and delete reload on their own.
+        .onChange(of: appState.historyTick) { _, _ in
+            loadTranscripts()
+            loadStats()
         }
         .sheet(item: $selected) { entry in
             HistoryDetailSheet(

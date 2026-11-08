@@ -492,10 +492,9 @@ public static class DimmyNative
     ///   { "process_name": "slack.exe", "bundle_id": "", "wm_class": "" }
     /// Pass any subset of keys; missing ones default to empty string.
     /// Returns 0 on success, non-zero on parse error.
-    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl,
-        CharSet = CharSet.Ansi, BestFitMapping = false, ThrowOnUnmappableChar = true)]
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_set_app_context(
-        [MarshalAs(UnmanagedType.LPStr)] string json);
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string json);
 
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern void dimmy_clear_app_context();
@@ -860,6 +859,30 @@ public static class DimmyNative
         int len = ffiCall(buf, buf.Length);
         if (len < 0) return null;
         return System.Text.Encoding.UTF8.GetString(buf, 0, len);
+    }
+
+    /// <summary>The core's config snapshot. Read every <c>dimmy_get_config_json</c>
+    /// through this: the core truncates silently at the buffer size, and the
+    /// snapshot (prompts, dictionary, app rules, device list) outgrows any
+    /// fixed buffer — a truncated snapshot fails to parse and the caller falls
+    /// back to defaults.</summary>
+    public static string? ConfigJson() => ReadGrowing(dimmy_get_config_json);
+
+    /// <summary>For getters that truncate silently and reject a null probe:
+    /// a result that fills the buffer may be cut, so retry with a larger one.
+    /// The core never cuts a UTF-8 character, so a cut result can stop up to
+    /// 3 bytes short of bufLen - 1. Returns null past 16 MB rather than hand
+    /// back a cut string.</summary>
+    internal static string? ReadGrowing(Func<byte[], int, int> ffiCall)
+    {
+        for (int size = 1 << 16; size <= 1 << 24; size <<= 2)
+        {
+            var buf = new byte[size];
+            int len = ffiCall(buf, size);
+            if (len < 0) return null;
+            if (len < size - 4) return System.Text.Encoding.UTF8.GetString(buf, 0, len);
+        }
+        return null;
     }
 
     /// <summary>Marshal the event callback JSON pointer to a C# string.</summary>
@@ -1294,11 +1317,15 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_claude_desktop_status(byte[] outBuf, int bufLen);
 
-    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
-    public static extern int dimmy_claude_desktop_install(string binaryPath, string versionPtr);
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_claude_desktop_install(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string binaryPath,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string versionPtr);
 
-    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
-    public static extern int dimmy_claude_desktop_refresh(string binaryPath, string versionPtr);
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_claude_desktop_refresh(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string binaryPath,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string versionPtr);
 
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_claude_desktop_uninstall();

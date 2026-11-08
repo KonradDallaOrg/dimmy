@@ -19,6 +19,7 @@ public sealed partial class SettingsWindow : Window
     public SettingsViewModel ViewModel { get; } = new();
     private string _currentTag = "home";
     private bool _loaded; // suppress SelectionChanged during init
+    private bool _configLoadFailed;
 
     // File-load → meeting bridge. Captured at successful file-load
     // completion so the "Run recap as meeting" button can mint a
@@ -339,7 +340,10 @@ public sealed partial class SettingsWindow : Window
         RefreshMeetingFolderDisplay();
         RefreshRecapExportFolderDisplay();
 
-        _loaded = true;
+        // A failed load leaves _loaded false: every save path checks it, so the
+        // defaults in the ViewModel never reach the core as the user's config.
+        _loaded = !_configLoadFailed;
+        ConfigLoadErrorBar.IsOpen = _configLoadFailed;
         // Now that selections are established + _loaded is true, run one auth
         // refresh so the provider/model pickers get filtered to the connected
         // providers (RebuildCombo no-ops while loading).
@@ -1473,25 +1477,19 @@ public sealed partial class SettingsWindow : Window
 
     private void LoadConfig()
     {
-        // Read from config.json file first — it has all fields including UI-only ones.
-        // Cartella DEVE matchare quella che il Rust core usa: prod →
-        // `dimmy/`, staging-flavor → `dimmy-staging/`. Hardcoding
-        // "dimmy" qui faceva sì che un binario con
-        // DIMMY_BUILD_FLAVOR=staging leggesse dalla cartella prod, poi
-        // sovrascrivesse la cartella staging con UI state vuoto via
-        // dimmy_set_config_json — silently distruggendo `app_rules`,
-        // `user_dict`, ecc. salvati dal Rust. Burned 2026-05-12.
-        string? fileJson = null;
-        try
-        {
-            var path = System.IO.Path.Combine(Services.BuildInfo.ConfigDirPath, "config.json");
-            if (System.IO.File.Exists(path))
-                fileJson = System.IO.File.ReadAllText(path);
-        }
-        catch { }
+        // The core's snapshot holds every persisted field plus the
+        // runtime-only ones (has_*_key, devices). Never read config.json
+        // here: the file can lag the core's state, and a save built from a
+        // stale read overwrites the newer values.
+        string? ffiJson = null;
+        try { ffiJson = DimmyNative.ConfigJson(); }
+        catch (Exception ex) { App.Log($"LoadConfig: FFI error: {ex.Message}", "Settings"); }
 
-        if (!string.IsNullOrEmpty(fileJson))
-            ViewModel.LoadFromJson(fileJson);
+        if (string.IsNullOrEmpty(ffiJson) || !ViewModel.LoadFromJson(ffiJson))
+        {
+            _configLoadFailed = true;
+            App.Log("LoadConfig: the core config could not be read — Settings stays read-only so defaults are never saved over it", "Settings");
+        }
 
         // Win-only UI prefs live outside config.json (CLAUDE.md
         // single-writer rule). Pull them in so the toggles in the Pill
@@ -1514,7 +1512,6 @@ public sealed partial class SettingsWindow : Window
         // config + waiting for Rust to round-trip.
         try
         {
-            var ffiJson = DimmyNative.ReadBuffer(DimmyNative.dimmy_get_config_json, 16384);
             if (!string.IsNullOrEmpty(ffiJson))
             {
                 using var doc = System.Text.Json.JsonDocument.Parse(ffiJson);
@@ -2689,7 +2686,7 @@ public sealed partial class SettingsWindow : Window
     {
         try
         {
-            var ffiJson = DimmyNative.ReadBuffer(DimmyNative.dimmy_get_config_json, 16384);
+            var ffiJson = DimmyNative.ConfigJson();
             if (string.IsNullOrEmpty(ffiJson)) return;
             using var doc = System.Text.Json.JsonDocument.Parse(ffiJson);
             _sttKeyByProvider.Clear();
@@ -4760,6 +4757,7 @@ public sealed partial class SettingsWindow : Window
 
     private void Save_Click(object sender, RoutedEventArgs e)
     {
+        if (!_loaded) { _autoSaveDone = true; this.Close(); return; }
         // Pull password values from PasswordBoxes into ViewModel before serializing
         if (!string.IsNullOrEmpty(CloudApiKeyBox.Password))
             ViewModel.ApiKey = CloudApiKeyBox.Password;
@@ -4798,7 +4796,7 @@ public sealed partial class SettingsWindow : Window
     /// edits. Same code path Save_Click uses, minus the Close() call.
     private void AutoSaveOnClose()
     {
-        if (_autoSaveDone) return;
+        if (_autoSaveDone || !_loaded) return;
         try
         {
             if (!string.IsNullOrEmpty(CloudApiKeyBox?.Password))
@@ -5047,8 +5045,7 @@ public sealed partial class SettingsWindow : Window
         {
             try
             {
-                var json = Interop.DimmyNative.ReadBuffer(
-                    Interop.DimmyNative.dimmy_get_config_json, 16384);
+                var json = Interop.DimmyNative.ConfigJson();
                 if (!string.IsNullOrEmpty(json))
                 {
                     using var doc = System.Text.Json.JsonDocument.Parse(json);
@@ -5948,6 +5945,7 @@ public sealed partial class SettingsWindow : Window
 
     private void RemoveExcludedApp_Click(object sender, RoutedEventArgs e)
     {
+        if (!_loaded) return;
         if (sender is not FrameworkElement fe) return;
         if (fe.Tag is not string appId || string.IsNullOrEmpty(appId)) return;
         ViewModel.CallDetectExcludedApps.Remove(appId);
@@ -6149,7 +6147,7 @@ public sealed partial class SettingsWindow : Window
         {
             ViewModel.HasNotionToken = true;
         }
-        if (dlg.Completed && !string.IsNullOrEmpty(dlg.PickedTargetId))
+        if (_loaded && dlg.Completed && !string.IsNullOrEmpty(dlg.PickedTargetId))
         {
             ViewModel.NotionTargetId = dlg.PickedTargetId;
             ViewModel.NotionTargetKind = dlg.PickedTargetKind;
@@ -6227,7 +6225,7 @@ public sealed partial class SettingsWindow : Window
             // destination; pass includeNotion: true so the empty
             // strings reach Rust and wipe the state.
             var json = ViewModel.ToJson(includeNotion: true);
-            int rcCfg = DimmyNative.dimmy_set_config_json(json);
+            int rcCfg = _loaded ? DimmyNative.dimmy_set_config_json(json) : -1;
             App.Log($"Notion disconnected rcToken={rcToken} rcCfg={rcCfg}", "Notion");
             App.Instance?.ApplySettings(ViewModel);
             NotionShowMessage("Disconnected. Token and destination removed from this device.", isError: false);

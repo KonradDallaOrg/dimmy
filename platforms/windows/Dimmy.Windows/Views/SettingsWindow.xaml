@@ -3241,6 +3241,10 @@
                      VerticalAlignment="Center"/>
         </StackPanel>
       </Border>
+      <InfoBar x:Name="ConfigLoadErrorBar" IsOpen="False" IsClosable="True" Severity="Error"
+               VerticalAlignment="Center"
+               Title="Settings could not be read."
+               Message="Changes here are not saved. Your config.json was not changed." />
       <Button Content="Cancel" Click="Cancel_Click" />
       <Button Content="Save" Click="Save_Click" Style="{ThemeResource AccentButtonStyle}" />
     </StackPanel>
