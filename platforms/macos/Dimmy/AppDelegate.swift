@@ -366,11 +366,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 if self.appState.isOnboardingComplete {
                     let askTerms = !TermsPrompt.isAccepted(in: cfg)
                     let askConsent = TelemetryConsentPrompt.needsAnswer(in: cfg)
-                    if askTerms || askConsent {
-                        DispatchQueue.main.async {
-                            MainActor.assumeIsolated {
-                                if askTerms { TermsPrompt.present() }
-                                if askConsent { TelemetryConsentPrompt.present() }
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated {
+                            if askTerms { TermsPrompt.present() }
+                            // One question at a time: an unasked crash
+                            // report waits in the core for a later launch.
+                            if askConsent {
+                                TelemetryConsentPrompt.present()
+                            } else {
+                                CrashReportPrompt.presentIfPending()
                             }
                         }
                     }

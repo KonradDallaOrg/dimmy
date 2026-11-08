@@ -531,6 +531,8 @@ fn dimmy_init_inner() -> c_int {
     // own panic integration nests cleanly.
     crate::telemetry::init();
     write_init_trace("P4: telemetry init returned");
+    #[cfg(debug_assertions)]
+    crate::telemetry::crash_dump::crash_on_request();
 
     // Load config
     let file_cfg = load_config_file();
@@ -10654,6 +10656,54 @@ pub extern "C" fn dimmy_telemetry_set_crash_enabled(enabled: c_int) -> c_int {
     crate::telemetry::set_crash_enabled(enabled != 0);
     save_consent(&state().crash_reports_consent, enabled != 0);
     0
+}
+
+/// A native crash from the previous launch is waiting for the user's answer
+/// (crash reports are off or not answered yet). Returns 1 exactly once per
+/// crash: the host shows its "Dimmy closed unexpectedly" dialog now, then
+/// calls `dimmy_crash_report_resolve`. 0 = nothing to ask.
+#[no_mangle]
+pub extern "C" fn dimmy_crash_report_prompt() -> c_int {
+    if crate::telemetry::crash_prompt::take_prompt() {
+        1
+    } else {
+        0
+    }
+}
+
+/// The user's answer to that dialog. `send` 1 = send this one report even
+/// though crash reports are off; 0 = delete it. Returns 1 sent, 0 deleted,
+/// -1 nothing was pending. "Always send" is the host's existing
+/// `dimmy_telemetry_set_crash_enabled(1)`, called before this.
+#[no_mangle]
+pub extern "C" fn dimmy_crash_report_resolve(send: c_int) -> c_int {
+    crate::telemetry::crash_prompt::resolve(send != 0)
+}
+
+/// The dialog's words, localized. `kind`: `title` | `body` | `send` |
+/// `dont_send` | `always`. Returns bytes written, or -1 for an unknown kind.
+///
+/// # Safety
+/// `kind_ptr` and `lang_ptr` must be null or valid NUL-terminated strings;
+/// `out_buf` must be writable for `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_crash_report_text(
+    kind_ptr: *const c_char,
+    lang_ptr: *const c_char,
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if kind_ptr.is_null() || lang_ptr.is_null() {
+        return -1;
+    }
+    let Ok(kind) = CStr::from_ptr(kind_ptr).to_str() else {
+        return -1;
+    };
+    let lang = CStr::from_ptr(lang_ptr).to_str().unwrap_or("en");
+    match crate::telemetry::crash_prompt::text(kind, lang) {
+        Some(text) => write_to_buf(text, out_buf, buf_len),
+        None => -1,
+    }
 }
 
 /// Read the runtime crash-reporting enabled flag. 0 = off, 1 = on.

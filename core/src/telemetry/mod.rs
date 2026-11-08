@@ -19,6 +19,8 @@
 
 pub mod abort_report;
 pub mod client;
+pub mod crash_dump;
+pub mod crash_prompt;
 pub mod events;
 pub mod identity;
 pub mod report;
@@ -45,7 +47,11 @@ pub fn init() {
         identity::anonymous_id(),
     ));
     sentry_pipeline::init();
-    if let Some(previous) = crate::config_dir_path().and_then(|d| abort_report::install(&d)) {
+    let dir = crate::config_dir_path();
+    if let Some(dir) = &dir {
+        crash_dump::install(dir);
+    }
+    if let Some(previous) = dir.and_then(|d| abort_report::install(&d)) {
         crate::log(&format!(
             "[telemetry] previous launch ended in a {previous}"
         ));
@@ -79,9 +85,7 @@ pub fn apply_consent(analytics: Option<bool>, crash_reports: Option<bool>) {
     set_enabled(a);
     set_crash_enabled(c);
     let previous = PENDING_ABORT.lock().ok().and_then(|mut slot| slot.take());
-    if let Some(previous) = previous {
-        report(Subsystem::Native, "abort", "", &report::slug(&previous));
-    }
+    crash_prompt::on_launch(previous, crash_dump::collect(), c);
 }
 
 fn consent_flags(analytics: Option<bool>, crash_reports: Option<bool>) -> (bool, bool) {
@@ -163,10 +167,16 @@ mod tests {
     use super::{apply_consent, consent_flags, PENDING_ABORT};
 
     #[test]
+    #[serial_test::serial(crash_prompt)]
     fn a_pending_abort_is_handled_once_consent_is_known() {
         *PENDING_ABORT.lock().unwrap() = Some("native abort".into());
         apply_consent(None, None);
         assert!(PENDING_ABORT.lock().unwrap().is_none());
+        assert_eq!(
+            super::crash_prompt::resolve(false),
+            0,
+            "kept for the prompt"
+        );
     }
 
     #[test]

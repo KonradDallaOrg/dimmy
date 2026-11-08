@@ -378,6 +378,27 @@ extension DimmyCore {
         return Data(bytes: ptr, count: Int(len))
     }
 
+    /// Words of the "Dimmy closed unexpectedly" dialog, from the core.
+    func crashReportText(kind: String, lang: String) -> String? {
+        let cap = 1024
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: cap)
+        defer { buffer.deallocate() }
+        buffer[0] = 0
+        let written = kind.withCString { k in
+            lang.withCString { l in
+                dimmy_crash_report_text(k, l, buffer, Int32(cap))
+            }
+        }
+        guard written > 0 else { return nil }
+        return String(cString: buffer)
+    }
+
+    /// True once per crash: show the dialog now.
+    func takeCrashReportPrompt() -> Bool { dimmy_crash_report_prompt() == 1 }
+
+    @discardableResult
+    func resolveCrashReport(send: Bool) -> Int32 { dimmy_crash_report_resolve(send ? 1 : 0) }
+
     func consentText(kind: String, lang: String) -> String? {
         let cap = 4096
         let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: cap)

@@ -781,6 +781,23 @@ public partial class App : Application
         }
     }
 
+    /// <summary>A native crash last launch and crash reports off: ask once
+    /// whether to send that one report. Never together with the consent
+    /// question; the core keeps the report for a later launch.</summary>
+    private void ShowCrashReportPromptIfNeeded()
+    {
+        try
+        {
+            if (!Services.CrashReportChoice.ShouldAsk(Services.StatsConsent.NeedsAsking())) return;
+            if (Interop.DimmyNative.dimmy_crash_report_prompt() != 1) return;
+            new Views.CrashReportWindow().Activate();
+        }
+        catch (Exception ex)
+        {
+            PttLog($"[telemetry] crash report prompt failed: {ex.Message}");
+        }
+    }
+
     private void StartNormalMode()
     {
         // Check audio device health before starting
@@ -819,6 +836,7 @@ public partial class App : Application
         InitTelegram();
         ShowTermsIfNeeded();
         ShowStatsConsentIfNeeded();
+        ShowCrashReportPromptIfNeeded();
 
         // If the launch came from a `dimmy://activate?…` URL but no
         // running instance was around to handle it, we stashed the

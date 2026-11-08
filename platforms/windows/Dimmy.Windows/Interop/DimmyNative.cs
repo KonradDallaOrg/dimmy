@@ -986,6 +986,25 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_telemetry_is_crash_enabled();
 
+    /// 1 exactly once per crash from the previous launch that waits for the
+    /// user's answer (crash reports off). See Views/CrashReportWindow.cs.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_crash_report_prompt();
+
+    /// send 1 = send that one report, 0 = delete it. 1 sent, 0 deleted, -1 none.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_crash_report_resolve(int send);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_crash_report_text(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string kind,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string lang,
+        byte[] outBuf, int bufLen);
+
+    /// kind = "title" | "body" | "send" | "dont_send" | "always".
+    public static string? CrashReportText(string kind, string lang) =>
+        ReadBuffer((buf, len) => dimmy_crash_report_text(kind, lang, buf, len), 1024);
+
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_telemetry_capture_feedback(
         [MarshalAs(UnmanagedType.LPUTF8Str)] string? kind,

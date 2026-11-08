@@ -224,6 +224,27 @@ where it happened and the stack trace (function names and source file names).
 It does not send the error message, because that text can contain file
 names or your text.
 
+If Dimmy stops inside native code (a speech or language engine, a GPU
+driver), there is no error message to send. On Windows Dimmy then writes a
+small crash file (a "minidump", usually under 2 MB) in its settings folder,
+in `crashes`. It holds the list of loaded program files (names only, no
+folders) and the call stack of each thread: the return addresses and the
+other numbers that look like memory addresses, nothing else. It holds no
+memory of the program's data, no open-file list and no environment
+variables. A stack can still hold a few small values that look like
+addresses by chance; they are not text or audio. At the next launch:
+
+- If you said yes to crash reports, Dimmy sends the file to Sentry EU with
+  the app version, OS and the installation ID, then deletes it.
+- If you did not, Dimmy asks once: "Dimmy closed unexpectedly last time.
+  Send the crash report so we can fix it?". **Send** sends only that one
+  report, even with crash reports off. **Don't send**, or closing the
+  window, deletes it. The box "Always send crash reports" turns crash
+  reports on, the same as the switch in Settings. On macOS the same
+  question is asked after a native abort.
+
+A crash file that is not sent is deleted after 7 days.
+
 ### Feedback
 
 **Settings → Send feedback** sends the text you type to Sentry, and your
