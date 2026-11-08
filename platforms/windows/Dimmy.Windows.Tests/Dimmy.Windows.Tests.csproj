@@ -28,6 +28,7 @@
     <Compile Include="..\Dimmy.Windows\Services\CallMediaSockets.cs" Link="Services\CallMediaSockets.cs" />
     <Compile Include="..\Dimmy.Windows\Services\ToastDuration.cs" Link="Services\ToastDuration.cs" />
     <Compile Include="..\Dimmy.Windows\Services\UpdateGate.cs" Link="Services\UpdateGate.cs" />
+    <Compile Include="..\Dimmy.Windows\Services\CommandPipeServer.cs" Link="Services\CommandPipeServer.cs" />
     <Compile Include="..\Dimmy.Windows\Services\VersionDisplay.cs" Link="Services\VersionDisplay.cs" />
     <Compile Include="..\Dimmy.Windows\Helpers\HardwareInfo.cs" Link="Helpers\HardwareInfo.cs" />
     <Compile Include="..\Dimmy.Windows\Helpers\InputDeviceChoice.cs" Link="Helpers\InputDeviceChoice.cs" />
