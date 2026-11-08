@@ -64,6 +64,32 @@ pub fn bundle_present() -> bool {
 /// What the v3 bundle expands to on disk, measured.
 pub const BUNDLE_SIZE_MB: u32 = 466;
 
+/// FluidAudio 0.12.6 throws `invalidAudioData` for fewer samples than this
+/// (`AsrManager.transcribeWithState` and `transcribeStreaming` both guard
+/// `>= 16_000`): one second at 16 kHz.
+#[cfg(feature = "local-stt-parakeet-fluid")]
+const ENGINE_MIN_SAMPLES: usize = 16_000;
+
+/// What a recording under the minimum is padded to. Measured on four
+/// 0.8-0.9 s cuts of `jfk_16k_mono.wav` (M-series, 2026-11-08): padded to
+/// 1.0 s one came back empty and one cut short; at 1.5 s all four were
+/// whole; at 3.0 s one was empty again.
+#[cfg(feature = "local-stt-parakeet-fluid")]
+const PADDED_SAMPLES: usize = 24_000;
+
+/// A recording shorter than the engine takes, followed by silence. Silence
+/// after the last word is what a longer recording of the same words has.
+#[cfg(feature = "local-stt-parakeet-fluid")]
+fn padded_to_engine_minimum(pcm_16k: &[f32]) -> std::borrow::Cow<'_, [f32]> {
+    if pcm_16k.len() >= ENGINE_MIN_SAMPLES {
+        return std::borrow::Cow::Borrowed(pcm_16k);
+    }
+    let mut padded = pcm_16k.to_vec();
+    padded.resize(PADDED_SAMPLES, 0.0);
+    assert!(padded.len() >= ENGINE_MIN_SAMPLES);
+    std::borrow::Cow::Owned(padded)
+}
+
 #[cfg(feature = "local-stt-parakeet-fluid")]
 pub use inference::{download_bundle, transcribe, warmup};
 
@@ -213,6 +239,7 @@ mod inference {
         if pcm_16k.is_empty() {
             return Ok(String::new());
         }
+        let pcm_16k = padded_to_engine_minimum(pcm_16k);
         ensure_loaded()?;
         let mtx = lock();
         let g = mtx
@@ -239,7 +266,7 @@ mod inference {
         {
             let mut w = hound::WavWriter::create(&tmp, spec)
                 .map_err(|e| TranscribeError::LocalModel(format!("temp wav create: {e}")))?;
-            for s in pcm_16k {
+            for s in pcm_16k.iter() {
                 let clamped = s.clamp(-1.0, 1.0);
                 let i = (clamped * 32767.0) as i16;
                 w.write_sample(i)
@@ -274,6 +301,48 @@ mod tests {
             "unexpected cache dir: {}",
             s
         );
+    }
+
+    /// RUST-4: FluidAudio refuses anything under one second with
+    /// `invalidAudioData`, which reached the user as "Transcription failed"
+    /// for every short dictation ("sì", "ok, invia"). The ONNX path on
+    /// Windows and Linux takes them.
+    #[cfg(feature = "local-stt-parakeet-fluid")]
+    #[test]
+    fn a_dictation_under_one_second_is_transcribed() {
+        if !bundle_present() {
+            eprintln!("skipped: no FluidAudio Parakeet bundle on this machine");
+            return;
+        }
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/jfk_16k_mono.wav"
+        );
+        let mut r = hound::WavReader::open(path).expect("fixture");
+        let pcm: Vec<f32> = r
+            .samples::<i16>()
+            .map(|s| s.expect("sample") as f32 / 32768.0)
+            .collect();
+        // "My fellow Americans": 0.9 s, from 1.0 s in.
+        let short = &pcm[16_000..30_400];
+        let text = transcribe(short).expect("a short dictation transcribes");
+        assert!(!text.trim().is_empty(), "speech came back empty");
+    }
+
+    #[cfg(feature = "local-stt-parakeet-fluid")]
+    #[test]
+    fn short_audio_is_padded_with_silence_and_long_audio_is_untouched() {
+        let short = vec![0.5f32; 9_600];
+        let padded = padded_to_engine_minimum(&short);
+        assert_eq!(padded.len(), PADDED_SAMPLES);
+        assert_eq!(&padded[..9_600], &short[..]);
+        assert!(padded[9_600..].iter().all(|&s| s == 0.0));
+
+        let long = vec![0.5f32; ENGINE_MIN_SAMPLES + 1];
+        assert!(matches!(
+            padded_to_engine_minimum(&long),
+            std::borrow::Cow::Borrowed(_)
+        ));
     }
 
     #[test]
