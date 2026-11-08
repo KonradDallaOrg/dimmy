@@ -370,7 +370,10 @@ fn write_to_buf(s: &str, buf: *mut c_char, buf_len: c_int) -> c_int {
     }
     let bytes = s.as_bytes();
     let max = (buf_len - 1) as usize; // leave room for null terminator
-    let copy_len = bytes.len().min(max);
+    let mut copy_len = bytes.len().min(max);
+    while !s.is_char_boundary(copy_len) {
+        copy_len -= 1;
+    }
 
     // Negative space: copy_len must fit within buffer (excluding null terminator)
     assert!(
@@ -13783,6 +13786,21 @@ pub(crate) mod tests {
             };
             assert_eq!(actual, *kind, "key {key}");
         }
+    }
+
+    #[test]
+    fn write_to_buf_never_cuts_a_utf8_character() {
+        // 'è' is two bytes, so a 3-byte buffer (2 + NUL) holds only "a".
+        let mut buf = [0x7fu8; 3];
+        let n = write_to_buf("a\u{e8}", buf.as_mut_ptr() as *mut c_char, 3);
+        assert_eq!(n, 1);
+        assert_eq!(&buf[..2], b"a\0");
+        let mut whole = [0u8; 4];
+        assert_eq!(
+            write_to_buf("a\u{e8}", whole.as_mut_ptr() as *mut c_char, 4),
+            3
+        );
+        assert_eq!(std::str::from_utf8(&whole[..3]).unwrap(), "a\u{e8}");
     }
 
     // ── dimmy_set_config_json tests ─────────────────────────────────
