@@ -102,6 +102,9 @@ public class LegalDialogTests : IDisposable
         client.Connect(1000);
         using var writer = new StreamWriter(client) { AutoFlush = true };
         writer.WriteLine(command);
+        // Same as CommandPipeServer.TrySendCommand: closing before the server
+        // waits for the connection loses the command.
+        client.WaitForPipeDrain();
         return command;
     }
 
