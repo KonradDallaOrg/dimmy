@@ -35,11 +35,10 @@ public sealed partial class SettingsWindow
     {
         try
         {
-            var buf = new byte[1 << 16];
-            int n = Interop.DimmyNative.dimmy_get_config_json(buf, buf.Length);
-            if (n <= 0) return false;
+            var cfgJson = Interop.DimmyNative.ConfigJson();
+            if (string.IsNullOrEmpty(cfgJson)) return false;
             using var doc = System.Text.Json.JsonDocument.Parse(
-                System.Text.Encoding.UTF8.GetString(buf, 0, n));
+                cfgJson);
             return doc.RootElement.TryGetProperty("gemini_cli_enabled", out var v)
                    && v.GetBoolean();
         }

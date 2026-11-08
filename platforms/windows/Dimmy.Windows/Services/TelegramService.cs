@@ -59,7 +59,7 @@ public sealed class TelegramService : IDisposable
     {
         try
         {
-            var cfg = DimmyNative.ReadBuffer(DimmyNative.dimmy_get_config_json, 16384);
+            var cfg = DimmyNative.ConfigJson();
             bool enabled = false;
             if (!string.IsNullOrEmpty(cfg))
             {

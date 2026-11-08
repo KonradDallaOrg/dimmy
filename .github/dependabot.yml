@@ -1,0 +1,17 @@
+# Keeps the SHA pins in .github/workflows/ current. Every third-party action
+# is pinned to a full commit SHA with the release it came from in a trailing
+# comment (`@<sha> # vX.Y.Z`); Dependabot reads that comment and moves both.
+# dtolnay/rust-toolchain is pinned to its `stable` branch head (`# stable`),
+# which Dependabot cannot track: bump that SHA by hand.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: staging
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore(ci)"
+    groups:
+      actions-minor-patch:
+        update-types: [minor, patch]

@@ -60,6 +60,7 @@ struct ClaudeConnectSheet: View {
     @State private var signInRunning: Bool = false
     @State private var copiedFlash: Bool = false
     @State private var pollTimer: Timer? = nil
+    @State private var recheckInFlight = false
 
     private var selectedCommand: String { commandSource.command }
     private var claudeOk: Bool { claudeStatus != .notInstalled }
@@ -307,27 +308,51 @@ struct ClaudeConnectSheet: View {
     }
 
     private func recheck() {
-        let s = DimmyCore.shared.recheckClaudeCode()
-        claudeStatus = s
-        binaryPath = DimmyCore.shared.claudeCodeBinaryPath
-        if ready { signInRunning = false; stopPoll() }
+        recheckOffMain { _ in
+            if ready { signInRunning = false; stopPoll() }
+        }
     }
 
     // MARK: - Polling (page 3 only)
+    //
+    // Documented exception to the no-FFI-polling rule: what is being awaited
+    // is an EXTERNAL change (an install finishing, a browser login in another
+    // process). The core cannot emit an event for something it has not
+    // observed. Stops on success and on sheet dismissal.
+    //
+    // The recheck itself runs OFF the main thread: the core may spawn a
+    // login shell (`zsh -l -c`) to find the CLI, which can take seconds and
+    // froze the sheet every 2 s. One recheck at a time; a tick that finds
+    // one in flight is skipped.
 
     private func startPoll() {
         stopPoll()
         let t = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
-            let s = DimmyCore.shared.recheckClaudeCode()
-            claudeStatus = s
-            binaryPath = DimmyCore.shared.claudeCodeBinaryPath
-            if s == .ready {
-                signInRunning = false
-                stopPoll()
+            recheckOffMain { _ in
+                if ready {
+                    signInRunning = false
+                    stopPoll()
+                }
             }
         }
         RunLoop.main.add(t, forMode: .common)
         pollTimer = t
+    }
+
+    private func recheckOffMain(_ after: @escaping (_ wasReady: Bool) -> Void) {
+        guard !recheckInFlight else { return }
+        recheckInFlight = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            let s = DimmyCore.shared.recheckClaudeCode()
+            let path = DimmyCore.shared.claudeCodeBinaryPath
+            DispatchQueue.main.async {
+                recheckInFlight = false
+                let was = claudeStatus == .ready
+                claudeStatus = s
+                binaryPath = path
+                after(was)
+            }
+        }
     }
 
     private func stopPoll() {

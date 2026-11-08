@@ -69,6 +69,8 @@ extension DimmyCore {
             default: return .failure(.unknown(Int(rc)))
             }
         }
+        // dimmy_transcribe_file saves the result to history.
+        DispatchQueue.main.async { AppState.shared.historyTick += 1 }
         if rc == 0 { return .success("") }
         return .success(String(cString: buffer))
     }

@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-If you find a security issue in Dimmy, please email **konrad.dalla@gmail.com** with a description and reproduction steps. Do not open a public GitHub issue for security reports — we want to fix the bug before it's broadcast.
+If you find a security issue in Dimmy, please email **security@dimmy.app** with a description and reproduction steps. Do not open a public GitHub issue for security reports — we want to fix the bug before it's broadcast.
 
 We aim to acknowledge reports within 72 hours and ship a fix in the next release (or sooner, if the issue is critical).
 

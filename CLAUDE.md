@@ -334,6 +334,8 @@ vice versa). Memorise:
 
 > **BEFORE pushing any signed Windows tag (`v*-staging.N`; later `v*-rcN` / `v*`): (1) the self-hosted runner must be ONLINE (`./run.cmd` → "Listening for Jobs"), and (2) SimplySign Desktop must be OPEN + LOGGED IN (session ~3h).** If not, the `sign-windows` job fails — but `build-windows` already uploaded UNSIGNED assets, so the release still works; just log into SimplySign and re-run the `sign-windows` job. Manual fallback: `scripts/dev/firma-release.ps1 -Tag <tag>` signs the downloaded installer post-hoc. Full setup in memory `reference_windows_code_signing_certum`.
 
+Both signing runners (C: `PC-KONRAD`, D: `PC-KDALLA`) need the pre-job guard installed, or a PR on this public repo can run code on them: [`docs/dev/signing-runner-hardening.md`](docs/dev/signing-runner-hardening.md).
+
 Practical consequences:
 
 - **A `v*-rcN` tag triggers `release.yml`, NOT staging.** Cutting `v0.6.46-rc1` builds against PROD endpoints. Velopack channel `prerelease` users see it; if anyone clicks "Buy plan" Stripe Live bills them. Recommended trial-only testing on rcN — `Start trial` and `/api/activate` magic-link redemption are free in both modes.

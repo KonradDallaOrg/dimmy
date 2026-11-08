@@ -113,26 +113,27 @@ public partial class AppViewModel : ObservableObject
     /// collection. Called from App.xaml.cs after a "never" response
     /// (the Rust core just persisted to config.json — re-read so the
     /// Settings UI list updates immediately).
-    public void RefreshCallDetectExclusions()
+    /// Returns false when the core's list could not be read, so callers
+    /// do not copy a stale list onward.
+    public bool RefreshCallDetectExclusions()
     {
         try
         {
-            var buf = new byte[8192];
-            int n = Interop.DimmyNative.dimmy_get_config_json(buf, buf.Length);
-            if (n <= 0) return;
-            var json = System.Text.Encoding.UTF8.GetString(buf, 0, n);
+            var json = Interop.DimmyNative.ConfigJson();
+            if (string.IsNullOrEmpty(json)) return false;
             using var doc = System.Text.Json.JsonDocument.Parse(json);
             if (!doc.RootElement.TryGetProperty("call_detect_excluded_apps", out var arr)
                 || arr.ValueKind != System.Text.Json.JsonValueKind.Array)
-                return;
+                return false;
             CallDetectExcludedApps.Clear();
             foreach (var item in arr.EnumerateArray())
             {
                 var s = item.GetString();
                 if (!string.IsNullOrEmpty(s)) CallDetectExcludedApps.Add(s);
             }
+            return true;
         }
-        catch { /* defensive — settings list will catch up on next reload */ }
+        catch { return false; }
     }
 
     [ObservableProperty] private int _chunkCurrent;

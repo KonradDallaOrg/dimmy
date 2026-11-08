@@ -1298,99 +1298,7 @@ pub fn save_config_file(cfg: &AppConfig) {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let mut json = serde_json::json!({
-            "api_url": cfg.api_url,
-            "api_model": cfg.api_model,
-            "language": cfg.language,
-            "shortcut_mode": cfg.shortcut_mode,
-            "shortcut": cfg.shortcut,
-            "prompt": cfg.prompt,
-            "user_dict": cfg.user_dict,
-            "llm_enabled": cfg.llm_enabled,
-            "llm_style": cfg.llm_style.as_str(),
-            "llm_tone": cfg.llm_tone.as_str(),
-            "llm_custom_prompt": cfg.llm_custom_prompt,
-            "llm_translate_to": cfg.llm_translate_to,
-            "llm_api_url": cfg.llm_api_url,
-            "llm_api_model": cfg.llm_api_model,
-            "llm_use_same_key": cfg.llm_use_same_key,
-            "llm_log_enabled": cfg.llm_log_enabled,
-            "llm_auth_method": cfg.llm_auth_method,
-            "recap_auth_method": cfg.recap_auth_method,
-            "recap_use_same_key": cfg.recap_use_same_key,
-            "recap_model_override": cfg.recap_model_override,
-            "chunk_streaming_enabled": cfg.chunk_streaming_enabled,
-            "streaming_dictation": cfg.streaming_dictation,
-            "gemini_cli_enabled": cfg.gemini_cli_enabled,
-            "telegram_enabled": cfg.telegram_enabled,
-            "telegram_auto_process": cfg.telegram_auto_process,
-            "preprocessing_enabled": cfg.preprocessing_enabled,
-            "audio_debug_enabled": cfg.audio_debug_enabled,
-            "ggml_debug_logging": cfg.ggml_debug_logging,
-            "use_keyring": cfg.use_keyring,
-            "stt_mode": cfg.stt_mode,
-            "local_model": cfg.local_model,
-            "local_stt_backend": cfg.local_stt_backend,
-            "qwen_asr_model": cfg.qwen_asr_model,
-            "nemotron_model": cfg.nemotron_model,
-            "live_captions_enabled": cfg.live_captions_enabled,
-            "call_detect_enabled": cfg.call_detect_enabled,
-            "call_detect_auto_record": cfg.call_detect_auto_record,
-            "call_detect_excluded_apps": cfg.call_detect_excluded_apps,
-            "call_detect_cooldown_secs": cfg.call_detect_cooldown_secs,
-            "call_detect_min_active_secs": cfg.call_detect_min_active_secs,
-            "call_detect_timeout_cooldown_secs": cfg.call_detect_timeout_cooldown_secs,
-            "save_audio_in_history": cfg.save_audio_in_history,
-            "history_audio_keep_days": cfg.history_audio_keep_days,
-            "history_audio_max_mb": cfg.history_audio_max_mb,
-            "auto_recap_threshold_secs": cfg.auto_recap_threshold_secs,
-            "meeting_generate_recap": cfg.meeting_generate_recap,
-            "diarization_enabled": cfg.diarization_enabled,
-            "filler_removal_enabled": cfg.filler_removal_enabled,
-            "llm_mode": cfg.llm_mode,
-            "local_llm_model": cfg.local_llm_model,
-            "border_style": cfg.border_style,
-            "waveform_style": cfg.waveform_style,
-            "overlay_position": cfg.overlay_position,
-            "keep_in_clipboard": cfg.keep_in_clipboard,
-            "input_gain": cfg.input_gain,
-            "loopback_gain": cfg.loopback_gain,
-            "meeting_chunk_secs": cfg.meeting_chunk_secs,
-            "meeting_storage_path": cfg.meeting_storage_path,
-            "terms_accepted_version": cfg.terms_accepted_version,
-            "analytics_consent": cfg.analytics_consent,
-            "crash_reports_consent": cfg.crash_reports_consent,
-            "notion_target_id": cfg.notion_target_id,
-            "notion_target_kind": cfg.notion_target_kind,
-            "notion_target_title": cfg.notion_target_title,
-            "notion_auto_send": cfg.notion_auto_send,
-            "calendar_context_enabled": cfg.calendar_context_enabled,
-            "confluence_site": cfg.confluence_site,
-            "confluence_email": cfg.confluence_email,
-            "confluence_space_id": cfg.confluence_space_id,
-            "confluence_space_key": cfg.confluence_space_key,
-            "confluence_space_name": cfg.confluence_space_name,
-            "confluence_parent_id": cfg.confluence_parent_id,
-            "confluence_auto_send": cfg.confluence_auto_send,
-            "audio_source": cfg.audio_source,
-            "stats_total_words": cfg.stats_total_words,
-            "stats_total_speaking_secs": cfg.stats_total_speaking_secs,
-        });
-        // app_rules / selected_device / anchors set outside the json! macro:
-        // adding more fields to the macro pushes it past its
-        // recursion-expansion limit.
-        if let Ok(v) = serde_json::to_value(&cfg.app_rules) {
-            json["app_rules"] = v;
-        }
-        if let Some(ref dev) = cfg.selected_device {
-            json["selected_device"] = serde_json::json!(dev);
-        }
-        if let Some(r) = cfg.window_anchor_right {
-            json["window_anchor_right"] = serde_json::json!(r);
-        }
-        if let Some(b) = cfg.window_anchor_bottom {
-            json["window_anchor_bottom"] = serde_json::json!(b);
-        }
+        let json = config_to_json(cfg);
         let body = serde_json::to_string_pretty(&json).unwrap_or_default();
         if let Err(e) = write_atomic(&path, body.as_bytes()) {
             log(&format!("[config] save failed: {e}"));
@@ -1451,6 +1359,112 @@ pub fn non_empty_or(v: &serde_json::Value, default: &str) -> String {
         Some(s) if !s.trim().is_empty() => s.to_string(),
         _ => default.to_string(),
     }
+}
+
+/// The persisted form of `cfg`: exactly what `save_config_file` writes, and
+/// the base of `dimmy_get_config_json`, so the hosts can read every saved
+/// field through the core. API keys and tokens are not in `AppConfig`.
+pub fn config_to_json(cfg: &AppConfig) -> serde_json::Value {
+    let mut json = serde_json::json!({
+        "api_url": cfg.api_url,
+        "api_model": cfg.api_model,
+        "language": cfg.language,
+        "shortcut_mode": cfg.shortcut_mode,
+        "shortcut": cfg.shortcut,
+        "prompt": cfg.prompt,
+        "user_dict": cfg.user_dict,
+        "llm_enabled": cfg.llm_enabled,
+        "llm_style": cfg.llm_style.as_str(),
+        "llm_tone": cfg.llm_tone.as_str(),
+        "llm_custom_prompt": cfg.llm_custom_prompt,
+        "llm_translate_to": cfg.llm_translate_to,
+        "llm_api_url": cfg.llm_api_url,
+        "llm_api_model": cfg.llm_api_model,
+        "llm_use_same_key": cfg.llm_use_same_key,
+        "llm_log_enabled": cfg.llm_log_enabled,
+        "llm_auth_method": cfg.llm_auth_method,
+        "recap_auth_method": cfg.recap_auth_method,
+        "recap_use_same_key": cfg.recap_use_same_key,
+        "recap_model_override": cfg.recap_model_override,
+        "chunk_streaming_enabled": cfg.chunk_streaming_enabled,
+        "streaming_dictation": cfg.streaming_dictation,
+        "gemini_cli_enabled": cfg.gemini_cli_enabled,
+        "telegram_enabled": cfg.telegram_enabled,
+        "telegram_auto_process": cfg.telegram_auto_process,
+        "preprocessing_enabled": cfg.preprocessing_enabled,
+        "audio_debug_enabled": cfg.audio_debug_enabled,
+        "ggml_debug_logging": cfg.ggml_debug_logging,
+        "use_keyring": cfg.use_keyring,
+        "stt_mode": cfg.stt_mode,
+        "local_model": cfg.local_model,
+        "local_stt_backend": cfg.local_stt_backend,
+        "qwen_asr_model": cfg.qwen_asr_model,
+        "nemotron_model": cfg.nemotron_model,
+        "live_captions_enabled": cfg.live_captions_enabled,
+        "call_detect_enabled": cfg.call_detect_enabled,
+        "call_detect_auto_record": cfg.call_detect_auto_record,
+        "call_detect_excluded_apps": cfg.call_detect_excluded_apps,
+        "call_detect_cooldown_secs": cfg.call_detect_cooldown_secs,
+        "call_detect_min_active_secs": cfg.call_detect_min_active_secs,
+        "call_detect_timeout_cooldown_secs": cfg.call_detect_timeout_cooldown_secs,
+        "save_audio_in_history": cfg.save_audio_in_history,
+        "history_audio_keep_days": cfg.history_audio_keep_days,
+        "history_audio_max_mb": cfg.history_audio_max_mb,
+        "auto_recap_threshold_secs": cfg.auto_recap_threshold_secs,
+        "meeting_generate_recap": cfg.meeting_generate_recap,
+        "diarization_enabled": cfg.diarization_enabled,
+        "filler_removal_enabled": cfg.filler_removal_enabled,
+        "llm_mode": cfg.llm_mode,
+        "local_llm_model": cfg.local_llm_model,
+        "border_style": cfg.border_style,
+        "waveform_style": cfg.waveform_style,
+        "overlay_position": cfg.overlay_position,
+        "keep_in_clipboard": cfg.keep_in_clipboard,
+        "input_gain": cfg.input_gain,
+        "loopback_gain": cfg.loopback_gain,
+        "meeting_chunk_secs": cfg.meeting_chunk_secs,
+        "meeting_storage_path": cfg.meeting_storage_path,
+        "terms_accepted_version": cfg.terms_accepted_version,
+        "analytics_consent": cfg.analytics_consent,
+        "crash_reports_consent": cfg.crash_reports_consent,
+        "notion_target_id": cfg.notion_target_id,
+        "notion_target_kind": cfg.notion_target_kind,
+        "notion_target_title": cfg.notion_target_title,
+        "notion_auto_send": cfg.notion_auto_send,
+        "calendar_context_enabled": cfg.calendar_context_enabled,
+        "confluence_site": cfg.confluence_site,
+        "confluence_email": cfg.confluence_email,
+        "confluence_space_id": cfg.confluence_space_id,
+        "confluence_space_key": cfg.confluence_space_key,
+        "confluence_space_name": cfg.confluence_space_name,
+        "confluence_parent_id": cfg.confluence_parent_id,
+        "confluence_auto_send": cfg.confluence_auto_send,
+        "audio_source": cfg.audio_source,
+        "stats_total_words": cfg.stats_total_words,
+        "stats_total_speaking_secs": cfg.stats_total_speaking_secs,
+    });
+    // app_rules / selected_device / anchors set outside the json! macro:
+    // adding more fields to the macro pushes it past its
+    // recursion-expansion limit.
+    if let Ok(v) = serde_json::to_value(&cfg.app_rules) {
+        json["app_rules"] = v;
+    }
+    if let Some(ref dev) = cfg.selected_device {
+        json["selected_device"] = serde_json::json!(dev);
+    }
+    if let Some(r) = cfg.window_anchor_right {
+        json["window_anchor_right"] = serde_json::json!(r);
+    }
+    if let Some(b) = cfg.window_anchor_bottom {
+        json["window_anchor_bottom"] = serde_json::json!(b);
+    }
+    for key in json.as_object().expect("config json is an object").keys() {
+        assert!(
+            !key.contains("api_key") && !key.contains("token") && !key.contains("secret"),
+            "config_to_json: secret-like key {key} must never be persisted"
+        );
+    }
+    json
 }
 
 /// Load non-sensitive config from file. Missing LLM fields use defaults (backward compatible).

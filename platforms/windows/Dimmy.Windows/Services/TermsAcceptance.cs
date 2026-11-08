@@ -22,7 +22,7 @@ public static class TermsAcceptance
         {
             var current = DimmyNative.TermsVersion();
             if (string.IsNullOrEmpty(current)) return true; // no version to ask about
-            var json = DimmyNative.ReadBuffer(DimmyNative.dimmy_get_config_json, 65536);
+            var json = DimmyNative.ConfigJson();
             if (string.IsNullOrEmpty(json)) return false;
             using var doc = JsonDocument.Parse(json);
             return doc.RootElement.TryGetProperty("terms_accepted_version", out var v)
