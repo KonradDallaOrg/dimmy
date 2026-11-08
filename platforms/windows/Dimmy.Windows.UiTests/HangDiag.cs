@@ -149,6 +149,7 @@ public class SettingsHangRepro : IDisposable
             client.Connect(1000);
             using var w = new StreamWriter(client) { AutoFlush = true };
             w.WriteLine(cmd);
+            client.WaitForPipeDrain();
             return true;
         }
         catch { return false; }
