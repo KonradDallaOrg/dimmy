@@ -942,6 +942,9 @@ jobs:
   sign-windows:
     name: Sign Windows (self-hosted Certum)
     needs: [create-release, build-windows]
+    # Mistake guard, not a security boundary: the runner-side hook in
+    # scripts/signing-runner/ is what refuses foreign jobs.
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: [self-hosted, dimmy-sign]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
