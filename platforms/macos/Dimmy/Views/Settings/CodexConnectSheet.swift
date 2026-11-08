@@ -62,6 +62,7 @@ struct CodexConnectSheet: View {
 
     @State private var signInRunning: Bool = false
     @State private var pollTimer: Timer? = nil
+    @State private var recheckInFlight = false
 
     @State private var showInstallInfo: Bool = false
     @State private var showRunInfo: Bool = false
@@ -364,28 +365,51 @@ struct CodexConnectSheet: View {
     }
 
     private func recheck() {
-        let s = DimmyCore.shared.recheckCodex()
-        codexStatus = s
-        binaryPath = DimmyCore.shared.codexBinaryPath
-        if signedIn { signInRunning = false }
+        recheckOffMain { _ in
+            if signedIn { signInRunning = false }
+        }
     }
 
     // MARK: - Polling
+    //
+    // Documented exception to the no-FFI-polling rule: what is being awaited
+    // is an EXTERNAL change (an install finishing, a browser login in another
+    // process). The core cannot emit an event for something it has not
+    // observed. Stops on success and on sheet dismissal.
+    //
+    // The recheck itself runs OFF the main thread: the core may spawn a
+    // login shell (`zsh -l -c`) to find the CLI, which can take seconds and
+    // froze the sheet every 2 s. One recheck at a time; a tick that finds
+    // one in flight is skipped.
 
     private func startPoll() {
         stopPoll()
         let timer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
-            let prevSignedIn = signedIn
-            let s = DimmyCore.shared.recheckCodex()
-            codexStatus = s
-            binaryPath = DimmyCore.shared.codexBinaryPath
-            if signedIn {
-                signInRunning = false
-                if !prevSignedIn { stopPoll() } // fully done - stop hammering the CLI
+            recheckOffMain { prevSignedIn in
+                if signedIn {
+                    signInRunning = false
+                    if !prevSignedIn { stopPoll() } // fully done - stop hammering the CLI
+                }
             }
         }
         pollTimer = timer
         RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func recheckOffMain(_ after: @escaping (_ wasSignedIn: Bool) -> Void) {
+        guard !recheckInFlight else { return }
+        recheckInFlight = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            let s = DimmyCore.shared.recheckCodex()
+            let path = DimmyCore.shared.codexBinaryPath
+            DispatchQueue.main.async {
+                recheckInFlight = false
+                let was = codexStatus == .ready
+                codexStatus = s
+                binaryPath = path
+                after(was)
+            }
+        }
     }
 
     private func stopPoll() {
