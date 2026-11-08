@@ -79,13 +79,6 @@ The name is pronounced "Dimi", from the Italian *dimmi*, "tell me".
 - **Speaker labels** ("who said what"), which you can rename.
 - Detects calls and offers to record. Shows a recording-consent notice and keeps a local log of it.
 
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: light)" srcset="docs/readme/meeting-win-light.png">
-    <img src="docs/readme/meeting-win-dark.png" width="760" alt="A meeting recap in the Windows meeting window">
-  </picture>
-</p>
-
 **Integrations**
 
 - **Claude Desktop**: Dimmy installs an MCP server, so Claude can search your meetings.
