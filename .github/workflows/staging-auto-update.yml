@@ -636,7 +636,7 @@ jobs:
           if (-not $sdkDir) {
             throw "VulkanSDK not found after $maxTries chocolatey attempts (community.chocolatey.org may be degraded — re-run workflow when repo recovers)"
           }
-          echo "VULKAN_SDK=$($sdkDir.FullName)" >> $env:GITHUB_ENV
+          Add-Content -Path $env:GITHUB_ENV -Value "VULKAN_SDK=$($sdkDir.FullName)" -Encoding utf8
           echo "$($sdkDir.FullName)\Bin" >> $env:GITHUB_PATH
           Write-Host "Vulkan SDK: $($sdkDir.FullName)"
 
@@ -812,7 +812,7 @@ jobs:
             throw "Microsoft.Build.Packaging.Pri.Tasks.dll not found in VS install. UWP workload missing?"
           }
           Write-Host "AppxMSBuildToolsPath = $found"
-          echo "AppxMSBuildToolsPath=$found" >> $env:GITHUB_ENV
+          Add-Content -Path $env:GITHUB_ENV -Value "AppxMSBuildToolsPath=$found" -Encoding utf8
 
       - name: Publish Windows app (self-contained)
         working-directory: platforms/windows/Dimmy.Windows

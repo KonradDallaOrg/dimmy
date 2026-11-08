@@ -610,7 +610,7 @@ jobs:
             Start-Sleep -Seconds (30 * $attempt)
           }
           if (-not $sdkDir) { throw "VulkanSDK not found" }
-          echo "VULKAN_SDK=$($sdkDir.FullName)" >> $env:GITHUB_ENV
+          Add-Content -Path $env:GITHUB_ENV -Value "VULKAN_SDK=$($sdkDir.FullName)" -Encoding utf8
           echo "$($sdkDir.FullName)\Bin" >> $env:GITHUB_PATH
 
       - name: Rust cache
@@ -810,7 +810,7 @@ jobs:
           )
           $found = $candidates | Where-Object { Test-Path (Join-Path $_ "Microsoft.Build.Packaging.Pri.Tasks.dll") } | Select-Object -First 1
           if (-not $found) { throw "Microsoft.Build.Packaging.Pri.Tasks.dll not found" }
-          echo "AppxMSBuildToolsPath=$found" >> $env:GITHUB_ENV
+          Add-Content -Path $env:GITHUB_ENV -Value "AppxMSBuildToolsPath=$found" -Encoding utf8
 
       - name: Publish Windows app (self-contained)
         working-directory: platforms/windows/Dimmy.Windows
