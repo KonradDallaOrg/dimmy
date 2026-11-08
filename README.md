@@ -19,19 +19,55 @@
 
 <p align="center">
   <a href="https://dimmy.app"><strong>Website</strong></a> ·
+  <a href="https://github.com/KonradDallaOrg/dimmy"><strong>GitHub</strong></a> ·
+  <a href="https://huggingface.co/KonradDallaOrg"><strong>Hugging Face</strong></a> ·
   <a href="https://github.com/KonradDallaOrg/dimmy/releases/latest"><strong>Download</strong></a> ·
   <a href="https://dimmy.app/install.md"><strong>Install with your AI</strong></a> ·
   <a href="PRIVACY.md"><strong>Privacy</strong></a> ·
   <a href="CONTRIBUTING.md"><strong>Contribute</strong></a>
 </p>
 
-<p align="center">
-  <img src="docs/readme/pill-states.gif" width="680" alt="The Dimmy pill on Windows: idle, recording, transcribing, processing, done">
-</p>
+<table>
+  <tr>
+    <th>Windows</th>
+    <th>macOS</th>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><img src="docs/readme/pill-states-windows.gif" alt="The Dimmy pill on Windows: idle, hover, recording with timer, transcribing, processing, done"></td>
+    <td width="50%" align="center"><img src="docs/readme/pill-states-mac.gif" alt="The Dimmy pill on macOS: idle, hover, recording with timer, transcribing, processing, done"></td>
+  </tr>
+</table>
 
 Press a shortcut and speak. A small pill shows that Dimmy listens. Release the keys, and the text goes into the app that has focus. Dimmy can also record a whole call and write a recap.
 
 The name is pronounced "Dimi", from the Italian *dimmi*, "tell me".
+
+## The pill
+
+The pill stays on top of your other windows. Drag it to a corner or to the middle of a screen edge, and it snaps there. On the left and right edges it turns vertical. While you drag, the zones where it can dock show on the screen. Point at the pill to open it: the recording view then shows the time (mm:ss) and a stop button.
+
+<table>
+  <tr>
+    <th>Drag and dock (Windows)</th>
+    <th>Docked in a corner (Windows)</th>
+  </tr>
+  <tr>
+    <td rowspan="3" width="40%" align="center" valign="top"><img src="docs/readme/pill-dock-windows.gif" alt="A real drag of the pill on Windows: the dock zones appear, the pill snaps to the right edge and turns vertical, then snaps to the top-right corner"></td>
+    <td align="center"><img src="docs/readme/pill-corner-windows.png" alt="The recording pill docked in the bottom-right corner on Windows, with the timer and the stop button"></td>
+  </tr>
+  <tr>
+    <th>Docked on a side, vertical (Windows | macOS)</th>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/readme/pill-side-windows.png" height="250" alt="The vertical recording pill on the right edge on Windows"> <img src="docs/readme/pill-side-mac.png" height="241" alt="The vertical recording pill on the left edge on macOS"></td>
+  </tr>
+</table>
+
+Border style, waveform style and the default position are in **Settings → Pill overlay**.
+
+<p align="center">
+  <img src="docs/readme/settings-win-pill.png" width="560" alt="The Pill overlay page in Windows Settings: position grid, border style, waveform style">
+</p>
 
 ## Features
 
@@ -227,6 +263,12 @@ macOS: run `scripts/dev/preflight-mac.sh`. It builds the Rust static library, ru
 ## Acknowledgements
 
 [whisper.cpp](https://github.com/ggerganov/whisper.cpp) and [llama.cpp](https://github.com/ggerganov/llama.cpp) (Georgi Gerganov and contributors), [NVIDIA Parakeet and Nemotron](https://huggingface.co/nvidia), [Qwen3-ASR](https://huggingface.co/Qwen), [ONNX Runtime](https://onnxruntime.ai/), [cpal](https://github.com/RustAudio/cpal), [nnnoiseless](https://github.com/jneem/nnnoiseless), [dagc](https://github.com/audiojs/dagc) and [Velopack](https://velopack.io/). Third-party licences: [`core/assets/THIRD_PARTY_NOTICES.md`](core/assets/THIRD_PARTY_NOTICES.md).
+
+## Links
+
+- Website: [dimmy.app](https://dimmy.app)
+- Source code: [github.com/KonradDallaOrg/dimmy](https://github.com/KonradDallaOrg/dimmy)
+- Hugging Face: [huggingface.co/KonradDallaOrg](https://huggingface.co/KonradDallaOrg). This organisation keeps pinned mirrors of the speech and language models that Dimmy can download. Today the app downloads the full-precision Nemotron model from it. It downloads the other models from their upstream repositories, at pinned revisions where the code pins one.
 
 ## Support and contact
 
