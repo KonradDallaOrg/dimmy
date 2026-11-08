@@ -384,7 +384,7 @@ pub fn open_app_names() -> Vec<String> {
 
 /// "Documento1 - Word" says "Word": the last part of a title is usually the
 /// app. A long last part is a page or a file, so the process name is used.
-fn say_name(process: &str, title: &str) -> String {
+pub(crate) fn say_name(process: &str, title: &str) -> String {
     let last = title.rsplit(" - ").next().unwrap_or("").trim();
     if title.contains(" - ") && (2..=20).contains(&last.chars().count()) {
         last.to_string()

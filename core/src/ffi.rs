@@ -8896,6 +8896,15 @@ pub(crate) fn pc_execute_text(
         ..Default::default()
     };
     let t0 = std::time::Instant::now();
+    if crate::pc_help::is_here_request(text) {
+        out.ok = true;
+        out.engine = "help".into();
+        out.said = "Ecco i comandi di questa finestra".into();
+        out.help = Some(crate::pc_help::here_now());
+        out.plan_ms = t0.elapsed().as_millis() as u64;
+        log("[PcControl] engine=help: listed the commands of the window in front");
+        return (out, None);
+    }
     if crate::pc_help::is_help_request(text) {
         out.ok = true;
         out.engine = "help".into();

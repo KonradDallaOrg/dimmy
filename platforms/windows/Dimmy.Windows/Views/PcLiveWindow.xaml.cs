@@ -19,6 +19,7 @@ public sealed partial class PcLiveWindow : Window
     private const int WidthDip = 380;
     private const int HeightDip = 210;
     private const int HelpHeightDip = 420;
+    private const int ListHeightDip = 600;
     private int _heightDip = HeightDip;
     private const int MarginDip = 12;
 
@@ -31,7 +32,7 @@ public sealed partial class PcLiveWindow : Window
     public static void Update(string heard, string plan, string guess, double sureness, bool waitsForStop)
     {
         var w = Ensure();
-        if (w.HelpText.Visibility == Visibility.Visible)
+        if (w.HelpScroll.Visibility == Visibility.Visible)
         {
             w.Close();
             w = Ensure();
@@ -61,20 +62,25 @@ public sealed partial class PcLiveWindow : Window
         w._closeTimer.Start();
     }
 
-    /// <summary>"Cosa posso dire?": the examples instead of the live rows,
-    /// a taller card that stays longer; a tap closes it.</summary>
-    public static void ShowHelp(string text)
+    /// <summary>"Cosa posso dire?" (the examples) or "cosa posso dire qui?"
+    /// (every command of the window in front, scrollable) instead of the live
+    /// rows, in a taller card that stays longer; a tap closes it.</summary>
+    public static void ShowHelp(string text, bool sessionOpen)
     {
         var w = Ensure();
         foreach (var e in new FrameworkElement[] { w.HeardLabel, w.HeardText, w.PlanLabel, w.PlanText, w.SureLabel, w.SureRow })
             e.Visibility = Visibility.Collapsed;
         w.HelpText.Text = text;
-        w.HelpText.Visibility = Visibility.Visible;
-        w.NextText.Text = "Premi il tasto dei comandi e dì quello che vuoi";
-        w._heightDip = HelpHeightDip;
+        w.HelpScroll.Visibility = Visibility.Visible;
+        w.HelpScroll.ChangeView(null, 0, null, disableAnimation: true);
+        w.NextText.Text = sessionOpen
+            ? "Dimmi il prossimo comando, o premi il tasto per chiudere"
+            : "Premi il tasto dei comandi e dì quello che vuoi";
+        var longList = text.Split('\n').Length > 8;
+        w._heightDip = longList ? ListHeightDip : HelpHeightDip;
         w.Place();
         w._closeTimer.Stop();
-        w._closeTimer.Interval = TimeSpan.FromSeconds(25);
+        w._closeTimer.Interval = TimeSpan.FromSeconds(longList ? 60 : 25);
         w._closeTimer.Start();
     }
 
@@ -96,7 +102,7 @@ public sealed partial class PcLiveWindow : Window
         Root.Loaded += (_, _) => Place();
         _closeTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(4) };
         _closeTimer.Tick += (_, _) => Close();
-        Root.Tapped += (_, _) => { if (HelpText.Visibility == Visibility.Visible) Close(); };
+        Root.Tapped += (_, _) => { if (HelpScroll.Visibility == Visibility.Visible) Close(); };
         Closed += (_, _) =>
         {
             _closeTimer.Stop();

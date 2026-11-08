@@ -27,8 +27,10 @@
       <TextBlock Text="Dimmy · Comando vocale" Style="{StaticResource DimmyCaption}" VerticalAlignment="Center" />
     </StackPanel>
 
-    <TextBlock Grid.Row="1" Grid.RowSpan="3" Grid.ColumnSpan="2" x:Name="HelpText" Style="{StaticResource DimmyBody}"
-               TextWrapping="Wrap" Visibility="Collapsed" />
+    <ScrollViewer Grid.Row="1" Grid.RowSpan="3" Grid.ColumnSpan="2" x:Name="HelpScroll" Visibility="Collapsed"
+                  VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+      <TextBlock x:Name="HelpText" Style="{StaticResource DimmyBody}" TextWrapping="Wrap" IsTextSelectionEnabled="False" />
+    </ScrollViewer>
 
     <TextBlock Grid.Row="1" x:Name="HeardLabel" Text="Hai detto" Style="{StaticResource DimmySecondary}" />
     <TextBlock Grid.Row="1" Grid.Column="1" x:Name="HeardText" Style="{StaticResource DimmyBody}"

@@ -1696,7 +1696,7 @@ public partial class App : Application
         var help = S("help");
         if (help.Length > 0)
         {
-            Views.PcLiveWindow.ShowHelp(help);
+            Views.PcLiveWindow.ShowHelp(help, sessionOpen: true);
             return;
         }
         const string next = "Dimmi il prossimo comando, o premi il tasto per chiudere";
@@ -2325,7 +2325,7 @@ public partial class App : Application
             var help = Str("help");
             if (!string.IsNullOrEmpty(help))
             {
-                Views.PcLiveWindow.ShowHelp(help);
+                Views.PcLiveWindow.ShowHelp(help, sessionOpen: false);
                 _appViewModel.SetState(AppState.Idle);
                 return;
             }

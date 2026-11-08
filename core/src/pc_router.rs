@@ -1703,7 +1703,12 @@ pub fn shadow_observe(cumulative: &str) {
         (s.started.elapsed().as_millis(), text, words)
     };
     std::thread::spawn(move || {
-        let (plan, margin, detail) = route_scored(&text, &crate::pc_control::known_names());
+        // A question is answered at the pause, never run as a command.
+        let (plan, margin, detail) = if crate::pc_help::is_help_request(&text) {
+            (None, 0.0, "help".to_string())
+        } else {
+            route_scored(&text, &crate::pc_control::known_names())
+        };
         let sure = plan.is_some() && margin >= live_prob();
         let mut stable = false;
         if let Some(s) = SHADOW.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {

@@ -7,12 +7,7 @@
 /// The words that ask for the list. Narrow on purpose: a real command that
 /// happens to contain "comandi" must still run.
 pub fn is_help_request(spoken: &str) -> bool {
-    let s: String = spoken
-        .to_lowercase()
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { ' ' })
-        .collect();
-    let s = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let s = normal(spoken);
     const ASKS: &[&str] = &[
         "posso dire",
         "posso fare",
@@ -22,6 +17,53 @@ pub fn is_help_request(spoken: &str) -> bool {
         "what can i do",
     ];
     matches!(s.as_str(), "aiuto" | "help" | "comandi") || ASKS.iter().any(|a| s.contains(a))
+}
+
+/// The words that ask for every command of the window in front. Checked
+/// before `is_help_request`, which "cosa posso dire qui" also matches.
+pub fn is_here_request(spoken: &str) -> bool {
+    let s = normal(spoken);
+    const ASKS: &[&str] = &[
+        "posso dire qui",
+        "posso fare qui",
+        "comandi di questa finestra",
+        "comandi della finestra",
+        "comandi di questa app",
+        "comandi dell app",
+        "what can i say here",
+        "what can i do here",
+    ];
+    ASKS.iter().any(|a| s.contains(a))
+}
+
+fn normal(spoken: &str) -> String {
+    let s: String = spoken
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { ' ' })
+        .collect();
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Every command of the window in front, one line per menu.
+pub fn here_text(front: Option<(&str, &[crate::pc_appcmds::Menu])>) -> String {
+    let Some((app, groups)) = front.filter(|(_, g)| !g.is_empty()) else {
+        return "Non riesco a leggere i comandi della finestra davanti.\n\
+                Funzionano i comandi di base: di' «cosa posso dire?»."
+            .to_string();
+    };
+    let mut t = format!("Comandi di {app}: dì il nome di una voce.");
+    for (menu, names) in groups {
+        let head = if menu.is_empty() { "Pulsanti" } else { menu };
+        t.push_str(&format!("\n• {head}: {}", names.join(" · ")));
+    }
+    t
+}
+
+/// The full list for the window in front now.
+pub fn here_now() -> String {
+    let front = crate::pc_appcmds::groups();
+    here_text(front.as_ref().map(|(a, g)| (a.as_str(), g.as_slice())))
 }
 
 /// The list, from the open apps and the front app's commands.
@@ -47,7 +89,10 @@ pub fn help_text(open_apps: &[String], front: Option<(&str, &[String])>) -> Stri
     );
     if let Some((app, cmds)) = front.filter(|(_, c)| !c.is_empty()) {
         let said: Vec<String> = cmds.iter().map(|c| format!("«{c}»")).collect();
-        t.push_str(&format!("\n• In {app}: {}", said.join(", ")));
+        t.push_str(&format!(
+            "\n• In {app}: {} — tutti: «cosa posso dire qui?»",
+            said.join(", ")
+        ));
     }
     assert!(!t.contains("«apri »"), "every example names an app");
     t
@@ -80,6 +125,41 @@ mod tests {
         ] {
             assert!(is_help_request(s), "{s}");
         }
+    }
+
+    #[test]
+    fn asking_for_this_window_is_its_own_question() {
+        for s in [
+            "cosa posso dire qui?",
+            "comandi di questa finestra",
+            "quali sono i comandi dell'app",
+            "What can I say here?",
+        ] {
+            assert!(is_here_request(s), "{s}");
+        }
+        for s in [
+            "cosa posso dire?",
+            "apri Notepad++",
+            "chiudi questa finestra",
+        ] {
+            assert!(!is_here_request(s), "{s}");
+        }
+    }
+
+    #[test]
+    fn the_window_list_has_a_line_per_menu() {
+        let groups = vec![
+            (
+                "File".to_string(),
+                vec!["Nuovo".to_string(), "Salva".into()],
+            ),
+            (String::new(), vec!["Indietro".into()]),
+        ];
+        let t = here_text(Some(("Notepad++", &groups)));
+        assert!(t.contains("Comandi di Notepad++"), "{t}");
+        assert!(t.contains("• File: Nuovo · Salva"), "{t}");
+        assert!(t.contains("• Pulsanti: Indietro"), "{t}");
+        assert!(here_text(None).contains("cosa posso dire?"));
     }
 
     #[test]

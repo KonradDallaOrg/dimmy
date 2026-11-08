@@ -31,7 +31,8 @@ enum Target {
 }
 
 struct Snapshot {
-    process: String,
+    /// The app as a person names it ("Notepad++", "Word").
+    app: String,
     cmds: Vec<AppCommand>,
 }
 
@@ -211,7 +212,7 @@ pub fn candidates(spoken: &str, n: usize) -> (String, Vec<String>) {
             }
         })
         .collect();
-    (snap.process.clone(), labels)
+    (snap.app.clone(), labels)
 }
 
 /// The front app and a few of its safe commands, short names first, to show
@@ -220,7 +221,48 @@ pub fn examples(n: usize) -> Option<(String, Vec<String>)> {
     let g = SNAPSHOT.lock().unwrap_or_else(|e| e.into_inner());
     let snap = g.as_ref()?;
     let names = examples_of(&snap.cmds, n);
-    (!names.is_empty()).then(|| (snap.process.clone(), names))
+    (!names.is_empty()).then(|| (snap.app.clone(), names))
+}
+
+/// A top menu ("File", or "" for the buttons) and the names under it.
+pub type Menu = (String, Vec<String>);
+
+/// Every safe command of the window in front, by menu: the full list
+/// "cosa posso dire qui?" shows.
+pub fn groups() -> Option<(String, Vec<Menu>)> {
+    let g = SNAPSHOT.lock().unwrap_or_else(|e| e.into_inner());
+    let snap = g.as_ref()?;
+    let groups = groups_of(&snap.cmds);
+    (!groups.is_empty()).then(|| (snap.app.clone(), groups))
+}
+
+/// Grouped by the top menu ("File", "Modifica"), in the app's order; a
+/// control has no menu and goes in the group "". No name twice in a group.
+fn groups_of(cmds: &[AppCommand]) -> Vec<Menu> {
+    let mut out: Vec<Menu> = Vec::new();
+    for c in cmds.iter().filter(|c| !c.risky) {
+        let name = c.name.trim();
+        if !name.chars().any(char::is_alphabetic) {
+            continue;
+        }
+        let top = match c.label.split_once(" > ") {
+            Some((top, _)) => top.trim().to_string(),
+            None => String::new(),
+        };
+        let i = match out.iter().position(|(g, _)| *g == top) {
+            Some(i) => i,
+            None => {
+                out.push((top, Vec::new()));
+                out.len() - 1
+            }
+        };
+        let names = &mut out[i].1;
+        if !names.iter().any(|n| n.eq_ignore_ascii_case(name)) {
+            names.push(name.to_string());
+        }
+    }
+    assert!(out.iter().all(|(_, n)| !n.is_empty()));
+    out
 }
 
 fn examples_of(cmds: &[AppCommand], n: usize) -> Vec<String> {
@@ -286,6 +328,7 @@ mod win {
         fn PostMessageW(h: isize, msg: u32, w: usize, l: isize) -> i32;
         fn SetForegroundWindow(h: isize) -> i32;
         fn GetWindowThreadProcessId(h: isize, pid: *mut u32) -> u32;
+        fn GetWindowTextW(h: isize, buf: *mut u16, max: i32) -> i32;
     }
 
     const MF_BYPOSITION: u32 = 0x400;
@@ -438,7 +481,11 @@ mod win {
                 t.elapsed().as_millis(),
                 cmds.iter().filter(|c| c.risky).count()
             ));
-            *SNAPSHOT.lock().unwrap_or_else(|e| e.into_inner()) = Some(Snapshot { process, cmds });
+            let mut buf = [0u16; 256];
+            let n = unsafe { GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32) };
+            let title = String::from_utf16_lossy(&buf[..n.max(0) as usize]);
+            let app = crate::pc_control::say_name(&process, &title);
+            *SNAPSHOT.lock().unwrap_or_else(|e| e.into_inner()) = Some(Snapshot { app, cmds });
         });
     }
 
@@ -566,6 +613,42 @@ mod tests {
     }
 
     #[test]
+    fn the_full_list_is_by_menu_and_safe() {
+        let mk = |label: &str| {
+            let name = label.rsplit(" > ").next().unwrap().to_string();
+            AppCommand {
+                label: label.into(),
+                risky: is_risky(&name),
+                name,
+                shortcut: String::new(),
+                target: Target::Control { hwnd: 0 },
+            }
+        };
+        let cmds: Vec<AppCommand> = [
+            "File > Nuovo",
+            "File > Salva tutto",
+            "File > Esci",
+            "Modifica > Copia",
+            "File > Recenti > nuovo",
+            "Indietro",
+        ]
+        .iter()
+        .map(|l| mk(l))
+        .collect();
+        assert_eq!(
+            groups_of(&cmds),
+            vec![
+                (
+                    "File".to_string(),
+                    vec!["Nuovo".to_string(), "Salva tutto".into()]
+                ),
+                ("Modifica".into(), vec!["Copia".into()]),
+                ("".into(), vec!["Indietro".into()]),
+            ]
+        );
+    }
+
+    #[test]
     fn a_clear_lead_is_needed_to_run() {
         let mk = |name: &str| AppCommand {
             label: name.into(),
@@ -575,7 +658,7 @@ mod tests {
             target: Target::Control { hwnd: 0 },
         };
         *SNAPSHOT.lock().unwrap() = Some(Snapshot {
-            process: "test".into(),
+            app: "test".into(),
             cmds: vec![
                 mk("Salva tutto"),
                 mk("Salva"),
