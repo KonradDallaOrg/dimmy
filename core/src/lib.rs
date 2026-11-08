@@ -1417,11 +1417,23 @@ pub fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()>
         seq
     ));
     let written = (|| {
+        let t0 = std::time::Instant::now();
         let mut f = std::fs::File::create(&tmp)?;
         f.write_all(bytes)?;
+        let t1 = std::time::Instant::now();
         f.sync_all()?;
+        let t2 = std::time::Instant::now();
         drop(f);
-        std::fs::rename(&tmp, path)
+        let r = std::fs::rename(&tmp, path);
+        log(&format!(
+            "[diag] write_atomic {:?}: write {} ms, sync_all {} ms, rename {} ms, thread {:?}",
+            path.file_name(),
+            (t1 - t0).as_millis(),
+            (t2 - t1).as_millis(),
+            t2.elapsed().as_millis(),
+            std::thread::current().id()
+        ));
+        r
     })();
     if written.is_err() {
         let _ = std::fs::remove_file(&tmp);
