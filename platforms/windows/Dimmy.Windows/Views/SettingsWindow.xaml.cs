@@ -30,7 +30,7 @@ public sealed partial class SettingsWindow : Window
 
     public SettingsWindow()
     {
-        this.InitializeComponent();
+        App.Log("DIAG ctor before this.InitializeComponent", "Diag"); this.InitializeComponent();
 
         if (Content is FrameworkElement root)
         {
@@ -40,7 +40,7 @@ public sealed partial class SettingsWindow : Window
             root.DataContext = ViewModel;
         }
 
-        Title = "Dimmy Settings";
+        App.Log("DIAG ctor before Settings;", "Diag"); Title = "Dimmy Settings";
 
         var appWindow = WindowHelper.GetAppWindow(this);
         WindowHelper.ResizeLogical(this, 920, 640);
@@ -86,17 +86,17 @@ public sealed partial class SettingsWindow : Window
             };
         }
 
-        LoadConfig();
+        App.Log("DIAG ctor before LoadConfig", "Diag"); LoadConfig();
         ViewModel.LoadGpuStatus();
         // Build the STT + LLM pickers from the single-source catalog BEFORE
         // syncing the selection to the saved config.
-        PopulateSttProviderPicker();
+        App.Log("DIAG ctor before PopulateSttProviderPicker", "Diag"); PopulateSttProviderPicker();
         PopulateLlmProviderPicker();
         SyncProviderComboBox();
-        SyncLlmProviderComboBox();
+        App.Log("DIAG ctor before SyncLlmProviderComboBox", "Diag"); SyncLlmProviderComboBox();
         // Reveal/refresh the Claude Code status card if the user's
         // saved LLM provider is the synthetic claude-code:// URL.
-        RefreshClaudeCodeStatus();
+        App.Log("DIAG ctor before RefreshClaudeCodeStatus", "Diag"); RefreshClaudeCodeStatus();
         SyncLanguageComboBox();
         SyncThemeRadioButtons();
         SyncAudioSourceRadio();

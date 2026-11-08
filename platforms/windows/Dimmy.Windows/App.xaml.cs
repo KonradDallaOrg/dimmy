@@ -814,8 +814,11 @@ public partial class App : Application
         InitCommandPipeAndJumpList();
         InitCallDetection();
         InitTelegram();
+        Log("DIAG before ShowTermsIfNeeded", "Diag");
         ShowTermsIfNeeded();
+        Log("DIAG before ShowStatsConsentIfNeeded", "Diag");
         ShowStatsConsentIfNeeded();
+        Log("DIAG after ShowStatsConsentIfNeeded", "Diag");
 
         // If the launch came from a `dimmy://activate?…` URL but no
         // running instance was around to handle it, we stashed the
@@ -1151,8 +1154,10 @@ public partial class App : Application
     /// FFI — pipe callbacks fire on a thread-pool worker.</summary>
     private void HandleForwardedCommand(string command)
     {
-        _dispatcherQueue?.TryEnqueue(() =>
+        Log($"DIAG pipe command '{command}' received, enqueue", "Diag");
+        var enq = _dispatcherQueue?.TryEnqueue(() =>
         {
+            Log($"DIAG pipe command '{command}' running on UI thread", "Diag");
             try
             {
                 if (command == "toggle-pill") { TogglePill(); return; }
@@ -1245,9 +1250,10 @@ public partial class App : Application
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[App] HandleForwardedCommand: {ex.Message}");
+                Log($"DIAG HandleForwardedCommand threw: {ex}", "Diag");
             }
         });
+        Log($"DIAG TryEnqueue returned {enq}", "Diag");
     }
 
     /// <summary>Parse `--command <name>` from the process command line.
@@ -2663,9 +2669,12 @@ public partial class App : Application
             }
             catch { _settingsWindow = null; }
         }
+        Log("DIAG new SettingsWindow", "Diag");
         _settingsWindow = new SettingsWindow();
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;
+        Log("DIAG SettingsWindow.Activate", "Diag");
         _settingsWindow.Activate();
+        Log("DIAG SettingsWindow activated", "Diag");
         ForegroundSettingsWindow();
     }
 

@@ -92,6 +92,7 @@ public class LegalDialogTests : IDisposable
             }
             Thread.Sleep(250);
         }
+        HangDiag.Capture(what.Replace(' ', '_').Replace("'", ""), Console.WriteLine);
         throw new TimeoutException($"{what} did not appear in {Timeout.TotalSeconds} s");
     }
 
