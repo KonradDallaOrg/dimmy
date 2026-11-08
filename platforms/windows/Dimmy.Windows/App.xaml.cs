@@ -2317,8 +2317,10 @@ public partial class App : Application
         {
             DimmyNative.dimmy_call_signal_response(appId, "never");
             // Rust persisted the exclusion to disk via save_config_file.
-            // Refresh the VM's mirror so Settings reflects it immediately.
-            _appViewModel.RefreshCallDetectExclusions();
+            // Refresh the VM's mirror, and the open Settings window's list:
+            // that is the list Settings saves.
+            if (_appViewModel.RefreshCallDetectExclusions())
+                _settingsWindow?.ViewModel.ReplaceCallDetectExcludedApps(_appViewModel.CallDetectExcludedApps);
         }
         catch (Exception ex)
         {

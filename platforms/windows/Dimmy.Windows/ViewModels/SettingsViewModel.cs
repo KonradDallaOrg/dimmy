@@ -157,6 +157,16 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool _callDetectEnabled = true;
     [ObservableProperty] private bool _callDetectAutoRecord;
     public ObservableCollection<string> CallDetectExcludedApps { get; } = new();
+
+    /// The core adds an exclusion on its own when the user picks "Never" on
+    /// the call nudge. An open Settings window must take the core's list,
+    /// or its next save sends the old list back and drops the new entry.
+    public void ReplaceCallDetectExcludedApps(IEnumerable<string> apps)
+    {
+        var fresh = apps.ToList();
+        CallDetectExcludedApps.Clear();
+        foreach (var a in fresh) CallDetectExcludedApps.Add(a);
+    }
     [ObservableProperty] private bool _saveAudioInHistory = false;
     [ObservableProperty] private int _historyAudioKeepDays = 30;
     [ObservableProperty] private int _historyAudioMaxMb = 5_000;

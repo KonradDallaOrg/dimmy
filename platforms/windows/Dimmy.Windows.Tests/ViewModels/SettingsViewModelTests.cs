@@ -576,6 +576,21 @@ public class SettingsViewModelTests
         Assert.False(vm.LoadFromJson(json));
     }
 
+    // "Never" on the call nudge adds an exclusion in the core while Settings
+    // is open. The open window must save the core's list, not the one it
+    // loaded, or the new exclusion is dropped on the next save.
+    [Fact]
+    public void Replaced_exclusion_list_is_the_one_saved()
+    {
+        var vm = new SettingsViewModel();
+        vm.LoadFromJson("{\"call_detect_excluded_apps\":[\"teams\"]}");
+        vm.ReplaceCallDetectExcludedApps(new[] { "teams", "zoom" });
+        var saved = System.Text.Json.JsonDocument.Parse(vm.ToJson()).RootElement
+            .GetProperty("call_detect_excluded_apps");
+        Assert.Equal(new[] { "teams", "zoom" },
+            System.Linq.Enumerable.Select(saved.EnumerateArray(), e => e.GetString()));
+    }
+
     [Fact]
     public void LoadFromJson_reports_success_on_valid_config()
     {
