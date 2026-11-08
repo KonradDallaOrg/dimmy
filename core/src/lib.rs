@@ -17,6 +17,7 @@ pub mod catalog;
 pub mod chunked_stt;
 pub mod claude_code;
 pub mod claude_desktop;
+pub mod cli_runner;
 pub mod codex;
 /// Notion REST API client — sends meeting recap markdown to a user-
 /// picked Notion page or database. Internal integration tokens, no

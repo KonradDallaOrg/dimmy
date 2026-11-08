@@ -103,7 +103,6 @@
 //! - `Display` for the error type redacts spawn messages + stderr so a
 //!   transcript fragment echoed by the CLI can't leak.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::RwLock;
@@ -461,10 +460,6 @@ pub fn run_blocking(prompt: &str, model: &str, timeout: Duration) -> Result<Stri
     // instructions we did not write.
     cmd.current_dir(std::env::temp_dir());
 
-    cmd.stdin(Stdio::piped());
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
-
     // Suppress the console window flash on Windows (Dimmy is a GUI app).
     #[cfg(target_os = "windows")]
     {
@@ -479,49 +474,14 @@ pub fn run_blocking(prompt: &str, model: &str, timeout: Duration) -> Result<Stri
         prompt.len()
     ));
 
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| GeminiError::Spawn(format!("{}", e)))?;
-
-    // Pipe prompt to stdin, then drop the handle so Gemini sees EOF.
-    if let Some(mut stdin) = child.stdin.take() {
-        if let Err(e) = stdin.write_all(prompt.as_bytes()) {
-            let _ = child.kill();
-            return Err(GeminiError::Spawn(format!("stdin write: {}", e)));
-        }
-        drop(stdin);
-    } else {
-        let _ = child.kill();
-        return Err(GeminiError::Spawn("no stdin handle".into()));
-    }
-
-    // Poll with timeout (std Child has no timed wait). 100 ms keeps CPU
-    // near zero while terminating within a tick of completion.
-    let deadline = std::time::Instant::now() + timeout;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_status)) => break,
-            Ok(None) => {
-                if std::time::Instant::now() >= deadline {
-                    let _ = child.kill();
-                    return Err(GeminiError::Timeout);
-                }
-                std::thread::sleep(Duration::from_millis(100));
-            }
-            Err(e) => {
-                let _ = child.kill();
-                return Err(GeminiError::Spawn(format!("wait: {}", e)));
-            }
-        }
-    }
-
-    let output = child
-        .wait_with_output()
-        .map_err(|e| GeminiError::Spawn(format!("collect: {}", e)))?;
+    let output = match crate::cli_runner::run(&mut cmd, prompt.as_bytes(), timeout) {
+        Ok(o) => o,
+        Err(crate::cli_runner::RunError::Timeout) => return Err(GeminiError::Timeout),
+        Err(crate::cli_runner::RunError::Spawn(e)) => return Err(GeminiError::Spawn(e)),
+    };
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let excerpt: String = stderr.chars().take(500).collect();
+        let excerpt = crate::cli_runner::excerpt(&output.stderr);
         crate::log(&format!(
             "[Gemini] non-zero exit code={:?} stderr={}",
             output.status.code(),
