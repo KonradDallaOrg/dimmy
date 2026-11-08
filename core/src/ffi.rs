@@ -2671,6 +2671,18 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         .unwrap_or_default()
         .into();
 
+    // Every persisted field, by construction: the hosts read the config only
+    // through this getter. The keys built above win where both exist.
+    let Ok(cfg) = crate::snapshot_config(st) else {
+        return -1;
+    };
+    let obj = json.as_object_mut().expect("config json is an object");
+    if let serde_json::Value::Object(persisted) = crate::config_to_json(&cfg) {
+        for (key, value) in persisted {
+            obj.entry(key).or_insert(value);
+        }
+    }
+
     let s = serde_json::to_string(&json).unwrap_or_else(|_| "{}".to_string());
     write_to_buf(&s, out_buf, buf_len)
 }
@@ -13611,6 +13623,166 @@ pub(crate) mod tests {
         ensure_test_state();
         let result = dimmy_get_config_json(std::ptr::null_mut(), 100);
         assert_eq!(result, -1);
+    }
+
+    fn read_config_json() -> serde_json::Value {
+        let mut buf = vec![0u8; 1 << 16];
+        let len = dimmy_get_config_json(buf.as_mut_ptr() as *mut c_char, buf.len() as c_int);
+        assert!(
+            len > 0 && (len as usize) < buf.len() - 4,
+            "config json must fit"
+        );
+        serde_json::from_slice(&buf[..len as usize]).expect("config json must parse")
+    }
+
+    /// The hosts read the config only through the getter, so it must carry
+    /// every field `save_config_file` persists, with the same value.
+    #[test]
+    #[serial]
+    fn config_getter_has_every_persisted_field() {
+        ensure_test_state();
+        let persisted = crate::config_to_json(&crate::snapshot_config(state()).unwrap());
+        let got = read_config_json();
+        for (key, value) in persisted.as_object().unwrap() {
+            assert_eq!(
+                got.get(key),
+                Some(value),
+                "getter must return persisted key {key}"
+            );
+        }
+    }
+
+    /// Key names and JSON types the hosts already depend on.
+    const GETTER_KEY_TYPES: &[(&str, &str)] = &[
+        ("analytics_consent", "null"),
+        ("api_model", "string"),
+        ("api_url", "string"),
+        ("app_rules", "array"),
+        ("audio_debug_enabled", "bool"),
+        ("audio_source", "string"),
+        ("auto_recap_threshold_secs", "number"),
+        ("border_style", "string"),
+        ("calendar_context_enabled", "bool"),
+        ("call_detect_auto_record", "bool"),
+        ("call_detect_cooldown_secs", "number"),
+        ("call_detect_enabled", "bool"),
+        ("call_detect_excluded_apps", "array"),
+        ("call_detect_min_active_secs", "number"),
+        ("call_detect_timeout_cooldown_secs", "number"),
+        ("chunk_streaming_enabled", "bool"),
+        ("confluence_auto_send", "bool"),
+        ("confluence_email", "string"),
+        ("confluence_parent_id", "string"),
+        ("confluence_site", "string"),
+        ("confluence_space_id", "string"),
+        ("confluence_space_key", "string"),
+        ("confluence_space_name", "string"),
+        ("crash_reports_consent", "null"),
+        ("devices", "array"),
+        ("diarization_enabled", "bool"),
+        ("filler_removal_enabled", "bool"),
+        ("gemini_cli_enabled", "bool"),
+        ("ggml_debug_logging", "bool"),
+        ("has_anthropic_llm_key", "bool"),
+        ("has_anthropic_recap_key", "bool"),
+        ("has_custom_key", "bool"),
+        ("has_custom_llm_key", "bool"),
+        ("has_custom_recap_key", "bool"),
+        ("has_deepgram_key", "bool"),
+        ("has_fireworks_key", "bool"),
+        ("has_fireworks_llm_key", "bool"),
+        ("has_fireworks_recap_key", "bool"),
+        ("has_gemini_key", "bool"),
+        ("has_gemini_llm_key", "bool"),
+        ("has_gemini_recap_key", "bool"),
+        ("has_groq_key", "bool"),
+        ("has_groq_llm_key", "bool"),
+        ("has_groq_recap_key", "bool"),
+        ("has_key", "bool"),
+        ("has_llm_anthropic_key", "bool"),
+        ("has_llm_custom_key", "bool"),
+        ("has_llm_gemini_key", "bool"),
+        ("has_llm_groq_key", "bool"),
+        ("has_llm_key", "bool"),
+        ("has_llm_openai_key", "bool"),
+        ("has_llm_openrouter_key", "bool"),
+        ("has_notion_token", "bool"),
+        ("has_openai_key", "bool"),
+        ("has_openai_llm_key", "bool"),
+        ("has_openai_recap_key", "bool"),
+        ("has_openrouter_key", "bool"),
+        ("has_openrouter_llm_key", "bool"),
+        ("has_openrouter_recap_key", "bool"),
+        ("has_together_key", "bool"),
+        ("has_together_llm_key", "bool"),
+        ("has_together_recap_key", "bool"),
+        ("history_audio_keep_days", "number"),
+        ("history_audio_max_mb", "number"),
+        ("input_gain", "number"),
+        ("keep_in_clipboard", "bool"),
+        ("language", "string"),
+        ("live_captions_enabled", "bool"),
+        ("llm_api_model", "string"),
+        ("llm_api_url", "string"),
+        ("llm_auth_method", "string"),
+        ("llm_custom_prompt", "string"),
+        ("llm_enabled", "bool"),
+        ("llm_log_enabled", "bool"),
+        ("llm_mode", "string"),
+        ("llm_style", "string"),
+        ("llm_tone", "string"),
+        ("llm_translate_to", "string"),
+        ("llm_use_same_key", "bool"),
+        ("local_llm_model", "string"),
+        ("local_model", "string"),
+        ("local_stt_backend", "string"),
+        ("meeting_generate_recap", "bool"),
+        ("meeting_storage_path", "string"),
+        ("nemotron_model", "string"),
+        ("notion_auto_send", "bool"),
+        ("notion_target_id", "string"),
+        ("notion_target_kind", "string"),
+        ("notion_target_title", "string"),
+        ("overlay_position", "string"),
+        ("preprocessing_enabled", "bool"),
+        ("prompt", "string"),
+        ("qwen_asr_model", "string"),
+        ("recap_auth_method", "string"),
+        ("recap_model_override", "string"),
+        ("recap_use_same_key", "bool"),
+        ("save_audio_in_history", "bool"),
+        ("selected_device", "null"),
+        ("shortcut", "string"),
+        ("shortcut_mode", "string"),
+        ("stats_total_speaking_secs", "number"),
+        ("stats_total_words", "number"),
+        ("streaming_dictation", "bool"),
+        ("stt_mode", "string"),
+        ("telegram_auto_process", "bool"),
+        ("telegram_enabled", "bool"),
+        ("terms_accepted_version", "string"),
+        ("use_keyring", "bool"),
+        ("user_dict", "array"),
+        ("waveform_style", "string"),
+    ];
+
+    #[test]
+    #[serial]
+    fn config_getter_keeps_its_key_names_and_types() {
+        ensure_test_state();
+        let got = read_config_json();
+        for (key, kind) in GETTER_KEY_TYPES {
+            let actual = match got.get(*key) {
+                None => "missing",
+                Some(serde_json::Value::Null) => "null",
+                Some(serde_json::Value::Bool(_)) => "bool",
+                Some(serde_json::Value::Number(_)) => "number",
+                Some(serde_json::Value::String(_)) => "string",
+                Some(serde_json::Value::Array(_)) => "array",
+                Some(serde_json::Value::Object(_)) => "object",
+            };
+            assert_eq!(actual, *kind, "key {key}");
+        }
     }
 
     // ── dimmy_set_config_json tests ─────────────────────────────────
