@@ -256,10 +256,11 @@ impl Provider {
         }
         // Replace full key
         let mut result = text.replace(key, "[REDACTED]");
-        // Also scrub any prefix of 8+ chars (partial key exposure)
-        if key.len() >= 8 {
-            let prefix = &key[..8];
-            result = result.replace(prefix, "[REDACTED]");
+        // Also scrub any prefix of 8+ chars (partial key exposure). By
+        // chars: a byte slice could split a multibyte character and panic.
+        if key.chars().count() >= 8 {
+            let prefix: String = key.chars().take(8).collect();
+            result = result.replace(&prefix, "[REDACTED]");
         }
         result
     }
@@ -351,6 +352,14 @@ impl std::fmt::Display for Provider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scrub_api_key_survives_a_multibyte_key() {
+        // Byte 8 falls inside the fourth "é": `&key[..8]` panicked here.
+        let key = "aéééé-secret";
+        let out = Provider::scrub_api_key("leak: aéééé-se and aéééé-secret", key);
+        assert!(!out.contains("aéééé-se"), "{out}");
+    }
 
     #[test]
     fn detect_groq() {
