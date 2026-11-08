@@ -323,6 +323,16 @@ struct Engine {
 
 static ENGINE_STATE: Mutex<Option<Engine>> = Mutex::new(None);
 
+/// The model was verified at download, but the file on disk can change
+/// since (disk error, another tool, a user): an error, not a crash.
+fn read_model(path: &std::path::Path) -> Result<Vec<u8>, String> {
+    let model = std::fs::read(path).map_err(|e| e.to_string())?;
+    if !model.starts_with(MODEL_MAGIC) {
+        return Err("file is not a Whistle model; download it again".into());
+    }
+    Ok(model)
+}
+
 impl Engine {
     fn load() -> Result<Self, TranscribeError> {
         let err = |what: &str, e: &dyn std::fmt::Display| {
@@ -331,11 +341,7 @@ impl Engine {
         let engine = ENGINE
             .as_ref()
             .ok_or_else(|| err("engine", &"not available on this platform"))?;
-        let model = std::fs::read(model_path()).map_err(|e| err("model", &e))?;
-        assert!(
-            model.starts_with(MODEL_MAGIC),
-            "whistle.cact was verified at download and must still be a model"
-        );
+        let model = read_model(&model_path()).map_err(|e| err("model", &e))?;
 
         // SAFETY: the library is the pinned, checksummed engine, and the
         // signatures below are the ones declared in its `needle.h`.
@@ -513,6 +519,20 @@ pub fn transcribe_words(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_model_file_without_the_magic_is_an_error_not_a_crash() {
+        let dir = std::env::temp_dir().join(format!("dimmy-whistle-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let bad = dir.join("bad.cact");
+        std::fs::write(&bad, b"not a model").expect("write");
+        assert!(read_model(&bad).is_err());
+        let good = dir.join("good.cact");
+        std::fs::write(&good, [MODEL_MAGIC, b"rest"].concat()).expect("write");
+        assert!(read_model(&good).is_ok());
+        assert!(read_model(&dir.join("missing.cact")).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn secs(s: f32) -> usize {
         (s * SAMPLE_RATE as f32) as usize

@@ -3179,19 +3179,20 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
         }
     }
     // UI appearance fields (round-tripped for native frontends)
-    if let Some(s) = v["border_style"].as_str() {
+    let ui_defaults = crate::AppConfig::default();
+    if v.get("border_style").is_some() {
         if let Ok(mut bs) = st.border_style.lock() {
-            *bs = s.to_string();
+            *bs = crate::non_empty_or(&v["border_style"], &ui_defaults.border_style);
         }
     }
-    if let Some(s) = v["waveform_style"].as_str() {
+    if v.get("waveform_style").is_some() {
         if let Ok(mut ws) = st.waveform_style.lock() {
-            *ws = s.to_string();
+            *ws = crate::non_empty_or(&v["waveform_style"], &ui_defaults.waveform_style);
         }
     }
-    if let Some(s) = v["overlay_position"].as_str() {
+    if v.get("overlay_position").is_some() {
         if let Ok(mut op) = st.overlay_position.lock() {
-            *op = s.to_string();
+            *op = crate::non_empty_or(&v["overlay_position"], &ui_defaults.overlay_position);
         }
     }
     if let Some(b) = v["keep_in_clipboard"].as_bool() {
@@ -8470,6 +8471,15 @@ pub unsafe extern "C" fn dimmy_history_save(
             CStr::from_ptr(language_ptr).to_str().unwrap_or("en")
         }
     };
+    // HistoryStore::save asserts these; a host bug must cost an rc, not the app.
+    if text.trim().is_empty() || !duration.is_finite() || duration < 0.0 {
+        return -1;
+    }
+    let language = if language.trim().is_empty() {
+        "en"
+    } else {
+        language
+    };
 
     let st = state();
     if let Ok(guard) = st.history_store.lock() {
@@ -13653,6 +13663,43 @@ pub(crate) mod tests {
         let clear = CString::new(r#"{"selected_device":""}"#).unwrap();
         assert_eq!(unsafe { dimmy_set_config_json(clear.as_ptr()) }, 0);
         assert_eq!(*state().selected_device.lock().unwrap(), None);
+    }
+
+    #[test]
+    #[serial]
+    fn history_save_rejects_bad_input_with_an_rc_instead_of_a_panic() {
+        ensure_test_state();
+        let en = CString::new("en").unwrap();
+        for (text, duration) in [
+            ("", 1.0),
+            ("   ", 1.0),
+            ("hello", f64::NAN),
+            ("hello", f64::INFINITY),
+            ("hello", -1.0),
+        ] {
+            let t = CString::new(text).unwrap();
+            let rc = unsafe { dimmy_history_save(t.as_ptr(), en.as_ptr(), duration) };
+            assert_eq!(rc, -1, "{text:?} {duration}");
+        }
+        let t = CString::new("hello").unwrap();
+        let blank = CString::new("").unwrap();
+        assert!(unsafe { dimmy_history_save(t.as_ptr(), blank.as_ptr(), 1.0) } > 0);
+    }
+
+    #[test]
+    #[serial]
+    fn set_config_json_turns_blank_ui_styles_into_defaults() {
+        ensure_test_state();
+        let json =
+            CString::new(r#"{"border_style":"","waveform_style":" ","overlay_position":""}"#)
+                .unwrap();
+        assert_eq!(unsafe { dimmy_set_config_json(json.as_ptr()) }, 0);
+        assert_eq!(state().border_style.lock().unwrap().as_str(), "Rainbow");
+        assert_eq!(state().waveform_style.lock().unwrap().as_str(), "Bars");
+        assert_eq!(
+            state().overlay_position.lock().unwrap().as_str(),
+            "Bottom Right"
+        );
     }
 
     #[test]

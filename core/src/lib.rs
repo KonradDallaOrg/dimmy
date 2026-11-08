@@ -1431,6 +1431,16 @@ pub fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()>
     Ok(())
 }
 
+/// A UI style string from config JSON, with `default` standing in for a
+/// missing or blank value: a blank one would trip the save asserts.
+pub fn non_empty_or(v: &serde_json::Value, default: &str) -> String {
+    assert!(!default.is_empty(), "non_empty_or: empty default");
+    match v.as_str() {
+        Some(s) if !s.trim().is_empty() => s.to_string(),
+        _ => default.to_string(),
+    }
+}
+
 /// Load non-sensitive config from file. Missing LLM fields use defaults (backward compatible).
 pub fn load_config_file() -> AppConfig {
     let defaults = AppConfig::default();
@@ -1617,12 +1627,12 @@ pub fn load_config_file() -> AppConfig {
                         .as_str()
                         .unwrap_or(&defaults.local_llm_model)
                         .to_string(),
-                    border_style: v["border_style"].as_str().unwrap_or("Rainbow").to_string(),
-                    waveform_style: v["waveform_style"].as_str().unwrap_or("Bars").to_string(),
-                    overlay_position: v["overlay_position"]
-                        .as_str()
-                        .unwrap_or("Bottom Right")
-                        .to_string(),
+                    border_style: non_empty_or(&v["border_style"], &defaults.border_style),
+                    waveform_style: non_empty_or(&v["waveform_style"], &defaults.waveform_style),
+                    overlay_position: non_empty_or(
+                        &v["overlay_position"],
+                        &defaults.overlay_position,
+                    ),
                     keep_in_clipboard: v["keep_in_clipboard"].as_bool().unwrap_or(false),
                     input_gain: v["input_gain"]
                         .as_f64()
@@ -2630,8 +2640,18 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
 }
 
 #[cfg(test)]
-mod write_atomic_tests {
+mod config_file_tests {
     use super::*;
+
+    #[test]
+    fn a_blank_style_string_falls_back_to_the_default() {
+        let v = serde_json::json!({"a": "", "b": "  ", "c": "Solid", "d": 3});
+        assert_eq!(non_empty_or(&v["a"], "Rainbow"), "Rainbow");
+        assert_eq!(non_empty_or(&v["b"], "Rainbow"), "Rainbow");
+        assert_eq!(non_empty_or(&v["c"], "Rainbow"), "Solid");
+        assert_eq!(non_empty_or(&v["d"], "Rainbow"), "Rainbow");
+        assert_eq!(non_empty_or(&v["missing"], "Bars"), "Bars");
+    }
 
     #[test]
     fn replaces_an_existing_file_and_leaves_no_temp_behind() {
