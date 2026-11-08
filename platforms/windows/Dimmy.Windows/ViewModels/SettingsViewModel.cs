@@ -537,7 +537,10 @@ public partial class SettingsViewModel : ObservableObject
     /// are designed to prevent).
     private string ToJsonFull() => ToJson(includeNotion: true, includeLlm: true, includeRecap: true);
 
-    public void LoadFromJson(string json)
+    /// <summary>False when the JSON could not be read. The caller must then
+    /// not save: every field still holds its default, and a save would send
+    /// those defaults to the core as the user's config.</summary>
+    public bool LoadFromJson(string json)
     {
         try
         {
@@ -764,8 +767,12 @@ public partial class SettingsViewModel : ObservableObject
             }
 
             _snapshotJson = ToJsonFull();
+            return true;
         }
-        catch (JsonException) { }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+        {
+            return false;
+        }
     }
 
     /// Replace the input-device list with a fresh enumeration. The selection

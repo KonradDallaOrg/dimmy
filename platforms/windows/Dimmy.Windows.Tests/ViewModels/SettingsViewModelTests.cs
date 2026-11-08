@@ -563,6 +563,27 @@ public class SettingsViewModelTests
         Assert.True(vm.KeepInClipboard);
     }
 
+    // Settings auto-saves only when the load succeeded. A load that failed
+    // quietly left every field at its default, and the next auto-save sent
+    // those defaults to the core as the user's whole config.
+    [Theory]
+    [InlineData("{ \"language\": \"it\", ")]   // cut mid-write
+    [InlineData("not json")]
+    [InlineData("{\"language\": 5}")]          // wrong type: GetString throws
+    public void LoadFromJson_reports_failure_on_unreadable_config(string json)
+    {
+        var vm = new SettingsViewModel();
+        Assert.False(vm.LoadFromJson(json));
+    }
+
+    [Fact]
+    public void LoadFromJson_reports_success_on_valid_config()
+    {
+        var vm = new SettingsViewModel();
+        Assert.True(vm.LoadFromJson("{\"language\":\"it\"}"));
+        Assert.Equal("it", vm.Language);
+    }
+
     [Fact]
     public void LoadFromJson_MissingUiFields_DefaultsCorrectly()
     {

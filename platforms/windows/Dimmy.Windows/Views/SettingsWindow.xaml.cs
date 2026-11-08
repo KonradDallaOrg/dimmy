@@ -19,6 +19,7 @@ public sealed partial class SettingsWindow : Window
     public SettingsViewModel ViewModel { get; } = new();
     private string _currentTag = "home";
     private bool _loaded; // suppress SelectionChanged during init
+    private bool _configLoadFailed;
 
     // File-load → meeting bridge. Captured at successful file-load
     // completion so the "Run recap as meeting" button can mint a
@@ -339,7 +340,10 @@ public sealed partial class SettingsWindow : Window
         RefreshMeetingFolderDisplay();
         RefreshRecapExportFolderDisplay();
 
-        _loaded = true;
+        // A failed load leaves _loaded false: every save path checks it, so the
+        // defaults in the ViewModel never reach the core as the user's config.
+        _loaded = !_configLoadFailed;
+        ConfigLoadErrorBar.IsOpen = _configLoadFailed;
         // Now that selections are established + _loaded is true, run one auth
         // refresh so the provider/model pickers get filtered to the connected
         // providers (RebuildCombo no-ops while loading).
@@ -1490,8 +1494,11 @@ public sealed partial class SettingsWindow : Window
         }
         catch { }
 
-        if (!string.IsNullOrEmpty(fileJson))
-            ViewModel.LoadFromJson(fileJson);
+        if (!string.IsNullOrEmpty(fileJson) && !ViewModel.LoadFromJson(fileJson))
+        {
+            _configLoadFailed = true;
+            App.Log("LoadConfig: config.json could not be parsed — Settings stays read-only so defaults are never saved over it", "Settings");
+        }
 
         // Win-only UI prefs live outside config.json (CLAUDE.md
         // single-writer rule). Pull them in so the toggles in the Pill
@@ -4760,6 +4767,7 @@ public sealed partial class SettingsWindow : Window
 
     private void Save_Click(object sender, RoutedEventArgs e)
     {
+        if (!_loaded) { _autoSaveDone = true; this.Close(); return; }
         // Pull password values from PasswordBoxes into ViewModel before serializing
         if (!string.IsNullOrEmpty(CloudApiKeyBox.Password))
             ViewModel.ApiKey = CloudApiKeyBox.Password;
@@ -4798,7 +4806,7 @@ public sealed partial class SettingsWindow : Window
     /// edits. Same code path Save_Click uses, minus the Close() call.
     private void AutoSaveOnClose()
     {
-        if (_autoSaveDone) return;
+        if (_autoSaveDone || !_loaded) return;
         try
         {
             if (!string.IsNullOrEmpty(CloudApiKeyBox?.Password))
@@ -5947,6 +5955,7 @@ public sealed partial class SettingsWindow : Window
 
     private void RemoveExcludedApp_Click(object sender, RoutedEventArgs e)
     {
+        if (!_loaded) return;
         if (sender is not FrameworkElement fe) return;
         if (fe.Tag is not string appId || string.IsNullOrEmpty(appId)) return;
         ViewModel.CallDetectExcludedApps.Remove(appId);
@@ -6148,7 +6157,7 @@ public sealed partial class SettingsWindow : Window
         {
             ViewModel.HasNotionToken = true;
         }
-        if (dlg.Completed && !string.IsNullOrEmpty(dlg.PickedTargetId))
+        if (_loaded && dlg.Completed && !string.IsNullOrEmpty(dlg.PickedTargetId))
         {
             ViewModel.NotionTargetId = dlg.PickedTargetId;
             ViewModel.NotionTargetKind = dlg.PickedTargetKind;
@@ -6226,7 +6235,7 @@ public sealed partial class SettingsWindow : Window
             // destination; pass includeNotion: true so the empty
             // strings reach Rust and wipe the state.
             var json = ViewModel.ToJson(includeNotion: true);
-            int rcCfg = DimmyNative.dimmy_set_config_json(json);
+            int rcCfg = _loaded ? DimmyNative.dimmy_set_config_json(json) : -1;
             App.Log($"Notion disconnected rcToken={rcToken} rcCfg={rcCfg}", "Notion");
             App.Instance?.ApplySettings(ViewModel);
             NotionShowMessage("Disconnected. Token and destination removed from this device.", isError: false);
