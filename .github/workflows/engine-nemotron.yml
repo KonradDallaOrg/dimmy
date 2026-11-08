@@ -60,7 +60,7 @@ jobs:
             # Turing (GTX 16 / RTX 20) and newer; older cards fall back to CPU.
             cuda_arch: "75-real;80-virtual;86-real;89-real;120a-real"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
       - name: Fetch NeMo-Speech.cpp at the pinned commit
@@ -81,7 +81,7 @@ jobs:
           cuda: "13.0.0"
           method: network
       - name: Restore vcpkg binaries
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ~\AppData\Local\vcpkg\archives
           key: nemo-vcpkg-windows-${{ env.NEMO_COMMIT }}
@@ -155,7 +155,7 @@ jobs:
           New-Item -ItemType Directory -Force dist | Out-Null
           Compress-Archive -Path "$stage\*" -DestinationPath "dist\$name.zip"
           Get-ChildItem $stage | Format-Table Name, Length
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: engine-windows-${{ matrix.backend }}
           path: dist/*.zip
@@ -176,7 +176,7 @@ jobs:
             preset: cuda-asr
             cuda_arch: "75-real;80-virtual;86-real;89-real;120a-real"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
       - name: Fetch NeMo-Speech.cpp at the pinned commit
@@ -191,7 +191,7 @@ jobs:
           test "$(git -C llama.cpp rev-parse HEAD)" = "$LLAMA_COMMIT"
       - name: Install build tools
         run: sudo apt-get update && sudo apt-get install -y build-essential ninja-build pkg-config
-      - uses: lukka/get-cmake@latest
+      - uses: lukka/get-cmake@f86dd60acae0d132056913e248bdabf0e0580b7a # v4.4.5
       - name: Install the CUDA toolkit
         if: matrix.backend == 'cuda'
         uses: Jimver/cuda-toolkit@b8bf9c6c28f8a92fbb04dcfcaee872e60c57462d # v0.2.36
@@ -248,7 +248,7 @@ jobs:
           cp nemo/LICENSE nemo/NOTICE nemo/THIRD_PARTY_NOTICES.md "$stage"
           (cd "$RUNNER_TEMP" && zip -qry "$GITHUB_WORKSPACE/dist/$name.zip" "$name")
           ls -la "$stage"
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: engine-linux-${{ matrix.backend }}
           path: dist/*.zip
@@ -262,7 +262,7 @@ jobs:
       # The app's own floor (Dimmy.xcodeproj MACOSX_DEPLOYMENT_TARGET).
       MACOSX_DEPLOYMENT_TARGET: "14.0"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
       - name: Fetch NeMo-Speech.cpp at the pinned commit
@@ -314,7 +314,7 @@ jobs:
           cp nemo/LICENSE nemo/NOTICE nemo/THIRD_PARTY_NOTICES.md "$stage"
           (cd "$RUNNER_TEMP" && zip -qry "$GITHUB_WORKSPACE/dist/$name.zip" "$name")
           ls -la "$stage"
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: engine-macos-metal
           path: dist/*.zip
@@ -326,7 +326,7 @@ jobs:
     if: github.ref_type == 'tag' || inputs.publish
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: engine-*
           path: dist
