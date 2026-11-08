@@ -657,25 +657,26 @@ pub enum RefreshError {
 
 impl RefreshError {
     /// True when the server has said, for good, that this token no longer
-    /// grants anything: the license is gone, suspended (refund, chargeback),
-    /// expired or withdrawn, or this device was deactivated / removed.
-    /// Network errors, timeouts, 429 and 5xx are NOT revocations — the
-    /// offline grace covers those.
+    /// grants anything: the license was revoked (refund, subscription
+    /// ended), withdrawn (EU withdrawal), deleted or never existed, or this
+    /// device was signed out / removed. Matched on the `error` code and the
+    /// status together. Everything else keeps the token: 409
+    /// `license_expired` (the token already shows Expired and renewing
+    /// re-activates it), 400 / 401 token errors, 429, 5xx and network
+    /// errors, which the offline grace covers.
     pub fn is_revocation(&self) -> bool {
         let RefreshError::Rejected { status, code } = self else {
             return false;
         };
-        let code = code.to_ascii_lowercase();
-        match status {
-            404 => code == "license not found" || code == "device not found",
-            409 => {
-                code == "license suspended"
-                    || code == "license expired"
-                    || code == "device deactivated"
-                    || code.contains("withdrawn")
-            }
-            _ => false,
-        }
+        matches!(
+            (*status, code.as_str()),
+            (403, "license_revoked")
+                | (403, "license_withdrawn")
+                | (403, "license_deleted")
+                | (404, "license_not_found")
+                | (403, "device_deactivated")
+                | (404, "device_not_found")
+        )
     }
 }
 
@@ -1016,24 +1017,28 @@ mod tests {
             code: code.into(),
         };
         for (status, code) in [
-            (404, "license not found"),
-            (404, "device not found"),
-            (409, "license suspended"),
-            (409, "license expired"),
-            (409, "device deactivated"),
-            (409, "license withdrawn"),
+            (403, "license_revoked"),
+            (403, "license_withdrawn"),
+            (403, "license_deleted"),
+            (404, "license_not_found"),
+            (403, "device_deactivated"),
+            (404, "device_not_found"),
         ] {
             assert!(rej(status, code).is_revocation(), "{status} {code}");
         }
         for (status, code) in [
-            (500, "license suspended"),
+            (409, "license_expired"),
+            (400, "invalid_token"),
+            (400, "token_required"),
+            (400, "invalid_json"),
+            (401, "token_expired"),
+            (429, "license_revoked"),
+            (500, "license_revoked"),
+            (503, "license_not_found"),
             (502, ""),
-            (503, "license not found"),
-            (429, "rate limited"),
-            (400, "invalid token: signature verify"),
-            (400, "token required"),
+            (403, ""),
             (404, ""),
-            (409, ""),
+            (403, "license revoked"),
         ] {
             assert!(!rej(status, code).is_revocation(), "{status} {code}");
         }

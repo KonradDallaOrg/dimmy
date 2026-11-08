@@ -15228,10 +15228,12 @@ mod license_refresh_tests {
     #[test]
     fn a_definitive_rejection_removes_the_token_and_leaves_the_free_state() {
         for (status, body) in [
-            ("409 Conflict", r#"{"error":"license suspended"}"#),
-            ("409 Conflict", r#"{"error":"device deactivated"}"#),
-            ("409 Conflict", r#"{"error":"license withdrawn"}"#),
-            ("404 Not Found", r#"{"error":"license not found"}"#),
+            ("403 Forbidden", r#"{"error":"license_revoked"}"#),
+            ("403 Forbidden", r#"{"error":"license_withdrawn"}"#),
+            ("403 Forbidden", r#"{"error":"license_deleted"}"#),
+            ("404 Not Found", r#"{"error":"license_not_found"}"#),
+            ("403 Forbidden", r#"{"error":"device_deactivated"}"#),
+            ("404 Not Found", r#"{"error":"device_not_found"}"#),
         ] {
             with_token(|| {
                 let out = refresh_license_at(&serve_once(status, body));
@@ -15247,12 +15249,19 @@ mod license_refresh_tests {
     #[test]
     fn a_server_error_or_a_dead_network_keeps_the_token() {
         with_token(|| {
-            let out = refresh_license_at(&serve_once(
-                "503 Service Unavailable",
-                r#"{"error":"license not found"}"#,
-            ));
-            assert_eq!(out["ok"], false);
-            assert!(out.get("revoked").is_none(), "{out}");
+            for (status, body) in [
+                (
+                    "503 Service Unavailable",
+                    r#"{"error":"license_not_found"}"#,
+                ),
+                ("409 Conflict", r#"{"error":"license_expired"}"#),
+                ("401 Unauthorized", r#"{"error":"token_expired"}"#),
+                ("429 Too Many Requests", r#"{"error":"rate_limited"}"#),
+            ] {
+                let out = refresh_license_at(&serve_once(status, body));
+                assert_eq!(out["ok"], false);
+                assert!(out.get("revoked").is_none(), "{status}: {out}");
+            }
             assert_eq!(
                 license::load_license_file().ok().flatten().as_deref(),
                 Some("h.p.s")
