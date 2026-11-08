@@ -173,6 +173,7 @@ public static class MeetingPostProcessService
         catch (Exception ex)
         {
             App.Log($"recap (shared) exc: {ex}", "MeetingRecap");
+            Helpers.CrashReporter.Report(ex, "meeting_recap");
             return new RecapResult { Success = false, Dir = dir, Error = ex.Message };
         }
         finally

@@ -21,6 +21,7 @@
     <Compile Include="..\Dimmy.Windows\Services\HotkeyRecorderEvents.cs" Link="Services\HotkeyRecorderEvents.cs" />
     <Compile Include="..\Dimmy.Windows\Services\HotkeyEvents.cs" Link="Services\HotkeyEvents.cs" />
     <Compile Include="..\Dimmy.Windows\Services\HotkeyEdgePolicy.cs" Link="Services\HotkeyEdgePolicy.cs" />
+    <Compile Include="..\Dimmy.Windows\Helpers\CrashFrames.cs" Link="Helpers\CrashFrames.cs" />
     <Compile Include="..\Dimmy.Windows\Helpers\PillDockMath.cs" Link="Helpers\PillDockMath.cs" />
     <Compile Include="..\Dimmy.Windows\Helpers\PillHitRegion.cs" Link="Helpers\PillHitRegion.cs" />
     <Compile Include="..\Dimmy.Windows\Helpers\LegalDocument.cs" Link="Helpers\LegalDocument.cs" />
