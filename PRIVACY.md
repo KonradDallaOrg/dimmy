@@ -273,7 +273,7 @@ withdrawal) send what you type to `license.dimmy.app`.
 
 | Processing | Legal basis |
 |---|---|
-| Licence, trial, activation, devices, payment, receipts, withdrawal requests | Performance of the contract (art. 6(1)(b)), and legal obligations for tax and accounting records (art. 6(1)(c)). |
+| Licence, trial, activation, devices, payment, receipts, withdrawal requests | Performance of the contract (art. 6(1)(b)). Keeping an ended licence for the card-dispute window, and an expired trial's e-mail hash: our legitimate interest in defending payment disputes and preventing repeated free trials (art. 6(1)(f)). |
 | Usage statistics and crash reports | Your consent (art. 6(1)(a); ePrivacy art. 5(3), Codice privacy art. 122). |
 | "I'd buy this", waitlist and newsletter e-mails | Your consent (art. 6(1)(a)). |
 | Feedback you send | Your consent, given by sending it. |
@@ -312,13 +312,24 @@ European Commission's Standard Contractual Clauses.
 
 | Data | Kept for |
 |---|---|
-| Rate-limit rows (IP address) | 48 hours, then deleted by a daily job. |
-| Activation codes | 30 days after they expire, then deleted. |
-| Licence, device and payment records | For the duration of the licence, then for the period Italian law requires for accounting records (10 years, art. 2220 of the Civil Code). |
-| Withdrawal requests | 2 years. |
-| "I'd buy this" / waitlist e-mails | Until we have written to you about it, until you ask, or until you delete your account. |
-| Telemetry events (PostHog) and crash reports (Sentry) | As long as the PostHog and Sentry plan in use keeps them. We delete them earlier on request. |
+| Rate-limit rows (IP address) | 48 hours. |
+| Activation codes and account-deletion codes | 24 hours after they expire. |
+| Active licence and its devices | As long as the licence is active. |
+| Licence that ended (expired, refunded or revoked, withdrawn, deleted) and its devices | 120 days after the end (the window for card disputes), then deleted. |
+| Expired trial that never became a paid licence | Only the hash of your e-mail, for 12 months after the trial ended, so that the same address cannot start a second free trial. Then deleted. Device names and User-Agents are removed when the trial ends. |
+| Audit log | 12 months. |
+| Stripe event IDs (each payment event is processed once) | 90 days. |
+| Withdrawal declarations | 12 months after we receive them. |
+| Leads, "I'd buy this" and waitlist e-mails | 12 months, or earlier when you ask or delete your account. |
+| Usage statistics (PostHog) | Up to 12 months. |
+| Crash reports (Sentry) | Up to 90 days. |
 | Data on your computer | Until you delete it. |
+
+A daily job on the licence service deletes the rows when their period ends.
+Stripe (including Link) keeps your payment data as its own controller, under
+its own privacy policy. We keep Stripe's monthly self-billed invoices for 10
+years, as Italian law requires for accounting records (art. 2220 of the Civil
+Code). These invoices do not contain your personal data.
 
 ---
 
