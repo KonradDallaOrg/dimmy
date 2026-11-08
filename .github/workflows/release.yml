@@ -20,15 +20,16 @@ jobs:
     name: Rust Lint & Test
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
+          toolchain: stable
           components: rustfmt, clippy
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: core
 
@@ -61,7 +62,7 @@ jobs:
       release_id: ${{ steps.create.outputs.id }}
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
 
@@ -144,7 +145,7 @@ jobs:
 
       - name: Create GitHub Release
         id: create
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           tag_name: ${{ github.ref_name }}
           name: "Dimmy ${{ github.ref_name }}"
@@ -165,11 +166,12 @@ jobs:
     needs: create-release
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
+          toolchain: stable
           targets: aarch64-apple-darwin
 
       - name: Install CMake
@@ -186,12 +188,12 @@ jobs:
         run: scripts/download-onnxruntime.sh
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: core
 
       - name: Cache FluidAudio Swift build
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: |
             ~/Library/Developer/Xcode/DerivedData/FluidAudio*
@@ -911,7 +913,7 @@ jobs:
           cat "$APPCAST"
 
       - name: Upload DMG to release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           tag_name: ${{ github.ref_name }}
           files: platforms/macos/build/Dimmy-macos-arm64.dmg
@@ -923,7 +925,7 @@ jobs:
 
       - name: Upload appcast.xml to release
         if: hashFiles('platforms/macos/build/appcast.xml') != ''
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           tag_name: ${{ github.ref_name }}
           files: platforms/macos/build/appcast.xml
@@ -959,7 +961,7 @@ jobs:
     needs: create-release
     runs-on: windows-2025-vs2026
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       # llama.cpp now vendors a web UI whose paths blow past Windows' 260-char
       # limit when cargo checks the submodule out under CARGO_HOME:
@@ -977,12 +979,13 @@ jobs:
           "CARGO_NET_GIT_FETCH_WITH_CLI=true" | Add-Content -Encoding utf8 $env:GITHUB_ENV
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
+          toolchain: stable
           targets: x86_64-pc-windows-msvc
 
       - name: Install CMake & Ninja
-        uses: lukka/get-cmake@latest
+        uses: lukka/get-cmake@f86dd60acae0d132056913e248bdabf0e0580b7a # v4.4.5
 
       - name: Install VS 2026 BuildTools side-by-side (MSVC 14.50+)
         shell: pwsh
@@ -1146,12 +1149,12 @@ jobs:
           if (-not $sdkDir) {
             throw "VulkanSDK not found after $maxTries chocolatey attempts (community.chocolatey.org may be degraded — re-run workflow when repo recovers)"
           }
-          echo "VULKAN_SDK=$($sdkDir.FullName)" >> $env:GITHUB_ENV
+          Add-Content -Path $env:GITHUB_ENV -Value "VULKAN_SDK=$($sdkDir.FullName)" -Encoding utf8
           echo "$($sdkDir.FullName)\Bin" >> $env:GITHUB_PATH
           Write-Host "Vulkan SDK: $($sdkDir.FullName)"
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: core
           shared-key: windows-release-llamacpp061
@@ -1389,7 +1392,7 @@ jobs:
       # existed anywhere by the time anyone asked.
       - name: Upload AVX-512 gate evidence
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: avx512-gate-evidence
           path: ${{ runner.temp }}/avx512-evidence
@@ -1425,7 +1428,7 @@ jobs:
           exit 0
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v5
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
         with:
           dotnet-version: '8.0.x'
 
@@ -1440,7 +1443,7 @@ jobs:
       # can never fail the release.
       - name: Restore NuGet cache
         id: nuget-cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ~/.nuget/packages
           key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
@@ -1453,7 +1456,7 @@ jobs:
       - name: Save NuGet cache
         if: steps.nuget-cache.outputs.cache-hit != 'true'
         continue-on-error: true
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ~/.nuget/packages
           key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
@@ -1489,7 +1492,7 @@ jobs:
             throw "Microsoft.Build.Packaging.Pri.Tasks.dll not found in VS install. UWP workload missing?"
           }
           Write-Host "AppxMSBuildToolsPath = $found"
-          echo "AppxMSBuildToolsPath=$found" >> $env:GITHUB_ENV
+          Add-Content -Path $env:GITHUB_ENV -Value "AppxMSBuildToolsPath=$found" -Encoding utf8
 
       - name: Publish Windows app (self-contained)
         working-directory: platforms/windows/Dimmy.Windows
@@ -1574,7 +1577,7 @@ jobs:
       # The self-hosted `sign-windows` job consumes this to Authenticode-sign
       # the Dimmy binaries with the Certum cloud cert and re-pack signed.
       - name: Upload unsigned publish dir (for self-hosted signing)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: win-publish
           path: platforms/windows/Dimmy.Windows/publish
@@ -1601,7 +1604,7 @@ jobs:
           Get-ChildItem platforms/windows/velopack-output | ForEach-Object { Write-Host "$($_.Name) ($([math]::Round($_.Length/1MB, 1)) MB)" }
 
       - name: Upload to release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           tag_name: ${{ github.ref_name }}
           # Keep DRAFT until the Publish job (after gates). This step uploads
@@ -1626,12 +1629,15 @@ jobs:
   sign-windows:
     name: Sign Windows (self-hosted Certum)
     needs: [create-release, build-windows]
+    # Mistake guard, not a security boundary: the runner-side hook in
+    # scripts/signing-runner/ is what refuses foreign jobs.
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: [self-hosted, dimmy-sign]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Download unsigned publish dir
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: win-publish
           path: platforms/windows/Dimmy.Windows/publish
@@ -1684,7 +1690,7 @@ jobs:
       # ~120 MB artifact round-trip that nothing consumes.
       - name: Upload signed Setup.exe artifact (for R2 publish)
         if: ${{ !contains(github.ref_name, '-') }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: signed-win-setup
           path: |
@@ -1707,7 +1713,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download signed Setup.exe
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: signed-win-setup
           path: r2in
@@ -1740,15 +1746,16 @@ jobs:
     needs: create-release
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
+          toolchain: stable
           components: clippy
 
       - name: Cache cargo
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -1807,7 +1814,7 @@ jobs:
           mv Dimmy*.AppImage Dimmy-linux-x86_64.AppImage
 
       - name: Upload AppImage to release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           tag_name: ${{ github.ref_name }}
           files: Dimmy-linux-x86_64.AppImage
@@ -1887,7 +1894,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Publish release
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         with:
           script: |
             await github.rest.repos.updateRelease({
