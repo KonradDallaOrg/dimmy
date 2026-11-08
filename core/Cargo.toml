@@ -494,3 +494,11 @@ fluidaudio-rs = { path = "vendor/fluidaudio-rs", optional = true }
 #   crates get built with abort while the test harness requires unwind
 #   ("requires panic strategy `abort` which is incompatible"). Verified
 #   2026-07-02 — do not re-add without solving that first.
+
+# Line tables only, for Sentry symbolication. Without them the Windows PDB
+# and the macOS dSYM carry no Dimmy source lines (only std's), so a crash
+# shows function names and nothing more. The shipped binaries do not grow:
+# the debug info lives in the PDB / dSYM, which CI uploads to Sentry and
+# never ships (scripts/ci/sentry.sh).
+[profile.release]
+debug = "line-tables-only"
