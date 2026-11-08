@@ -41,6 +41,12 @@ final class DimmyCore {
     /// Large buffer for transcripts (512 KB).
     private static let transcriptBufferSize: Int32 = 524_288
 
+    /// History rows (4 MB, same as Windows). The core truncates silently at
+    /// the buffer size, and one long meeting row (transcript + word
+    /// timestamps) is ~60 KB, so 200 rows in 64 KB parsed as nothing and
+    /// the History page showed empty.
+    private static let historyBufferSize: Int32 = 4 << 20
+
     private init() {}
 
     /// True once `initialize()` has returned success. FFI calls panic
@@ -1230,7 +1236,7 @@ final class DimmyCore {
 
     /// Get recent transcripts as JSON array.
     func historyRecent(limit: Int32) -> [[String: Any]]? {
-        let bufLen = Self.bufferSize
+        let bufLen = Self.historyBufferSize
         let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
         defer { buffer.deallocate() }
         buffer[0] = 0
@@ -1248,7 +1254,7 @@ final class DimmyCore {
 
     /// Search transcripts via full-text search. Returns JSON array.
     func historySearch(query: String, limit: Int32) -> [[String: Any]]? {
-        let bufLen = Self.bufferSize
+        let bufLen = Self.historyBufferSize
         let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
         defer { buffer.deallocate() }
         buffer[0] = 0
