@@ -493,15 +493,7 @@ pub fn check_status() -> LicenseStatus {
             };
         }
 
-        // Offline-grace check.
-        let last_online = last_online_check();
-        let days_offline = if last_online <= 0 {
-            // No record yet — assume we just installed and let it slide
-            // for now. The first successful refresh will start the clock.
-            0
-        } else {
-            ((now - last_online) / 86_400).max(0) as u32
-        };
+        let days_offline = days_offline(now, last_online_check(), claims.iat);
         let grace = claims.max_offline.saturating_add(7);
         if days_offline > grace {
             return LicenseStatus::Suspended {
@@ -529,6 +521,22 @@ pub fn check_status() -> LicenseStatus {
             },
         }
     }
+}
+
+/// Whole days since the last proof that the server still accepts this
+/// token. A missing sidecar (`last_online <= 0`) or one stamped in the
+/// future (clock rolled back, or the file edited) proves nothing, so the
+/// token's own `iat` — when the server last signed it — stands in: the
+/// worst case the sidecar's doc promises.
+pub fn days_offline(now: i64, last_online: i64, iat: i64) -> u32 {
+    assert!(iat > 0, "days_offline: iat must be positive");
+    let since = if last_online <= 0 || last_online > now {
+        iat
+    } else {
+        last_online
+    };
+    let days = ((now - since) / 86_400).max(0);
+    u32::try_from(days).unwrap_or(u32::MAX)
 }
 
 #[cfg(feature = "license-client")]
@@ -987,6 +995,19 @@ fn urlencoding(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_missing_or_future_online_check_counts_from_the_token_issue_time() {
+        let day = 86_400;
+        let now = 1_000 * day;
+        let iat = now - 40 * day;
+        assert_eq!(days_offline(now, 0, iat), 40);
+        assert_eq!(days_offline(now, -5, iat), 40);
+        assert_eq!(days_offline(now, now + 365 * day, iat), 40);
+        assert_eq!(days_offline(now, now - 3 * day, iat), 3);
+        assert_eq!(days_offline(now, now, iat), 0);
+        assert_eq!(days_offline(now, 0, now + day), 0);
+    }
 
     #[test]
     fn refresh_revocation_matches_only_the_servers_definitive_rejections() {
