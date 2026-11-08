@@ -38,7 +38,7 @@
 //!   transcript fragment echoed by the CLI can't leak.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::RwLock;
 use std::time::Duration;
 
@@ -549,9 +549,9 @@ pub fn spawn_login() -> Result<(), CodexError> {
         cmd.arg(""); // empty window title
         cmd.arg(&binary);
         cmd.arg("login");
-        cmd.stdin(Stdio::null());
-        cmd.stdout(Stdio::null());
-        cmd.stderr(Stdio::null());
+        cmd.stdin(std::process::Stdio::null());
+        cmd.stdout(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::null());
         cmd.spawn()
             .map_err(|e| CodexError::Spawn(format!("{}", e)))?;
     }
@@ -567,9 +567,9 @@ pub fn spawn_login() -> Result<(), CodexError> {
     {
         let mut cmd = Command::new(&binary);
         cmd.arg("login");
-        cmd.stdin(Stdio::null());
-        cmd.stdout(Stdio::null());
-        cmd.stderr(Stdio::null());
+        cmd.stdin(std::process::Stdio::null());
+        cmd.stdout(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::null());
         cmd.spawn()
             .map_err(|e| CodexError::Spawn(format!("{}", e)))?;
     }

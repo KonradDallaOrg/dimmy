@@ -104,7 +104,7 @@
 //!   transcript fragment echoed by the CLI can't leak.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::RwLock;
 use std::time::Duration;
 
@@ -527,9 +527,9 @@ pub fn spawn_login() -> Result<(), GeminiError> {
         cmd.arg("start");
         cmd.arg(""); // empty window title
         cmd.arg(&binary);
-        cmd.stdin(Stdio::null());
-        cmd.stdout(Stdio::null());
-        cmd.stderr(Stdio::null());
+        cmd.stdin(std::process::Stdio::null());
+        cmd.stdout(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::null());
         cmd.spawn()
             .map_err(|e| GeminiError::Spawn(format!("{}", e)))?;
     }
@@ -544,9 +544,9 @@ pub fn spawn_login() -> Result<(), GeminiError> {
     #[cfg(target_os = "linux")]
     {
         let mut cmd = Command::new(&binary);
-        cmd.stdin(Stdio::null());
-        cmd.stdout(Stdio::null());
-        cmd.stderr(Stdio::null());
+        cmd.stdin(std::process::Stdio::null());
+        cmd.stdout(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::null());
         cmd.spawn()
             .map_err(|e| GeminiError::Spawn(format!("{}", e)))?;
     }
