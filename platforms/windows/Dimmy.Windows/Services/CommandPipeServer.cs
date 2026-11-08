@@ -31,12 +31,14 @@ public sealed class CommandPipeServer : IDisposable
     public const string PipeName = "DimmyCommand";
 
     private readonly Action<string> _onCommand;
+    private readonly Action<Exception>? _onHandlerError;
     private readonly CancellationTokenSource _cts = new();
     private Task? _loopTask;
 
-    public CommandPipeServer(Action<string> onCommand)
+    public CommandPipeServer(Action<string> onCommand, Action<Exception>? onHandlerError = null)
     {
         _onCommand = onCommand;
+        _onHandlerError = onHandlerError;
     }
 
     public void Start()
@@ -79,7 +81,7 @@ public sealed class CommandPipeServer : IDisposable
                 catch (Exception ex)
                 {
                     System.Diagnostics.Debug.WriteLine($"[CommandPipe] handler threw: {ex.Message}");
-                    Helpers.CrashReporter.Report(ex, "command_pipe_handler");
+                    _onHandlerError?.Invoke(ex);
                 }
             }
             catch (OperationCanceledException) { break; }

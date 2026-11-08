@@ -872,7 +872,9 @@ public partial class App : Application
     {
         try
         {
-            _commandPipe = new CommandPipeServer(HandleForwardedCommand);
+            _commandPipe = new CommandPipeServer(
+                HandleForwardedCommand,
+                ex => Helpers.CrashReporter.Report(ex, "command_pipe_handler"));
             _commandPipe.Start();
         }
         catch (Exception ex)
