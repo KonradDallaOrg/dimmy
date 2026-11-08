@@ -11202,18 +11202,26 @@ pub unsafe extern "C" fn dimmy_license_redeem(
 /// writes back the rotated one. Writes JSON `{ok, error?}` to buf.
 #[no_mangle]
 pub extern "C" fn dimmy_license_refresh(buf: *mut c_char, buf_len: c_int) -> c_int {
+    let json = refresh_license_at(&licensing_server_url());
+    write_to_buf(&json.to_string(), buf, buf_len)
+}
+
+/// On a definitive rejection (see `RefreshError::is_revocation`) the stored
+/// token is deleted, so the license falls back to `NotFound` (free) now
+/// instead of after `max_offline` days. The result carries `revoked: true`.
+fn refresh_license_at(server: &str) -> serde_json::Value {
+    let err = |msg: String| serde_json::json!({"ok": false, "error": msg});
     let token = match license::load_license_file() {
         Ok(Some(t)) => t,
-        Ok(None) => return write_license_err(buf, buf_len, "no license file"),
-        Err(e) => return write_license_err(buf, buf_len, &format!("load: {}", e)),
+        Ok(None) => return err("no license file".into()),
+        Err(e) => return err(format!("load: {}", e)),
     };
-    let server = licensing_server_url();
     let rt = match tokio::runtime::Runtime::new() {
         Ok(r) => r,
-        Err(e) => return write_license_err(buf, buf_len, &format!("runtime: {}", e)),
+        Err(e) => return err(format!("runtime: {}", e)),
     };
-    let result = rt.block_on(license::refresh_token(&server, &token));
-    let json = match result {
+    let result = rt.block_on(license::refresh_token(server, &token));
+    match result {
         Ok(r) => match license::save_license_file(&r.token) {
             Ok(()) => {
                 let now = std::time::SystemTime::now()
@@ -11234,13 +11242,21 @@ pub extern "C" fn dimmy_license_refresh(buf: *mut c_char, buf_len: c_int) -> c_i
             }
         },
         Err(e) => {
-            track(Event::LicenseRefreshFailed {
-                error_category: license_error_category(&e),
-            });
-            serde_json::json!({"ok": false, "error": format!("{}", e)})
+            let error_category = match &e {
+                license::RefreshError::Http(h) => license_error_category(h),
+                license::RefreshError::Rejected { status, .. } if *status >= 500 => "server_5xx",
+                license::RefreshError::Rejected { .. } => "server_4xx",
+            };
+            track(Event::LicenseRefreshFailed { error_category });
+            if !e.is_revocation() {
+                return err(format!("{}", e));
+            }
+            if let Err(io) = license::forget_license() {
+                return err(format!("revoked, but removing the token failed: {}", io));
+            }
+            serde_json::json!({"ok": false, "revoked": true, "error": format!("{}", e)})
         }
-    };
-    write_to_buf(&json.to_string(), buf, buf_len)
+    }
 }
 
 /// `POST /api/checkout/create { tier, token? }` via FFI. Token is read
@@ -15098,5 +15114,107 @@ mod stop_drain_tests {
     fn a_stop_that_never_finishes_refuses_the_press_instead_of_losing_its_audio() {
         let flag = AtomicBool::new(true);
         assert!(!stop_drain_settled(&flag, Duration::from_millis(20)));
+    }
+}
+
+#[cfg(test)]
+mod license_refresh_tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    static LICENSE_FILE: Mutex<()> = Mutex::new(());
+
+    fn serve_once(status_line: &'static str, body: &'static str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().expect("accept");
+            let mut req = Vec::new();
+            let mut chunk = [0u8; 4096];
+            while let Ok(n) = s.read(&mut chunk) {
+                if n == 0 {
+                    break;
+                }
+                req.extend_from_slice(&chunk[..n]);
+                let text = String::from_utf8_lossy(&req);
+                if let Some(h) = text.find("\r\n\r\n") {
+                    let len = text[..h]
+                        .lines()
+                        .find_map(|l| {
+                            l.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                        })
+                        .unwrap_or(0);
+                    if req.len() >= h + 4 + len {
+                        break;
+                    }
+                }
+            }
+            let resp = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_line,
+                body.len(),
+                body
+            );
+            let _ = s.write_all(resp.as_bytes());
+        });
+        format!("http://{}", addr)
+    }
+
+    fn with_token<F: FnOnce()>(f: F) {
+        let _g = LICENSE_FILE.lock().unwrap_or_else(|p| p.into_inner());
+        license::save_license_file("h.p.s").expect("save");
+        f();
+        let _ = license::forget_license();
+    }
+
+    #[test]
+    fn a_definitive_rejection_removes_the_token_and_leaves_the_free_state() {
+        for (status, body) in [
+            ("409 Conflict", r#"{"error":"license suspended"}"#),
+            ("409 Conflict", r#"{"error":"device deactivated"}"#),
+            ("409 Conflict", r#"{"error":"license withdrawn"}"#),
+            ("404 Not Found", r#"{"error":"license not found"}"#),
+        ] {
+            with_token(|| {
+                let out = refresh_license_at(&serve_once(status, body));
+                assert_eq!(out["revoked"], true, "{status} {body}: {out}");
+                assert!(
+                    matches!(license::load_license_file(), Ok(None)),
+                    "{body}: token still on disk"
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn a_server_error_or_a_dead_network_keeps_the_token() {
+        with_token(|| {
+            let out = refresh_license_at(&serve_once(
+                "503 Service Unavailable",
+                r#"{"error":"license not found"}"#,
+            ));
+            assert_eq!(out["ok"], false);
+            assert!(out.get("revoked").is_none(), "{out}");
+            assert_eq!(
+                license::load_license_file().ok().flatten().as_deref(),
+                Some("h.p.s")
+            );
+        });
+        with_token(|| {
+            let port = TcpListener::bind("127.0.0.1:0")
+                .expect("bind")
+                .local_addr()
+                .expect("addr")
+                .port();
+            let out = refresh_license_at(&format!("http://127.0.0.1:{}", port));
+            assert_eq!(out["ok"], false);
+            assert_eq!(
+                license::load_license_file().ok().flatten().as_deref(),
+                Some("h.p.s")
+            );
+        });
     }
 }

@@ -635,24 +635,105 @@ pub async fn redeem_activation_code(
         .await
 }
 
+/// Why `/api/refresh` did not return a token.
+#[derive(Debug)]
+pub enum RefreshError {
+    /// The server answered with a non-2xx status. `code` is the JSON
+    /// `error` field, empty when the body had none.
+    Rejected {
+        status: u16,
+        code: String,
+    },
+    Http(reqwest::Error),
+}
+
+impl RefreshError {
+    /// True when the server has said, for good, that this token no longer
+    /// grants anything: the license is gone, suspended (refund, chargeback),
+    /// expired or withdrawn, or this device was deactivated / removed.
+    /// Network errors, timeouts, 429 and 5xx are NOT revocations — the
+    /// offline grace covers those.
+    pub fn is_revocation(&self) -> bool {
+        let RefreshError::Rejected { status, code } = self else {
+            return false;
+        };
+        let code = code.to_ascii_lowercase();
+        match status {
+            404 => code == "license not found" || code == "device not found",
+            409 => {
+                code == "license suspended"
+                    || code == "license expired"
+                    || code == "device deactivated"
+                    || code.contains("withdrawn")
+            }
+            _ => false,
+        }
+    }
+}
+
+impl std::fmt::Display for RefreshError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RefreshError::Rejected { status, code } => {
+                let code: String = code.chars().take(200).collect();
+                write!(f, "HTTP {}: {}", status, code)
+            }
+            RefreshError::Http(e) => write!(f, "{}", e),
+        }
+    }
+}
+
+impl std::error::Error for RefreshError {}
+
+impl From<reqwest::Error> for RefreshError {
+    fn from(e: reqwest::Error) -> Self {
+        RefreshError::Http(e)
+    }
+}
+
 /// Refresh an existing token. Server may return the same token (no-op
 /// touch of `last_seen`) or a re-issued one (e.g. after a sub renewal).
 /// Either way the caller writes it back to the license file.
-pub async fn refresh_token(server: &str, token: &str) -> Result<TokenResponse, reqwest::Error> {
+pub async fn refresh_token(server: &str, token: &str) -> Result<TokenResponse, RefreshError> {
     assert!(!server.is_empty(), "server URL required");
     assert!(!token.is_empty(), "token required");
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()?;
     let url = format!("{}/api/refresh", server.trim_end_matches('/'));
-    client
+    let resp = client
         .post(&url)
         .json(&RefreshRequest { token })
         .send()
-        .await?
-        .error_for_status()?
-        .json::<TokenResponse>()
-        .await
+        .await?;
+    let status = resp.status();
+    if !status.is_success() {
+        let code = resp
+            .json::<serde_json::Value>()
+            .await
+            .ok()
+            .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from))
+            .unwrap_or_default();
+        return Err(RefreshError::Rejected {
+            status: status.as_u16(),
+            code,
+        });
+    }
+    Ok(resp.json::<TokenResponse>().await?)
+}
+
+/// Remove the stored token. Status falls back to `NotFound` (free).
+pub fn forget_license() -> Result<(), std::io::Error> {
+    let Some(path) = license_path() else {
+        return Ok(());
+    };
+    match std::fs::remove_file(&path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    assert!(!path.exists(), "license file must be gone after forget");
+    Ok(())
 }
 
 /// One device under a license. Returned by `/api/devices/list`.
@@ -906,6 +987,36 @@ fn urlencoding(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refresh_revocation_matches_only_the_servers_definitive_rejections() {
+        let rej = |status: u16, code: &str| RefreshError::Rejected {
+            status,
+            code: code.into(),
+        };
+        for (status, code) in [
+            (404, "license not found"),
+            (404, "device not found"),
+            (409, "license suspended"),
+            (409, "license expired"),
+            (409, "device deactivated"),
+            (409, "license withdrawn"),
+        ] {
+            assert!(rej(status, code).is_revocation(), "{status} {code}");
+        }
+        for (status, code) in [
+            (500, "license suspended"),
+            (502, ""),
+            (503, "license not found"),
+            (429, "rate limited"),
+            (400, "invalid token: signature verify"),
+            (400, "token required"),
+            (404, ""),
+            (409, ""),
+        ] {
+            assert!(!rej(status, code).is_revocation(), "{status} {code}");
+        }
+    }
 
     #[test]
     fn unrestricted_when_pubkey_is_empty() {
