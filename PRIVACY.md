@@ -31,7 +31,7 @@ The website at <https://dimmy.app/privacy/> shows the same content.
 ## Who is responsible
 
 The controller is **Konrad Dalla**, Via La Piera 67, Bologna, Italy, who develops and sells Dimmy.
-Contact: **konrad.dalla@gmail.com**. Security issues: security@dimmy.app.
+Contact: **hi@dimmy.app**. Security issues: security@dimmy.app.
 
 There is no data protection officer; the law does not require one at this
 size. Write to the address above for any request in this policy.
@@ -326,7 +326,7 @@ European Commission's Standard Contractual Clauses.
 
 Under the GDPR you can ask for access to your data, correction, deletion,
 restriction, portability, and you can object to processing based on
-legitimate interest. Write to **konrad.dalla@gmail.com**. We answer within
+legitimate interest. Write to **hi@dimmy.app**. We answer within
 one month.
 
 You can also lodge a complaint with the Italian supervisory authority,
