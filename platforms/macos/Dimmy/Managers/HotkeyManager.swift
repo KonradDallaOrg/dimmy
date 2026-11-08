@@ -570,6 +570,7 @@ final class HotkeyManager {
                 self.currentRecordingBundleId = ""
 
                 appState.lastTranscript = finalText
+                if historyIdFinal >= 0 { appState.historyTick += 1 }
 
                 if finalText.isEmpty {
                     appState.recordingState = .idle

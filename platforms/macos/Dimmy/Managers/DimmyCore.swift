@@ -1355,6 +1355,8 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
         if let text = payload["text"] as? String {
             appState.lastTranscript = text
         }
+        // dimmy_stop_recording saved the history row before emitting this.
+        appState.historyTick += 1
         // Re-read config so the cumulative word/speaking-time counters
         // shown in Home stay in sync after every successful transcription.
         // The Rust core writes the updated stats to config inside
