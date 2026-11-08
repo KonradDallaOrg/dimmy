@@ -1527,7 +1527,11 @@ impl Streamer {
     pub fn stop(mut self) -> String {
         self.cancel.store(true, std::sync::atomic::Ordering::SeqCst);
         if let Some(h) = self.handle.take() {
-            let _ = h.join();
+            crate::stream_bounds::join_worker(
+                h,
+                crate::stream_bounds::LOCAL_STOP_JOIN_TIMEOUT,
+                "Nemotron",
+            );
         }
         self.final_text
             .lock()

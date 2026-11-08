@@ -891,6 +891,44 @@ struct SttThreadCtx {
     /// (queue full, or the final window capped): live speaker labels would
     /// have a hole, so the stop falls back to the full pass.
     windows_lost: Arc<AtomicBool>,
+    /// Set by the capture worker the first time the queue is full: seconds
+    /// into the meeting, plus one (0 = not behind). This thread tells the
+    /// host, because the capture loop may not call into it.
+    behind_at: Arc<AtomicU64>,
+}
+
+fn engine_label(stt: &SttSnapshot) -> &'static str {
+    if stt.mode == "cloud" {
+        "cloud"
+    } else if stt.local_backend == "parakeet" {
+        "parakeet"
+    } else if stt.local_backend == "whistle" {
+        "whistle"
+    } else if stt.local_backend == "nemotron" {
+        "nemotron"
+    } else {
+        "whisper"
+    }
+}
+
+/// The once-per-meeting "transcription is behind" notice, sent from the
+/// transcription thread after the capture worker raised `behind_at`.
+fn report_behind(ctx: &SttThreadCtx, reported: &mut bool) {
+    let at = ctx.behind_at.load(Ordering::SeqCst);
+    if *reported || at == 0 {
+        return;
+    }
+    *reported = true;
+    let secs = at - 1;
+    let engine = engine_label(&ctx.stt);
+    crate::telemetry::track(crate::telemetry::Event::MeetingTranscriptionBehind {
+        engine,
+        elapsed_bucket: bucket_elapsed_secs(secs as f64),
+    });
+    crate::ffi::emit_event(
+        "meeting_transcription_behind",
+        &serde_json::json!({ "engine": engine, "elapsed_secs": secs }).to_string(),
+    );
 }
 
 /// Nemotron's live meeting transcription: one stream per track for the
@@ -1526,7 +1564,9 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
         }
     };
 
+    let mut behind_reported = false;
     while let Ok(job) = rx.recv() {
+        report_behind(&ctx, &mut behind_reported);
         let (mic_slice, system_slice, elapsed_ms, track_start, stats_secs) = match job {
             SttJob::Paused { elapsed_ms, dur_ms } => {
                 let line = format!(
@@ -1932,6 +1972,7 @@ fn worker_loop(
     // why that separation is not negotiable.
     let chunk_count_shared = Arc::new(std::sync::atomic::AtomicU32::new(0));
     let windows_lost = Arc::new(AtomicBool::new(false));
+    let behind_at = Arc::new(AtomicU64::new(0));
     let queue_depth = if stt.mode == "local" && stt.local_backend == "nemotron" {
         NEMOTRON_QUEUE_DEPTH
     } else {
@@ -1952,6 +1993,7 @@ fn worker_loop(
         transcripts_file,
         chunk_count: Arc::clone(&chunk_count_shared),
         windows_lost: Arc::clone(&windows_lost),
+        behind_at: Arc::clone(&behind_at),
     };
     let stt_handle = thread::Builder::new()
         .name("dimmy-meeting-stt".into())
@@ -2419,34 +2461,11 @@ fn worker_loop(
                     }
                     // Tell the user ONCE, while it is still happening and
                     // they can act on it. Finding out at stop time is too
-                    // late to change engine for this meeting.
+                    // late to change engine for this meeting. The
+                    // transcription thread sends it: a host callback or a
+                    // telemetry call could block this loop.
                     if stt_dropped_chunks == 1 {
-                        let engine: &'static str = if stt.mode == "cloud" {
-                            "cloud"
-                        } else if stt.local_backend == "parakeet" {
-                            "parakeet"
-                        } else if stt.local_backend == "whistle" {
-                            "whistle"
-                        } else if stt.local_backend == "nemotron" {
-                            "nemotron"
-                        } else {
-                            "whisper"
-                        };
-                        let secs = started.elapsed().as_secs_f64();
-                        crate::telemetry::track(
-                            crate::telemetry::Event::MeetingTranscriptionBehind {
-                                engine,
-                                elapsed_bucket: bucket_elapsed_secs(secs),
-                            },
-                        );
-                        crate::ffi::emit_event(
-                            "meeting_transcription_behind",
-                            &serde_json::json!({
-                                "engine": engine,
-                                "elapsed_secs": secs as u64,
-                            })
-                            .to_string(),
-                        );
+                        behind_at.store(started.elapsed().as_secs() + 1, Ordering::SeqCst);
                     }
                 }
                 Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
@@ -3620,6 +3639,22 @@ mod audio_never_blocked {
             !src[start..end].contains("update_stats("),
             "the capture loop writes config.json again"
         );
+    }
+
+    /// `emit_event` runs the host's callback under a mutex and
+    /// `telemetry::track` takes locks and may queue I/O: either can wait,
+    /// so neither may run inside the capture loop.
+    #[test]
+    fn the_capture_loop_never_calls_the_host_or_telemetry() {
+        let src = include_str!("meeting.rs");
+        let start = src.find("fn worker_loop(").expect("worker_loop");
+        let end = start + src[start..].find("ORDER MATTERS").expect("end of the loop");
+        for call in ["emit_event(", "telemetry::track("] {
+            assert!(
+                !src[start..end].contains(call),
+                "the capture loop calls {call} again"
+            );
+        }
     }
 
     #[test]

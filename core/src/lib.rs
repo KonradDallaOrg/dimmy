@@ -17,6 +17,7 @@ pub mod catalog;
 pub mod chunked_stt;
 pub mod claude_code;
 pub mod claude_desktop;
+pub mod cli_runner;
 pub mod codex;
 /// Notion REST API client — sends meeting recap markdown to a user-
 /// picked Notion page or database. Internal integration tokens, no
@@ -96,6 +97,7 @@ pub mod setup_prefs;
 pub mod silero;
 #[cfg(feature = "sim-audio")]
 pub mod sim_audio;
+pub mod stream_bounds;
 pub mod telegram;
 pub mod telemetry;
 pub mod transcribe;
@@ -1297,10 +1299,53 @@ pub fn save_config_file(cfg: &AppConfig) {
             let _ = std::fs::create_dir_all(parent);
         }
         let json = config_to_json(cfg);
-        let _ = std::fs::write(
-            &path,
-            serde_json::to_string_pretty(&json).unwrap_or_default(),
-        );
+        let body = serde_json::to_string_pretty(&json).unwrap_or_default();
+        if let Err(e) = write_atomic(&path, body.as_bytes()) {
+            log(&format!("[config] save failed: {e}"));
+        }
+    }
+}
+
+/// Replace `path` with `bytes` so a crash or power loss mid-write leaves
+/// either the old file or the new one, never a truncated mix: write a
+/// sibling temp file, flush it to disk, rename it over the target.
+/// `std::fs::rename` replaces an existing target on Windows too
+/// (MoveFileExW + MOVEFILE_REPLACE_EXISTING).
+pub fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let name = path
+        .file_name()
+        .ok_or_else(|| std::io::Error::other("write_atomic: path has no file name"))?;
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let tmp = path.with_file_name(format!(
+        "{}.{}.{}.tmp",
+        name.to_string_lossy(),
+        std::process::id(),
+        seq
+    ));
+    let written = (|| {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+        drop(f);
+        std::fs::rename(&tmp, path)
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written?;
+    assert!(!tmp.exists(), "write_atomic: temp file left behind");
+    Ok(())
+}
+
+/// A UI style string from config JSON, with `default` standing in for a
+/// missing or blank value: a blank one would trip the save asserts.
+pub fn non_empty_or(v: &serde_json::Value, default: &str) -> String {
+    assert!(!default.is_empty(), "non_empty_or: empty default");
+    match v.as_str() {
+        Some(s) if !s.trim().is_empty() => s.to_string(),
+        _ => default.to_string(),
     }
 }
 
@@ -1596,12 +1641,12 @@ pub fn load_config_file() -> AppConfig {
                         .as_str()
                         .unwrap_or(&defaults.local_llm_model)
                         .to_string(),
-                    border_style: v["border_style"].as_str().unwrap_or("Rainbow").to_string(),
-                    waveform_style: v["waveform_style"].as_str().unwrap_or("Bars").to_string(),
-                    overlay_position: v["overlay_position"]
-                        .as_str()
-                        .unwrap_or("Bottom Right")
-                        .to_string(),
+                    border_style: non_empty_or(&v["border_style"], &defaults.border_style),
+                    waveform_style: non_empty_or(&v["waveform_style"], &defaults.waveform_style),
+                    overlay_position: non_empty_or(
+                        &v["overlay_position"],
+                        &defaults.overlay_position,
+                    ),
                     keep_in_clipboard: v["keep_in_clipboard"].as_bool().unwrap_or(false),
                     input_gain: v["input_gain"]
                         .as_f64()
@@ -2606,6 +2651,58 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
             .map_err(|e| e.to_string())?,
         app_rules: state.app_rules.lock().map_err(|e| e.to_string())?.clone(),
     })
+}
+
+#[cfg(test)]
+mod config_file_tests {
+    use super::*;
+
+    #[test]
+    fn a_blank_style_string_falls_back_to_the_default() {
+        let v = serde_json::json!({"a": "", "b": "  ", "c": "Solid", "d": 3});
+        assert_eq!(non_empty_or(&v["a"], "Rainbow"), "Rainbow");
+        assert_eq!(non_empty_or(&v["b"], "Rainbow"), "Rainbow");
+        assert_eq!(non_empty_or(&v["c"], "Rainbow"), "Solid");
+        assert_eq!(non_empty_or(&v["d"], "Rainbow"), "Rainbow");
+        assert_eq!(non_empty_or(&v["missing"], "Bars"), "Bars");
+    }
+
+    #[test]
+    fn replaces_an_existing_file_and_leaves_no_temp_behind() {
+        let dir = std::env::temp_dir().join(format!("dimmy-atomic-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("config.json");
+        std::fs::write(&path, "{\"old\":true, \"long\":\"padding padding\"}").expect("seed");
+        write_atomic(&path, b"{\"new\":1}").expect("write");
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), "{\"new\":1}");
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .expect("ls")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name() != "config.json")
+            .collect();
+        assert!(leftovers.is_empty(), "left behind: {leftovers:?}");
+        write_atomic(&dir.join("fresh.json"), b"x").expect("create");
+        assert_eq!(std::fs::read(dir.join("fresh.json")).expect("read"), b"x");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_write_keeps_the_old_file() {
+        let dir = std::env::temp_dir().join(format!("dimmy-atomic-fail-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        // A directory where the file should be: the rename must fail and the
+        // directory (standing in for the old config) must survive.
+        let target = dir.join("config.json");
+        std::fs::create_dir_all(target.join("keep")).expect("blocker");
+        assert!(write_atomic(&target, b"{}").is_err());
+        assert!(target.join("keep").is_dir());
+        assert_eq!(
+            std::fs::read_dir(&dir).expect("ls").count(),
+            1,
+            "temp left behind"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 #[cfg(test)]

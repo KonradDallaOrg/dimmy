@@ -361,7 +361,7 @@ fn add_prefix(index: &Index, q: &str, out: &mut Vec<(String, f64)>) {
         .filter(|v| v.as_str() != q && v.starts_with(q))
         .map(|v| (v, index.df.get(v).copied().unwrap_or(0)))
         .collect();
-    prefixed.sort_by(|a, b| b.1.cmp(&a.1));
+    prefixed.sort_by_key(|e| std::cmp::Reverse(e.1));
     for (v, _) in prefixed.into_iter().take(12) {
         out.push((v.clone(), WEIGHT_PREFIX));
     }
