@@ -96,8 +96,31 @@ all, backfill), it must not use the Kimi subscription.** The plan's
 | `dimmy_kimi_ping` | ms > 0; -1 not installed, -2 not signed in, -3 spawn, -4 timeout, -5 protocol, -6 reported (usage limit), -7 refused, -8 empty |
 | `dimmy_kimi_models_json` | `[{"id","name"}]`; -3 not installed / signed in, -4 CLI failed. Blocks up to 30 s |
 
+| `dimmy_kimi_mcp_status` | JSON `{kimi_found, registered, binary_exists, config_path}` |
+| `dimmy_kimi_mcp_install(binary)` | 0 done; -1 no home, -2 binary missing, -3 `mcp.json` not valid JSON (left untouched), -4 write failed |
+| `dimmy_kimi_mcp_uninstall` | 1 removed, 0 nothing to remove, negative on error |
+
 Host event `kimi_cli.login_completed {outcome}` goes through
 `dimmy_telemetry_track_typed`.
+
+## MCP bridge: Kimi reads Dimmy (Phase 3)
+
+`core/src/kimi_mcp.rs`. Kimi Code CLI and Kimi Code Desktop read the same
+`~/.kimi-code/mcp.json`. The toggle "Let Kimi Code read your meetings" on
+the Kimi card (both hosts, shown when `~/.kimi-code` exists) writes one key,
+`mcpServers.dimmy` (`dimmy-<ns>` for staging), pointing at the shipped
+`dimmy-mcp` (Win: next to `Dimmy.exe`; Mac: `Contents/Resources`). Rules:
+every other entry is kept; a file that is not a JSON object is refused,
+never overwritten; the first change to an existing file keeps a copy as
+`mcp.json.dimmy-backup`; the write is tmp + rename.
+
+Unlike the Claude Desktop extension, the binary is referenced in place,
+not copied. Velopack's `current\` folder and `/Applications/Dimmy.app` are
+stable across updates.
+
+Side effect: Kimi loads user MCP servers in every session, including the
+ones Dimmy opens for the subscription, so with the bridge on each Kimi
+call also starts `dimmy-mcp`. Its tools are never approved there.
 
 ## Setup CLI
 
@@ -110,7 +133,8 @@ Everything above was written from the CLI source and tested against a
 scripted ACP fake (`kimi_cli::tests`). Still to run on a real account:
 ping, rewrite latency (Claude's is 1.4 s), the recap of a long meeting,
 the model list, that no tool runs, that `session/delete` leaves no session
-behind, and that the catalog ids (`k3`, `kimi-for-coding`,
+behind, that Kimi Code Desktop lists the 6 Dimmy tools after the bridge is
+on and `dimmy_search` works, and that the catalog ids (`k3`, `kimi-for-coding`,
 `kimi-for-coding-highspeed`) match what `/coding/v1/models` returns.
 
 ## Where to look in code

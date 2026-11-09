@@ -2476,6 +2476,28 @@
                 </Grid>
               </Border>
 
+              <!-- Kimi Code MCP: lets Kimi Code (CLI and Desktop) read Dimmy's
+                   meetings and dictations through dimmy-mcp. Shown once Kimi
+                   Code is on this machine. -->
+              <Border x:Name="KimiMcpCard" Style="{StaticResource DimmyCard}" Padding="16"
+                      Margin="0,8,0,0" Visibility="Collapsed">
+                <Grid ColumnSpacing="{StaticResource DimmySpaceL}">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                  </Grid.ColumnDefinitions>
+                  <StackPanel Spacing="{StaticResource DimmySpaceXS}">
+                    <TextBlock Text="Let Kimi Code read your meetings" Style="{StaticResource DimmyBody}"/>
+                    <TextBlock x:Name="KimiMcpStatusText" Style="{StaticResource DimmySecondary}" TextWrapping="Wrap"
+                               Text="Adds Dimmy to ~/.kimi-code/mcp.json, for Kimi Code CLI and Kimi Code Desktop. Other entries stay as they are."/>
+                  </StackPanel>
+                  <ToggleSwitch x:Name="KimiMcpToggle" Grid.Column="1" VerticalAlignment="Center"
+                                OnContent="" OffContent="" MinWidth="0"
+                                Toggled="KimiMcpToggle_Toggled"
+                                AutomationProperties.Name="Let Kimi Code read your meetings"/>
+                </Grid>
+              </Border>
+
               <Border x:Name="KimiIntegrationMessageBar" Background="{ThemeResource SystemFillColorAttentionBackgroundBrush}"
                       BorderThickness="0" CornerRadius="6" Padding="12,8"
                       Margin="0,16,0,0" Visibility="Collapsed">

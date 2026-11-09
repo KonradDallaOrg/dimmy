@@ -76,6 +76,25 @@ extension DimmyCore {
         ClaudeCodeStatus(rawValue: dimmy_kimi_recheck()) ?? .notInstalled
     }
 
+    /// (Kimi Code found on this Mac, Dimmy registered in its mcp.json).
+    var kimiMcpStatus: (kimiFound: Bool, registered: Bool) {
+        guard let json = readKimiBuffer(4096, { dimmy_kimi_mcp_status($0, $1) }),
+              let data = json.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return (false, false) }
+        return ((obj["kimi_found"] as? Bool) ?? false, (obj["registered"] as? Bool) ?? false)
+    }
+
+    /// 0 done; -1 no home, -2 binary missing, -3 mcp.json invalid, -4 write failed.
+    func installKimiMcp(binaryPath: String) -> Int32 {
+        binaryPath.withCString { dimmy_kimi_mcp_install($0) }
+    }
+
+    @discardableResult
+    func uninstallKimiMcp() -> Int32 {
+        dimmy_kimi_mcp_uninstall()
+    }
+
     private func readKimiBuffer(
         _ capacity: Int32,
         _ call: (UnsafeMutablePointer<CChar>, Int32) -> Int32

@@ -95,6 +95,49 @@ public sealed partial class SettingsWindow
         {
             KimiIntegrationMessageBar.Visibility = Visibility.Collapsed;
         }
+
+        RefreshKimiMcpStatus();
+    }
+
+    /// Guards the Toggled handler while the switch mirrors the saved state.
+    private bool _kimiMcpSuppressToggle;
+
+    private void RefreshKimiMcpStatus()
+    {
+        var (found, registered) = Interop.DimmyNative.GetKimiMcpStatus();
+        KimiMcpCard.Visibility = found ? Visibility.Visible : Visibility.Collapsed;
+        _kimiMcpSuppressToggle = true;
+        KimiMcpToggle.IsOn = registered;
+        _kimiMcpSuppressToggle = false;
+    }
+
+    private void KimiMcpToggle_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (_kimiMcpSuppressToggle) return;
+        string? error = null;
+        if (KimiMcpToggle.IsOn)
+        {
+            var binary = ClaudeDesktopConnectDialog.ResolveMcpBinaryPath();
+            var rc = binary == null ? -2 : Interop.DimmyNative.InstallKimiMcp(binary);
+            error = rc switch
+            {
+                0 => null,
+                -2 => "dimmy-mcp.exe was not found next to Dimmy.exe.",
+                -3 => "~/.kimi-code/mcp.json is not valid JSON. Dimmy left it untouched; fix it and try again.",
+                _ => "Could not write ~/.kimi-code/mcp.json. See dimmy.log.",
+            };
+        }
+        else
+        {
+            var rc = Interop.DimmyNative.UninstallKimiMcp();
+            if (rc < 0) error = "Could not update ~/.kimi-code/mcp.json. See dimmy.log.";
+        }
+        App.Log($"kimi mcp -> {KimiMcpToggle.IsOn} error={error != null}", "Kimi");
+        RefreshKimiMcpStatus();
+        KimiMcpStatusText.Text = error
+            ?? (KimiMcpToggle.IsOn
+                ? "Connected. Open a new Kimi Code session to use Dimmy's tools."
+                : "Adds Dimmy to ~/.kimi-code/mcp.json, for Kimi Code CLI and Kimi Code Desktop. Other entries stay as they are.");
     }
 
     private async void KimiIntegrationWizard_Click(object sender, RoutedEventArgs e)

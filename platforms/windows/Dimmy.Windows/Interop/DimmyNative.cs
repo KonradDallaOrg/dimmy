@@ -1363,6 +1363,47 @@ public static class DimmyNative
         catch { return ClaudeCodeStatus.NotInstalled; }
     }
 
+    // Kimi Code MCP bridge: registers dimmy-mcp in ~/.kimi-code/mcp.json.
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_kimi_mcp_status(byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_kimi_mcp_install(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string binaryPath);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_kimi_mcp_uninstall();
+
+    /// <summary>(Kimi Code found on this machine, Dimmy registered with it).</summary>
+    public static (bool KimiFound, bool Registered) GetKimiMcpStatus()
+    {
+        try
+        {
+            var json = ReadBuffer(dimmy_kimi_mcp_status, 4096);
+            if (string.IsNullOrEmpty(json)) return (false, false);
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var r = doc.RootElement;
+            return (r.GetProperty("kimi_found").GetBoolean(),
+                    r.GetProperty("registered").GetBoolean());
+        }
+        catch { return (false, false); }
+    }
+
+    /// <summary>0 done; -1 no home dir, -2 binary missing, -3 mcp.json not
+    /// valid JSON (left untouched), -4 write failed.</summary>
+    public static int InstallKimiMcp(string binaryPath)
+    {
+        try { return dimmy_kimi_mcp_install(binaryPath); }
+        catch { return -4; }
+    }
+
+    public static int UninstallKimiMcp()
+    {
+        try { return dimmy_kimi_mcp_uninstall(); }
+        catch { return -4; }
+    }
+
     // ── Gemini CLI (Google account) ────────────────────
     //
     // Use the user's Google account (free tier, AI Pro, AI Ultra) via the

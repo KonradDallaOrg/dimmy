@@ -920,6 +920,13 @@ int32_t dimmy_kimi_ping(void);
 /// -1 bad args, -2 buffer too small, -3 not installed / signed in, -4 CLI failed.
 int32_t dimmy_kimi_models_json(char * _Nonnull out_buf, int32_t buf_len);
 int32_t dimmy_kimi_recheck(void);
+/// Kimi Code MCP bridge: registers dimmy-mcp in ~/.kimi-code/mcp.json.
+/// Status JSON {kimi_found, registered, binary_exists, config_path}.
+int32_t dimmy_kimi_mcp_status(char * _Nonnull out_buf, int32_t buf_len);
+/// 0 done; -1 no home, -2 binary missing, -3 mcp.json invalid (untouched), -4 write failed.
+int32_t dimmy_kimi_mcp_install(const char * _Nonnull binary_path);
+/// 1 removed, 0 nothing to remove, negative on error.
+int32_t dimmy_kimi_mcp_uninstall(void);
 
 /// Claude Desktop MCP bridge — JSON snapshot:
 ///   {installed, install_path?, extension_path?, config_patched,

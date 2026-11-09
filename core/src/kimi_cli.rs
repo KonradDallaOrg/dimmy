@@ -84,7 +84,7 @@ pub fn clear_cache() {
 
 /// `$KIMI_CODE_HOME`, default `~/.kimi-code`: config, credentials, and
 /// (native installer) `bin/kimi[.exe]`.
-fn kimi_home() -> Option<PathBuf> {
+pub(crate) fn kimi_home() -> Option<PathBuf> {
     if let Ok(h) = std::env::var("KIMI_CODE_HOME") {
         if !h.trim().is_empty() {
             return Some(PathBuf::from(h));

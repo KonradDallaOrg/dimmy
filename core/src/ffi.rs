@@ -5732,6 +5732,75 @@ pub extern "C" fn dimmy_kimi_recheck() -> c_int {
     crate::kimi_cli::status().as_code()
 }
 
+// ── Kimi Code MCP bridge (Kimi CLI + Kimi Code Desktop) ───────────
+// Registers `dimmy-mcp` in `~/.kimi-code/mcp.json`. See kimi_mcp.rs.
+
+/// `{"kimi_found","registered","binary_exists","config_path"}` as JSON.
+/// Bytes written, -1 on null buf, -2 on too-small buf.
+///
+/// # Safety
+/// `out_buf` must be a valid writable buffer of `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_kimi_mcp_status(out_buf: *mut c_char, buf_len: c_int) -> c_int {
+    if out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let json = crate::kimi_mcp::status_json(crate::config_dir_name());
+    if json.len() + 1 > buf_len as usize {
+        return -2;
+    }
+    write_to_buf(&json, out_buf, buf_len)
+}
+
+/// Register `binary_path` (the host's `dimmy-mcp`) with Kimi Code.
+/// 0 = done, -1 bad args / no home dir, -2 binary missing,
+/// -3 `mcp.json` is not valid JSON (left untouched), -4 write failed.
+///
+/// # Safety
+/// `binary_path` must be a valid null-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_kimi_mcp_install(binary_path: *const c_char) -> c_int {
+    use crate::kimi_mcp::McpError;
+    if binary_path.is_null() {
+        return -1;
+    }
+    let path = match unsafe { CStr::from_ptr(binary_path) }.to_str() {
+        Ok(s) if !s.is_empty() => s,
+        _ => return -1,
+    };
+    // Compile-time namespace, as for Claude Desktop: see dimmy_claude_desktop_install.
+    let (rc, kind) =
+        match crate::kimi_mcp::install(std::path::Path::new(path), crate::config_dir_name()) {
+            Ok(()) => return 0,
+            Err(McpError::NoHome) => (-1, "no_home"),
+            Err(McpError::BinaryMissing) => (-2, "binary_missing"),
+            Err(McpError::Unreadable) => (-3, "config_unreadable"),
+            Err(McpError::WriteFailed) => (-4, "write_failed"),
+        };
+    crate::telemetry::report(
+        crate::telemetry::Subsystem::Integration,
+        kind,
+        "kimi_mcp",
+        "",
+    );
+    rc
+}
+
+/// Remove our entry from `~/.kimi-code/mcp.json`. 1 removed, 0 nothing to
+/// remove, -1 no home dir, -3 file not valid JSON, -4 write failed.
+#[no_mangle]
+pub extern "C" fn dimmy_kimi_mcp_uninstall() -> c_int {
+    use crate::kimi_mcp::McpError;
+    match crate::kimi_mcp::uninstall(crate::config_dir_name()) {
+        Ok(true) => 1,
+        Ok(false) => 0,
+        Err(McpError::NoHome) => -1,
+        Err(McpError::BinaryMissing) => -2,
+        Err(McpError::Unreadable) => -3,
+        Err(McpError::WriteFailed) => -4,
+    }
+}
+
 // ── Gemini CLI (Google account) bridge ───────────────────
 // Direct mirror of the Codex FFI above, same integer contracts, so the
 // hosts reuse the status-card logic for all three CLI backends.

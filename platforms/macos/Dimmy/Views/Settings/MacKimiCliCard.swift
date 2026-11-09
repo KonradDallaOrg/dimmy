@@ -20,65 +20,88 @@ struct MacKimiCliCard: View {
     @State private var signInRunning = false
     @State private var testRunning = false
     @State private var statusMessage = ""
+    @State private var mcpFound = false
+    @State private var mcpRegistered = false
+    @State private var mcpMessage = ""
 
     var body: some View {
-        HStack(alignment: .top, spacing: 14) {
-            Image("kimi")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 30, height: 30)
-                .frame(width: 40, height: 40)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 14) {
+                Image("kimi")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 30, height: 30)
+                    .frame(width: 40, height: 40)
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Kimi Code subscription").font(.system(size: 16, weight: .semibold))
-                Text(descriptionText)
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Kimi Code subscription").font(.system(size: 16, weight: .semibold))
+                    Text(descriptionText)
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
 
-                HStack(spacing: 8) {
-                    if signInRunning || testRunning {
-                        ProgressView().controlSize(.small).scaleEffect(0.7)
-                    }
-                    if let openWizard = onWizardRequested {
-                        if status == .notInstalled {
-                            Button(action: openWizard) {
-                                Label("Set up wizard", systemImage: "wand.and.stars")
-                            }
-                            .controlSize(.small)
-                            .buttonStyle(.borderedProminent)
-                            .help("Guided install + Kimi sign-in, one click per step")
-                        } else {
-                            Button(action: openWizard) {
-                                Label("Re-run wizard", systemImage: "wand.and.stars")
-                            }
-                            .controlSize(.small)
+                    HStack(spacing: 8) {
+                        if signInRunning || testRunning {
+                            ProgressView().controlSize(.small).scaleEffect(0.7)
                         }
+                        if let openWizard = onWizardRequested {
+                            if status == .notInstalled {
+                                Button(action: openWizard) {
+                                    Label("Set up wizard", systemImage: "wand.and.stars")
+                                }
+                                .controlSize(.small)
+                                .buttonStyle(.borderedProminent)
+                                .help("Guided install + Kimi sign-in, one click per step")
+                            } else {
+                                Button(action: openWizard) {
+                                    Label("Re-run wizard", systemImage: "wand.and.stars")
+                                }
+                                .controlSize(.small)
+                            }
+                        }
+                        Button(action: signIn) {
+                            Label(status == .ready ? "Re-sign in" : "Sign in with Kimi",
+                                  systemImage: "person.badge.key.fill")
+                        }
+                        .controlSize(.small)
+                        .disabled(signInRunning || testRunning || status == .notInstalled)
+                        Button(action: testConnection) {
+                            Label("Test", systemImage: "checkmark.circle.fill")
+                        }
+                        .controlSize(.small)
+                        .disabled(signInRunning || testRunning || status != .ready)
+                        .help("Send a small ping prompt through `kimi acp` (binary + login + plan)")
+                        Button(action: refresh) {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .controlSize(.small)
+                        .help("Re-probe Kimi Code status")
                     }
-                    Button(action: signIn) {
-                        Label(status == .ready ? "Re-sign in" : "Sign in with Kimi",
-                              systemImage: "person.badge.key.fill")
-                    }
-                    .controlSize(.small)
-                    .disabled(signInRunning || testRunning || status == .notInstalled)
-                    Button(action: testConnection) {
-                        Label("Test", systemImage: "checkmark.circle.fill")
-                    }
-                    .controlSize(.small)
-                    .disabled(signInRunning || testRunning || status != .ready)
-                    .help("Send a small ping prompt through `kimi acp` (binary + login + plan)")
-                    Button(action: refresh) {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .controlSize(.small)
-                    .help("Re-probe Kimi Code status")
+                    .padding(.top, 4)
                 }
-                .padding(.top, 4)
+                Spacer()
+                Image(systemName: statusIconName)
+                    .font(.system(size: 22))
+                    .foregroundStyle(statusIconColor)
             }
-            Spacer()
-            Image(systemName: statusIconName)
-                .font(.system(size: 22))
-                .foregroundStyle(statusIconColor)
+
+            // Kimi Code MCP bridge: Kimi Code (CLI and Desktop) reads
+            // Dimmy's meetings through dimmy-mcp. Shown once Kimi is here.
+            if mcpFound {
+                Toggle(isOn: Binding(get: { mcpRegistered }, set: { setMcp($0) })) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Let Kimi Code read your meetings").font(.system(size: 13))
+                        Text(mcpMessage.isEmpty
+                             ? "Adds Dimmy to ~/.kimi-code/mcp.json, for Kimi Code CLI and Kimi Code Desktop. Other entries stay as they are."
+                             : mcpMessage)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+            }
         }
         .padding(16)
         .background(
@@ -124,6 +147,31 @@ struct MacKimiCliCard: View {
         binaryPath = DimmyCore.shared.kimiBinaryPath
         statusMessage = ""
         appState.refreshKimiStatus()
+        refreshMcp()
+    }
+
+    private func refreshMcp() {
+        let s = DimmyCore.shared.kimiMcpStatus
+        mcpFound = s.kimiFound
+        mcpRegistered = s.registered
+    }
+
+    private func setMcp(_ on: Bool) {
+        if on {
+            let bin = Bundle.main.bundlePath + "/Contents/Resources/dimmy-mcp"
+            let rc: Int32 = FileManager.default.fileExists(atPath: bin)
+                ? DimmyCore.shared.installKimiMcp(binaryPath: bin) : -2
+            switch rc {
+            case 0: mcpMessage = "Connected. Open a new Kimi Code session to use Dimmy's tools."
+            case -2: mcpMessage = "dimmy-mcp was not found in the app bundle."
+            case -3: mcpMessage = "~/.kimi-code/mcp.json is not valid JSON. Dimmy left it untouched; fix it and try again."
+            default: mcpMessage = "Could not write ~/.kimi-code/mcp.json. See dimmy.log."
+            }
+        } else {
+            let rc = DimmyCore.shared.uninstallKimiMcp()
+            mcpMessage = rc < 0 ? "Could not update ~/.kimi-code/mcp.json. See dimmy.log." : ""
+        }
+        refreshMcp()
     }
 
     private func signIn() {
