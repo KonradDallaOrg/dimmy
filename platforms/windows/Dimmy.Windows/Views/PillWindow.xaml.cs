@@ -1926,141 +1926,20 @@ public sealed partial class PillWindow : Window
         catch (Exception ex) { _vm.SetError(ex.Message); }
     }
 
-    /// Stop a meeting from the pill, then trigger the recap pipeline.
-    /// Behaviour:
-    /// - dimmy_meeting_stop on a background thread → returns transcript
-    ///   + dir as JSON (the Rust side finalises WAVs, deletes the
-    ///   .recording marker, joins the worker thread).
-    /// - Hand off to MeetingPostProcessService.RunRecapAsync which
-    ///   builds the Notion-style prompt, calls the LLM, and persists
-    ///   recap.md + actions plaintext via dimmy_meeting_save_post_process.
-    /// - If MeetingWindow is open, it re-polls dimmy_meeting_is_active
-    ///   and flips to Done state independently — no UI sync needed
-    ///   from here.
-    /// - On error: surface a brief pill error tag.
+    /// Stop the meeting from the pill (also the meeting shortcut and the
+    /// call-detect "Stop & recap"): the shared pipeline in
+    /// MeetingStopService, which the meeting window's Stop uses too.
     internal async System.Threading.Tasks.Task StopMeetingFromPillAsync()
     {
-        string? stoppedDir = null;
         try
         {
-            App.Log("Pill Stop while meeting active — calling dimmy_meeting_stop", "Pill");
-            // Visual feedback: pill flips to Transcribing state for the
-            // duration of the recap pipeline (~10-30 s with Anthropic
-            // Opus 4.7 adaptive thinking on a typical meeting). Without
-            // this the pill silently disappears as the meeting state
-            // poll sees is_active=0 and the user wonders if anything
-            // happened. Reverts to Idle in the finally block.
-            _vm.SetState(AppState.Transcribing);
-
-            var (rc, dir, transcript, stopError, labeled) = await System.Threading.Tasks.Task.Run(() =>
-            {
-                var buf = new byte[1 << 22];
-                int code = DimmyNative.dimmy_meeting_stop(buf, buf.Length);
-                if (code <= 0) return (code, "", "", (string?)null, false);
-                var json = System.Text.Encoding.UTF8.GetString(buf, 0, code);
-                try
-                {
-                    using var doc = System.Text.Json.JsonDocument.Parse(json);
-                    var root = doc.RootElement;
-                    var d = root.GetProperty("dir").GetString() ?? "";
-                    var t = root.GetProperty("transcript").GetString() ?? "";
-                    // WAV finalize errors (disk full, IO) ride the same
-                    // payload. The MeetingWindow stop button surfaced
-                    // them; this path (pill + hotkey + call-nudge all
-                    // land here) swallowed them.
-                    var err = root.TryGetProperty("error", out var e)
-                        ? e.GetString() : null;
-                    bool lab = !(root.TryGetProperty("speaker_pass", out var sl) && sl.ValueKind == System.Text.Json.JsonValueKind.True);
-                    return (code, d, t, string.IsNullOrWhiteSpace(err) ? null : err, lab);
-                }
-                catch { return (code, "", "", (string?)null, false); }
-            });
-            App.Log($"Pill Stop meeting rc={rc} dir='{dir}' transcript={transcript.Length} chars", "Pill");
-
-            if (rc <= 0)
-            {
-                _vm.SetError($"Meeting stop rc={rc}");
-                return;
-            }
-            stoppedDir = dir;
-            if (stopError != null)
-            {
-                App.Log($"Pill Stop: meeting stop reported error: {stopError}", "Pill");
-                Services.DictNotificationService.ShowMeetingAudioIncomplete(stopError);
-            }
-
-            // Fire the recap pipeline. We AWAIT it here so the pill
-            // stays in Transcribing state with its spinner visible
-            // until the LLM call returns — gives the user real visual
-            // feedback ("yes, something is happening"). Without this
-            // the pill flipped back to Idle in 1-2 s while the recap
-            // ran silently in the background, and the user had no
-            // signal that the recap was being generated.
-            // Honour the recap choice captured at meeting start. If the user
-            // started with "Generate recap" unchecked, the stop path (pill OR
-            // call-detect popup, both land here) must NOT recap — same as the
-            // meeting window's own stop.
-            // Speaker labels (when enabled) replace the live per-track
-            // transcript before the recap reads it.
-            // Read BEFORE the speaker pass: the next meeting can start while it
-            // runs and writes its own choice into the same flag.
-            bool wantRecap = App.Instance?.AppViewModel?.MeetingGenerateRecap ?? true;
-            if (!string.IsNullOrEmpty(dir))
-                transcript = await Services.DiarizationService.RelabelIfEnabledAsync(dir, transcript, labeled);
-            if (wantRecap && !string.IsNullOrEmpty(dir) && !string.IsNullOrWhiteSpace(transcript))
-            {
-                var result = await Services.MeetingPostProcessService.RunRecapAsync(dir, transcript);
-                if (!result.Success)
-                {
-                    App.Log($"Pill Stop: recap failed: {result.Error}", "Pill");
-                    _vm.SetError(result.Error ?? "Recap failed");
-                    // CRITICAL: the MeetingWindow was flipped to Processing
-                    // ("Wrapping up…") by the meeting_state event. On a recap
-                    // failure it must still leave Processing, otherwise it
-                    // hangs there forever. Route it to the Done view showing
-                    // the transcript + audio that DID succeed; the recap can
-                    // be regenerated from there. Burned 2026-06-02 (Groq
-                    // Pick-best recap -2 left the window stuck in Wrapping up).
-                    if (!string.IsNullOrEmpty(dir)) App.Instance?.NotifyMeetingRecapSaved(dir);
-                }
-                else
-                {
-                    App.Log($"Pill Stop: recap saved to {result.Dir}", "Pill");
-                    // If MeetingWindow is open, refresh its sidebar +
-                    // jump straight to the just-finished meeting so the
-                    // user sees the recap cards populated without
-                    // having to click anything.
-                    App.Instance?.NotifyMeetingRecapSaved(result.Dir);
-                }
-            }
-            else
-            {
-                App.Log(wantRecap
-                    ? "Pill Stop: no transcript / dir — skipping recap"
-                    : "Pill Stop: recap disabled at start — skipping recap", "Pill");
-                // Even with no recap, surface the finished meeting (transcript
-                // + audio) in the window if it's open.
-                if (!string.IsNullOrEmpty(dir)) App.Instance?.NotifyMeetingRecapSaved(dir);
-            }
-        }
-        catch (Exception ex)
-        {
-            App.Log($"Pill Stop meeting exc: {ex.Message}", "Pill");
-            _vm.SetError(ex.Message);
+            App.Log("Pill Stop while meeting active", "Pill");
+            await Services.MeetingStopService.StopAsync(_vm);
         }
         finally
         {
-            // Every way out lets an open meeting window leave "Wrapping
-            // up": a failed stop (rc <= 0, an exception, no folder) used to
-            // return without a word, and the window refused to close for good.
-            App.Instance?.NotifyMeetingStopEnded(stoppedDir);
-            // Always exit the Transcribing state — Idle on success, Error
-            // already sets its own state.
-            if (_vm.CurrentState == AppState.Transcribing)
-                _vm.ReturnToRest();
             // The meeting just ended; clear our internal flag so the
-            // meeting-state poll doesn't immediately push us back to
-            // Recording on the next tick.
+            // meeting-state handler doesn't push us back to Recording.
             _pillRecordingDueToMeeting = false;
         }
     }

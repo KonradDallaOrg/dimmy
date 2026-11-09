@@ -42,8 +42,10 @@ public partial class AppViewModel : ObservableObject
     /// Set when PTT release initiates stop before Rust's callback arrives.</summary>
     public bool SuppressRecordingStarted { get; set; }
 
-    /// <summary>Wall-clock UTC when the current recording started (set on the
-    /// recording_started event). Used to scale the transcription timeout with
+    /// <summary>Wall-clock UTC when the current recording started: set when
+    /// the core's dictation phase turns recording, cleared at idle, so a
+    /// skipped late `recording_started` can never leave the previous
+    /// dictation's start behind. Used to scale the transcription timeout with
     /// the recording length — a multi-minute local dictation legitimately takes
     /// far longer than a flat 30s to transcribe.</summary>
     public DateTime? RecordingStartedUtc { get; set; }
@@ -691,7 +693,6 @@ public partial class AppViewModel : ObservableObject
                     }
                     else
                     {
-                        RecordingStartedUtc = DateTime.UtcNow;
                         SetState(AppState.Recording);
                     }
                     break;
@@ -705,6 +706,8 @@ public partial class AppViewModel : ObservableObject
                 case "dictation_phase":
                     CoreDictationPhase = payload.TryGetProperty("phase", out var dp)
                         ? (dp.GetString() ?? "idle") : "idle";
+                    if (CoreDictationPhase == "recording") RecordingStartedUtc = DateTime.UtcNow;
+                    else if (CoreDictationPhase == "idle") RecordingStartedUtc = null;
                     break;
                 case "status":
                     var stateStr = payload.GetProperty("state").GetString();
