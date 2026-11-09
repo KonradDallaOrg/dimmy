@@ -48,6 +48,8 @@
                          they have. -->
                     <SvgImageSource x:Key="GeminiMarkSource"
                                     UriSource="ms-appx:///Assets/Providers/gemini.svg" />
+                    <SvgImageSource x:Key="KimiMarkSource"
+                                    UriSource="ms-appx:///Assets/Providers/kimi.svg" />
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Dark">
                     <SvgImageSource x:Key="NotionMarkSource"
@@ -60,6 +62,8 @@
                                     UriSource="ms-appx:///Assets/Providers/openai-mark-dark.svg" />
                     <SvgImageSource x:Key="GeminiMarkSource"
                                     UriSource="ms-appx:///Assets/Providers/gemini.svg" />
+                    <SvgImageSource x:Key="KimiMarkSource"
+                                    UriSource="ms-appx:///Assets/Providers/kimi.svg" />
 
                     <!-- Lift the three foundational Dark-theme surface
                          colours by ~10/255 (~4%). WinUI's default dark

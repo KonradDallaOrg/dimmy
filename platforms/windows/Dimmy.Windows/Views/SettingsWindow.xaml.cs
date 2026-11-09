@@ -350,6 +350,7 @@ public sealed partial class SettingsWindow : Window
         RefreshAuthIntegrationStatus();
         RefreshCodexIntegrationStatus();
         RefreshGeminiIntegrationStatus();
+        RefreshKimiIntegrationStatus();
     }
 
     /// File extensions accepted by `dimmy_transcribe_file`. WAV is the
@@ -1769,6 +1770,9 @@ public sealed partial class SettingsWindow : Window
         // GeminiSubscriptionUsable.
         var geminiReady = GeminiSubscriptionUsable();
         var isGemini = IsGeminiUrl(llmUrl);
+        // Kimi parallel: Kimi Code URL + subscription routes to the `kimi` CLI.
+        var kimiReady = KimiSubscriptionUsable();
+        var isKimi = IsKimiUrl(llmUrl);
 
         // Coerce LLM subscription off when the provider is not Anthropic —
         // subscription is Claude Code CLI only (Anthropic-only). Without this
@@ -1780,6 +1784,7 @@ public sealed partial class SettingsWindow : Window
         // from a fresh Anthropic+subscription baseline. Mirror of the recap
         // auth-method coercion below.
         if (!isAnthropic && !(isOpenAI && codexReady) && !(isGemini && geminiReady)
+            && !(isKimi && kimiReady)
             && string.Equals(ViewModel.LlmAuthMethod, "subscription", StringComparison.Ordinal))
         {
             ViewModel.LlmAuthMethod = "api_key";
@@ -1877,10 +1882,12 @@ public sealed partial class SettingsWindow : Window
         // integration is connected. Otherwise hide entirely.
         var llmSubShown = (isAnthropic && integrationReady)
             || (isOpenAI && codexReady)
-            || (isGemini && geminiReady);
+            || (isGemini && geminiReady)
+            || (isKimi && kimiReady);
         LlmUseSubscriptionCard.Visibility = llmSubShown ? Visibility.Visible : Visibility.Collapsed;
         LlmUseSubscriptionCard.Label =
             (isGemini && geminiReady) ? "Use Google account (Gemini CLI)"
+            : (isKimi && kimiReady) ? "Use Kimi subscription"
             : (isOpenAI && codexReady) ? "Use ChatGPT subscription"
             : "Use Anthropic subscription";
         LlmUseSubscriptionToggle.IsOn = llmUseSub;
@@ -1963,11 +1970,14 @@ public sealed partial class SettingsWindow : Window
             recapVendorForSubGate, "anthropic", StringComparison.OrdinalIgnoreCase);
         var recapModelIsOpenAI = string.Equals(
             recapVendorForSubGate, "openai", StringComparison.OrdinalIgnoreCase);
+        var recapModelIsKimi = string.Equals(
+            recapVendorForSubGate, "kimi", StringComparison.OrdinalIgnoreCase);
         // Subscription routes recap through the matching CLI: Anthropic
         // model → claude (needs claude signed in), OpenAI model → codex
         // (needs codex signed in).
         var canShowRecapSub = (integrationReady && recapModelIsAnthropic)
-            || (codexReady && recapModelIsOpenAI);
+            || (codexReady && recapModelIsOpenAI)
+            || (kimiReady && recapModelIsKimi);
         if (!canShowRecapSub && recapForceSub)
         {
             App.Log(
@@ -1986,7 +1996,9 @@ public sealed partial class SettingsWindow : Window
             ? Visibility.Visible : Visibility.Collapsed;
         RecapUseSubscriptionCard.Label = recapModelIsOpenAI
             ? "Use ChatGPT subscription for recap"
-            : "Use Anthropic subscription for recap";
+            : recapModelIsKimi
+                ? "Use Kimi subscription for recap"
+                : "Use Anthropic subscription for recap";
         RecapUseSubscriptionToggle.IsOn = recapForceSub;
 
         // The recap model picker shows ALL curated entries (any
@@ -2011,8 +2023,8 @@ public sealed partial class SettingsWindow : Window
         // the user actually has a key for (keys live in Providers & keys now).
         // Custom is always offered (inline URL+key); Anthropic stays offered
         // when the Claude CLI subscription is connected (keyless path).
-        FilterCloudProviderPickers(integrationReady, codexReady);
-        FilterRecapModelPicker(integrationReady, codexReady);
+        FilterCloudProviderPickers(integrationReady, codexReady, kimiReady);
+        FilterRecapModelPicker(integrationReady, codexReady, kimiReady);
 
         // The recap picker IS filtered now (FilterRecapModelPicker above) to
         // the vendors the user connected — Auto/Custom/local always stay,
@@ -2036,6 +2048,7 @@ public sealed partial class SettingsWindow : Window
             return "anthropic";
         if (lower.Contains("openai.com")) return "openai";
         if (lower.Contains("googleapis.com")) return "gemini";
+        if (IsKimiUrl(lower)) return "kimi";
         // Unknown vendors (custom URLs, Groq, OpenRouter, etc.) get
         // "anthropic" as a default for the picker — but the user can
         // always pick Auto or type a Custom model id, so this is a
@@ -2129,7 +2142,7 @@ public sealed partial class SettingsWindow : Window
     /// whose ONLY connection is the subscription can never even select the
     /// vendor, so the "Use ... subscription" toggle stays unreachable); the
     /// selected item is never removed.</summary>
-    private void FilterCloudProviderPickers(bool integrationReady, bool codexReady)
+    private void FilterCloudProviderPickers(bool integrationReady, bool codexReady, bool kimiReady)
     {
         RebuildCombo(ProviderComboBox, item =>
         {
@@ -2141,7 +2154,8 @@ public sealed partial class SettingsWindow : Window
             var v = ((item.Tag as string) ?? "").Split('-')[0].ToLowerInvariant();
             return v == "custom" || HasAnyKeyForVendor(v)
                    || (v == "anthropic" && integrationReady)
-                   || (v == "openai" && codexReady);
+                   || (v == "openai" && codexReady)
+                   || (v == "kimi" && kimiReady);
         });
     }
 
@@ -2150,7 +2164,7 @@ public sealed partial class SettingsWindow : Window
     /// RecapVendorFromModel. Auto, Custom, and local models are always kept;
     /// Anthropic models stay under the Claude subscription and OpenAI models
     /// under the Codex subscription (keyless CLI paths).</summary>
-    private void FilterRecapModelPicker(bool integrationReady, bool codexReady)
+    private void FilterRecapModelPicker(bool integrationReady, bool codexReady, bool kimiReady)
     {
         RebuildCombo(RecapModelComboBox, item =>
         {
@@ -2161,7 +2175,8 @@ public sealed partial class SettingsWindow : Window
             var v = RecapVendorFromModel(tag, "");
             return HasAnyKeyForVendor(v)
                    || (v == "anthropic" && integrationReady)
-                   || (v == "openai" && codexReady);
+                   || (v == "openai" && codexReady)
+                   || (v == "kimi" && kimiReady);
         });
     }
 
@@ -2230,6 +2245,7 @@ public sealed partial class SettingsWindow : Window
         if (url.Contains("fireworks.ai", StringComparison.OrdinalIgnoreCase)) return "fireworks";
         if (url.Contains("together.xyz", StringComparison.OrdinalIgnoreCase)
             || url.Contains("together.ai", StringComparison.OrdinalIgnoreCase)) return "together";
+        if (IsKimiUrl(url)) return "kimi";
         return "custom";
     }
 
@@ -2247,6 +2263,7 @@ public sealed partial class SettingsWindow : Window
             var u when u.Contains("fireworks.ai", StringComparison.OrdinalIgnoreCase) => "fireworks",
             var u when u.Contains("together.xyz", StringComparison.OrdinalIgnoreCase) => "together",
             var u when u.Contains("together.ai", StringComparison.OrdinalIgnoreCase) => "together",
+            var u when IsKimiUrl(u) => "kimi",
             _ => "other",
         };
         return Family(sttUrl) == Family(llmUrl)
@@ -2714,6 +2731,7 @@ public sealed partial class SettingsWindow : Window
             ("has_deepgram_key", "deepgram"),
             ("has_fireworks_key", "fireworks"),
             ("has_together_key", "together"),
+            ("has_kimi_key", "kimi"),
             ("has_custom_key", "custom"),
         })
         {
@@ -2727,6 +2745,7 @@ public sealed partial class SettingsWindow : Window
             ("has_openrouter_llm_key", "openrouter"),
             ("has_fireworks_llm_key", "fireworks"),
             ("has_together_llm_key", "together"),
+            ("has_kimi_llm_key", "kimi"),
             ("has_custom_llm_key", "custom"),
         })
         {
@@ -5002,6 +5021,10 @@ public sealed partial class SettingsWindow : Window
             || m.StartsWith("o3-", StringComparison.Ordinal)
             || m.StartsWith("o4-", StringComparison.Ordinal)) return "openai";
         if (m.StartsWith("gemini-", StringComparison.Ordinal)) return "gemini";
+        // Kimi ids (k3, kimi-for-coding…) carry no vendor prefix: ask the
+        // catalog, as the Rust dispatcher does.
+        if (Services.ModelCatalog.RecapEntries().Any(e => e.ProviderId == "kimi"
+                && string.Equals(e.Id, model, StringComparison.OrdinalIgnoreCase))) return "kimi";
         return RecapVendorFromUrl(llmUrl);
     }
 

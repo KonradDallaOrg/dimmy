@@ -2401,6 +2401,87 @@
                 <TextBlock x:Name="CodexIntegrationMessageText" Style="{StaticResource DimmyBody}" TextWrapping="Wrap" />
               </Border>
 
+              <!-- Group: KIMI (Kimi Code CLI)
+                   The user's Kimi membership (Plus and up) through the local
+                   `kimi` CLI, driven over ACP. Same anatomy as the Codex
+                   card. The wizard installs Git for Windows and the CLI. -->
+              <TextBlock Text="Kimi (Kimi Code)" Style="{StaticResource DimmyCardTitle}" Margin="0,28,0,12"/>
+
+              <Border Style="{StaticResource DimmyCard}" Padding="16">
+                <Grid ColumnSpacing="{StaticResource DimmySpaceL}" RowSpacing="{StaticResource DimmySpaceM}">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                  </Grid.ColumnDefinitions>
+                  <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                  </Grid.RowDefinitions>
+                  <Image Grid.Column="0" Grid.Row="0" Grid.RowSpan="2"
+                         Width="36" Height="36" VerticalAlignment="Top"
+                         Source="{ThemeResource KimiMarkSource}" />
+                  <StackPanel Grid.Column="1" Grid.Row="0" VerticalAlignment="Center" Spacing="{StaticResource DimmySpaceXS}">
+                    <TextBlock Text="Kimi Code" Style="{StaticResource DimmyCardTitle}" />
+                    <TextBlock x:Name="KimiIntegrationStatusText"
+                               Text="Probing…"
+                               Style="{StaticResource DimmySecondary}"
+                               TextWrapping="Wrap"/>
+                  </StackPanel>
+                  <FontIcon x:Name="KimiIntegrationStatusGlyph"
+                            Grid.Column="2" Grid.Row="0" VerticalAlignment="Top"
+                            Glyph="&#xEA39;"
+                            FontSize="{StaticResource DimmyIconXL}"
+                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                  <StackPanel x:Name="KimiIntegrationDisconnectedActions"
+                              Grid.Column="1" Grid.ColumnSpan="2" Grid.Row="1"
+                              Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}"
+                              Visibility="Collapsed">
+                    <Button x:Name="KimiIntegrationWizardBtn"
+                            Click="KimiIntegrationWizard_Click"
+                            ToolTipService.ToolTip="Guided install + Kimi sign-in, one click per step">
+                      <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                        <FontIcon Glyph="&#xE8FC;" FontSize="{StaticResource DimmyIconM}"/>
+                        <TextBlock Text="Set up wizard"/>
+                      </StackPanel>
+                    </Button>
+                    <Button x:Name="KimiIntegrationSignInBtn"
+                            Click="KimiIntegrationSignIn_Click">
+                      <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                        <FontIcon Glyph="&#xE8A7;" FontSize="{StaticResource DimmyIconM}"/>
+                        <TextBlock Text="Sign in with Kimi"/>
+                      </StackPanel>
+                    </Button>
+                    <Button Content="Refresh" Click="KimiIntegrationRefresh_Click"
+                            ToolTipService.ToolTip="Re-probe the local `kimi` CLI install status"/>
+                  </StackPanel>
+                  <StackPanel x:Name="KimiIntegrationConnectedActions"
+                              Grid.Column="1" Grid.ColumnSpan="2" Grid.Row="1"
+                              Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}"
+                              Visibility="Collapsed">
+                    <Button x:Name="KimiIntegrationTestBtn"
+                            Click="KimiIntegrationTest_Click"
+                            ToolTipService.ToolTip="Send a tiny ping prompt through `kimi acp` to verify end-to-end (binary + login + plan)">
+                      <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                        <FontIcon Glyph="&#xE945;" FontSize="{StaticResource DimmyIconM}"/>
+                        <TextBlock Text="Test connection"/>
+                      </StackPanel>
+                    </Button>
+                    <Button Content="Re-sign in" Click="KimiIntegrationSignIn_Click"
+                            ToolTipService.ToolTip="Re-run the Kimi sign-in if your token expired"/>
+                    <Button Content="Re-run setup" Click="KimiIntegrationRerunWizard_Click"
+                            ToolTipService.ToolTip="Re-open the install + sign-in wizard"/>
+                    <Button Content="Refresh" Click="KimiIntegrationRefresh_Click"/>
+                  </StackPanel>
+                </Grid>
+              </Border>
+
+              <Border x:Name="KimiIntegrationMessageBar" Background="{ThemeResource SystemFillColorAttentionBackgroundBrush}"
+                      BorderThickness="0" CornerRadius="6" Padding="12,8"
+                      Margin="0,16,0,0" Visibility="Collapsed">
+                <TextBlock x:Name="KimiIntegrationMessageText" Style="{StaticResource DimmyBody}" TextWrapping="Wrap" />
+              </Border>
+
               <!-- Group: GOOGLE (Gemini CLI)
                    Third CLI-backed subscription, same anatomy as the two
                    above. NOT the Gemini desktop app that shipped for

@@ -595,6 +595,7 @@ public partial class SettingsViewModel : ObservableObject
                 ["deepgram"] = r.TryGetProperty("has_deepgram_key", out var hsd) && hsd.GetBoolean(),
                 ["fireworks"] = r.TryGetProperty("has_fireworks_key", out var hsf) && hsf.GetBoolean(),
                 ["together"] = r.TryGetProperty("has_together_key", out var hst) && hst.GetBoolean(),
+                ["kimi"] = r.TryGetProperty("has_kimi_key", out var hsk) && hsk.GetBoolean(),
                 ["custom"] = r.TryGetProperty("has_custom_key", out var hsc) && hsc.GetBoolean(),
             };
             HasApiKey = HasSttKeyForUrl(ApiUrl);
@@ -720,6 +721,7 @@ public partial class SettingsViewModel : ObservableObject
                 ["openrouter"] = r.TryGetProperty("has_openrouter_llm_key", out var hlor) && hlor.GetBoolean(),
                 ["fireworks"] = r.TryGetProperty("has_fireworks_llm_key", out var hlf) && hlf.GetBoolean(),
                 ["together"] = r.TryGetProperty("has_together_llm_key", out var hlt) && hlt.GetBoolean(),
+                ["kimi"] = r.TryGetProperty("has_kimi_llm_key", out var hlk) && hlk.GetBoolean(),
                 ["custom"] = r.TryGetProperty("has_custom_llm_key", out var hlc) && hlc.GetBoolean(),
             };
             // Initial green ✓ for LLM — derived from the per-provider dict via
