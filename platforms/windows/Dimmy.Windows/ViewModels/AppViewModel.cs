@@ -560,6 +560,11 @@ public partial class AppViewModel : ObservableObject
                         var chunk = payload.TryGetProperty("delta", out var ld)
                             ? (ld.GetString() ?? "")
                             : "";
+                        // Only recaps feed the meeting's live recap card: a
+                        // command-mode answer used to land there too.
+                        var purpose = payload.TryGetProperty("purpose", out var pu)
+                            ? (pu.GetString() ?? "recap") : "recap";
+                        if (purpose != "recap") break;
                         if (phase == "start")
                         {
                             LlmStreamText = ""; LlmThinkingText = "";

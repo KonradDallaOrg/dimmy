@@ -1539,15 +1539,14 @@ async fn read_openai_sse(
     mut response: reqwest::Response,
 ) -> Result<(String, bool), crate::error::LlmError> {
     let mut acc = SseAccumulator::default();
+    let end = StreamEnd::begin();
     // `chunk()` needs no reqwest "stream" feature, so this adds no dependency.
     while let Some(bytes) = response.chunk().await? {
         for delta in acc.feed(&String::from_utf8_lossy(&bytes)) {
             emit_recap_stream_event("delta", &delta);
         }
     }
-    if !acc.text.is_empty() {
-        emit_recap_stream_event("end", "");
-    }
+    drop(end);
     // No SSE at all: the provider ignored `stream: true` and answered with a
     // plain chat completion. That must keep working — asking for streaming is
     // an optimisation, and a provider declining it is not an error. Parse the
@@ -1666,12 +1665,11 @@ async fn read_anthropic_sse(
     mut response: reqwest::Response,
 ) -> Result<(String, bool), crate::error::LlmError> {
     let mut acc = AnthropicSseAccumulator::default();
+    let end = StreamEnd::begin();
     while let Some(bytes) = response.chunk().await? {
         acc.feed(&String::from_utf8_lossy(&bytes));
     }
-    if !acc.text.is_empty() {
-        emit_recap_stream_event("end", "");
-    }
+    drop(end);
     crate::log(&format!(
         "[LLM] anthropic stream: {} text delta(s), {} thinking delta(s), {} chars{}",
         acc.text_deltas,
@@ -1816,10 +1814,95 @@ impl AnthropicSseAccumulator {
 /// event callback the only sanctioned way to push core state at a host.
 /// Emitting it costs nothing when no host subscribes yet.
 pub(crate) fn emit_recap_stream_event(phase: &str, delta: &str) {
+    use std::sync::atomic::Ordering;
     crate::ffi::emit_event(
         "llm_stream",
-        &serde_json::json!({ "phase": phase, "delta": delta }).to_string(),
+        &serde_json::json!({
+            "phase": phase,
+            "delta": delta,
+            "job_id": STREAM_JOB.load(Ordering::SeqCst),
+            "purpose": StreamPurpose::current().code(),
+        })
+        .to_string(),
     );
+}
+
+/// The stream the next `llm_stream` events belong to. Bumped by every
+/// [`StreamEnd`], so a host can tell one recap from the next.
+static STREAM_JOB: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static STREAM_PURPOSE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// What the streamed text is for. Before this every stream looked like a
+/// recap, so a command-mode answer could land in the meeting's recap card.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StreamPurpose {
+    /// Dictation cleanup and anything not marked otherwise.
+    Text = 0,
+    Recap = 1,
+    Command = 2,
+}
+
+impl StreamPurpose {
+    pub fn code(self) -> &'static str {
+        match self {
+            StreamPurpose::Text => "text",
+            StreamPurpose::Recap => "recap",
+            StreamPurpose::Command => "command",
+        }
+    }
+
+    fn current() -> Self {
+        match STREAM_PURPOSE.load(std::sync::atomic::Ordering::SeqCst) {
+            1 => StreamPurpose::Recap,
+            2 => StreamPurpose::Command,
+            _ => StreamPurpose::Text,
+        }
+    }
+
+    /// Marks every stream until the guard drops. Set by the FFI entry that
+    /// knows what the call is for (`dimmy_llm_call_raw`, `dimmy_command_transform`).
+    pub fn mark(self) -> StreamPurposeGuard {
+        let prev = STREAM_PURPOSE.swap(self as u8, std::sync::atomic::Ordering::SeqCst);
+        StreamPurposeGuard { prev }
+    }
+}
+
+pub struct StreamPurposeGuard {
+    prev: u8,
+}
+
+impl Drop for StreamPurposeGuard {
+    fn drop(&mut self) {
+        STREAM_PURPOSE.store(self.prev, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// Sends `end` when the stream reader returns, however it returns.
+///
+/// The readers loop on `response.chunk().await?`: a connection dropped
+/// mid-recap returned through the `?` before `end` was sent, and the Mac sat
+/// on "Generating recap..." for good. A drop guard cannot be skipped by an
+/// early return. `end` with no `start` before it is harmless on every host.
+pub(crate) struct StreamEnd {
+    job: u64,
+}
+
+impl StreamEnd {
+    pub(crate) fn begin() -> Self {
+        let job = STREAM_JOB.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        assert!(job > 0, "stream job ids start at 1");
+        Self { job }
+    }
+}
+
+impl Drop for StreamEnd {
+    fn drop(&mut self) {
+        // A later stream may have begun meanwhile (two overlapping calls):
+        // its own guard ends it, this one says nothing in its name.
+        if STREAM_JOB.load(std::sync::atomic::Ordering::SeqCst) == self.job {
+            emit_recap_stream_event("end", "");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1831,6 +1914,46 @@ mod tests {
             "data: {}\n",
             serde_json::json!({"choices":[{"delta":{"content":delta}}]})
         )
+    }
+
+    /// 2026-11-09 report: a connection dropped mid-recap returned through
+    /// `chunk().await?` before `end` was sent; the Mac sat on "Generating
+    /// recap..." for good.
+    #[test]
+    #[serial_test::serial]
+    fn a_stream_ends_even_when_its_reader_fails_midway() {
+        crate::ffi::tests::reset_event_capture();
+        let purpose = StreamPurpose::Recap.mark();
+        let failed: Result<(), &str> = (|| {
+            let _end = StreamEnd::begin();
+            emit_recap_stream_event("thinking", "x");
+            Err("connection reset")?;
+            Ok(())
+        })();
+        drop(purpose);
+        let events = crate::ffi::tests::drain_event_capture();
+        assert!(failed.is_err());
+        let parsed: Vec<serde_json::Value> = events
+            .iter()
+            .filter_map(|e| serde_json::from_str::<serde_json::Value>(e).ok())
+            .filter(|v| v["event"] == "llm_stream")
+            .collect();
+        let job = parsed[0]["payload"]["job_id"].clone();
+        let ours: Vec<&serde_json::Value> = parsed
+            .iter()
+            .filter(|v| v["payload"]["job_id"] == job)
+            .collect();
+        assert_eq!(
+            ours.last().unwrap()["payload"]["phase"],
+            "end",
+            "{events:?}"
+        );
+        assert!(ours.iter().all(|v| v["payload"]["purpose"] == "recap"));
+        assert_eq!(
+            StreamPurpose::current(),
+            StreamPurpose::Text,
+            "guard restored"
+        );
     }
 
     #[test]

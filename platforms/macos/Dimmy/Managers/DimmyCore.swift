@@ -1648,6 +1648,9 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
         // Gemini-native still answers in one shot and never sends this.
         let phase = (payload["phase"] as? String) ?? ""
         let delta = (payload["delta"] as? String) ?? ""
+        // Only recaps feed the meeting's live recap card: a command-mode
+        // answer used to land there too. `end` is now sent on every exit.
+        if let purpose = payload["purpose"] as? String, purpose != "recap" { break }
         if phase == "start" {
             // The recap is live now, so the backlog wait is over.
             appState.meetingFinishingTranscription = false

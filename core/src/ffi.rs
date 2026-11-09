@@ -4373,6 +4373,8 @@ pub unsafe extern "C" fn dimmy_command_transform(
     if selection_ptr.is_null() || spoken_ptr.is_null() || out_buf.is_null() || buf_len <= 0 {
         return -1;
     }
+    // Streamed text from here is command output, never a recap.
+    let _purpose = crate::llm::StreamPurpose::Command.mark();
     // Selection is OPTIONAL. With a selection → transform/replace it. Without
     // one → the spoken words are a generation instruction whose result gets
     // inserted at the cursor. Empty/whitespace selection collapses to None.
@@ -6681,6 +6683,7 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
         Ok(s) if !s.is_empty() => s.to_string(),
         _ => return -1,
     };
+    let _purpose = crate::llm::StreamPurpose::Recap.mark();
     let model_override = if model_override_ptr.is_null() {
         String::new()
     } else {
