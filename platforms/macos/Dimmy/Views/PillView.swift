@@ -262,6 +262,9 @@ struct PillView: View {
             case .idle:
                 if Self.showsRecap(state: effectiveState, recapsRunning: appState.recapsRunning) {
                     recapView
+                } else if Self.showsBackgroundTranscribe(state: effectiveState,
+                                                         transcribesRunning: appState.transcribesRunning) {
+                    transcribingView
                 } else {
                     idleView
                 }
@@ -837,6 +840,14 @@ struct PillView: View {
     static func showsRecap(state: RecordingState, recapsRunning: Int) -> Bool {
         guard case .idle = state else { return false }
         return recapsRunning > 0
+    }
+
+    /// A file transcription (Telegram, a loaded file, Regenerate transcript)
+    /// runs while the dictation is idle: shown, but it never holds the
+    /// dictation's state, so a press still starts a dictation.
+    static func showsBackgroundTranscribe(state: RecordingState, transcribesRunning: Int) -> Bool {
+        guard case .idle = state else { return false }
+        return transcribesRunning > 0
     }
 
     /// A meeting recap is running. Its own word and colour: the pill used to

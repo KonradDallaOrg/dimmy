@@ -406,7 +406,14 @@ final class HotkeyManager {
     @discardableResult
     private func startRecording(mode: RecordingMode) -> Bool {
         guard let appState else { return false }
-        guard case .idle = appState.recordingState else { return false }
+        guard case .idle = appState.recordingState else {
+            // The pill is busy with something that is not this dictation
+            // (a meeting stopping from the pill). Used to do nothing at all.
+            hkLog("[HotkeyManager] dictation refused: pill busy (\(appState.recordingState))")
+            DictToastWindow.show(kind: .workflowHint, title: "Dimmy is busy",
+                                 body: "The meeting is still saving. Press again in a moment.")
+            return false
+        }
 
         // Phase 4 hotkey gate: a meeting recording owns the cpal buffer.
         // Starting a parallel dictation here would corrupt both sessions
@@ -458,7 +465,9 @@ final class HotkeyManager {
             // Meeting active — race with the pre-flight meetingIsActive
             // gate above. Silent no-op: don't pull the user out of their
             // meeting context with an error toast, just log.
-            hkLog("[HotkeyManager] dictation hotkey suppressed: meeting active (rc=-7)")
+            // -7 also covers the second or so in which a stopped meeting is
+            // still writing out its audio (crate::capture).
+            hkLog("[HotkeyManager] dictation hotkey suppressed: meeting holds the capture (rc=-7)")
             DimmyCore.shared.clearAppContext()
             currentRecordingBundleId = ""
             recordingStartedAt = nil
