@@ -296,6 +296,13 @@ symphonia = { version = "0.5", default-features = false, features = [
     "ogg",
     "vorbis",
 ] }
+# Opus DECODER for Symphonia (libopus, built from its bundled source with
+# CMake, BSD-3-Clause). A Telegram voice note is Opus in Ogg, and Symphonia
+# has no Opus decoder of its own: without this, no voice note could be
+# transcribed, and the Mac (which plays meeting audio through the core's
+# decoder) could not play one. Registered in `file_stream::codecs()`.
+# 0.2.x is the line for symphonia-core 0.5; 0.3 needs Symphonia 0.6.
+symphonia-adapter-libopus = "0.2.9"
 # Ogg/Vorbis ENCODER for compressed meeting audio (realtime .ogg recording,
 # replacing the streamed WAVs). Symphonia (above) already DECODES vorbis/ogg
 # for re-transcription + file-load; this supplies the missing encoder. Wraps

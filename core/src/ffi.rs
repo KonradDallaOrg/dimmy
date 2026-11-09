@@ -9377,7 +9377,7 @@ pub fn decode_via_symphonia(path: &str) -> Result<(Vec<f32>, u32), String> {
         .map(|c| c.count())
         .unwrap_or(1)
         .max(1);
-    let mut decoder = symphonia::default::get_codecs()
+    let mut decoder = crate::file_stream::codecs()
         .make(&track.codec_params, &DecoderOptions::default())
         .map_err(|e| format!("decoder: {e}"))?;
     let mut interleaved: Vec<f32> = Vec::new();
@@ -9567,7 +9567,7 @@ fn compute_peaks_streaming(path: &str, buckets: usize) -> Result<(Vec<f32>, f64)
         .map(|c| c.count())
         .unwrap_or(1)
         .max(1);
-    let mut decoder = symphonia::default::get_codecs()
+    let mut decoder = crate::file_stream::codecs()
         .make(&track.codec_params, &DecoderOptions::default())
         .map_err(|e| format!("decoder: {e}"))?;
 
