@@ -995,9 +995,9 @@ final class AppState: ObservableObject {
     @Published var recordingState: RecordingState = .idle
     @Published var preferredMode: RecordingMode = .pushToTalk
     @Published var waveformLevels: [CGFloat] = Array(repeating: 0.2, count: 7)
-    /// Mirror of `dimmy_meeting_is_active()`. PillWindowController polls
-    /// every 500 ms so the pill UI knows when a meeting started from
-    /// any surface (meeting window, future tray menu) and can render
+    /// Mirror of the core's meeting state, set from the `meeting_state`
+    /// event (no polling), so the pill knows when a meeting started from
+    /// any surface (meeting window, tray menu, call detect) and can render
     /// the Stop button + recording feedback even with no dictation.
     @Published var meetingActive: Bool = false
     /// Captured at meeting START from `MeetingViewModel.generateRecap`
@@ -1008,9 +1008,9 @@ final class AppState: ObservableObject {
     /// / popup paths stop running the recap unconditionally. Mac
     /// mirror of Win `AppViewModel.MeetingGenerateRecap`.
     @Published var meetingGenerateRecap: Bool = true
-    /// Mirror of `dimmy_meeting_is_paused()`. Also polled from the pill
-    /// state poll so the bar / status reflects pause state regardless
-    /// of which surface flipped it.
+    /// Mirror of the core's pause state, set from the same `meeting_state`
+    /// event, so the bar / status reflects pause state regardless of
+    /// which surface flipped it.
     @Published var meetingIsPaused: Bool = false
     /// Absolute path of the meeting directory currently producing
     /// chunks — pinned on the first `meeting_chunk` event so later

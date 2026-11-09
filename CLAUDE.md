@@ -391,8 +391,10 @@ If you're about to bump and `gh release list` shows a higher version than what y
 
 **Don't poll the Rust core to mirror state in the UI.** Use the event
 callback channel (`dimmy_set_event_callback` ⇒ Win
-`AppViewModel.HandleEvent`, Mac `DimmyCore.handleEvent`,
-Linux `DimmyCore::on_event`). When you need the host UI to react to a
+`AppViewModel.HandleEvent`, Mac `DimmyCore.handleEvent`).
+The Linux host registers no event callback yet (its pill sender is
+dropped in `platforms/linux/src/main.rs`); Linux is frozen until the
+Linux decision, so don't assume a Linux mirror exists. When you need the host UI to react to a
 state change in the Rust core (meeting active, recording started,
 chunk progress, …), have the Rust side `emit_event(...)` exactly once
 per transition; subscribers update local state from the envelope.
@@ -421,8 +423,8 @@ core emit?").
 
 1. Add a Rust emit: small helper like `emit_meeting_state_event(active, paused)` that wraps the call to `emit_event("name", "{...}")`.
 2. Call it in every state-transition branch of the Rust handler. One emit per transition, exactly.
-3. Add a `case "name":` in the host `HandleEvent` / `handleEvent` /
-   `on_event` switch; map payload fields to observable view-model
+3. Add a `case "name":` in the host `HandleEvent` / `handleEvent`
+   switch; map payload fields to observable view-model
    properties.
 4. Replace the polling tick body with the same logic, hooked off
    `PropertyChanged` (Win) / `@Published` (Mac, Combine) / signal

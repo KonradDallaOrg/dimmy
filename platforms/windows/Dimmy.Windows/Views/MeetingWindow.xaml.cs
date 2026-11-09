@@ -27,7 +27,7 @@ public sealed partial class MeetingWindow : Window
 {
     private enum MeetingState { Idle, Recording, Processing, Done }
 
-    private DispatcherQueueTimer? _pollTimer;
+    private DispatcherQueueTimer? _clockTimer;
     private DispatcherQueueTimer? _toastTimer;
     private DispatcherQueueTimer? _announceTimer;
     private DateTime _startedAt;
@@ -241,7 +241,7 @@ public sealed partial class MeetingWindow : Window
 
         Closed += (_, __) =>
         {
-            StopPolling();
+            StopClock();
             StopAmplitudePoll();
             if (App.Instance?.AppViewModel is { } vmClose)
             {
@@ -304,7 +304,7 @@ public sealed partial class MeetingWindow : Window
                 // meeting looked like it had lost the conversation — and at a
                 // 30 s window the next chunk can be half a minute away.
                 BackfillLiveTranscript();
-                StartPolling();
+                StartClock();
                 StartAmplitudePoll();
                 App.Log("ctor: re-attached to active meeting", "Meeting");
             }
@@ -448,7 +448,7 @@ public sealed partial class MeetingWindow : Window
                     AppContextName.Text = "Microphone";
                     SetState(MeetingState.Recording);
                     ShowLivePlaceholder("🎙️ Re-attached to ongoing recording…");
-                    StartPolling();
+                    StartClock();
                     StartAmplitudePoll();
                     ShowToast("Re-attached to an ongoing recording.");
                     return true;
@@ -498,7 +498,7 @@ public sealed partial class MeetingWindow : Window
             _recordingActive = true;
             SetState(MeetingState.Recording);
             ShowLivePlaceholder("🎙️ Listening… first transcript appears in ~15 s.");
-            StartPolling();
+            StartClock();
             StartAmplitudePoll();
             if (autoConsent) ArmAutoAnnounce(lang);
             // Background, never awaited: the lookup shells out to the
@@ -544,7 +544,7 @@ public sealed partial class MeetingWindow : Window
         // Pinned now: the next meeting's start writes its own choice here.
         bool wantRecapAtStop = App.Instance?.AppViewModel?.MeetingGenerateRecap ?? true;
         StopBtn.IsEnabled = false;
-        StopPolling();
+        StopClock();
         StopAmplitudePoll();
         // Recording is being torn down — flip the flag NOW so close
         // is unblocked even if the Rust stop call hangs.
@@ -958,22 +958,22 @@ public sealed partial class MeetingWindow : Window
     // CLAUDE.md explicitly forbids — replaced by the event-driven
     // path so the window now uses zero CPU between chunks.
 
-    private void StartPolling()
+    private void StartClock()
     {
         var dq = DispatcherQueue.GetForCurrentThread();
-        _pollTimer = dq.CreateTimer();
-        _pollTimer.Interval = TimeSpan.FromSeconds(1);
-        _pollTimer.IsRepeating = true;
-        _pollTimer.Tick += OnRecTimerTick;
-        _pollTimer.Start();
+        _clockTimer = dq.CreateTimer();
+        _clockTimer.Interval = TimeSpan.FromSeconds(1);
+        _clockTimer.IsRepeating = true;
+        _clockTimer.Tick += OnRecTimerTick;
+        _clockTimer.Start();
     }
 
-    private void StopPolling()
+    private void StopClock()
     {
-        if (_pollTimer == null) return;
-        _pollTimer.Stop();
-        _pollTimer.Tick -= OnRecTimerTick;
-        _pollTimer = null;
+        if (_clockTimer == null) return;
+        _clockTimer.Stop();
+        _clockTimer.Tick -= OnRecTimerTick;
+        _clockTimer = null;
     }
 
     private void OnRecTimerTick(DispatcherQueueTimer sender, object args)
@@ -1159,7 +1159,7 @@ public sealed partial class MeetingWindow : Window
             try
             {
                 App.Log("meeting_state=false from external stop — flipping MeetingWindow to Processing", "Meeting");
-                StopPolling();
+                StopClock();
                 StopAmplitudePoll();
                 _recordingActive = false;
                 StopBtn.IsEnabled = false;
