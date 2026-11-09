@@ -12,6 +12,7 @@ pub mod calendar;
 pub mod call_detector;
 pub mod call_media;
 #[cfg(target_os = "windows")]
+pub mod capture;
 pub mod capture_sessions;
 pub mod catalog;
 pub mod chunked_stt;

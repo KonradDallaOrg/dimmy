@@ -1086,6 +1086,19 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
         }
     }
 
+    // The one owner of the capture (crate::capture). Also refuses the short
+    // window in which a stopped meeting is still writing out its audio.
+    let dictation_id = match crate::capture::claim_dictation() {
+        Ok(id) => id,
+        Err(crate::capture::Busy::Dictation) => return -2,
+        Err(busy) => {
+            log(&format!(
+                "[StartRec] suppressed — capture held by {busy:?} (rc=-7)"
+            ));
+            return -7;
+        }
+    };
+
     *recording = true;
 
     let selected_device = st.selected_device.lock().ok().and_then(|d| d.clone());
@@ -1461,7 +1474,19 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
     prewarm_claude_for_dictation(st);
 
     emit_event("recording_started", "{}");
+    emit_dictation_phase("recording", dictation_id);
     0
+}
+
+/// One `dictation_phase` event per transition of the core's dictation:
+/// `recording` (capture claimed), `finishing` (stop running: audio taken,
+/// transcription and cleanup under way), `idle` (stop returned). Hosts
+/// derive the pill from it instead of guessing with timers.
+fn emit_dictation_phase(phase: &str, id: u64) {
+    emit_event(
+        "dictation_phase",
+        &serde_json::json!({ "phase": phase, "id": id }).to_string(),
+    );
 }
 
 /// Start the `claude` CLI now when this dictation will end in a subscription
@@ -1528,6 +1553,27 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
     let _stop_guard = StopGuard;
 
     let st = state();
+
+    // Which dictation this stop ends (0: none held the capture). The guard
+    // releases the capture on every exit; the normal path releases it as
+    // soon as the audio is out of the buffer, not after transcription.
+    let dictation_id = match crate::capture::owner() {
+        crate::capture::Owner::Dictation { id } => id,
+        _ => 0,
+    };
+    struct CaptureGuard(u64);
+    impl Drop for CaptureGuard {
+        fn drop(&mut self) {
+            crate::capture::release_dictation();
+            if self.0 > 0 {
+                emit_dictation_phase("idle", self.0);
+            }
+        }
+    }
+    let _capture_guard = CaptureGuard(dictation_id);
+    if dictation_id > 0 {
+        emit_dictation_phase("finishing", dictation_id);
+    }
 
     // Consume the recording-start instant up front so it is cleared on EVERY
     // exit path (the early returns below for empty/muted buffer must not leave
@@ -1651,6 +1697,7 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
         Err(_) => return -1,
     };
     drop(drain_guard);
+    crate::capture::release_dictation();
 
     // Diagnostic: log buffer stats
     let buf_len_samples = buffer.len();
@@ -2387,6 +2434,13 @@ fn llm_report_kind(err: &crate::error::LlmError, category: &'static str) -> &'st
 pub extern "C" fn dimmy_cancel_recording() {
     let st = state();
 
+    // Esc during a meeting used to send AudioCommand::Stop and clear the
+    // buffer under the meeting's worker: cancel is a dictation's only.
+    if crate::capture::meeting_holds() {
+        log("[Cancel] a meeting holds the capture — nothing to cancel");
+        return;
+    }
+
     // Compute audio_secs BEFORE clearing, for the telemetry event.
     let sample_rate = st.audio_sample_rate.lock().map(|s| *s).unwrap_or(16_000);
     let audio_secs = st
@@ -2412,7 +2466,12 @@ pub extern "C" fn dimmy_cancel_recording() {
     // kept transcribing the mic into every later dictation.
     DICTATION_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     retire_streamer();
+    let cancelled = crate::capture::owner();
+    crate::capture::release_dictation();
     emit_event("recording_cancelled", "{}");
+    if let crate::capture::Owner::Dictation { id } = cancelled {
+        emit_dictation_phase("idle", id);
+    }
 
     crate::telemetry::track(crate::telemetry::Event::TranscriptionCancelled { audio_secs });
 }
@@ -4593,7 +4652,8 @@ pub extern "C" fn dimmy_get_version(out_buf: *mut c_char, buf_len: c_int) -> c_i
 /// worker that streams the recorded WAV to disk and transcribes
 /// chunks every 15 s. Returns 0 on success and writes the meeting id
 /// to `out_buf`. Returns -1 if a session is already active, -2 on
-/// audio-capture start failure, -3 on filesystem error.
+/// audio-capture start failure, -3 on filesystem error, -4 while a
+/// dictation is recording (finish it first).
 ///
 /// # Safety
 /// `out_buf` must be a valid writable buffer of `buf_len` bytes.
@@ -4639,12 +4699,26 @@ pub unsafe extern "C" fn dimmy_meeting_start(out_buf: *mut c_char, buf_len: c_in
     if let Ok(mut sr) = st.audio_sample_rate.lock() {
         *sr = device_sr;
     }
-    // Claim the shared audio state: any meeting still stopping in the
-    // background must not tear it down under us from here on.
+    // Claim the capture (crate::capture) before touching the buffers: a
+    // previous worker still finishing must not act on what we are about to
+    // put in them, and a running dictation must not lose its audio to us
+    // (it used to: ending that dictation then killed the meeting's capture).
+    let claim = match crate::capture::claim_meeting() {
+        Ok(c) => c,
+        Err(crate::capture::Busy::Dictation) => {
+            log("[Meeting] start refused — a dictation is recording (rc=-4)");
+            return -4;
+        }
+        Err(busy) => {
+            log(&format!(
+                "[Meeting] start refused — capture held by {busy:?}"
+            ));
+            return -1;
+        }
+    };
+    // Any meeting still stopping in the background must not tear the shared
+    // audio state down under us from here on.
     MEETING_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    // And the capture buffers themselves: a previous worker still finishing
-    // must not act on what we are about to put in them.
-    crate::meeting::claim_capture_buffers();
     // Clear any stale buffers from a previous recording so the meeting
     // worker starts at offset 0 on both primary and secondary streams.
     if let Ok(mut b) = st.audio_buffer.lock() {
@@ -4743,7 +4817,8 @@ pub unsafe extern "C" fn dimmy_meeting_start(out_buf: *mut c_char, buf_len: c_in
         "[Meeting] mic_sr={} system_sr={} source={:?}",
         device_sr, system_sr, mt_source
     ));
-    let session = match crate::meeting::MeetingSession::start(
+    let session = match crate::meeting::MeetingSession::start_claimed(
+        claim,
         st.audio_buffer.clone(),
         st.audio_buffer_secondary.clone(),
         device_sr,
@@ -4753,6 +4828,7 @@ pub unsafe extern "C" fn dimmy_meeting_start(out_buf: *mut c_char, buf_len: c_in
     ) {
         Ok(s) => s,
         Err(e) => {
+            crate::capture::meeting_released(claim, &[]);
             log(&format!("[Meeting] start failed: {}", e));
             crate::telemetry::report(
                 crate::telemetry::Subsystem::Meeting,
@@ -4802,6 +4878,8 @@ pub unsafe extern "C" fn dimmy_meeting_stop(out_buf: *mut c_char, buf_len: c_int
             None => return -1,
         }
     };
+    let claim = session.claim();
+    crate::capture::meeting_stopping(claim);
     // Notify subscribers BEFORE the (potentially seconds-long) drain
     // happens — the pill should leave the meeting-active visual the
     // instant the user clicked Stop, not after the worker finishes
@@ -4842,14 +4920,14 @@ pub unsafe extern "C" fn dimmy_meeting_stop(out_buf: *mut c_char, buf_len: c_int
 
     let result = session.stop();
     crate::coreml_encoder::run_deferred();
-    // Release the whole-meeting capture buffers NOW: nothing reads them
-    // after the worker join (AudioCommand::Stop tears down streams but
-    // never clears, and the next Start clears-then-fills). Leaving them
-    // kept ~0.6-1.3 GB resident after every long meeting AND left a
-    // stale giant buffer for anything that inspects buffer length.
-    if still_ours() {
-        clear_capture_buffers(st);
-    } else {
+    // The worker hands the buffers back (and frees them) as soon as its
+    // audio is on disk. This only covers a worker that never got there
+    // (panicked or abandoned): released here, still only if nothing else
+    // claimed the capture meanwhile. The old unconditional clear at this
+    // point wiped a dictation started during "Wrapping up" (2026-11-09).
+    if crate::capture::meeting_released(claim, &[&st.audio_buffer, &st.audio_buffer_secondary]) {
+        log("[Meeting] capture released at stop (the worker did not get to it)");
+    } else if !still_ours() {
         log("[Meeting] stop finished after the NEXT meeting started — leaving the shared audio state to it");
     }
     let backend = state()
@@ -4873,19 +4951,6 @@ pub unsafe extern "C" fn dimmy_meeting_stop(out_buf: *mut c_char, buf_len: c_int
     })
     .to_string();
     write_to_buf(&json, out_buf, buf_len)
-}
-
-/// Drop the shared capture buffers' contents and reclaim their heap
-/// allocations. Called from `dimmy_meeting_stop` after the worker join;
-/// safe because the audio streams were already sent Stop and the meeting
-/// worker (sole consumer of the cursors) has exited.
-fn clear_capture_buffers(st: &AppState) {
-    for buf in [&st.audio_buffer, &st.audio_buffer_secondary] {
-        if let Ok(mut b) = buf.lock() {
-            b.clear();
-            b.shrink_to_fit();
-        }
-    }
 }
 
 /// Persist the post-process LLM artefacts (recap, actions JSON,
@@ -14694,16 +14759,20 @@ pub(crate) mod tests {
     /// they held 0.6-1.3 GB after every long meeting.
     #[test]
     #[serial]
-    fn clear_capture_buffers_releases_meeting_audio() {
+    fn a_released_meeting_frees_the_capture_buffers() {
         ensure_test_state();
         let st = state();
+        let claim = crate::capture::claim_meeting().expect("capture idle in tests");
         if let Ok(mut b) = st.audio_buffer.lock() {
             b.extend_from_slice(&[0.1f32; 1000]);
         }
         if let Ok(mut b) = st.audio_buffer_secondary.lock() {
             b.extend_from_slice(&[0.2f32; 1000]);
         }
-        clear_capture_buffers(st);
+        assert!(crate::capture::meeting_released(
+            claim,
+            &[&st.audio_buffer, &st.audio_buffer_secondary]
+        ));
         assert_eq!(st.audio_buffer.lock().unwrap().len(), 0);
         assert_eq!(st.audio_buffer_secondary.lock().unwrap().len(), 0);
         assert_eq!(
@@ -14711,6 +14780,60 @@ pub(crate) mod tests {
             0,
             "heap must be reclaimed, not just truncated"
         );
+    }
+
+    /// 2026-11-09 report: a dictation started while a meeting was wrapping
+    /// up was wiped by the meeting's final buffer clear.
+    #[test]
+    #[serial]
+    fn a_dictation_after_the_meeting_audio_is_saved_keeps_its_audio() {
+        ensure_test_state();
+        let st = state();
+        let claim = crate::capture::claim_meeting().expect("capture idle in tests");
+        crate::capture::meeting_stopping(claim);
+        // Still writing out its tail: a dictation must wait.
+        assert_eq!(
+            crate::capture::claim_dictation(),
+            Err(crate::capture::Busy::MeetingDraining)
+        );
+        // The worker's audio is on disk: it hands the capture back.
+        assert!(crate::capture::meeting_released(claim, &[&st.audio_buffer]));
+        let dictation = crate::capture::claim_dictation().expect("free after the release");
+        if let Ok(mut b) = st.audio_buffer.lock() {
+            b.extend_from_slice(&[0.3f32; 480]);
+        }
+        // The stop's backstop runs after the transcriber join: it must not
+        // touch a capture someone else now holds.
+        assert!(!crate::capture::meeting_released(
+            claim,
+            &[&st.audio_buffer]
+        ));
+        assert_eq!(
+            st.audio_buffer.lock().unwrap().len(),
+            480,
+            "dictation audio kept"
+        );
+        assert_eq!(
+            crate::capture::owner(),
+            crate::capture::Owner::Dictation { id: dictation }
+        );
+        crate::capture::release_dictation();
+        st.audio_buffer.lock().unwrap().clear();
+    }
+
+    /// A meeting no longer starts under a running dictation: ending that
+    /// dictation sent AudioCommand::Stop and the meeting recorded nothing.
+    #[test]
+    #[serial]
+    fn a_meeting_cannot_start_under_a_running_dictation() {
+        ensure_test_state();
+        let _dictation = crate::capture::claim_dictation().expect("capture idle in tests");
+        let mut out = vec![0 as c_char; 256];
+        let rc = unsafe { dimmy_meeting_start(out.as_mut_ptr(), out.len() as c_int) };
+        assert_eq!(rc, -4, "refused with the dictation code");
+        assert!(MEETING.lock().unwrap().is_none());
+        crate::capture::release_dictation();
+        assert_eq!(crate::capture::owner(), crate::capture::Owner::Idle);
     }
 
     #[test]

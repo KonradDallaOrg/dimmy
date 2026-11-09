@@ -87,21 +87,11 @@ pub(crate) fn join_bounded<T: Send + 'static>(
 /// on a slow disk or a loaded machine can wake up after the next meeting has
 /// cleared the buffers and started filling them. Acting on its own cursors it
 /// would pad the new system track and drain audio the new meeting has not
-/// written yet. Every meeting claims the buffers before it touches them; a
-/// worker that has lost the claim leaves them alone.
-static CAPTURE_OWNER: AtomicU64 = AtomicU64::new(0);
-static CAPTURE_CLAIMS: AtomicU64 = AtomicU64::new(0);
-
-/// Take the shared capture buffers for a new meeting. Call BEFORE clearing
-/// them: from here on any earlier worker stops touching them.
-pub fn claim_capture_buffers() -> u64 {
-    let claim = CAPTURE_CLAIMS.fetch_add(1, Ordering::SeqCst) + 1;
-    CAPTURE_OWNER.store(claim, Ordering::SeqCst);
-    claim
-}
-
+/// written yet. Every meeting claims the buffers (`crate::capture`) before it
+/// touches them; a worker that has lost the claim leaves them alone.
+/// One atomic load: the capture loop never takes a lock.
 fn owns_capture_buffers(claim: u64) -> bool {
-    CAPTURE_OWNER.load(Ordering::SeqCst) == claim
+    crate::capture::meeting_owns(claim)
 }
 
 /// Snapshot of the user's STT preferences taken at meeting-start time.
@@ -304,6 +294,8 @@ pub struct MeetingSession {
     /// up in the audio file or in the transcript timeline.
     paused: Arc<AtomicBool>,
     handle: Option<JoinHandle<MeetingResult>>,
+    /// This meeting's claim on the capture buffers (`crate::capture`).
+    claim: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -331,6 +323,34 @@ impl MeetingSession {
         source: crate::audio::AudioSource,
         stt: SttSnapshot,
     ) -> Result<Self, String> {
+        let claim =
+            crate::capture::claim_meeting().map_err(|busy| format!("capture busy: {busy:?}"))?;
+        Self::start_claimed(
+            claim,
+            audio_buffer,
+            audio_buffer_secondary,
+            device_sample_rate,
+            system_sample_rate,
+            source,
+            stt,
+        )
+        .inspect_err(|_| {
+            crate::capture::meeting_released(claim, &[]);
+        })
+    }
+
+    /// `start` for a caller that already claimed the capture (the FFI claims
+    /// before it clears the buffers and starts the streams).
+    pub fn start_claimed(
+        claim: u64,
+        audio_buffer: Arc<Mutex<Vec<f32>>>,
+        audio_buffer_secondary: Arc<Mutex<Vec<f32>>>,
+        device_sample_rate: u32,
+        system_sample_rate: u32,
+        source: crate::audio::AudioSource,
+        stt: SttSnapshot,
+    ) -> Result<Self, String> {
+        assert!(claim > 0, "a meeting starts with a capture claim");
         assert!(
             device_sample_rate > 0,
             "device_sample_rate must be positive"
@@ -397,7 +417,6 @@ impl MeetingSession {
         // be moved across the spawn boundary). The worker owns them end
         // to end.
 
-        let claim = claim_capture_buffers();
         let cancel = Arc::new(AtomicBool::new(false));
         let paused = Arc::new(AtomicBool::new(false));
         let cancel_w = cancel.clone();
@@ -432,6 +451,7 @@ impl MeetingSession {
             cancel,
             paused,
             handle: Some(handle),
+            claim,
         })
     }
 
@@ -546,6 +566,11 @@ impl MeetingSession {
             had_recap: false,
         });
         result
+    }
+
+    /// This meeting's claim on the capture buffers.
+    pub fn claim(&self) -> u64 {
+        self.claim
     }
 
     pub fn id(&self) -> &str {
@@ -2709,6 +2734,10 @@ fn worker_loop(
              finished — stopped touching them; this meeting's audio up to here is on disk",
         );
     }
+    // Done with the shared buffers: hand them back, and their memory with
+    // them, before the long wait on the transcriber. A dictation may start
+    // from here on without anything clearing its audio later (2026-11-09).
+    crate::capture::meeting_released(claim, &[&audio_buffer, &audio_buffer_secondary]);
     // The sinks are final, so a slow write here can no longer cost a sample.
     if pending_stats_secs > 0.0 {
         let _ = crate::ffi::dimmy_update_stats(0, pending_stats_secs);
