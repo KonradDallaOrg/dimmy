@@ -146,6 +146,7 @@ struct PillView: View {
     private static let commandAmber = Color(red: 1.0, green: 0x9F / 255.0, blue: 0x0A / 255.0)
     private static let sky = Color(red: 0x38 / 255.0, green: 0xbd / 255.0, blue: 0xf8 / 255.0)
     private static let aiPurple = Color(red: 0xa8 / 255.0, green: 0x55 / 255.0, blue: 0xf7 / 255.0)
+    private static let errorRed = Color(red: 0xef / 255.0, green: 0x44 / 255.0, blue: 0x44 / 255.0)
     private static let sparkle = Color(red: 0xc0 / 255.0, green: 0x84 / 255.0, blue: 0xfc / 255.0)
 
     private var activeBorderStyle: BorderStyle {
@@ -276,6 +277,8 @@ struct PillView: View {
                 processingView
             case .completing:
                 completionView
+            case .error(let message):
+                errorView(message)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -880,6 +883,39 @@ struct PillView: View {
         .shadow(color: .teal.opacity(0.3), radius: 8)
     }
 
+    // MARK: - Error State
+
+    /// Win parity: the pill's ErrorPanel (red badge + the message). Standing
+    /// vertical there is no room for text: the badge alone, message on hover.
+    private func errorView(_ message: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "exclamationmark.circle.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(Self.errorRed)
+            if !isVertical {
+                Text(message)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(Self.errorRed)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: 160)
+                    .fixedSize()
+            }
+        }
+        .frame(width: isVertical ? pillHeight : nil, height: pillHeight)
+        .padding(.horizontal, isVertical ? 0 : 14)
+        .background(
+            Capsule()
+                .fill(.ultraThickMaterial)
+        )
+        .overlay(
+            Capsule()
+                .stroke(Self.errorRed.opacity(0.5), lineWidth: 1.5)
+        )
+        .shadow(color: Self.errorRed.opacity(0.3), radius: 8)
+        .help(message)
+    }
+
     // MARK: - Completion State
 
     private var completionView: some View {
@@ -954,6 +990,7 @@ extension RecordingState {
         case .transcribing: return 3
         case .processing: return 4
         case .completing: return 5
+        case .error: return 6
         }
     }
 }

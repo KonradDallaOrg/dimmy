@@ -1344,6 +1344,9 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
         if case .idle = appState.recordingState {
             break
         }
+        if case .error = appState.recordingState {
+            break
+        }
         if let state = payload["state"] as? String {
             switch state {
             case "transcribing":
@@ -1387,7 +1390,7 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
 
     case "error":
         if let message = payload["message"] as? String {
-            appState.lastError = message
+            appState.showError(message)
             print("[DimmyCore] error event: \(message)")
             // Structured failures (payload carries `source`) also get a
             // toast. The transient error state alone proved invisible

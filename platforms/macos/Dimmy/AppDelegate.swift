@@ -270,7 +270,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                         self.captionWindowController?.reset()
                         self.captionWindowController?.show()
                     }
-                case .idle:
+                case .idle, .error:
                     // Stop / cancel paths converge here. If the user
                     // cancelled (no final emitted) the schedule-hide
                     // never fires — hide eagerly.

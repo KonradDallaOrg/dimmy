@@ -194,6 +194,11 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             button.image = Self.menuBarImage(symbolName: "checkmark.circle.fill",
                                              accessibility: "Dimmy - Done",
                                              paletteColor: .systemGreen)
+        case .error(let message):
+            button.image = Self.menuBarImage(symbolName: "exclamationmark.circle.fill",
+                                             accessibility: "Dimmy - Error",
+                                             paletteColor: .systemYellow)
+            button.toolTip = message
         }
     }
 
@@ -565,6 +570,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         case .transcribing: return "Transcribing…"
         case .processing: return "Processing…"
         case .completing: return "Done"
+        case .error(let message): return message
         }
     }
 
@@ -576,6 +582,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         case .transcribing: return .systemBlue
         case .processing: return .systemPurple
         case .completing: return .systemGreen
+        case .error: return .systemYellow
         }
     }
 

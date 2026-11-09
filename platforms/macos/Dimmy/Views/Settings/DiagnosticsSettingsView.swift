@@ -107,6 +107,7 @@ struct DiagnosticsSettingsView: View {
         case .transcribing: return "transcribing"
         case .processing: return "processing"
         case .completing: return "completing"
+        case .error: return "error"
         }
     }
 

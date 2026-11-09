@@ -456,13 +456,14 @@ final class PillWindowController {
     // MARK: - Pill Stop → meeting recap
 
     /// Called by PillView's Stop button branch when a meeting is
-    /// active. Spins up the recap pipeline on a background thread,
-    /// shows transcribing-style feedback on the pill while the LLM
-    /// runs, then drops the pill back to idle.
+    /// active. Spins up the recap pipeline on a background thread. It is
+    /// background work, like a loaded file: the pill says "Transcribing..."
+    /// through `transcribesRunning` until the transcript is final, then
+    /// "Recap..." through `recapsRunning`, and the dictation state is never
+    /// touched, so a dictation can start while the meeting saves.
     nonisolated static func stopMeetingFromPill(appState: AppState) {
         Task { @MainActor in
-            // Visual feedback during recap — recap can take 10-60s.
-            appState.recordingState = .transcribing
+            appState.transcribesRunning += 1
             let notionAutoSend = appState.notionAutoSend
             // Capture the recap flag pinned at meeting START (set by
             // MeetingViewModel.start / call-detect-started) so a stale
@@ -500,6 +501,10 @@ final class PillWindowController {
                     DiarizationService.relabelIfEnabled(dir: $0.dir, liveTranscript: $0.transcript,
                                                         alreadyLabeled: $0.speakersLabeled)
                 }?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                await MainActor.run {
+                    appState.transcribesRunning = max(0, appState.transcribesRunning - 1)
+                    if stopResult == nil { appState.showError("Meeting stop failed") }
+                }
                 guard let stopResult, !transcript.isEmpty else {
                     dimmyHostLog("[Recap] skip (pill stop): reason=\(stopResult == nil ? "meetingStop returned nil" : "empty transcript") — no recap will run")
                     // Empty / failed stop → no recap will run. Still post
@@ -508,7 +513,6 @@ final class PillWindowController {
                     // resolves to the empty done state instead of hanging
                     // forever waiting for a recap that never comes.
                     await MainActor.run {
-                        appState.recordingState = .idle
                         appState.meetingActive = DimmyCore.shared.meetingIsActive
                         NotificationCenter.default.post(
                             name: .meetingRecapSaved,
@@ -533,7 +537,6 @@ final class PillWindowController {
                 if !generateRecap {
                     dimmyHostLog("[Recap] skip (pill stop): reason=meetingGenerateRecap=false (recap toggled off for this meeting) — transcript kept, no recap")
                     await MainActor.run {
-                        appState.recordingState = .idle
                         appState.meetingActive = DimmyCore.shared.meetingIsActive
                         NotificationCenter.default.post(
                             name: .meetingRecapSaved,
@@ -547,17 +550,14 @@ final class PillWindowController {
                     }
                     return
                 }
-                // The meeting is stopped and its transcript is final, so what
-                // follows is the recap: drop "Transcribing..." and let the pill
-                // show "Recap..." (recapsRunning, raised inside runRecap).
-                await MainActor.run { appState.recordingState = .idle }
+                // The transcript is final; the pill now shows "Recap..."
+                // (recapsRunning, raised inside runRecap).
                 let recap = MeetingPostProcessService.runRecap(
                     dir: stopResult.dir,
                     transcript: transcript,
                     notionAutoSend: notionAutoSend
                 )
                 await MainActor.run {
-                    appState.recordingState = .completing
                     appState.meetingActive = DimmyCore.shared.meetingIsActive
                     NotificationCenter.default.post(
                         name: .meetingRecapSaved,
@@ -567,10 +567,6 @@ final class PillWindowController {
                             "success": (try? recap.get()) != nil,
                         ]
                     )
-                    // Brief completion flash, then idle.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-                        appState.recordingState = .idle
-                    }
                 }
             }.value
         }

@@ -423,6 +423,9 @@ enum RecordingState: Equatable {
     case transcribing
     case processing
     case completing
+    /// A failure the pill shows for 5 s, then rest. Not busy: a press
+    /// starts a dictation. Win parity: AppState.Error.
+    case error(String)
 }
 
 // MARK: - LLM Style (mirrors Rust LlmStyle, 13 variants)
@@ -992,7 +995,21 @@ final class AppState: ObservableObject {
 
     // MARK: - Recording State
 
-    @Published var recordingState: RecordingState = .idle
+    @Published var recordingState: RecordingState = .idle {
+        didSet {
+            switch recordingState {
+            case .transcribing, .processing: break
+            default: pendingError = nil
+            }
+        }
+    }
+    /// An error that arrived while a dictation was still being transcribed,
+    /// shown by `endDictation` if that dictation ends with nothing to paste.
+    /// Lives only while a dictation is in flight (cleared above).
+    private var pendingError: String?
+    /// Which `.error` the 5 s timer may clear: a newer error, or the same
+    /// text shown again, must not be cut short by an older timer.
+    private var errorToken = 0
     @Published var preferredMode: RecordingMode = .pushToTalk
     @Published var waveformLevels: [CGFloat] = Array(repeating: 0.2, count: 7)
     /// Mirror of the core's meeting state, set from the `meeting_state`
@@ -1053,6 +1070,55 @@ final class AppState: ObservableObject {
     var isRecording: Bool {
         if case .recording = recordingState { return true }
         return false
+    }
+
+    /// Every error meant for the pill comes through here. Win parity:
+    /// AppViewModel.SetError. While something records, the pill keeps its
+    /// recording look and the error is said beside it; while a dictation is
+    /// still transcribing it waits for `endDictation`.
+    func showError(_ message: String) {
+        let text = String(message.prefix(200))
+        lastError = text
+        switch Self.errorRoute(state: recordingState, meetingActive: meetingActive) {
+        case .besideRecording:
+            DictToastWindow.show(kind: .error, title: "Still recording", body: text)
+        case .afterDictation:
+            pendingError = text
+        case .pill:
+            enterError(text)
+        }
+    }
+
+    enum ErrorRoute: Equatable { case besideRecording, afterDictation, pill }
+
+    nonisolated static func errorRoute(state: RecordingState, meetingActive: Bool) -> ErrorRoute {
+        if meetingActive { return .besideRecording }
+        switch state {
+        case .recording: return .besideRecording
+        case .transcribing, .processing: return .afterDictation
+        case .idle, .completing, .error: return .pill
+        }
+    }
+
+    /// The dictation pipeline is over without a paste: the pill shows the
+    /// error it ran into, or goes to rest.
+    func endDictation() {
+        if let text = pendingError {
+            enterError(text)
+        } else {
+            recordingState = .idle
+        }
+    }
+
+    private func enterError(_ text: String) {
+        errorToken &+= 1
+        let token = errorToken
+        recordingState = .error(text)
+        // 5 s, not 3: the Windows pill found 3 s read as a flash.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+            guard let self, self.errorToken == token, case .error = self.recordingState else { return }
+            self.recordingState = .idle
+        }
     }
 
     // MARK: - Onboarding & UI
@@ -1253,9 +1319,10 @@ final class AppState: ObservableObject {
     /// through, so the pill reflects all of them.
     @Published var recapsRunning: Int = 0
 
-    /// Transcriptions from a file running right now (Regenerate transcript,
-    /// the speaker relabel, a loaded file, a Telegram audio). Counted like
-    /// `recapsRunning`, only by the two `DimmyCore` file wrappers, so the
+    /// Transcriptions running with the dictation at rest (Regenerate
+    /// transcript, the speaker relabel, a loaded file, a Telegram audio, a
+    /// meeting stopped from the pill). Counted like `recapsRunning`, by the
+    /// two `DimmyCore` file wrappers and the pill's meeting stop, so the
     /// menu bar icon is not at rest while one runs.
     @Published var transcribesRunning: Int = 0
 

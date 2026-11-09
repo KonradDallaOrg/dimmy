@@ -146,7 +146,7 @@ final class HotkeyManager {
         appState.$recordingState
             .sink { state in
                 switch state {
-                case .idle, .completing: DimmyCore.shared.dictationInput(.cancel)
+                case .idle, .completing, .error: DimmyCore.shared.dictationInput(.cancel)
                 default: break
                 }
             }
@@ -406,12 +406,15 @@ final class HotkeyManager {
     @discardableResult
     private func startRecording(mode: RecordingMode) -> Bool {
         guard let appState else { return false }
-        guard case .idle = appState.recordingState else {
-            // The pill is busy with something that is not this dictation
-            // (a meeting stopping from the pill). Used to do nothing at all.
+        switch appState.recordingState {
+        case .idle, .completing, .error:
+            // At rest, or only showing the last result: a press records.
+            break
+        default:
+            // The last dictation is still on its way. Used to do nothing at all.
             hkLog("[HotkeyManager] dictation refused: pill busy (\(appState.recordingState))")
             DictToastWindow.show(kind: .workflowHint, title: "Dimmy is busy",
-                                 body: "The meeting is still saving. Press again in a moment.")
+                                 body: "The last dictation is still finishing. Press again in a moment.")
             return false
         }
 
@@ -445,7 +448,7 @@ final class HotkeyManager {
             startAmplitudePolling()
             return true
         } else if result == -1 {
-            appState.lastError = "No API key configured"
+            appState.showError("No API key configured")
             print("[HotkeyManager] startRecording failed: no API key")
             // Failed start → clear so we don't carry stale context into
             // the next attempt.
@@ -533,7 +536,7 @@ final class HotkeyManager {
             case .failed(let code):
                 print("[HotkeyManager] stop failed rc=\(code)")
                 DispatchQueue.main.async { [weak self] in
-                    self?.appState?.recordingState = .idle
+                    self?.appState?.endDictation()
                 }
                 return
             case .transcript(let t):
@@ -582,7 +585,7 @@ final class HotkeyManager {
                 if historyIdFinal >= 0 { appState.historyTick += 1 }
 
                 if finalText.isEmpty {
-                    appState.recordingState = .idle
+                    appState.endDictation()
                     return
                 }
 
@@ -712,7 +715,7 @@ final class HotkeyManager {
                 // untouched (it stays as the user set it).
                 appState.oneShotCommandPending = false
                 if wasEmpty {
-                    appState.recordingState = .idle
+                    appState.endDictation()
                     self.recordingTargetApp = nil
                     return
                 }
@@ -1256,7 +1259,7 @@ enum MeetingShortcut {
         }
         if appState.isRecording {
             NSLog("[MeetingShortcut] ignored — a dictation is in progress")
-            appState.lastError = "Finish the dictation first"
+            appState.showError("Finish the dictation first")
             return
         }
         let lang = Locale.current.language.languageCode?.identifier ?? "en"
@@ -1268,7 +1271,7 @@ enum MeetingShortcut {
         let startedMeetingId = start.id
         if startedMeetingId == nil {
             NSLog("[MeetingShortcut] meeting start failed rc=\(start.rc)")
-            appState.lastError = start.rc == -4 ? "Finish the dictation first" : "Meeting start failed"
+            appState.showError(start.rc == -4 ? "Finish the dictation first" : "Meeting start failed")
         } else {
             // A meeting started from the shortcut never touches
             // MeetingViewModel.start, so the calendar lookup that hangs
