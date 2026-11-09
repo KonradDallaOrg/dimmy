@@ -90,7 +90,7 @@ struct RecapModelOption: Identifiable, Equatable {
     let provider: Provider
 
     enum Provider: String {
-        case auto, anthropic, gemini, openai, local, custom
+        case auto, anthropic, gemini, openai, kimi, local, custom
     }
 
     /// The GGUF this option runs, for a local option; nil for every cloud
@@ -125,6 +125,7 @@ struct RecapModelOption: Identifiable, Equatable {
         case "anthropic": return .anthropic
         case "openai": return .openai
         case "gemini": return .gemini
+        case "kimi": return .kimi
         default: return .custom
         }
     }
@@ -173,6 +174,7 @@ struct RecapModelOption: Identifiable, Equatable {
         case .anthropic: return "a.circle.fill"
         case .gemini: return "diamond.fill"
         case .openai: return "circle.hexagongrid.fill"
+        case .kimi: return "k.circle.fill"
         case .local: return "cpu"
         case .custom: return "wrench.adjustable"
         }
@@ -187,6 +189,7 @@ struct RecapModelOption: Identifiable, Equatable {
         case .anthropic: return "anthropic"
         case .gemini: return "gemini"
         case .openai: return "openai"
+        case .kimi: return "kimi"
         case .auto, .local, .custom: return ""
         }
     }
@@ -198,6 +201,7 @@ struct RecapModelOption: Identifiable, Equatable {
         case .anthropic: return "orange"
         case .gemini: return "blue"
         case .openai: return "green"
+        case .kimi: return "blue"
         case .local: return "purple"
         case .custom: return "gray"
         }

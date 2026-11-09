@@ -111,6 +111,9 @@
 		AA00F201 /* DimmyCore+GeminiCli.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00F201 /* DimmyCore+GeminiCli.swift */; };
 		AA00F202 /* MacGeminiCliCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00F202 /* MacGeminiCliCard.swift */; };
 		AA00F203 /* GeminiConnectSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00F203 /* GeminiConnectSheet.swift */; };
+		AA00F301 /* DimmyCore+Kimi.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00F301 /* DimmyCore+Kimi.swift */; };
+		AA00F302 /* MacKimiCliCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00F302 /* MacKimiCliCard.swift */; };
+		AA00F303 /* KimiConnectSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00F303 /* KimiConnectSheet.swift */; };
 		AA00F102 /* ConfluenceConnectSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00F102 /* ConfluenceConnectSheet.swift */; };
 		AA000301 /* MacLicensePage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000301 /* MacLicensePage.swift */; };
 		AA000202 /* MacHomePage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000202 /* MacHomePage.swift */; };
@@ -276,6 +279,9 @@
 		AB00F201 /* DimmyCore+GeminiCli.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DimmyCore+GeminiCli.swift"; sourceTree = "<group>"; };
 		AB00F202 /* MacGeminiCliCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacGeminiCliCard.swift; sourceTree = "<group>"; };
 		AB00F203 /* GeminiConnectSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeminiConnectSheet.swift; sourceTree = "<group>"; };
+		AB00F301 /* DimmyCore+Kimi.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DimmyCore+Kimi.swift"; sourceTree = "<group>"; };
+		AB00F302 /* MacKimiCliCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacKimiCliCard.swift; sourceTree = "<group>"; };
+		AB00F303 /* KimiConnectSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KimiConnectSheet.swift; sourceTree = "<group>"; };
 		AB00F102 /* ConfluenceConnectSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfluenceConnectSheet.swift; sourceTree = "<group>"; };
 		AB000301 /* MacLicensePage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacLicensePage.swift; sourceTree = "<group>"; };
 		AB000202 /* MacHomePage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacHomePage.swift; sourceTree = "<group>"; };
@@ -482,6 +488,7 @@
 				AB000300 /* DimmyCore+License.swift */,
 				AB00F101 /* DimmyCore+Confluence.swift */,
 				AB00F201 /* DimmyCore+GeminiCli.swift */,
+				AB00F301 /* DimmyCore+Kimi.swift */,
 				AB000500 /* DimmyCore+V2.swift */,
 				AB001100 /* DimmyCore+CallDetect.swift */,
 				AB000800 /* DictHotkeyManager.swift */,
@@ -557,6 +564,8 @@
 				AB00F102 /* ConfluenceConnectSheet.swift */,
 				AB00F202 /* MacGeminiCliCard.swift */,
 				AB00F203 /* GeminiConnectSheet.swift */,
+				AB00F302 /* MacKimiCliCard.swift */,
+				AB00F303 /* KimiConnectSheet.swift */,
 				AB000303 /* NotionConnectSheet.swift */,
 				AB000304 /* ClaudeConnectSheet.swift */,
 				AB000305 /* ClaudeDesktopConnectSheet.swift */,
@@ -877,6 +886,9 @@ echo \"[gtcrn] bundled $(basename \"$GTCRN_SRC\") into Resources\"
 				AA00F201 /* DimmyCore+GeminiCli.swift in Sources */,
 				AA00F202 /* MacGeminiCliCard.swift in Sources */,
 				AA00F203 /* GeminiConnectSheet.swift in Sources */,
+				AA00F301 /* DimmyCore+Kimi.swift in Sources */,
+				AA00F302 /* MacKimiCliCard.swift in Sources */,
+				AA00F303 /* KimiConnectSheet.swift in Sources */,
 				AA00F102 /* ConfluenceConnectSheet.swift in Sources */,
 				AA000301 /* MacLicensePage.swift in Sources */,
 				AA000302 /* MacIntegrationsPage.swift in Sources */,

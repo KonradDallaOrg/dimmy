@@ -152,7 +152,7 @@ enum ProviderCatalog {
     /// and OpenRouter are LLM-only; Deepgram is not here (STT only);
     /// Custom and Local are configured elsewhere.
     private static let llmKeyVendors: Set<String> = [
-        "groq", "openai", "anthropic", "gemini", "openrouter", "fireworks", "together",
+        "groq", "openai", "anthropic", "gemini", "openrouter", "fireworks", "together", "kimi",
     ]
 
     /// Vendors whose STT key the FFI accepts (mirrors
@@ -271,6 +271,15 @@ enum ProviderCatalog {
             stt: true, llm: true,
             getKeyHint: "Create a key in the Together dashboard.",
             models: cat("together")
+        ),
+
+        ProviderInfo(
+            id: "kimi", name: "Kimi Code", mark: "Ki",
+            accentHex: "#027AFF",
+            consoleUrl: "https://www.kimi.com/code/console",
+            stt: false, llm: true,
+            getKeyHint: "Kimi Code membership (Plus and up): create an API key in the Kimi Code console. Or sign in with the Kimi Code CLI under Integrations.",
+            models: cat("kimi")
         ),
 
         ProviderInfo(

@@ -903,6 +903,24 @@ int32_t dimmy_codex_spawn_login(void);
 int32_t dimmy_codex_ping(void);
 int32_t dimmy_codex_recheck(void);
 
+/// Kimi Code CLI (Kimi membership), driven over ACP. Same 0/1/2 status
+/// contract as Codex. See core/src/kimi_cli.rs.
+int32_t dimmy_kimi_status(void);
+int32_t dimmy_kimi_diagnostics(char * _Nonnull out_buf, int32_t buf_len);
+int32_t dimmy_kimi_binary_path(char * _Nonnull out_buf, int32_t buf_len);
+/// The vendor's one-line install command for this OS. Bytes written, -1 on error.
+int32_t dimmy_kimi_install_command(char * _Nonnull out_buf, int32_t buf_len);
+/// 1 when the CLI's shell is available (always 1 on macOS).
+int32_t dimmy_kimi_git_bash_present(void);
+int32_t dimmy_kimi_spawn_login(void);
+/// Elapsed ms on success (> 0). -1 not installed, -2 not signed in, -3 spawn,
+/// -4 timeout, -5 protocol, -6 reported (usage limit), -7 refused, -8 empty.
+int32_t dimmy_kimi_ping(void);
+/// The plan's models as JSON [{"id","name"}]. Blocks up to 30 s.
+/// -1 bad args, -2 buffer too small, -3 not installed / signed in, -4 CLI failed.
+int32_t dimmy_kimi_models_json(char * _Nonnull out_buf, int32_t buf_len);
+int32_t dimmy_kimi_recheck(void);
+
 /// Claude Desktop MCP bridge — JSON snapshot:
 ///   {installed, install_path?, extension_path?, config_patched,
 ///    extension_installed, extension_enabled, extension_version?,
