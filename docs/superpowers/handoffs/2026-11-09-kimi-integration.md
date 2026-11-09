@@ -4,7 +4,21 @@ Branch `feat/kimi-subscription`, cut from `origin/staging` @ `0d456207`.
 Work-PC worktree: `E:\dimmy-wt\kimi`. Plan + feasibility:
 [`docs/dev/kimi-integration-plan.md`](../../dev/kimi-integration-plan.md).
 
-## 🔴 First thing on the other PC
+## Status (2026-11-09, evening)
+
+Steps 1-7 below are DONE on this branch (commits after `03ec029c`):
+compiled, `cargo clippy -D warnings` clean, 1409 lib tests + 63 `v2_ffi`
+tests green, ABI snapshot regenerated, setup `kimi-sub` profile +
+`login … kimi`, Windows wizard/card/toggles (600 C# tests green), macOS
+parity (`xcodebuild` OK and the app launched without a SelfTests trip on
+MacinCloud), docs (`docs/dev/kimi-backend.md`, telemetry, PRIVACY,
+CLAUDE.md), Phase 3 MCP bridge (`kimi_mcp.rs` + a toggle on both cards).
+No Linux UI work (user: no Linux).
+
+**Only step 8 is open: the live check on the user's real Kimi account.**
+Nothing was run against a real `kimi` binary yet.
+
+## (history) First thing on the other PC
 
 **The Rust changes have NEVER been compiled.** The only clippy attempt on the
 work PC failed on argument parsing before cargo started (C: was at 1.4 GB
