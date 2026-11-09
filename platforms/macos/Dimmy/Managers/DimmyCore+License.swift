@@ -11,8 +11,24 @@ extension DimmyCore {
 
     // MARK: - Types
 
+    /// `kind` of `dimmy_license_status_json`, mirror of the core's
+    /// `LicenseStatus` variants. Anything unknown decodes as `.invalid`.
+    public enum LicenseKind: String, Equatable {
+        case unrestricted = "Unrestricted"
+        case notFound = "NotFound"
+        case invalid = "Invalid"
+        case trialActive = "TrialActive"
+        case trialExpired = "TrialExpired"
+        case active = "Active"
+        case expired = "Expired"
+        case suspended = "Suspended"
+
+        /// A running trial or a paid license.
+        public var isLicensed: Bool { self == .trialActive || self == .active }
+    }
+
     public struct LicenseStatus: Equatable {
-        public let kind: String
+        public let kind: LicenseKind
         public let tier: String?
         public let daysRemaining: Int64?
         public let daysOffline: Int?
@@ -101,12 +117,12 @@ extension DimmyCore {
               let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else {
             return LicenseStatus(
-                kind: "Invalid", tier: nil, daysRemaining: nil, daysOffline: nil,
+                kind: .invalid, tier: nil, daysRemaining: nil, daysOffline: nil,
                 error: "FFI status returned \(n)", cloudEnabled: false, updatesEnabled: false,
                 scopes: [], cancelsAt: nil)
         }
         return LicenseStatus(
-            kind: dict["kind"] as? String ?? "Invalid",
+            kind: (dict["kind"] as? String).flatMap(LicenseKind.init(rawValue:)) ?? .invalid,
             tier: dict["tier"] as? String,
             daysRemaining: (dict["days_remaining"] as? NSNumber)?.int64Value,
             daysOffline: (dict["days_offline"] as? NSNumber)?.intValue,

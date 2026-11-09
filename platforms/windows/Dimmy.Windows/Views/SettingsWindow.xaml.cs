@@ -3938,14 +3938,16 @@ public sealed partial class SettingsWindow : Window
             {
                 ShowInfoBar(LicenseTrialInfoBar, InfoBarSeverity.Informational,
                     "Activating via magic link…");
+                // Armed before the link opens: the URL-scheme dispatch hands the
+                // code to this process over the named pipe and the redeem fires
+                // LicenseChanged when it finishes, possibly before Start returns.
+                var activation = WaitForActivationAsync(TimeSpan.FromSeconds(8));
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(link)
                 {
                     UseShellExecute = true,
                 });
 
-                // Poll status — the URL-scheme dispatch hands the code to the
-                // running Dimmy via named pipe; redeem completes asynchronously.
-                if (await WaitForActivationAsync(TimeSpan.FromSeconds(8)))
+                if (await activation)
                 {
                     RefreshLicenseStatus();
                     ShowInfoBar(LicenseTrialInfoBar, InfoBarSeverity.Success, "Activated. Welcome to Dimmy.");
@@ -4018,19 +4020,27 @@ public sealed partial class SettingsWindow : Window
         });
     }
 
-    /// Poll dimmy_license_status until kind transitions into TrialActive/Active,
-    /// or timeout. Used right after triggering a dimmy:// magic link to surface
-    /// the activation result inline instead of forcing the user to click Refresh.
+    /// True once a LicenseChanged lands with the license TrialActive/Active,
+    /// false on timeout. Every redeem path fires LicenseChanged when it ends,
+    /// so the status is read on that event instead of on a timer.
     private static async Task<bool> WaitForActivationAsync(TimeSpan budget)
     {
-        var start = DateTime.UtcNow;
-        while (DateTime.UtcNow - start < budget)
+        var done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnChanged()
         {
-            await Task.Delay(400);
-            var s = LicenseService.GetStatus();
-            if (s.Kind == "TrialActive" || s.Kind == "Active") return true;
+            var kind = LicenseService.GetStatus().Kind;
+            if (kind == "TrialActive" || kind == "Active") done.TrySetResult(true);
         }
-        return false;
+        LicenseService.LicenseChanged += OnChanged;
+        try
+        {
+            var winner = await Task.WhenAny(done.Task, Task.Delay(budget));
+            return winner == done.Task;
+        }
+        finally
+        {
+            LicenseService.LicenseChanged -= OnChanged;
+        }
     }
 
     private async void License_Activate_Click(object sender, RoutedEventArgs e)
