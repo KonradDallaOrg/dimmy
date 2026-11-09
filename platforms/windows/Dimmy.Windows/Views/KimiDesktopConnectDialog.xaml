@@ -56,8 +56,12 @@
             <ProgressRing x:Name="DetectRing" Width="16" Height="16" IsActive="False" Visibility="Collapsed"/>
           </StackPanel>
         </Border>
-        <Button x:Name="InstallBtn" Content="Install Kimi Code Desktop" Click="Install_Click"
-                Style="{ThemeResource AccentButtonStyle}" HorizontalAlignment="Left"/>
+        <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}">
+          <Button x:Name="InstallBtn" Content="Install Kimi Code Desktop" Click="Install_Click"
+                  Style="{ThemeResource AccentButtonStyle}"/>
+          <HyperlinkButton Content="Or download it from kimi.com/code"
+                           NavigateUri="https://www.kimi.com/code" VerticalAlignment="Center"/>
+        </StackPanel>
       </StackPanel>
 
       <!-- Step 2 - Connect -->

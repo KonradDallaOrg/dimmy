@@ -29,6 +29,8 @@ struct MeetingDoneView: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var copiedFlash: Bool = false
     @State private var claudeMcpInstalled: Bool = false
+    /// Kimi Code Desktop installed: shows "Open in Kimi Code".
+    @State private var kimiDesktopInstalled: Bool = false
     @State private var claudeIconPath: String? = nil
     @State private var editingTitle: Bool = false
     @State private var titleDraft: String = ""
@@ -175,6 +177,7 @@ struct MeetingDoneView: View {
             // MCP extension is installed. Status query is a single FFI
             // call (cheap, no event-callback wiring needed).
             claudeMcpInstalled = DimmyCore.shared.claudeDesktopStatus().extensionInstalled
+            kimiDesktopInstalled = DimmyCore.shared.kimiMcpStatus.desktopPath != nil
             if claudeMcpInstalled {
                 Task { claudeIconPath = await ClaudeIconExtractor.tryExtract() }
             }
@@ -343,6 +346,49 @@ struct MeetingDoneView: View {
         }
         if claudeMcpInstalled {
             recapWithClaudeButton
+        }
+        if kimiDesktopInstalled {
+            ToolbarIconButton(help: "Open in Kimi Code Desktop") {
+                openInKimi()
+            } label: {
+                Image("kimi")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 16, height: 16)
+            }
+        }
+    }
+
+    /// "Open in Kimi Code", mirror of Win `MeetingWindow.Kimi.cs`. Kimi Code
+    /// Desktop's only deep link is `kimi-code://open?root=<dir>&new=1` (a
+    /// new chat in a folder, no prompt pre-fill), so the recap prompt goes
+    /// on the pasteboard and the chat opens in the meeting's folder.
+    private func openInKimi() {
+        let dir = vm.selectedDir ?? activeDirFromAudio ?? ""
+        let meetingId = (dir as NSString).lastPathComponent
+        guard !dir.isEmpty, !meetingId.isEmpty else { return }
+        let prompt: String
+        if DimmyCore.shared.kimiMcpStatus.registered {
+            prompt =
+                "Recap Dimmy meeting `\(meetingId)`.\n\n" +
+                "1. Call `dimmy_get_recap_template` to fetch Dimmy's house format.\n" +
+                "2. Call `dimmy_get_meeting` with id `\(meetingId)` to read the transcript.\n" +
+                "3. Produce a recap that follows the template's rules exactly (first line is a Markdown H1 title in the transcript's language).\n" +
+                "4. Call `dimmy_save_recap` with id `\(meetingId)` and your recap markdown to persist it back into Dimmy.\n" +
+                "5. Confirm to me once saved."
+        } else {
+            prompt = "This folder is a Dimmy meeting. Read `transcripts.txt` and write a recap in the transcript's language: " +
+                "a Markdown H1 title, then summary, decisions and action items. Save it as `recap.md` in this folder."
+        }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(prompt, forType: .string)
+        var comps = URLComponents()
+        comps.scheme = "kimi-code"
+        comps.host = "open"
+        comps.queryItems = [URLQueryItem(name: "root", value: dir), URLQueryItem(name: "new", value: "1")]
+        if let url = comps.url {
+            NSWorkspace.shared.open(url)
         }
     }
 

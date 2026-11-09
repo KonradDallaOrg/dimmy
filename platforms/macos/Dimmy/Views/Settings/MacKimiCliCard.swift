@@ -20,9 +20,6 @@ struct MacKimiCliCard: View {
     @State private var signInRunning = false
     @State private var testRunning = false
     @State private var statusMessage = ""
-    @State private var mcpFound = false
-    @State private var mcpRegistered = false
-    @State private var mcpMessage = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -84,24 +81,6 @@ struct MacKimiCliCard: View {
                     .font(.system(size: 22))
                     .foregroundStyle(statusIconColor)
             }
-
-            // Kimi Code MCP bridge: Kimi Code (CLI and Desktop) reads
-            // Dimmy's meetings through dimmy-mcp. Shown once Kimi is here.
-            if mcpFound {
-                Toggle(isOn: Binding(get: { mcpRegistered }, set: { setMcp($0) })) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Let Kimi Code read your meetings").font(.system(size: 13))
-                        Text(mcpMessage.isEmpty
-                             ? "Adds Dimmy to ~/.kimi-code/mcp.json, for Kimi Code CLI and Kimi Code Desktop. Other entries stay as they are."
-                             : mcpMessage)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                .toggleStyle(.switch)
-                .controlSize(.small)
-            }
         }
         .padding(16)
         .background(
@@ -147,31 +126,6 @@ struct MacKimiCliCard: View {
         binaryPath = DimmyCore.shared.kimiBinaryPath
         statusMessage = ""
         appState.refreshKimiStatus()
-        refreshMcp()
-    }
-
-    private func refreshMcp() {
-        let s = DimmyCore.shared.kimiMcpStatus
-        mcpFound = s.kimiFound
-        mcpRegistered = s.registered
-    }
-
-    private func setMcp(_ on: Bool) {
-        if on {
-            let bin = Bundle.main.bundlePath + "/Contents/Resources/dimmy-mcp"
-            let rc: Int32 = FileManager.default.fileExists(atPath: bin)
-                ? DimmyCore.shared.installKimiMcp(binaryPath: bin) : -2
-            switch rc {
-            case 0: mcpMessage = "Connected. Open a new Kimi Code session to use Dimmy's tools."
-            case -2: mcpMessage = "dimmy-mcp was not found in the app bundle."
-            case -3: mcpMessage = "~/.kimi-code/mcp.json is not valid JSON. Dimmy left it untouched; fix it and try again."
-            default: mcpMessage = "Could not write ~/.kimi-code/mcp.json. See dimmy.log."
-            }
-        } else {
-            let rc = DimmyCore.shared.uninstallKimiMcp()
-            mcpMessage = rc < 0 ? "Could not update ~/.kimi-code/mcp.json. See dimmy.log." : ""
-        }
-        refreshMcp()
     }
 
     private func signIn() {

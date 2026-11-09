@@ -76,13 +76,28 @@ extension DimmyCore {
         ClaudeCodeStatus(rawValue: dimmy_kimi_recheck()) ?? .notInstalled
     }
 
-    /// (Kimi Code found on this Mac, Dimmy registered in its mcp.json).
-    var kimiMcpStatus: (kimiFound: Bool, registered: Bool) {
-        guard let json = readKimiBuffer(4096, { dimmy_kimi_mcp_status($0, $1) }),
+    struct KimiMcpStatus {
+        var kimiFound = false
+        /// Dimmy's entry is in ~/.kimi-code/mcp.json.
+        var registered = false
+        var configPath: String?
+        /// Kimi Code Desktop's app bundle, when installed.
+        var desktopPath: String?
+        /// Seconds since Kimi last started dimmy-mcp (its own heartbeat file).
+        var heartbeatAgeSecs: Int?
+    }
+
+    var kimiMcpStatus: KimiMcpStatus {
+        guard let json = readKimiBuffer(8192, { dimmy_kimi_mcp_status($0, $1) }),
               let data = json.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return (false, false) }
-        return ((obj["kimi_found"] as? Bool) ?? false, (obj["registered"] as? Bool) ?? false)
+        else { return KimiMcpStatus() }
+        return KimiMcpStatus(
+            kimiFound: (obj["kimi_found"] as? Bool) ?? false,
+            registered: (obj["registered"] as? Bool) ?? false,
+            configPath: obj["config_path"] as? String,
+            desktopPath: obj["desktop_path"] as? String,
+            heartbeatAgeSecs: obj["heartbeat_age_secs"] as? Int)
     }
 
     /// 0 done; -1 no home, -2 binary missing, -3 mcp.json invalid, -4 write failed.
