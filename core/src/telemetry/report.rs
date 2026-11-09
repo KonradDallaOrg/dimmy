@@ -266,6 +266,11 @@ pub fn failure_of(event: &super::Event) -> Option<(Subsystem, String, &'static s
             error_category,
             ..
         } => r(Subsystem::Llm, error_category, "codex"),
+        E::KimiCliInvocation {
+            success: false,
+            error_category,
+            ..
+        } => r(Subsystem::Llm, error_category, "kimi_cli"),
         E::GeminiCliInvocation {
             success: false,
             error_category,

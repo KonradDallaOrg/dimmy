@@ -52,6 +52,7 @@ pub mod history;
 mod hotkey;
 mod hotkey_recorder;
 pub mod keystore;
+pub mod kimi_cli;
 pub mod lang_detect;
 pub mod legal_doc;
 /// Licensing — local-server PoC for the v2 architecture (see

@@ -1,6 +1,6 @@
 # Kimi integration: feasibility and plan (2026-11-09)
 
-Status: **plan only, nothing built.** Branch `feat/kimi-subscription`, cut from
+Status: **in progress, see the handoff `docs/superpowers/handoffs/2026-11-09-kimi-integration.md`.** Phase 0 questions 1-4, 6, 7 and 9 were answered from the Kimi CLI source instead of a live account (transport = `kimi acp`); the live check is still open. Branch `feat/kimi-subscription`, cut from
 `origin/staging` @ `0d456207`. Everything below was checked against
 Moonshot's own docs on 2026-11-09. Items marked **SPIKE** still need a run
 on a real Kimi account before any code is written.
