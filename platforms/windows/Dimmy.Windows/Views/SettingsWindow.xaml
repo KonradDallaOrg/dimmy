@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Window
     x:Class="Dimmy.Windows.Views.SettingsWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -2476,25 +2476,45 @@
                 </Grid>
               </Border>
 
-              <!-- Kimi Code MCP: lets Kimi Code (CLI and Desktop) read Dimmy's
-                   meetings and dictations through dimmy-mcp. Shown once Kimi
-                   Code is on this machine. -->
-              <Border x:Name="KimiMcpCard" Style="{StaticResource DimmyCard}" Padding="16"
-                      Margin="0,8,0,0" Visibility="Collapsed">
-                <Grid ColumnSpacing="{StaticResource DimmySpaceL}">
+              <!-- Kimi Code Desktop (MCP): Kimi Code Desktop reads Dimmy's
+                   meetings and dictations through dimmy-mcp. Same shape as
+                   the Claude Desktop card; the wizard installs, connects and
+                   verifies. -->
+              <Border Style="{StaticResource DimmyCard}" Padding="16" Margin="0,8,0,0">
+                <Grid ColumnSpacing="{StaticResource DimmySpaceL}" RowSpacing="{StaticResource DimmySpaceM}">
                   <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                   </Grid.ColumnDefinitions>
-                  <StackPanel Spacing="{StaticResource DimmySpaceXS}">
-                    <TextBlock Text="Let Kimi Code read your meetings" Style="{StaticResource DimmyBody}"/>
-                    <TextBlock x:Name="KimiMcpStatusText" Style="{StaticResource DimmySecondary}" TextWrapping="Wrap"
-                               Text="Adds Dimmy to ~/.kimi-code/mcp.json, for Kimi Code CLI and Kimi Code Desktop. Other entries stay as they are."/>
+                  <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                  </Grid.RowDefinitions>
+                  <Image Grid.Column="0" Grid.Row="0" Grid.RowSpan="2"
+                         Width="36" Height="36" VerticalAlignment="Top"
+                         Source="{ThemeResource KimiMarkSource}" />
+                  <StackPanel Grid.Column="1" Grid.Row="0" Spacing="{StaticResource DimmySpaceXS}">
+                    <TextBlock Text="Kimi Code Desktop" Style="{StaticResource DimmyCardTitle}" />
+                    <TextBlock x:Name="KimiDesktopStatusText" Text="Probing…"
+                               Style="{StaticResource DimmySecondary}" TextWrapping="Wrap"/>
                   </StackPanel>
-                  <ToggleSwitch x:Name="KimiMcpToggle" Grid.Column="1" VerticalAlignment="Center"
-                                OnContent="" OffContent="" MinWidth="0"
-                                Toggled="KimiMcpToggle_Toggled"
-                                AutomationProperties.Name="Let Kimi Code read your meetings"/>
+                  <FontIcon x:Name="KimiDesktopStatusGlyph" Grid.Column="2" Grid.Row="0" VerticalAlignment="Top"
+                            Glyph="&#xEA39;" FontSize="{StaticResource DimmyIconXL}"
+                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                  <StackPanel Grid.Column="1" Grid.ColumnSpan="2" Grid.Row="1"
+                              Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                    <Button x:Name="KimiDesktopWizardBtn" Click="KimiDesktopWizard_Click"
+                            ToolTipService.ToolTip="Install Kimi Code Desktop, connect Dimmy, verify">
+                      <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
+                        <FontIcon Glyph="&#xE8FC;" FontSize="{StaticResource DimmyIconM}"/>
+                        <TextBlock x:Name="KimiDesktopWizardLabel" Text="Connect"/>
+                      </StackPanel>
+                    </Button>
+                    <Button x:Name="KimiDesktopDisconnectBtn" Content="Disconnect"
+                            Click="KimiDesktopDisconnect_Click" Visibility="Collapsed"/>
+                    <Button Content="Refresh" Click="KimiDesktopRefresh_Click"/>
+                  </StackPanel>
                 </Grid>
               </Border>
 

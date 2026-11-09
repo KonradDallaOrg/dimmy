@@ -21,6 +21,90 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Map, Value};
 
 const BACKUP_SUFFIX: &str = "dimmy-backup";
+/// `dimmy-mcp` writes `mcp.heartbeat.kimi` when started from our entry, so
+/// the wizard can tell "Kimi loaded Dimmy" apart from a running Claude
+/// Desktop (which writes plain `mcp.heartbeat`).
+const HEARTBEAT_CLIENT: &str = "kimi";
+
+/// Kimi Code Desktop, if installed. Windows: the NSIS installer (winget
+/// `MoonshotAI.KimiCodeDesktop`) puts it under `%LOCALAPPDATA%\Programs` or
+/// `%ProgramFiles%`; we take the first folder whose name has "kimi" in it
+/// and that holds a "kimi" .exe. macOS: an app bundle in /Applications or
+/// ~/Applications whose name has "Kimi Code".
+pub fn detect_desktop() -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        let roots: Vec<PathBuf> = [
+            std::env::var("LOCALAPPDATA")
+                .ok()
+                .map(|l| PathBuf::from(l).join("Programs")),
+            std::env::var("ProgramFiles").ok().map(PathBuf::from),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        for root in roots {
+            let Ok(dirs) = std::fs::read_dir(&root) else {
+                continue;
+            };
+            for d in dirs.flatten() {
+                let dir = d.path();
+                let name = d.file_name().to_string_lossy().to_lowercase();
+                if !name.contains("kimi") || !dir.is_dir() {
+                    continue;
+                }
+                let Ok(files) = std::fs::read_dir(&dir) else {
+                    continue;
+                };
+                let exe = files.flatten().map(|f| f.path()).find(|p| {
+                    let n = p
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_lowercase())
+                        .unwrap_or_default();
+                    n.ends_with(".exe") && n.contains("kimi") && !n.contains("uninstall")
+                });
+                if exe.is_some() {
+                    return exe;
+                }
+            }
+        }
+        None
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut roots = vec![PathBuf::from("/Applications")];
+        if let Some(h) = dirs::home_dir() {
+            roots.push(h.join("Applications"));
+        }
+        roots.into_iter().find_map(|root| {
+            std::fs::read_dir(root)
+                .ok()?
+                .flatten()
+                .map(|e| e.path())
+                .find(|p| {
+                    let n = p.file_name().map(|n| n.to_string_lossy().to_lowercase());
+                    n.is_some_and(|n| n.contains("kimi code") && n.ends_with(".app"))
+                })
+        })
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        None
+    }
+}
+
+/// Seconds since `dimmy-mcp` last wrote its Kimi heartbeat, if ever.
+fn heartbeat_age_secs() -> Option<u64> {
+    let dir = crate::config_dir_path()?;
+    let raw =
+        std::fs::read_to_string(dir.join(format!("mcp.heartbeat.{HEARTBEAT_CLIENT}"))).ok()?;
+    let ts = serde_json::from_str::<Value>(&raw).ok()?["timestamp"].as_u64()?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    Some(now.saturating_sub(ts))
+}
 
 #[derive(Debug, PartialEq)]
 pub enum McpError {
@@ -112,7 +196,7 @@ pub fn install_at(path: &Path, binary: &Path, namespace: &str) -> Result<(), Mcp
     let entry = json!({
         "command": binary.to_string_lossy(),
         "args": [],
-        "env": { "DIMMY_CONFIG_NAMESPACE": namespace },
+        "env": { "DIMMY_CONFIG_NAMESPACE": namespace, "DIMMY_MCP_CLIENT": HEARTBEAT_CLIENT },
         "enabled": true,
     });
     let servers = servers_mut(&mut root)?;
@@ -158,7 +242,8 @@ pub fn status_at(path: &Path, namespace: &str) -> (bool, Option<String>) {
     (entry.is_some(), command)
 }
 
-/// `{"kimi_found", "registered", "binary_exists", "config_path"}` for the
+/// `{"kimi_found", "registered", "binary_exists", "config_path",
+/// "desktop_path", "heartbeat_age_secs"}` for the
 /// Integrations card. Local UI only, never telemetry (it carries paths).
 pub fn status_json(namespace: &str) -> String {
     let path = mcp_json_path();
@@ -171,6 +256,8 @@ pub fn status_json(namespace: &str) -> String {
         "registered": registered,
         "binary_exists": command.as_deref().is_some_and(|c| Path::new(c).is_file()),
         "config_path": path.map(|p| p.to_string_lossy().into_owned()),
+        "desktop_path": detect_desktop().map(|p| p.to_string_lossy().into_owned()),
+        "heartbeat_age_secs": heartbeat_age_secs(),
     })
     .to_string()
 }
@@ -232,6 +319,7 @@ mod tests {
             v["mcpServers"]["dimmy"]["env"]["DIMMY_CONFIG_NAMESPACE"],
             "dimmy"
         );
+        assert_eq!(v["mcpServers"]["dimmy"]["env"]["DIMMY_MCP_CLIENT"], "kimi");
         assert!(
             !s.mcp().with_extension("json.dimmy-backup").exists(),
             "nothing to back up"

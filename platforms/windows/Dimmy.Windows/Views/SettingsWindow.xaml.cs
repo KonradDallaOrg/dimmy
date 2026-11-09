@@ -1577,8 +1577,7 @@ public sealed partial class SettingsWindow : Window
         {
             Width = 16,
             Height = 16,
-            Source = new Microsoft.UI.Xaml.Media.Imaging.SvgImageSource(
-                new Uri($"ms-appx:///Assets/Providers/{icon}.svg")),
+            Source = Helpers.ProviderIcon.Source(icon),
         });
         sp.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center });
         return sp;

@@ -26,10 +26,10 @@ public sealed partial class KimiConnectDialog : ContentDialog
 
     private enum Page { Install = 1, SignIn = 2, Test = 3 }
 
-    private const string GlyphSuccess = ""; // CheckMark
-    private const string GlyphPending = ""; // neutral placeholder
-    private const string GlyphInfo = "";    // Info
-    private const string GlyphError = "";
+    private const string GlyphSuccess = "\uE73E"; // CheckMark
+    private const string GlyphPending = "\uE9F5"; // neutral placeholder
+    private const string GlyphInfo = "\uE946";    // Info
+    private const string GlyphError = "\uEA39";   // ErrorBadge
 
     private const string CmdGit = "winget install --id Git.Git -e --source winget";
 
@@ -210,10 +210,12 @@ public sealed partial class KimiConnectDialog : ContentDialog
         }
         _signInStarted = true;
         _signInTicks = 0;
-        SignInText.Text = "Confirm the code in your browser. Dimmy detects the sign-in by itself...";
+        SignInText.Text = "Your browser opens kimi.com with a code. Confirm it there; Dimmy sees the sign-in by itself.";
         SignInRing.IsActive = true;
         SignInRing.Visibility = Visibility.Visible;
-        SignInBtn.IsEnabled = false;
+        // Stays enabled: if the browser tab was closed or the code expired,
+        // one more click starts a new sign-in.
+        SignInBtn.Content = "Sign in again";
         StartPoll();
     }
 
@@ -259,7 +261,6 @@ public sealed partial class KimiConnectDialog : ContentDialog
             SignInText.Text = "Sign-in not completed in 3 minutes. Try again.";
             SignInRing.IsActive = false;
             SignInRing.Visibility = Visibility.Collapsed;
-            SignInBtn.IsEnabled = true;
         }
     }
 

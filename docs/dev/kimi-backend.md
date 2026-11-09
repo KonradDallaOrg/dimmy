@@ -59,8 +59,8 @@ The user installs nothing by hand. Windows `KimiConnectDialog`, Mac
    `kimi_cli::git_bash_present`). One button runs
    `winget install --id Git.Git -e --source winget` in a visible terminal.
 2. **The CLI.** One button runs `dimmy_kimi_install_command` (PowerShell
-   `irm https://code.kimi.com/kimi-code/install.ps1 | iex`, or
-   `curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash`) in a
+   `irm https://code.kimi.ai/kimi-code/install.ps1 | iex`, or
+   `curl -fsSL https://code.kimi.ai/kimi-code/install.sh | bash`, the global channel: `code.kimi.com` writes region `mainland-cn` and the sign-in then fails for a kimi.ai account) in a
    visible terminal. It lands in `~/.kimi-code/bin`, which detection checks
    directly, so no PATH refresh is needed.
 3. **Sign in.** `kimi login` (device code) in a visible terminal. Dimmy

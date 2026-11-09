@@ -1375,19 +1375,27 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_kimi_mcp_uninstall();
 
-    /// <summary>(Kimi Code found on this machine, Dimmy registered with it).</summary>
-    public static (bool KimiFound, bool Registered) GetKimiMcpStatus()
+    public sealed record KimiMcpStatus(
+        bool KimiFound, bool Registered, string? ConfigPath, string? DesktopPath, long? HeartbeatAgeSecs);
+
+    /// <summary>Kimi Code on this machine, Dimmy's entry in its mcp.json,
+    /// Kimi Code Desktop's install, and the last time Kimi started dimmy-mcp.</summary>
+    public static KimiMcpStatus GetKimiMcpStatus()
     {
         try
         {
-            var json = ReadBuffer(dimmy_kimi_mcp_status, 4096);
-            if (string.IsNullOrEmpty(json)) return (false, false);
+            var json = ReadBuffer(dimmy_kimi_mcp_status, 8192);
+            if (string.IsNullOrEmpty(json)) return new(false, false, null, null, null);
             using var doc = System.Text.Json.JsonDocument.Parse(json);
             var r = doc.RootElement;
-            return (r.GetProperty("kimi_found").GetBoolean(),
-                    r.GetProperty("registered").GetBoolean());
+            static string? Str(System.Text.Json.JsonElement e, string k) =>
+                e.TryGetProperty(k, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String ? v.GetString() : null;
+            long? age = r.TryGetProperty("heartbeat_age_secs", out var h)
+                        && h.ValueKind == System.Text.Json.JsonValueKind.Number ? h.GetInt64() : null;
+            return new(r.GetProperty("kimi_found").GetBoolean(), r.GetProperty("registered").GetBoolean(),
+                       Str(r, "config_path"), Str(r, "desktop_path"), age);
         }
-        catch { return (false, false); }
+        catch { return new(false, false, null, null, null); }
     }
 
     /// <summary>0 done; -1 no home dir, -2 binary missing, -3 mcp.json not

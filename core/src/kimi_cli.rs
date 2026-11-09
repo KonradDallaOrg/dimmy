@@ -840,11 +840,11 @@ pub fn spawn_login() -> Result<(), KimiError> {
 pub fn install_command() -> &'static str {
     #[cfg(target_os = "windows")]
     {
-        "irm https://code.kimi.com/kimi-code/install.ps1 | iex"
+        "irm https://code.kimi.ai/kimi-code/install.ps1 | iex"
     }
     #[cfg(not(target_os = "windows"))]
     {
-        "curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash"
+        "curl -fsSL https://code.kimi.ai/kimi-code/install.sh | bash"
     }
 }
 

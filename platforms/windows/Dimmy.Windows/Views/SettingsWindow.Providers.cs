@@ -623,7 +623,7 @@ public sealed partial class SettingsWindow
             Height = 22,
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
-            Source = new SvgImageSource(SafeUri($"ms-appx:///Assets/Providers/{p.Id}.svg")),
+            Source = Helpers.ProviderIcon.Source(p.Id),
         };
         return new Border
         {

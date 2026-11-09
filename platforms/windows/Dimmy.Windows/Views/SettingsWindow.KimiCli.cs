@@ -40,7 +40,7 @@ public sealed partial class SettingsWindow
                     : binaryPath;
                 KimiIntegrationStatusText.Text =
                     $"Connected — using `{shownPath}`. Available for LLM rewrite and meeting recap.";
-                KimiIntegrationStatusGlyph.Glyph = ""; // CheckMark
+                KimiIntegrationStatusGlyph.Glyph = "\uE73E"; // CheckMark
                 KimiIntegrationStatusGlyph.Foreground = (Microsoft.UI.Xaml.Media.Brush)
                     Application.Current.Resources["SystemFillColorSuccessBrush"];
                 KimiIntegrationDisconnectedActions.Visibility = Visibility.Collapsed;
@@ -51,7 +51,7 @@ public sealed partial class SettingsWindow
             case Interop.DimmyNative.ClaudeCodeStatus.NotLoggedIn:
                 KimiIntegrationStatusText.Text =
                     "Kimi Code CLI installed but not signed in. Click Sign in to use your Kimi account.";
-                KimiIntegrationStatusGlyph.Glyph = ""; // Info
+                KimiIntegrationStatusGlyph.Glyph = "\uEA39"; // Info
                 KimiIntegrationStatusGlyph.Foreground = (Microsoft.UI.Xaml.Media.Brush)
                     Application.Current.Resources["TextFillColorTertiaryBrush"];
                 KimiIntegrationDisconnectedActions.Visibility = Visibility.Visible;
@@ -67,7 +67,7 @@ public sealed partial class SettingsWindow
             default:
                 KimiIntegrationStatusText.Text =
                     "Kimi Code CLI not detected. Click Set up wizard: it installs everything for you.";
-                KimiIntegrationStatusGlyph.Glyph = ""; // Info
+                KimiIntegrationStatusGlyph.Glyph = "\uEA39"; // Info
                 KimiIntegrationStatusGlyph.Foreground = (Microsoft.UI.Xaml.Media.Brush)
                     Application.Current.Resources["TextFillColorTertiaryBrush"];
                 KimiIntegrationDisconnectedActions.Visibility = Visibility.Visible;
@@ -96,49 +96,85 @@ public sealed partial class SettingsWindow
             KimiIntegrationMessageBar.Visibility = Visibility.Collapsed;
         }
 
-        RefreshKimiMcpStatus();
-    }
+        RefreshKimiDesktopCard();
+    }    // ── Kimi Code Desktop (MCP) card ──────────────────────────────────
 
-    /// Guards the Toggled handler while the switch mirrors the saved state.
-    private bool _kimiMcpSuppressToggle;
-
-    private void RefreshKimiMcpStatus()
+    private void RefreshKimiDesktopCard()
     {
-        var (found, registered) = Interop.DimmyNative.GetKimiMcpStatus();
-        KimiMcpCard.Visibility = found ? Visibility.Visible : Visibility.Collapsed;
-        _kimiMcpSuppressToggle = true;
-        KimiMcpToggle.IsOn = registered;
-        _kimiMcpSuppressToggle = false;
-    }
-
-    private void KimiMcpToggle_Toggled(object sender, RoutedEventArgs e)
-    {
-        if (_kimiMcpSuppressToggle) return;
-        string? error = null;
-        if (KimiMcpToggle.IsOn)
+        var s = Interop.DimmyNative.GetKimiMcpStatus();
+        var installed = !string.IsNullOrEmpty(s.DesktopPath);
+        string text;
+        bool good = false;
+        if (s.Registered && s.HeartbeatAgeSecs is long age && age <= 120)
         {
-            var binary = ClaudeDesktopConnectDialog.ResolveMcpBinaryPath();
-            var rc = binary == null ? -2 : Interop.DimmyNative.InstallKimiMcp(binary);
-            error = rc switch
-            {
-                0 => null,
-                -2 => "dimmy-mcp.exe was not found next to Dimmy.exe.",
-                -3 => "~/.kimi-code/mcp.json is not valid JSON. Dimmy left it untouched; fix it and try again.",
-                _ => "Could not write ~/.kimi-code/mcp.json. See dimmy.log.",
-            };
+            text = "Connected. Kimi Code is using Dimmy right now.";
+            good = true;
+        }
+        else if (s.Registered)
+        {
+            text = installed
+                ? "Connected. Start a new Kimi Code session to use Dimmy's tools."
+                : "Registered for Kimi Code CLI. Kimi Code Desktop is not installed.";
+            good = true;
         }
         else
         {
-            var rc = Interop.DimmyNative.UninstallKimiMcp();
-            if (rc < 0) error = "Could not update ~/.kimi-code/mcp.json. See dimmy.log.";
+            text = installed
+                ? "Kimi Code Desktop installed. Click Connect to let it read your meetings."
+                : "Let Kimi Code Desktop read your meetings and dictations. Click Connect to set it up.";
         }
-        App.Log($"kimi mcp -> {KimiMcpToggle.IsOn} error={error != null}", "Kimi");
-        RefreshKimiMcpStatus();
-        KimiMcpStatusText.Text = error
-            ?? (KimiMcpToggle.IsOn
-                ? "Connected. Open a new Kimi Code session to use Dimmy's tools."
-                : "Adds Dimmy to ~/.kimi-code/mcp.json, for Kimi Code CLI and Kimi Code Desktop. Other entries stay as they are.");
+        KimiDesktopStatusText.Text = text;
+        KimiDesktopStatusGlyph.Glyph = good ? "" : "";
+        KimiDesktopStatusGlyph.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[
+            good ? "SystemFillColorSuccessBrush" : "TextFillColorTertiaryBrush"];
+        KimiDesktopWizardLabel.Text = s.Registered ? "Re-run setup" : "Connect";
+        KimiDesktopWizardBtn.Style = (Style)Application.Current.Resources[
+            s.Registered ? "DefaultButtonStyle" : "AccentButtonStyle"];
+        KimiDesktopDisconnectBtn.Visibility = s.Registered ? Visibility.Visible : Visibility.Collapsed;
     }
+
+    private async void KimiDesktopWizard_Click(object sender, RoutedEventArgs e)
+    {
+        var s = Interop.DimmyNative.GetKimiMcpStatus();
+        var step = s.Registered ? 3 : !string.IsNullOrEmpty(s.DesktopPath) ? 2 : 1;
+        try
+        {
+            var dialog = new KimiDesktopConnectDialog
+            {
+                XamlRoot = this.Content.XamlRoot,
+                RequestedTheme = Helpers.ThemeHelper.ResolvedElementTheme(),
+                InitialStep = step,
+            };
+            await dialog.ShowAsync();
+        }
+        catch (Exception ex)
+        {
+            App.Log($"Kimi Desktop wizard exc: {ex}", "Kimi");
+        }
+        RefreshKimiDesktopCard();
+    }
+
+    private async void KimiDesktopDisconnect_Click(object sender, RoutedEventArgs e)
+    {
+        var confirm = new Microsoft.UI.Xaml.Controls.ContentDialog
+        {
+            RequestedTheme = Helpers.ThemeHelper.ResolvedElementTheme(),
+            Title = "Disconnect Kimi Code Desktop?",
+            Content = "Dimmy removes its entry from ~/.kimi-code/mcp.json. Your other servers stay in place. New Kimi Code sessions will no longer see Dimmy.",
+            PrimaryButtonText = "Disconnect",
+            CloseButtonText = "Cancel",
+            DefaultButton = Microsoft.UI.Xaml.Controls.ContentDialogButton.Close,
+            XamlRoot = this.Content.XamlRoot,
+        };
+        if (await confirm.ShowAsync() != Microsoft.UI.Xaml.Controls.ContentDialogResult.Primary) return;
+        var rc = Interop.DimmyNative.UninstallKimiMcp();
+        App.Log($"Kimi Desktop disconnect rc={rc}", "Kimi");
+        RefreshKimiDesktopCard();
+    }
+
+    private void KimiDesktopRefresh_Click(object sender, RoutedEventArgs e) => RefreshKimiDesktopCard();
+
+
 
     private async void KimiIntegrationWizard_Click(object sender, RoutedEventArgs e)
         => await ShowKimiWizardAsync(forceStep1: false);
