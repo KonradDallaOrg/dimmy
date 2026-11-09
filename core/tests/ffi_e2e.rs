@@ -30,7 +30,7 @@ use serial_test::serial;
 
 use dimmy_lib::ffi::{
     dimmy_get_config_json, dimmy_init, dimmy_inject_pcm_for_test, dimmy_process_with_llm,
-    dimmy_set_config_json, dimmy_stop_recording,
+    dimmy_set_config_json, dimmy_stop_recording, dimmy_transcribe_file,
 };
 
 // ── Fixture URLs ──────────────────────────────────────────────────────
@@ -760,6 +760,56 @@ fn local_stt_long_clip_over_30s_produces_full_transcript() {
         "expected 'ask not' at least twice in 3x-concatenated JFK, got {} hit(s) in: {:?}",
         hits,
         transcript
+    );
+}
+
+// ── Test: a Telegram voice note (Opus in Ogg) through the file path ──
+
+/// A Telegram voice note is Opus in an `.ogg`, and the core had no Opus
+/// decoder: `dimmy_transcribe_file` refused every one ("unsupported
+/// codec"), so Telegram dictation never worked. The fixture is jfk.wav
+/// encoded with libopusenc.
+#[test]
+#[serial]
+fn a_telegram_voice_note_in_opus_is_transcribed() {
+    ensure_init();
+    ensure_tiny_model();
+    set_config(
+        &serde_json::json!({
+            "stt_mode": "local",
+            "local_model": MODEL_FILENAME,
+            "language": "en",
+            "preprocessing_enabled": false,
+            "filler_removal_enabled": false,
+            "llm_enabled": false,
+        })
+        .to_string(),
+    );
+
+    let note = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/jfk_opus_voice_note.ogg"
+    );
+    let path = CString::new(note).unwrap();
+    let mut buf: Vec<u8> = vec![0; 16_384];
+    let n = unsafe {
+        dimmy_transcribe_file(
+            path.as_ptr(),
+            buf.as_mut_ptr() as *mut c_char,
+            buf.len() as c_int,
+        )
+    };
+    assert!(
+        n > 0,
+        "dimmy_transcribe_file refused the voice note: rc {n}"
+    );
+    let transcript = unsafe { CStr::from_ptr(buf.as_ptr() as *const c_char) }
+        .to_string_lossy()
+        .into_owned();
+    eprintln!("[test] Opus voice note transcript: {transcript:?}");
+    assert!(
+        transcript.to_lowercase().contains("ask not"),
+        "expected 'ask not' in the voice note, got: {transcript:?}"
     );
 }
 
