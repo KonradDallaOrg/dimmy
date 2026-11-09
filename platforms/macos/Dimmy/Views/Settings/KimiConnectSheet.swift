@@ -163,7 +163,7 @@ struct KimiConnectSheet: View {
                 Button("Install Kimi Code") { installNow() }
                     .buttonStyle(.borderedProminent)
             }
-            if let url = URL(string: "https://www.kimi.com/code") {
+            if let url = URL(string: "https://www.kimi.ai/code") {
                 Link("See Kimi's official install page", destination: url)
                     .font(.system(size: 12))
             }
@@ -299,7 +299,7 @@ struct KimiConnectSheet: View {
         case .timeout: return "✗ Timed out after 60 s, network or usage-limit issue."
         case .protocolError: return "✗ Unexpected answer from `kimi`. See dimmy.log."
         case .reported, .refused:
-            return "✗ Kimi refused the request. The usual cause is the plan's usage limit; see dimmy.log."
+            return "✗ Kimi refused the request: your plan may not include Kimi Code, or it reached its usage limit. See dimmy.log."
         case .emptyResponse: return "✗ Kimi answered with nothing. Try again."
         case .unknownError: return "✗ Unknown error. See dimmy.log."
         }

@@ -250,7 +250,7 @@ public static class ProviderCatalog
             "Create a key in the Together dashboard.",
             Cat("together")),
 
-        new ProviderInfo("kimi", "Kimi Code", "Ki", "#027AFF", "https://www.kimi.com/code/console",
+        new ProviderInfo("kimi", "Kimi Code", "Ki", "#027AFF", "https://www.kimi.ai/code/console",
             false, true,
             "Kimi Code membership (Plus and up): create an API key in the Kimi Code console. Or sign in with the Kimi Code CLI under Integrations.",
             Cat("kimi")),

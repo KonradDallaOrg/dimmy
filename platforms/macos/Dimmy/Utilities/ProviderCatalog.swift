@@ -276,7 +276,7 @@ enum ProviderCatalog {
         ProviderInfo(
             id: "kimi", name: "Kimi Code", mark: "Ki",
             accentHex: "#027AFF",
-            consoleUrl: "https://www.kimi.com/code/console",
+            consoleUrl: "https://www.kimi.ai/code/console",
             stt: false, llm: true,
             getKeyHint: "Kimi Code membership (Plus and up): create an API key in the Kimi Code console. Or sign in with the Kimi Code CLI under Integrations.",
             models: cat("kimi")

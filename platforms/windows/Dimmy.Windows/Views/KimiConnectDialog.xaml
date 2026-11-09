@@ -103,7 +103,7 @@
         </Border>
 
         <HyperlinkButton Content="See Kimi's official install page"
-                         NavigateUri="https://www.kimi.com/code"
+                         NavigateUri="https://www.kimi.ai/code"
                          FontSize="{StaticResource DimmyFontCaption}" Padding="0"/>
       </StackPanel>
 

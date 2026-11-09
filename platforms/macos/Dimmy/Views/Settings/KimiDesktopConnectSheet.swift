@@ -90,7 +90,7 @@ struct KimiDesktopConnectSheet: View {
                 .font(.system(size: 13)).foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             row(desktopOk, false, desktopOk ? "Kimi Code Desktop installed." : "Kimi Code Desktop is not installed.")
-            if !desktopOk, let url = URL(string: "https://www.kimi.com/code") {
+            if !desktopOk, let url = URL(string: "https://www.kimi.ai/code") {
                 Button("Download Kimi Code Desktop") { NSWorkspace.shared.open(url) }
                     .buttonStyle(.borderedProminent)
                 Text("Install it, then come back: this page sees it by itself.")

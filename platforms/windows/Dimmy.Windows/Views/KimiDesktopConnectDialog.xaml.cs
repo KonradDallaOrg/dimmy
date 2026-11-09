@@ -116,7 +116,7 @@ public sealed partial class KimiDesktopConnectDialog : ContentDialog
         catch (Exception ex)
         {
             App.Log($"KimiDesktop: install spawn failed {ex.Message}", "Kimi");
-            DetectStatus.Text = "Couldn't open a terminal. Download it from kimi.com/code.";
+            DetectStatus.Text = "Couldn't open a terminal. Download it from kimi.ai/code.";
         }
     }
 

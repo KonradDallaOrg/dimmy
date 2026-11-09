@@ -59,8 +59,8 @@
         <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}">
           <Button x:Name="InstallBtn" Content="Install Kimi Code Desktop" Click="Install_Click"
                   Style="{ThemeResource AccentButtonStyle}"/>
-          <HyperlinkButton Content="Or download it from kimi.com/code"
-                           NavigateUri="https://www.kimi.com/code" VerticalAlignment="Center"/>
+          <HyperlinkButton Content="Or download it from kimi.ai/code"
+                           NavigateUri="https://www.kimi.ai/code" VerticalAlignment="Center"/>
         </StackPanel>
       </StackPanel>
 

@@ -800,6 +800,13 @@ fn models_of(config_options: &Value) -> Vec<(String, String)> {
 
 /// `kimi login` (device-code OAuth) in a visible terminal: the user needs
 /// to see the code. Returns once spawned; the host re-checks `status()`.
+/// Always the global service (kimi.ai, `api.kimi.ai`). Without the flag the
+/// CLI uses the region its installer wrote, and the `code.kimi.com`
+/// installer writes `mainland-cn`: a kimi.ai account then signs in but every
+/// call is refused with "your subscription does not have access to Kimi
+/// Code" (seen 2026-11-09).
+const LOGIN_ARGS: [&str; 3] = ["login", "--region", "global"];
+
 pub fn spawn_login() -> Result<(), KimiError> {
     let binary = detect_binary().ok_or(KimiError::NotInstalled)?;
 
@@ -808,7 +815,7 @@ pub fn spawn_login() -> Result<(), KimiError> {
         let mut cmd = Command::new("cmd");
         cmd.args(["/c", "start", ""]);
         cmd.arg(&binary);
-        cmd.arg("login");
+        cmd.args(LOGIN_ARGS);
         cmd.stdin(std::process::Stdio::null());
         cmd.stdout(std::process::Stdio::null());
         cmd.stderr(std::process::Stdio::null());
@@ -816,14 +823,14 @@ pub fn spawn_login() -> Result<(), KimiError> {
     }
     #[cfg(target_os = "macos")]
     {
-        let command = format!("'{}' login", binary.display());
+        let command = format!("'{}' {}", binary.display(), LOGIN_ARGS.join(" "));
         crate::run_in_new_terminal_window(&command, "kimi-login")
             .map_err(|e| KimiError::Spawn(e.to_string()))?;
     }
     #[cfg(target_os = "linux")]
     {
         let mut cmd = Command::new(&binary);
-        cmd.arg("login");
+        cmd.args(LOGIN_ARGS);
         cmd.stdin(std::process::Stdio::null());
         cmd.stdout(std::process::Stdio::null());
         cmd.stderr(std::process::Stdio::null());
@@ -1183,6 +1190,18 @@ mod tests {
         let text = prompt["params"]["prompt"][0]["text"].as_str().unwrap();
         assert!(!text.trim_start().starts_with('/'));
         assert!(text.contains("/clear everything"));
+    }
+
+    /// The sign-in is always for the global service: the CN region makes a
+    /// kimi.ai account's every call fail with "no access to Kimi Code".
+    #[test]
+    fn login_always_targets_the_global_region() {
+        assert_eq!(LOGIN_ARGS, ["login", "--region", "global"]);
+        assert!(
+            install_command().contains("code.kimi.ai"),
+            "{}",
+            install_command()
+        );
     }
 
     #[test]

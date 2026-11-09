@@ -150,7 +150,7 @@ public sealed partial class KimiConnectDialog : ContentDialog
         if (cmd.Length > 0 && RunInTerminal(cmd))
             KimiText.Text = "Installing Kimi Code in the terminal...";
         else
-            KimiText.Text = "Couldn't open a terminal. See kimi.com/code for the installer.";
+            KimiText.Text = "Couldn't open a terminal. See kimi.ai/code for the installer.";
     }
 
     /// <summary>A visible PowerShell that runs <paramref name="cmd"/> and stays
@@ -210,7 +210,7 @@ public sealed partial class KimiConnectDialog : ContentDialog
         }
         _signInStarted = true;
         _signInTicks = 0;
-        SignInText.Text = "Your browser opens kimi.com with a code. Confirm it there; Dimmy sees the sign-in by itself.";
+        SignInText.Text = "Your browser opens kimi.ai with a code. Confirm it there; Dimmy sees the sign-in by itself.";
         SignInRing.IsActive = true;
         SignInRing.Visibility = Visibility.Visible;
         // Stays enabled: if the browser tab was closed or the code expired,
@@ -323,7 +323,7 @@ public sealed partial class KimiConnectDialog : ContentDialog
             DimmyNative.ClaudeCodePingResult.Timeout =>
                 "✗ Timed out after 60 s — network or usage-limit issue.",
             DimmyNative.ClaudeCodePingResult.Reported =>
-                "✗ Kimi refused the request. The usual cause is the plan's usage limit; see dimmy.log.",
+                "✗ Kimi refused the request: your plan may not include Kimi Code, or it reached its usage limit. See dimmy.log.",
             DimmyNative.ClaudeCodePingResult.EmptyResponse =>
                 "✗ Kimi answered with nothing. Try again.",
             DimmyNative.ClaudeCodePingResult.InvalidUtf8 =>
