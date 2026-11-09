@@ -1890,11 +1890,36 @@ enum TranscriptHealthText {
 
     /// `transcript.status` / `.reason` / `.engine` from a meeting's meta.json.
     static func readMeta(dir: String) -> (status: String?, reason: String?, engine: String?) {
+        let t = metaObject(dir: dir, "transcript")
+        return (t?["status"] as? String, t?["reason"] as? String, t?["engine"] as? String)
+    }
+
+    /// `recap.status` / `recap.reason` from meta.json: saved, pending,
+    /// failed, or nil for a meeting with no record of one.
+    static func readRecap(dir: String) -> (status: String?, reason: String?) {
+        let r = metaObject(dir: dir, "recap")
+        return (r?["status"] as? String, r?["reason"] as? String)
+    }
+
+    /// The Notion page the recap went to, or nil when it was never sent.
+    static func notionPageUrl(dir: String) -> String? {
+        metaObject(dir: dir, "notion")?["page_url"] as? String
+    }
+
+    /// What the Done view says in place of a recap that failed. Win parity.
+    static func recapFailed(reason: String?) -> String {
+        guard let reason, !reason.trimmingCharacters(in: .whitespaces).isEmpty else {
+            return "The recap failed. Use Regenerate recap to try again."
+        }
+        return "The recap failed: \(reason). Use Regenerate recap to try again."
+    }
+
+    private static func metaObject(dir: String, _ name: String) -> [String: Any]? {
         let url = URL(fileURLWithPath: dir).appendingPathComponent("meta.json")
         guard let data = try? Data(contentsOf: url),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let t = root["transcript"] as? [String: Any] else { return (nil, nil, nil) }
-        return (t["status"] as? String, t["reason"] as? String, t["engine"] as? String)
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        return root[name] as? [String: Any]
     }
 
     /// The summary shown when a meeting stops with no transcript. A failed

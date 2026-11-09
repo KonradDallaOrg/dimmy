@@ -1,11 +1,11 @@
 using System;
 using System.IO;
-using System.Linq;
 
 namespace Dimmy.Windows.Helpers;
 
 /// <summary>
-/// Where a meeting's audio lives on disk, and what a loaded file is saved as.
+/// Where a meeting's audio lives on disk (a loaded file is saved by the core,
+/// `meeting::import_from_file`, with the same extension list).
 ///
 /// <para>A loaded or Telegram file keeps its OWN container rather than being
 /// decoded to WAV: an hour of m4a is a tenth of the WAV, and the decode pass
@@ -22,16 +22,6 @@ public static class MeetingAudio
     /// a folder somehow holds two.
     public static readonly string[] Extensions =
         { "ogg", "wav", "m4a", "mp3", "aac", "flac", "mp4" };
-
-    /// <summary>The name a loaded file is saved under inside the meeting
-    /// folder: `audio.` plus its own extension. Anything we cannot name
-    /// falls back to `audio.wav`, which is what the caller used to write
-    /// unconditionally.</summary>
-    public static string FileNameForSource(string? sourcePath)
-    {
-        var ext = Path.GetExtension(sourcePath ?? "").TrimStart('.').ToLowerInvariant();
-        return Extensions.Contains(ext) ? $"audio.{ext}" : "audio.wav";
-    }
 
     /// <summary>Resolve `baseName` (audio / audio_mic / audio_system) to the
     /// file on disk, or null. `exists` is injected so the rule is testable

@@ -51,6 +51,9 @@ public static class MeetingPostProcessService
         // overlap a stop.
         var vm = (Microsoft.UI.Xaml.Application.Current as App)?.AppViewModel;
         if (vm != null) vm.RecapsRunning++;
+        // meta.json says a recap is running, then saved or failed: the Done
+        // view could not tell "failed" from "never ran".
+        DimmyNative.MeetingRecapPending(dir);
         try
         {
             // Listener's notes (notes.md) are the user's own emphasis — fold
@@ -96,6 +99,7 @@ public static class MeetingPostProcessService
                 // recap simply never appeared and nothing said why.
                 Services.DictNotificationService.ShowRecapFailed(
                     TelemetryBuckets.Provider(ReadLlmApiUrl()), msg, category);
+                DimmyNative.MeetingRecapFailed(dir, msg);
                 return new RecapResult { Success = false, Dir = dir, Error = msg };
             }
 
@@ -142,7 +146,12 @@ public static class MeetingPostProcessService
             // view's "Notion" button. Reads notion_auto_send fresh from
             // the Rust core's config snapshot so we don't have to thread
             // a mutable VM reference through this service.
-            if (Services.NotionService.HasToken() && ReadNotionAutoSend())
+            // Not when this meeting already has a page: a regenerated recap
+            // used to make a second one.
+            bool alreadySent = Helpers.TranscriptHealthText.NotionPageUrl(dir) != null;
+            if (alreadySent && ReadNotionAutoSend())
+                App.Log("recap auto-send skipped: this meeting already has a Notion page", "Notion");
+            if (!alreadySent && Services.NotionService.HasToken() && ReadNotionAutoSend())
             {
                 try
                 {
@@ -174,6 +183,7 @@ public static class MeetingPostProcessService
         {
             App.Log($"recap (shared) exc: {ex}", "MeetingRecap");
             Helpers.CrashReporter.Report(ex, "meeting_recap");
+            DimmyNative.MeetingRecapFailed(dir, ex.Message);
             return new RecapResult { Success = false, Dir = dir, Error = ex.Message };
         }
         finally

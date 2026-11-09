@@ -51,4 +51,25 @@ public class TranscriptHealthTextTests
             Assert.True(seen.Add(TranscriptHealthText.Cause("whisper", c)), c);
         Assert.DoesNotContain("—", TranscriptHealthText.UnavailableBody("nemotron", "not_enough_memory"));
     }
+
+    [Fact]
+    public void ReadsTheRecapAndNotionRecordsTheCoreWrites()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "dimmy-th-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            Assert.Equal((null, null), TranscriptHealthText.ReadRecap(dir));
+            Assert.Null(TranscriptHealthText.NotionPageUrl(dir));
+            File.WriteAllText(Path.Combine(dir, "meta.json"),
+                "{\"recap\":{\"status\":\"failed\",\"reason\":\"HTTP 429\",\"at\":1.0}," +
+                "\"notion\":{\"page_id\":\"a\",\"page_url\":\"https://www.notion.so/a\"}}");
+            Assert.Equal(("failed", "HTTP 429"), TranscriptHealthText.ReadRecap(dir));
+            Assert.Equal("https://www.notion.so/a", TranscriptHealthText.NotionPageUrl(dir));
+            Assert.Contains("HTTP 429", TranscriptHealthText.RecapFailed("HTTP 429"));
+            Assert.DoesNotContain(":  ", TranscriptHealthText.RecapFailed(null));
+            Assert.DoesNotContain("—", TranscriptHealthText.RecapFailed("x"));
+        }
+        finally { Directory.Delete(dir, true); }
+    }
 }

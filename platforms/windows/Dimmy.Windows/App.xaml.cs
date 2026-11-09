@@ -2984,16 +2984,13 @@ public partial class App : Application
         }
     }
 
-    private static bool IsOnboardingComplete()
-    {
-        var marker = Path.Combine(Services.BuildInfo.ConfigDirPath, ".onboarding_done");
-        return File.Exists(marker);
-    }
+    /// The core's `.onboarding_done` marker, shared with the Mac and
+    /// `Dimmy --setup onboarding done`.
+    private static bool IsOnboardingComplete() => DimmyNative.dimmy_onboarding_done() == 1;
 
     public static void MarkOnboardingComplete()
     {
-        var dimmyDir = Services.BuildInfo.ConfigDirPath;
-        Directory.CreateDirectory(dimmyDir);
-        File.WriteAllText(Path.Combine(dimmyDir, ".onboarding_done"), "1");
+        if (DimmyNative.dimmy_onboarding_set_done(1) != 0)
+            Log("onboarding marker not written", "Onboarding");
     }
 }

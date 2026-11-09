@@ -1383,12 +1383,18 @@ final class MeetingViewModel: ObservableObject {
         let recapURL = url.appendingPathComponent("recap.md")
         let transcriptURL = url.appendingPathComponent("transcripts.txt")
         doneRawTranscript = (try? String(contentsOf: transcriptURL, encoding: .utf8)) ?? ""
+        let recap = TranscriptHealthText.readRecap(dir: dir)
+        recapFailed = false
         if let recapMd = try? String(contentsOf: recapURL, encoding: .utf8), !recapMd.isEmpty {
             doneSections = MeetingPostProcessService.parseMarkdownIntoSections(recapMd)
         } else if doneRawTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             // No speech, or the transcriber failed: say which, whichever
             // surface stopped the meeting (only the window's own stop did).
             doneSections = ["TLDR": TranscriptHealthText.emptyMeetingSummary(dir: dir)]
+        } else if recap.status == "failed" {
+            // Recorded in meta.json whichever surface ran the recap.
+            doneSections = ["TLDR": TranscriptHealthText.recapFailed(reason: recap.reason)]
+            recapFailed = true
         } else {
             doneSections = [:]
         }
@@ -1727,12 +1733,15 @@ enum MeetingConsentFlow {
             body: "Notice copied: paste it in the meeting chat.")
     }
 
-    private static let autoRecordConfirmedKey = "consent.autoRecordConfirmed"
+    /// Where builds before 2026-11-09 kept the answer. Read, never written:
+    /// the consent audit log is the record now.
+    private static let legacyAutoRecordConfirmedKey = "consent.autoRecordConfirmed"
 
     /// One-time confirmation the first time "Start recording automatically"
     /// is turned on. Returns true when it may be enabled.
     static func confirmAutoRecord(lang: String) -> Bool {
-        if UserDefaults.standard.bool(forKey: autoRecordConfirmedKey) { return true }
+        if DimmyCore.shared.consentHas(kind: "auto_start_confirmed")
+            || UserDefaults.standard.bool(forKey: legacyAutoRecordConfirmedKey) { return true }
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Record calls automatically?"
@@ -1749,7 +1758,6 @@ enum MeetingConsentFlow {
             alert.window.defaultButtonCell = alert.buttons[1].cell as? NSButtonCell
         }
         guard alert.runModal() == .alertFirstButtonReturn else { return false }
-        UserDefaults.standard.set(true, forKey: autoRecordConfirmedKey)
         DimmyCore.shared.consentLogEvent(kind: "auto_start_confirmed", lang: lang)
         return true
     }

@@ -304,6 +304,48 @@ extension DimmyCore {
         return dir.withCString { d in title.withCString { t in dimmy_meeting_set_title(d, t) } } == 0
     }
 
+    /// A meeting from an already-transcribed audio file, made by the core
+    /// (folder, transcript, audio copy, meta.json). The folder, or nil.
+    func meetingImport(source: String, transcript: String, durationSecs: Double) -> String? {
+        let bufLen: Int32 = 4096
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
+        defer { buffer.deallocate() }
+        buffer[0] = 0
+        let rc = transcript.withCString { t in
+            source.isEmpty
+                ? dimmy_meeting_import(nil, t, durationSecs, buffer, bufLen)
+                : source.withCString { s in dimmy_meeting_import(s, t, durationSecs, buffer, bufLen) }
+        }
+        guard rc > 0 else { return nil }
+        return String(cString: buffer)
+    }
+
+    /// Record in meta.json that a meeting's recap is running.
+    func meetingRecapPending(dir: String) {
+        guard !dir.isEmpty else { return }
+        _ = dir.withCString { d in dimmy_meeting_set_recap_status(d, 0, nil) }
+    }
+
+    /// Record in meta.json that a meeting's recap failed, and why.
+    func meetingRecapFailed(dir: String, reason: String) {
+        guard !dir.isEmpty else { return }
+        _ = dir.withCString { d in reason.withCString { r in dimmy_meeting_set_recap_status(d, 1, r) } }
+    }
+
+    /// Whether the consent audit log holds an event of this kind.
+    func consentHas(kind: String) -> Bool {
+        kind.withCString { dimmy_consent_has($0) } == 1
+    }
+
+    /// The core's onboarding marker. Plain file I/O: no init needed.
+    var onboardingDone: Bool { dimmy_onboarding_done() == 1 }
+
+    func setOnboardingDone(_ done: Bool) {
+        if dimmy_onboarding_set_done(done ? 1 : 0) != 0 {
+            dimmyHostLog("[Onboarding] marker not written")
+        }
+    }
+
     // MARK: - Model catalog
 
     /// The embedded model catalog JSON (single source of truth for cloud

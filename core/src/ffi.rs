@@ -5092,6 +5092,137 @@ pub unsafe extern "C" fn dimmy_meeting_recover_interrupted(
     write_to_buf(&json, out_buf, buf_len)
 }
 
+/// Make a meeting from an audio file that was already transcribed (a loaded
+/// file, a Telegram voice note): the folder, `transcripts.txt`, the audio
+/// copy and `meta.json`, in the shape a live meeting has. `source_ptr` may be
+/// null or empty (no audio to copy). `duration_secs` is the host's probe of
+/// the file. Writes the new meeting folder's path to `out_buf` and returns its
+/// byte length; -1 bad argument, -2 the folder could not be written.
+///
+/// # Safety
+/// `source_ptr` must be null or a valid NUL-terminated UTF-8 string;
+/// `transcript_ptr` a valid one; `out_buf` writable for `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_meeting_import(
+    source_ptr: *const c_char,
+    transcript_ptr: *const c_char,
+    duration_secs: f64,
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if transcript_ptr.is_null() || out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let Ok(transcript) = CStr::from_ptr(transcript_ptr).to_str() else {
+        return -1;
+    };
+    if transcript.trim().is_empty() || !duration_secs.is_finite() || duration_secs < 0.0 {
+        return -1;
+    }
+    let source = if source_ptr.is_null() {
+        ""
+    } else {
+        CStr::from_ptr(source_ptr).to_str().unwrap_or("")
+    };
+    let source = (!source.is_empty()).then(|| std::path::Path::new(source));
+    let Some(root) = crate::meetings_dir() else {
+        return -2;
+    };
+    if let Err(e) = std::fs::create_dir_all(&root) {
+        log(&format!("[Meeting] import: meetings dir: {e}"));
+        return -2;
+    }
+    match crate::meeting::import_from_file(&root, source, transcript, duration_secs) {
+        Ok(dir) => write_to_buf(&dir.to_string_lossy(), out_buf, buf_len),
+        Err(e) => {
+            log(&format!("[Meeting] import failed: {e}"));
+            -2
+        }
+    }
+}
+
+/// Record that a meeting's recap is running (`status` 0) or failed
+/// (`status` 1, `reason_ptr` says why, cut to 200 chars). `saved` is written
+/// with the recap by `dimmy_meeting_save_post_process`. Returns 0, or -1 on a
+/// bad argument.
+///
+/// # Safety
+/// `dir_ptr` must be a valid NUL-terminated UTF-8 string; `reason_ptr` null
+/// or one.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_meeting_set_recap_status(
+    dir_ptr: *const c_char,
+    status: c_int,
+    reason_ptr: *const c_char,
+) -> c_int {
+    if dir_ptr.is_null() {
+        return -1;
+    }
+    let Ok(dir) = CStr::from_ptr(dir_ptr).to_str() else {
+        return -1;
+    };
+    let dir = std::path::Path::new(dir);
+    if dir.as_os_str().is_empty() || !dir.is_dir() {
+        return -1;
+    }
+    let outcome = match status {
+        0 => crate::meeting::RecapOutcome::Pending,
+        1 => crate::meeting::RecapOutcome::Failed,
+        _ => return -1,
+    };
+    let reason = if reason_ptr.is_null() {
+        ""
+    } else {
+        CStr::from_ptr(reason_ptr).to_str().unwrap_or("")
+    };
+    crate::meeting::record_recap(dir, outcome, reason);
+    0
+}
+
+/// Whether the consent audit log (`consent.jsonl`) holds an event of this
+/// kind: 1 yes, 0 no, -1 bad argument. The hosts kept their own copy of
+/// "auto-record was confirmed" (a marker file on Windows, UserDefaults on
+/// macOS) next to the audit line that already said so.
+///
+/// # Safety
+/// `kind_ptr` must be a valid NUL-terminated UTF-8 string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_consent_has(kind_ptr: *const c_char) -> c_int {
+    if kind_ptr.is_null() {
+        return -1;
+    }
+    match CStr::from_ptr(kind_ptr).to_str() {
+        Ok(kind) if !kind.is_empty() => crate::consent::has_event(kind) as c_int,
+        _ => -1,
+    }
+}
+
+/// 1 when onboarding was completed on this install, 0 when not. Only the
+/// marker counts (an existing config.json does not: the core writes one
+/// before onboarding ends).
+#[no_mangle]
+pub extern "C" fn dimmy_onboarding_done() -> c_int {
+    crate::onboarding_marker_exists() as c_int
+}
+
+/// Mark onboarding done (`done` 1) or not done (0, "run onboarding again").
+/// Returns 0, or -1 when the marker could not be written or removed.
+#[no_mangle]
+pub extern "C" fn dimmy_onboarding_set_done(done: c_int) -> c_int {
+    let r = match done {
+        1 => crate::mark_onboarding_done(),
+        0 => crate::clear_onboarding_done(),
+        _ => return -1,
+    };
+    match r {
+        Ok(()) => 0,
+        Err(e) => {
+            log(&format!("[Onboarding] marker: {e}"));
+            -1
+        }
+    }
+}
+
 /// Set a meeting's title in its meta.json, through the core's one atomic
 /// writer. Hosts used to rewrite meta.json themselves. Returns 0, or -1 on
 /// a bad argument.
@@ -6745,6 +6876,7 @@ pub unsafe extern "C" fn dimmy_notion_send_recap(
                 dir.display(),
                 page.url
             ));
+            crate::meeting::record_notion_page(&dir, &page.id, &page.url);
             serde_json::json!({
                 "ok": true,
                 "page_id": page.id,
@@ -10569,7 +10701,7 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
         log("[Retranscribe] produced empty transcript");
         return -5;
     }
-    if let Err(e) = std::fs::write(dir_path.join("transcripts.txt"), out.as_bytes()) {
+    if let Err(e) = crate::write_atomic(&dir_path.join("transcripts.txt"), out.as_bytes()) {
         log(&format!(
             "[Retranscribe] write transcripts.txt failed: {}",
             e
@@ -10582,9 +10714,11 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
         );
         return -3;
     }
+    let engine = if is_local { backend.as_str() } else { "cloud" };
+    crate::meeting::record_retranscribed(dir_path, lines.len(), engine);
     log(&format!(
         "[Retranscribe] {} dir='{}' -> {} lines, {} bytes",
-        if is_local { &backend } else { "cloud" },
+        engine,
         dir,
         lines.len(),
         out.len()
@@ -12779,7 +12913,7 @@ pub unsafe extern "C" fn dimmy_telegram_pending(out_buf: *mut c_char, buf_len: c
 /// `audio.m4a` has to be found here as well as in the host; Symphonia decodes
 /// all of them.
 fn resolve_meeting_track(dir: &std::path::Path, base: &str) -> Option<String> {
-    ["ogg", "wav", "m4a", "mp3", "aac", "flac", "mp4"]
+    crate::meeting::TRACK_EXTENSIONS
         .iter()
         .map(|ext| dir.join(format!("{base}.{ext}")))
         .find(|p| p.exists())

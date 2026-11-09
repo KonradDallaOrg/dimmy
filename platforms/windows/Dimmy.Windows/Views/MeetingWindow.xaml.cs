@@ -2400,6 +2400,7 @@ public sealed partial class MeetingWindow : Window
         // one the user happened to trigger.
         var vm = (Microsoft.UI.Xaml.Application.Current as App)?.AppViewModel;
         if (vm != null) vm.RecapsRunning++;
+        DimmyNative.MeetingRecapPending(dir);
         try
         {
             var modelOverride = PickRecapModel();
@@ -2438,6 +2439,7 @@ public sealed partial class MeetingWindow : Window
                 var actionable = rc == -5 || rc == -6 || rc == -7;
                 TrackRecapCompleted(modelOverride, recapTimer.ElapsedMilliseconds, false,
                     Helpers.MeetingRecapHelpers.RecapRcToCategory(rc));
+                DimmyNative.MeetingRecapFailed(dir, msg);
                 ShowDoneFallback(transcript, msg, actionable);
                 return;
             }
@@ -2459,6 +2461,7 @@ public sealed partial class MeetingWindow : Window
         catch (Exception ex)
         {
             App.Log($"post-process exc: {ex}", "Meeting");
+            DimmyNative.MeetingRecapFailed(dir, ex.Message);
             ShowDoneFallback(transcript, $"Post-process failed: {ex.Message}");
         }
         finally
@@ -3259,6 +3262,13 @@ public sealed partial class MeetingWindow : Window
                     Helpers.MarkdownRenderer.Render(TldrText, text);
                     TldrCard.Visibility = Visibility.Visible;
                 }
+            }
+            else if (Helpers.TranscriptHealthText.ReadRecap(row.Dir) is ("failed", var recapReason))
+            {
+                // A failed recap is recorded in meta.json whichever surface ran
+                // it; only the window's own stop used to say so, and only then.
+                Helpers.MarkdownRenderer.Render(TldrText, Helpers.TranscriptHealthText.RecapFailed(recapReason));
+                TldrCard.Visibility = Visibility.Visible;
             }
             var txt = Path.Combine(row.Dir, "transcripts.txt");
             LoadDoneSpeakers(row.Dir);

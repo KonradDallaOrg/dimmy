@@ -69,20 +69,46 @@ public static class TranscriptHealthText
     /// meeting folder's meta.json. Missing or unreadable: (null, null, null).
     public static (string? Status, string? Reason, string? Engine) ReadMeta(string dir)
     {
+        var t = ReadStrings(dir, "transcript", "status", "reason", "engine");
+        return (t[0], t[1], t[2]);
+    }
+
+    /// `recap.status` / `recap.reason` from meta.json: saved, pending,
+    /// failed, or (null, null) for a meeting with no record of one.
+    public static (string? Status, string? Reason) ReadRecap(string dir)
+    {
+        var r = ReadStrings(dir, "recap", "status", "reason");
+        return (r[0], r[1]);
+    }
+
+    /// The Notion page the recap went to, or null when it was never sent.
+    public static string? NotionPageUrl(string dir) => ReadStrings(dir, "notion", "page_url")[0];
+
+    /// What the Done view says in place of a recap that failed.
+    public static string RecapFailed(string? reason) =>
+        string.IsNullOrWhiteSpace(reason)
+            ? "The recap failed. Use Regenerate recap to try again."
+            : $"The recap failed: {reason}. Use Regenerate recap to try again.";
+
+    private static string?[] ReadStrings(string dir, string objectName, params string[] names)
+    {
+        var none = new string?[names.Length];
         try
         {
             var path = Path.Combine(dir, "meta.json");
-            if (!File.Exists(path)) return (null, null, null);
+            if (!File.Exists(path)) return none;
             using var doc = JsonDocument.Parse(File.ReadAllText(path));
-            if (!doc.RootElement.TryGetProperty("transcript", out var t) || t.ValueKind != JsonValueKind.Object)
-                return (null, null, null);
-            string? Str(string name) => t.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
-                ? v.GetString() : null;
-            return (Str("status"), Str("reason"), Str("engine"));
+            if (!doc.RootElement.TryGetProperty(objectName, out var o) || o.ValueKind != JsonValueKind.Object)
+                return none;
+            var values = new string?[names.Length];
+            for (int i = 0; i < names.Length; i++)
+                values[i] = o.TryGetProperty(names[i], out var v) && v.ValueKind == JsonValueKind.String
+                    ? v.GetString() : null;
+            return values;
         }
-        catch (IOException) { return (null, null, null); }
-        catch (JsonException) { return (null, null, null); }
-        catch (System.UnauthorizedAccessException) { return (null, null, null); }
+        catch (IOException) { return none; }
+        catch (JsonException) { return none; }
+        catch (System.UnauthorizedAccessException) { return none; }
     }
 
     public static string EmptyTranscriptFor(string dir)

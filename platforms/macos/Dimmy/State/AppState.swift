@@ -1123,9 +1123,17 @@ final class AppState: ObservableObject {
 
     // MARK: - Onboarding & UI
 
+    /// Stored in the core's `.onboarding_done` marker, the one Windows and
+    /// `Dimmy --setup onboarding done` use. The UserDefaults key keeps a
+    /// different fact: the wizard itself ran on this Mac (see
+    /// `configuredByAssistant`).
     @Published var isOnboardingComplete: Bool {
-        didSet { UserDefaults.standard.set(isOnboardingComplete, forKey: "isOnboardingComplete") }
+        didSet {
+            DimmyCore.shared.setOnboardingDone(isOnboardingComplete)
+            UserDefaults.standard.set(isOnboardingComplete, forKey: Self.wizardRanKey)
+        }
     }
+    private static let wizardRanKey = "isOnboardingComplete"
     /// Whether Dimmy shows a Dock icon outside of onboarding.
     /// Onboarding always forces the app into `.regular` activation policy so the user
     /// can find it again after clicking away to System Settings. This preference
@@ -1811,35 +1819,28 @@ final class AppState: ObservableObject {
         return languageMap.contains(where: { $0.code == code }) ? code : ""
     }
 
-    /// `Dimmy --setup onboarding done` (an AI assistant set Dimmy up from
-    /// the terminal) writes the same `.onboarding_done` marker Windows reads.
-    /// The Mac app never writes it itself (its own flag lives in
-    /// UserDefaults), so on a Mac the marker means "configured by an
-    /// assistant". It is kept, so `onboarding status` stays true after the
-    /// app starts; the "Reset onboarding" actions remove it.
-    private static var setupOnboardingMarker: URL? {
-        DimmyCore.shared.configDirURL?.appendingPathComponent(".onboarding_done")
-    }
-
+    /// Onboarding is done but the wizard never ran here: an AI assistant set
+    /// Dimmy up from the terminal (`Dimmy --setup onboarding done`), so only
+    /// the permission grants are missing.
     static var configuredByAssistant: Bool {
-        guard let marker = setupOnboardingMarker else { return false }
-        return FileManager.default.fileExists(atPath: marker.path)
+        dimmy_onboarding_done() == 1 && !UserDefaults.standard.bool(forKey: wizardRanKey)
     }
 
-    /// Run the full onboarding again: clears both the app's flag and the
-    /// assistant's marker, or the marker would mark it complete next launch.
+    /// Run the full onboarding again (clears the marker and the wizard flag).
     func resetOnboarding() {
-        if let marker = AppState.setupOnboardingMarker {
-            try? FileManager.default.removeItem(at: marker)
-        }
         isOnboardingComplete = false
     }
 
     // MARK: - Init
 
     private init() {
-        self.isOnboardingComplete = UserDefaults.standard.bool(forKey: "isOnboardingComplete")
-            || AppState.configuredByAssistant
+        // Builds before 2026-11-09 kept the flag only in UserDefaults: such a
+        // Mac gets its marker now, once.
+        let wizardRan = UserDefaults.standard.bool(forKey: Self.wizardRanKey)
+        if wizardRan && dimmy_onboarding_done() != 1 {
+            _ = dimmy_onboarding_set_done(1)
+        }
+        self.isOnboardingComplete = wizardRan || dimmy_onboarding_done() == 1
         self.showInDock = UserDefaults.standard.bool(forKey: "showInDock")
         // Default true: a fresh user sees the menu-bar icon, so they can
         // always find the app even if Dock is hidden.

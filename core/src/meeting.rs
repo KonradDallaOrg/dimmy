@@ -3298,6 +3298,144 @@ fn finalize_meeting_meta(
     });
 }
 
+/// The containers a meeting track may be stored in, in the order a lookup
+/// tries them. A loaded file keeps its own container (an hour of m4a is a
+/// tenth of the WAV it would decode to); anything else is copied as `.wav`,
+/// which is what the hosts did.
+pub const TRACK_EXTENSIONS: [&str; 7] = ["ogg", "wav", "m4a", "mp3", "aac", "flac", "mp4"];
+
+fn imported_audio_name(source: &std::path::Path) -> String {
+    let ext = source
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    if TRACK_EXTENSIONS.contains(&ext.as_str()) {
+        format!("audio.{ext}")
+    } else {
+        "audio.wav".to_string()
+    }
+}
+
+/// A meeting made from an audio file (a loaded file, a Telegram voice
+/// note): its folder, transcript and `meta.json` in the same shape a live
+/// meeting has. The hosts used to write all three themselves, with their own
+/// folder names and `started_at` as a local-time string where every other
+/// meeting has Unix seconds. `duration_secs` comes from the host, which
+/// probes the file without decoding it. The audio copy is best-effort, as it
+/// was: the transcript is what the recap needs.
+pub fn import_from_file(
+    meetings_root: &std::path::Path,
+    source: Option<&std::path::Path>,
+    transcript: &str,
+    duration_secs: f64,
+) -> Result<std::path::PathBuf, String> {
+    let transcript = transcript.trim();
+    assert!(!transcript.is_empty(), "an import needs a transcript");
+    assert!(
+        duration_secs.is_finite() && duration_secs >= 0.0,
+        "duration {duration_secs}"
+    );
+    let id = uuid_v4_simple();
+    let dir = meetings_root.join(&id);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {e}"))?;
+    let line = format!("[{}] [file] {}\n", format_elapsed(0), transcript);
+    crate::write_atomic(&dir.join("transcripts.txt"), line.as_bytes())
+        .map_err(|e| format!("transcripts.txt: {e}"))?;
+    if let Some(src) = source.filter(|s| s.is_file()) {
+        if let Err(e) = std::fs::copy(src, dir.join(imported_audio_name(src))) {
+            crate::log(&format!("[Meeting] import: audio copy failed: {e}"));
+        }
+    }
+    let stem = source
+        .and_then(|s| s.file_stem())
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("Imported audio");
+    let now = unix_now_secs();
+    update_meta(&dir, |obj| {
+        obj.insert("id".into(), serde_json::Value::String(id.clone()));
+        obj.insert("origin".into(), "file-load".into());
+        obj.insert(
+            "title".into(),
+            serde_json::Value::String(format!("File: {stem}")),
+        );
+        obj.insert("started_at".into(), serde_json::json!(now));
+        obj.insert("ended_at".into(), serde_json::json!(now));
+        obj.insert("duration_secs".into(), serde_json::json!(duration_secs));
+        obj.insert("chunk_count".into(), serde_json::json!(1));
+        obj.insert("stage".into(), "stopped".into());
+        obj.insert(
+            "transcript".into(),
+            serde_json::json!({ "status": "ok", "engine": "file-load" }),
+        );
+    });
+    assert!(dir.join("meta.json").is_file(), "import wrote no meta.json");
+    Ok(dir)
+}
+
+/// What became of a meeting's recap, besides `saved` (written by
+/// [`save_post_process`] with the recap itself).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecapOutcome {
+    /// The LLM call is running. A crash leaves it here, which is the truth.
+    Pending,
+    /// The call ended without a recap; `reason` says why.
+    Failed,
+}
+
+/// Record a recap that is running or that failed. Only the transcript and
+/// the audio were ever written for those, so the Done view could not tell
+/// "no recap yet" from "the recap failed" from "recap turned off".
+pub fn record_recap(meeting_dir: &std::path::Path, outcome: RecapOutcome, reason: &str) {
+    // Error bodies never carry more than 200 chars (keys, PII).
+    let reason: String = reason.trim().chars().take(200).collect();
+    update_meta(meeting_dir, |obj| {
+        let value = match outcome {
+            RecapOutcome::Pending => {
+                serde_json::json!({ "status": "pending", "at": unix_now_secs() })
+            }
+            RecapOutcome::Failed => serde_json::json!({
+                "status": "failed",
+                "at": unix_now_secs(),
+                "reason": reason,
+            }),
+        };
+        obj.insert("recap".into(), value);
+    });
+}
+
+/// Record the Notion page a recap went to. A second send used to make a
+/// second page with nothing to say the first existed: the hosts read this
+/// to skip the automatic send and to name the page on a manual one.
+pub fn record_notion_page(meeting_dir: &std::path::Path, page_id: &str, page_url: &str) {
+    assert!(!page_id.is_empty(), "a sent page has an id");
+    update_meta(meeting_dir, |obj| {
+        obj.insert(
+            "notion".into(),
+            serde_json::json!({ "page_id": page_id, "page_url": page_url, "at": unix_now_secs() }),
+        );
+    });
+}
+
+/// After "Regenerate transcript": the counts and the status describe the
+/// new transcript, not the one recorded live (a meeting whose live
+/// transcriber failed kept saying "failed" over a good regenerated text).
+pub fn record_retranscribed(meeting_dir: &std::path::Path, lines: usize, engine: &str) {
+    assert!(lines > 0, "an empty regenerate writes nothing");
+    update_meta(meeting_dir, |obj| {
+        obj.insert("chunk_count".into(), serde_json::json!(lines));
+        obj.insert(
+            "transcript".into(),
+            serde_json::json!({
+                "status": "ok",
+                "engine": engine,
+                "regenerated_at": unix_now_secs(),
+            }),
+        );
+    });
+}
+
 /// Lazy backfill: if `meta.json` has no `title` but `recap.md` exists
 /// and contains a parseable first-line H1, write it. Called by the
 /// UI on meeting open so old meetings recorded before this schema
@@ -4817,6 +4955,115 @@ mod transcript_time_order {
         assert_eq!(
             in_time_order("[00:00:02] [mic] b\n[00:00:01] [mic] a"),
             "[00:00:01] [mic] a\n[00:00:02] [mic] b\n"
+        );
+    }
+}
+
+#[cfg(test)]
+mod meta_records {
+    use super::*;
+
+    struct TempDir(std::path::PathBuf);
+    impl TempDir {
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    fn tempdir() -> TempDir {
+        let d = std::env::temp_dir().join(format!("dimmy-meta-rec-{}", uuid_v4_simple()));
+        std::fs::create_dir_all(&d).unwrap();
+        TempDir(d)
+    }
+
+    fn meta(dir: &std::path::Path) -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(dir.join("meta.json")).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn an_import_has_the_shape_of_a_live_meeting() {
+        let root = tempdir();
+        let src = root.path().join("Voice memo.M4A");
+        std::fs::write(&src, b"not really audio").unwrap();
+        let dir = import_from_file(root.path(), Some(&src), "  ciao a tutti  ", 12.5).unwrap();
+        let m = meta(&dir);
+        assert_eq!(m["schema"], META_SCHEMA);
+        assert_eq!(m["stage"], "stopped");
+        assert_eq!(m["origin"], "file-load");
+        assert_eq!(m["title"], "File: Voice memo");
+        assert!(
+            m["started_at"].is_f64(),
+            "Unix seconds, like a live meeting: {m}"
+        );
+        assert_eq!(m["duration_secs"], 12.5);
+        assert_eq!(m["transcript"]["status"], "ok");
+        assert_eq!(m["id"], dir.file_name().unwrap().to_str().unwrap());
+        assert_eq!(
+            std::fs::read_to_string(dir.join("transcripts.txt")).unwrap(),
+            "[00:00:00] [file] ciao a tutti\n"
+        );
+        assert!(dir.join("audio.m4a").is_file(), "keeps its own container");
+    }
+
+    #[test]
+    fn an_import_without_a_file_still_has_a_title_and_an_unknown_container_is_wav() {
+        let root = tempdir();
+        let dir = import_from_file(root.path(), None, "x", 0.0).unwrap();
+        assert_eq!(meta(&dir)["title"], "File: Imported audio");
+        let src = root.path().join("note.opus");
+        std::fs::write(&src, b"x").unwrap();
+        let dir = import_from_file(root.path(), Some(&src), "x", 1.0).unwrap();
+        assert!(dir.join("audio.wav").is_file());
+    }
+
+    #[test]
+    fn a_failed_recap_says_why_and_keeps_the_rest() {
+        let dir = tempdir();
+        update_meta(dir.path(), |o| {
+            o.insert("started_at".into(), serde_json::json!(1.0));
+        });
+        record_recap(dir.path(), RecapOutcome::Pending, "");
+        assert_eq!(meta(dir.path())["recap"]["status"], "pending");
+        let long = "x".repeat(500);
+        record_recap(dir.path(), RecapOutcome::Failed, &long);
+        let m = meta(dir.path());
+        assert_eq!(m["recap"]["status"], "failed");
+        assert_eq!(m["recap"]["reason"].as_str().unwrap().len(), 200);
+        assert_eq!(m["started_at"], 1.0);
+    }
+
+    #[test]
+    fn a_saved_recap_replaces_a_failed_one() {
+        let dir = tempdir();
+        record_recap(dir.path(), RecapOutcome::Failed, "HTTP 401");
+        save_post_process(dir.path(), "# Title\n\nBody", "", None, None).unwrap();
+        assert_eq!(meta(dir.path())["recap"]["status"], "saved");
+    }
+
+    #[test]
+    fn the_notion_page_and_a_regenerated_transcript_are_recorded() {
+        let dir = tempdir();
+        update_meta(dir.path(), |o| {
+            o.insert("chunk_count".into(), serde_json::json!(0));
+            o.insert(
+                "transcript".into(),
+                serde_json::json!({ "status": "failed", "reason": "network" }),
+            );
+        });
+        record_notion_page(dir.path(), "abc", "https://www.notion.so/abc");
+        record_retranscribed(dir.path(), 42, "parakeet");
+        let m = meta(dir.path());
+        assert_eq!(m["notion"]["page_id"], "abc");
+        assert_eq!(m["chunk_count"], 42);
+        assert_eq!(m["transcript"]["status"], "ok");
+        assert_eq!(m["transcript"]["engine"], "parakeet");
+        assert!(
+            m["transcript"]["reason"].is_null(),
+            "the old failure is gone: {m}"
         );
     }
 }
