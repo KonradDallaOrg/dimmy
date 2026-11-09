@@ -1041,12 +1041,17 @@ fn with_or_without_speakers<T>(speakers: bool, open: impl Fn(bool) -> Option<T>)
 }
 
 impl NemoTracks {
-    fn open(ctx: &SttThreadCtx) -> Self {
+    /// `Err` when neither track opened: no window will ever produce text.
+    fn open(ctx: &SttThreadCtx) -> Result<Self, crate::transcriber_health::Reason> {
         let keywords = crate::ffi::dictionary_keywords();
+        let last_error = std::cell::RefCell::new(None::<String>);
         let open = |rate: u32, speakers: bool| {
             with_or_without_speakers(speakers, |speakers| {
                 crate::nemotron::MeetingTrack::open(rate, &ctx.language, &keywords, speakers)
-                    .map_err(|e| crate::log(&format!("[Meeting] nemotron track unavailable: {e}")))
+                    .map_err(|e| {
+                        crate::log(&format!("[Meeting] nemotron track unavailable: {e}"));
+                        *last_error.borrow_mut() = Some(e.to_string());
+                    })
                     .ok()
             })
         };
@@ -1079,13 +1084,11 @@ impl NemoTracks {
             system.as_ref().is_some_and(|s| s.has_speakers()),
             mic.as_ref().is_some_and(|t| t.has_speakers())
         ));
-        // No track means no live text at all: say so while the meeting can
-        // still change engine, instead of an empty transcript at stop.
+        // No track means no live text at all. The caller tells the host
+        // the real reason (2026-11-09: this used to say "behind").
         if mic.is_none() && system.is_none() {
-            crate::ffi::emit_event(
-                "meeting_transcription_behind",
-                &serde_json::json!({ "engine": "nemotron", "elapsed_secs": 0 }).to_string(),
-            );
+            let message = last_error.borrow().clone().unwrap_or_default();
+            return Err(crate::transcriber_health::Reason::classify(&message));
         }
         let gpu = [&mic, &system].into_iter().flatten().any(|t| t.on_gpu());
         // Before the meeting has anything to lose: the limit reads low even
@@ -1101,7 +1104,7 @@ impl NemoTracks {
         if limit_low {
             emit_gpu_limited();
         }
-        Self {
+        Ok(Self {
             mic,
             system,
             mic_labels,
@@ -1111,20 +1114,23 @@ impl NemoTracks {
                 slowed_readings: 0,
                 told: limit_low,
             }),
-        }
+        })
     }
 
-    /// Feed one window of both tracks; returns the words written.
+    /// Feed one window of both tracks; returns the words written and, when
+    /// no track took the window, why.
     fn feed(
         &mut self,
         sink: &mut LineSink<'_>,
         mic: &[f32],
         system: &[f32],
         track_start: usize,
-    ) -> usize {
+    ) -> (usize, Option<crate::transcriber_health::Reason>) {
         let started = Instant::now();
         let mic_label = sink.mic_label;
         let mut words = 0;
+        let mut fed_any = false;
+        let mut failure = None;
         let mut fresh_secs = 0.0f64;
         for (track, label, window) in [
             (self.mic.as_mut(), mic_label, mic),
@@ -1133,6 +1139,7 @@ impl NemoTracks {
             let Some(t) = track else { continue };
             match t.feed(window, track_start) {
                 Ok(fed) => {
+                    fed_any = true;
                     fresh_secs = fresh_secs.max(fed.fresh_secs);
                     let labels = self.mic_labels.as_mut().filter(|_| label != "system");
                     words += sink.write(label, &fed.lines, labels);
@@ -1140,7 +1147,10 @@ impl NemoTracks {
                         sink.partial(label, &text);
                     }
                 }
-                Err(e) => crate::log(&format!("[Meeting] nemotron {label}: {e}")),
+                Err(e) => {
+                    crate::log(&format!("[Meeting] nemotron {label}: {e}"));
+                    failure = Some(crate::transcriber_health::Reason::classify(&e.to_string()));
+                }
             }
         }
         if fresh_secs > 0.0 {
@@ -1185,7 +1195,7 @@ impl NemoTracks {
                 break;
             }
         }
-        words
+        (words, failure.filter(|_| !fed_any))
     }
 
     /// Flush both tracks. Returns true when the live labels covered the
@@ -1378,6 +1388,8 @@ struct SttOutcome {
     /// read back.
     fallback: String,
     speakers_labeled: bool,
+    /// The `transcript` object of `meta.json` (TranscriberHealth::to_meta).
+    transcript: serde_json::Value,
 }
 
 /// Transcription thread: receives windows, runs STT, appends to
@@ -1407,9 +1419,22 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
     let mut mic_accum = String::new();
     let mut system_accum = String::new();
 
-    let mut nemo = (ctx.stt.mode == "local" && ctx.stt.local_backend == "nemotron")
-        .then(|| NemoTracks::open(&ctx));
-    let mut live = if ctx.stt.speaker_labels && ctx.stt.mode == "local" && nemo.is_none() {
+    let engine = engine_label(&ctx.stt);
+    let mut health = crate::transcriber_health::TranscriberHealth::new();
+    let nemotron = ctx.stt.mode == "local" && ctx.stt.local_backend == "nemotron";
+    // The user's choice of engine stands: when Nemotron cannot start, the
+    // meeting is told why and nothing else runs in its place (2026-11-09).
+    let mut nemo = None;
+    if nemotron {
+        match NemoTracks::open(&ctx) {
+            Ok(n) => nemo = Some(n),
+            Err(reason) => {
+                let notice = health.refused(reason);
+                announce_health(&ctx, engine, notice, 0);
+            }
+        }
+    }
+    let mut live = if ctx.stt.speaker_labels && ctx.stt.mode == "local" && !nemotron {
         match crate::diarize::LiveSpeakers::start() {
             Ok(l) => Some(l),
             Err(e) => {
@@ -1433,11 +1458,13 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
     // Returns the text and, when live speaker labels are on and the engine
     // has them, the word timestamps (seconds from the window start). The
     // silence gate keeps or drops a window WHOLE, so the times stay aligned.
-    let transcribe = |slice: Vec<f32>,
-                      source_sr: u32|
-     -> (String, Option<Vec<crate::diarize::Word>>) {
+    use crate::transcriber_health::Reason;
+    type Transcribed = (String, Option<Vec<crate::diarize::Word>>, Option<Reason>);
+    let failed =
+        |message: &str| -> Transcribed { (String::new(), None, Some(Reason::classify(message))) };
+    let transcribe = |slice: Vec<f32>, source_sr: u32| -> Transcribed {
         if slice.is_empty() {
-            return (String::new(), None);
+            return (String::new(), None, None);
         }
         // Silence trim before the model sees the window. An idle
         // chunk collapses to empty here and never reaches whisper,
@@ -1448,7 +1475,7 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
             slice
         };
         if slice.is_empty() {
-            return (String::new(), None);
+            return (String::new(), None, None);
         }
         let pcm_16k = if source_sr == 16_000 {
             slice
@@ -1456,7 +1483,7 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
             crate::preprocess::downsample_to_16k(&slice, source_sr)
         };
         if pcm_16k.is_empty() {
-            return (String::new(), None);
+            return (String::new(), None, None);
         }
         if ctx.stt.mode == "cloud" {
             let wav = pcm16k_to_wav_bytes(&pcm_16k);
@@ -1488,17 +1515,17 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
                         .await
                     });
                     match result {
-                        Ok(t) => (t, None),
+                        Ok(t) => (t, None, None),
                         Err(e) => {
                             crate::log(&format!("[Meeting] cloud STT error: {}", e));
                             report_chunk_error("cloud", &e.to_string());
-                            (String::new(), None)
+                            failed(&e.to_string())
                         }
                     }
                 }
                 _ => {
                     crate::log("[Meeting] cloud STT unavailable: missing key or runtime");
-                    (String::new(), None)
+                    failed("missing key or runtime")
                 }
             }
         } else if ctx.stt.local_backend == "parakeet" {
@@ -1510,20 +1537,20 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
             // Same decode either way: `transcribe` is this call's text.
             if want_words {
                 match crate::parakeet::transcribe_with_word_timestamps(&pcm_16k) {
-                    Ok((t, ts)) => (t, Some(crate::diarize::parakeet_words(&ts, 0.0))),
+                    Ok((t, ts)) => (t, Some(crate::diarize::parakeet_words(&ts, 0.0)), None),
                     Err(e) => {
                         crate::log(&format!("[Meeting] parakeet error: {}", e));
                         report_chunk_error("parakeet", &e.to_string());
-                        (String::new(), None)
+                        failed(&e.to_string())
                     }
                 }
             } else {
                 match crate::parakeet::transcribe(&pcm_16k) {
-                    Ok(t) => (t, None),
+                    Ok(t) => (t, None, None),
                     Err(e) => {
                         crate::log(&format!("[Meeting] parakeet error: {}", e));
                         report_chunk_error("parakeet", &e.to_string());
-                        (String::new(), None)
+                        failed(&e.to_string())
                     }
                 }
             }
@@ -1532,11 +1559,12 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
                 Ok((t, words)) => (
                     t,
                     want_words.then(|| crate::transcribe::whistle_words(words, 0.0)),
+                    None,
                 ),
                 Err(e) => {
                     crate::log(&format!("[Meeting] whistle error: {}", e));
                     report_chunk_error("whistle", &e.to_string());
-                    (String::new(), None)
+                    failed(&e.to_string())
                 }
             }
         } else {
@@ -1550,11 +1578,11 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
                         &ctx.language,
                         &ctx.stt.prompt,
                     ) {
-                        Ok((t, words)) => (t, Some(words)),
+                        Ok((t, words)) => (t, Some(words), None),
                         Err(e) => {
                             crate::log(&format!("[Meeting] whisper error: {}", e));
                             report_chunk_error("whisper", &e.to_string());
-                            (String::new(), None)
+                            failed(&e.to_string())
                         }
                     }
                 }
@@ -1565,17 +1593,17 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
                         &ctx.language,
                         &ctx.stt.prompt,
                     ) {
-                        Ok(t) => (t, None),
+                        Ok(t) => (t, None, None),
                         Err(e) => {
                             crate::log(&format!("[Meeting] whisper error: {}", e));
                             report_chunk_error("whisper", &e.to_string());
-                            (String::new(), None)
+                            failed(&e.to_string())
                         }
                     }
                 }
                 None => {
                     crate::log("[Meeting] local STT skipped: no usable .bin model");
-                    (String::new(), None)
+                    failed("no usable model")
                 }
             }
         }
@@ -1604,14 +1632,26 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
             } => (mic, system, elapsed_ms, track_start, stats_secs),
         };
 
-        if let Some(n) = nemo.as_mut() {
+        if nemotron {
+            let Some(n) = nemo.as_mut() else {
+                // Refused at open and already told: the audio is on disk,
+                // "Regenerate transcript" redoes it once memory is free.
+                continue;
+            };
             let mut sink = LineSink {
                 file: &mut ctx.transcripts_file,
                 chunk_count: &ctx.chunk_count,
                 dir: &ctx.dir_str,
                 mic_label: ctx.mic_label,
             };
-            let words = n.feed(&mut sink, &mic_slice, &system_slice, track_start);
+            let (words, failure) = n.feed(&mut sink, &mic_slice, &system_slice, track_start);
+            let window = match failure {
+                _ if words > 0 => crate::transcriber_health::Window::Text,
+                Some(r) => crate::transcriber_health::Window::Failed(r),
+                None => crate::transcriber_health::Window::Silent,
+            };
+            let notice = health.observe(window);
+            announce_health(&ctx, engine, notice, elapsed_ms as u64 / 1000);
             if words > 0 || stats_secs > 0.0 {
                 let _ = crate::ffi::dimmy_update_stats(words as std::os::raw::c_int, stats_secs);
             }
@@ -1619,16 +1659,25 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
         }
 
         let mic_audio = live.as_ref().map(|_| mic_slice.clone());
-        let (mic_text, mic_words) = transcribe(mic_slice, ctx.device_sample_rate);
+        let (mic_text, mic_words, mic_failure) = transcribe(mic_slice, ctx.device_sample_rate);
         let system_audio = live
             .as_ref()
             .filter(|_| ctx.mix_active)
             .map(|_| system_slice.clone());
-        let (system_text, system_words) = if ctx.mix_active {
+        let (system_text, system_words, system_failure) = if ctx.mix_active {
             transcribe(system_slice, ctx.system_sample_rate)
         } else {
-            (String::new(), None)
+            (String::new(), None, None)
         };
+        let window = if !mic_text.trim().is_empty() || !system_text.trim().is_empty() {
+            crate::transcriber_health::Window::Text
+        } else if let Some(r) = mic_failure.or(system_failure) {
+            crate::transcriber_health::Window::Failed(r)
+        } else {
+            crate::transcriber_health::Window::Silent
+        };
+        let notice = health.observe(window);
+        announce_health(&ctx, engine, notice, elapsed_ms as u64 / 1000);
 
         // Append helper: dedup vs the per-speaker accumulator,
         // append the delta to the speaker's accumulator, emit a
@@ -1762,10 +1811,71 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
             system_accum
         ));
     }
+    if ctx.chunk_count.load(Ordering::Relaxed) > 0 {
+        health.finished_with_text();
+    }
+    crate::log(&format!(
+        "[Meeting] transcript {}: {} window(s) with text, {} silent, {} failed",
+        health.status().code(),
+        health.windows_text,
+        health.windows_silent,
+        health.windows_failed
+    ));
     SttOutcome {
         fallback,
         speakers_labeled,
+        transcript: health.to_meta(engine),
     }
+}
+
+/// Tell the host when the transcriber stops or starts producing text again.
+/// Transcription thread only (THE AUDIO RULE).
+fn announce_health(
+    ctx: &SttThreadCtx,
+    engine: &'static str,
+    notice: Option<crate::transcriber_health::Notice>,
+    elapsed_secs: u64,
+) {
+    use crate::transcriber_health::Notice;
+    match notice {
+        None => {}
+        Some(Notice::Unavailable(reason)) => {
+            crate::log(&format!(
+                "[Meeting] transcription unavailable ({engine}): {} at {elapsed_secs}s; the audio keeps recording",
+                reason.code()
+            ));
+            crate::telemetry::track(crate::telemetry::Event::MeetingTranscriptionUnavailable {
+                engine,
+                reason: reason.code(),
+            });
+            crate::ffi::emit_event(
+                "meeting_transcription_unavailable",
+                &transcription_unavailable_payload(&ctx.dir_str, engine, reason, elapsed_secs),
+            );
+        }
+        Some(Notice::Recovered) => {
+            crate::log(&format!("[Meeting] transcription recovered ({engine})"));
+            crate::ffi::emit_event(
+                "meeting_transcription_recovered",
+                &serde_json::json!({ "dir": ctx.dir_str, "engine": engine }).to_string(),
+            );
+        }
+    }
+}
+
+fn transcription_unavailable_payload(
+    dir: &str,
+    engine: &str,
+    reason: crate::transcriber_health::Reason,
+    elapsed_secs: u64,
+) -> String {
+    serde_json::json!({
+        "dir": dir,
+        "engine": engine,
+        "reason": reason.code(),
+        "elapsed_secs": elapsed_secs,
+    })
+    .to_string()
 }
 
 /// Overwrite transcripts.txt while this thread still holds it open for
@@ -2632,12 +2742,14 @@ fn worker_loop(
             &serde_json::json!({ "dropped_windows": stt_dropped_chunks }).to_string(),
         );
     }
-    let (stt_fallback, speakers_labeled) = match stt_handle {
+    // `unknown`, never `silent`, when the transcriber cannot report.
+    let unknown = || serde_json::json!({ "status": "unknown" });
+    let (stt_fallback, speakers_labeled, transcript_meta) = match stt_handle {
         Some(h) => match join_bounded(h, Duration::from_secs(90)) {
-            BoundedJoin::Done(o) => (o.fallback, o.speakers_labeled),
+            BoundedJoin::Done(o) => (o.fallback, o.speakers_labeled, o.transcript),
             BoundedJoin::Panicked => {
                 crate::log("[Meeting] transcription thread panicked — audio is unaffected");
-                (String::new(), false)
+                (String::new(), false, unknown())
             }
             BoundedJoin::TimedOut => {
                 crate::telemetry::report(
@@ -2647,12 +2759,13 @@ fn worker_loop(
                     "",
                 );
                 crate::log(
-                    "[Meeting] transcription thread still busy at stop — abandoning it;                      the recording and everything transcribed so far are already on disk",
+                    "[Meeting] transcription thread still busy at stop — abandoning it; \
+                     the recording and everything transcribed so far are already on disk",
                 );
-                (String::new(), false)
+                (String::new(), false, unknown())
             }
         },
-        None => (String::new(), false),
+        None => (String::new(), false, unknown()),
     };
     if stt_dropped_chunks > 0 {
         crate::log(&format!(
@@ -2704,7 +2817,7 @@ fn worker_loop(
             }
         }
     }
-    finalize_meeting_meta(&dir, &id, duration_secs, chunk_count);
+    finalize_meeting_meta(&dir, &id, duration_secs, chunk_count, transcript_meta);
 
     // Build the final transcript: time-ordered labeled stream read
     // back from transcripts.txt (one line per chunk, format
@@ -3088,6 +3201,7 @@ fn finalize_meeting_meta(
     id: &str,
     duration_secs: f64,
     chunk_count: u32,
+    transcript: serde_json::Value,
 ) {
     let path = meeting_dir.join("meta.json");
     let mut obj: serde_json::Map<String, serde_json::Value> = std::fs::read_to_string(&path)
@@ -3097,6 +3211,7 @@ fn finalize_meeting_meta(
     obj.insert("id".into(), serde_json::Value::String(id.to_string()));
     obj.insert("duration_secs".into(), serde_json::json!(duration_secs));
     obj.insert("chunk_count".into(), serde_json::json!(chunk_count));
+    obj.insert("transcript".into(), transcript);
     obj.insert(
         "ended_at".into(),
         serde_json::json!(SystemTime::now()
@@ -3608,6 +3723,78 @@ mod a_slow_mic_never_throttles_the_recording {
         out
     }
 
+    /// 2026-11-09: a meeting whose transcriber never produced text left a
+    /// folder identical to a silent one, and the host blamed the VAD. A
+    /// failing engine must now say so, live and in meta.json.
+    #[test]
+    #[serial]
+    fn a_failing_transcriber_is_announced_and_recorded_as_failed_not_silent() {
+        crate::ffi::tests::ensure_test_state();
+        crate::ffi::tests::reset_event_capture();
+        let stt = SttSnapshot {
+            mode: "cloud".to_string(),
+            api_url: "https://test.invalid/".to_string(),
+            api_model: "x".to_string(),
+            api_key: Some("x".to_string()),
+            prompt: String::new(),
+            local_model: String::new(),
+            local_backend: "whisper".to_string(),
+            language: "en".to_string(),
+            chunk_secs: Some(5.0),
+            preprocessing_enabled: false,
+            speaker_labels: false,
+        };
+        let primary: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+        let secondary: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+        let session = MeetingSession::start(
+            primary.clone(),
+            secondary.clone(),
+            RATE as u32,
+            RATE as u32,
+            crate::audio::AudioSource::Mix,
+            stt,
+        )
+        .expect("meeting start");
+        // Two full windows of speech-loud tone, delivered in real time.
+        let block = RATE / 100;
+        let t0 = Instant::now();
+        let mut sent: u64 = 0;
+        let mut phase = 0usize;
+        while t0.elapsed().as_secs_f64() < 11.0 {
+            let due = Duration::from_millis(sent * 10);
+            let now = t0.elapsed();
+            if now < due {
+                thread::sleep(due - now);
+                continue;
+            }
+            let tone: Vec<f32> = (phase..phase + block)
+                .map(|i| (i as f32 * 0.0575).sin() * 0.3)
+                .collect();
+            phase += block;
+            primary.lock().unwrap().extend_from_slice(&tone);
+            secondary.lock().unwrap().extend_from_slice(&tone);
+            sent += 1;
+        }
+        let result = session.stop();
+        let events = crate::ffi::tests::drain_event_capture();
+
+        let meta: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(result.dir.join("meta.json")).unwrap())
+                .unwrap();
+        let _ = std::fs::remove_dir_all(&result.dir);
+        assert_eq!(meta["transcript"]["status"], "failed", "meta: {meta}");
+        assert_eq!(meta["transcript"]["reason"], "network", "meta: {meta}");
+        assert_eq!(meta["transcript"]["windows_text"], 0);
+        assert_eq!(meta["transcript"]["engine"], "cloud");
+        let unavailable: Vec<_> = events
+            .iter()
+            .filter(|e| e.contains("\"event\":\"meeting_transcription_unavailable\""))
+            .collect();
+        assert_eq!(unavailable.len(), 1, "told once: {events:?}");
+        assert!(unavailable[0].contains("\"reason\":\"network\""));
+        assert!(unavailable[0].contains("\"engine\":\"cloud\""));
+    }
+
     #[test]
     #[serial]
     fn a_muted_mic_at_a_quarter_of_real_time_still_records_the_whole_call() {
@@ -4056,7 +4243,7 @@ mod tests {
         )
         .unwrap();
 
-        finalize_meeting_meta(&tmp, "abc", 42.0, 7);
+        finalize_meeting_meta(&tmp, "abc", 42.0, 7, serde_json::json!({ "status": "ok" }));
 
         let v: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(tmp.join("meta.json")).unwrap()).unwrap();

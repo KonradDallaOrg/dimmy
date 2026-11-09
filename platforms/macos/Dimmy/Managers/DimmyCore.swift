@@ -1734,6 +1734,27 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
             body: "Your recording is safe and continues normally. \(hint) "
                 + "You can also regenerate the transcript from the audio after the meeting.")
 
+    case "meeting_transcription_unavailable":
+        // The meeting's transcriber produces no text: the engine could not
+        // start (Nemotron refused for memory, 2026-11-09) or windows fail in
+        // a row. Once per transition; the recording continues regardless.
+        // Payload: { dir, engine, reason, elapsed_secs }; reason codes from
+        // core/src/transcriber_health.rs.
+        let engine = (payload["engine"] as? String) ?? ""
+        let reason = (payload["reason"] as? String) ?? ""
+        NSLog("[DimmyCore] transcription unavailable (engine=\(engine), reason=\(reason)), recording unaffected")
+        DictToastWindow.show(
+            kind: .error,
+            title: TranscriptHealthText.unavailableTitle,
+            body: TranscriptHealthText.unavailableBody(engine: engine, reason: reason))
+
+    case "meeting_transcription_recovered":
+        NSLog("[DimmyCore] transcription recovered")
+        DictToastWindow.show(
+            kind: .alreadyPresent,
+            title: TranscriptHealthText.recoveredTitle,
+            body: TranscriptHealthText.recoveredBody)
+
     case "nemotron_cpu_fallback":
         NSLog("[DimmyCore] Nemotron fell back to the CPU engine")
         DictToastWindow.show(
@@ -1801,6 +1822,79 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
 
     default:
         print("[DimmyCore] unhandled event: \(event)")
+    }
+}
+
+/// What to tell the user when a meeting's transcriber produces no text.
+/// Mirror of Windows `Helpers/TranscriptHealthText.cs`: same reason codes
+/// (core/src/transcriber_health.rs), same sentences.
+enum TranscriptHealthText {
+    static func engineName(_ engine: String) -> String {
+        switch engine {
+        case "nemotron": return "Nemotron"
+        case "parakeet": return "Parakeet"
+        case "whisper": return "Whisper"
+        case "whistle": return "Whistle"
+        case "cloud": return "the cloud provider"
+        default: return "the transcription engine"
+        }
+    }
+
+    static func cause(engine: String, reason: String) -> String {
+        switch reason {
+        case "not_enough_memory": return "There is not enough free memory to load \(engineName(engine))."
+        case "model_missing": return "The \(engineName(engine)) model is not downloaded."
+        case "no_api_key": return "There is no API key for the transcription provider."
+        case "auth": return "The transcription provider refused the API key."
+        case "network": return "The transcription provider cannot be reached."
+        case "rate_limit": return "The transcription provider is limiting requests."
+        default:
+            let name = engineName(engine)
+            return name.prefix(1).uppercased() + name.dropFirst() + " returned errors."
+        }
+    }
+
+    static func hint(reason: String) -> String {
+        switch reason {
+        case "not_enough_memory": return "Close some programs, then use Regenerate transcript after the meeting."
+        case "model_missing": return "Download it in Settings, Transcription, then use Regenerate transcript."
+        case "no_api_key", "auth": return "Check the key in Settings, Providers, then use Regenerate transcript."
+        case "network": return "Check your connection. Regenerate transcript can redo it after the meeting."
+        default: return "Regenerate transcript can redo it after the meeting."
+        }
+    }
+
+    static let unavailableTitle = "Transcription stopped"
+    static func unavailableBody(engine: String, reason: String) -> String {
+        "\(cause(engine: engine, reason: reason)) Your recording is safe and continues. \(hint(reason: reason))"
+    }
+    static let recoveredTitle = "Transcription resumed"
+    static let recoveredBody =
+        "The transcript continues from here. Regenerate transcript after the meeting fills the gap."
+
+    /// `transcript.status` / `.reason` / `.engine` from a meeting's meta.json.
+    static func readMeta(dir: String) -> (status: String?, reason: String?, engine: String?) {
+        let url = URL(fileURLWithPath: dir).appendingPathComponent("meta.json")
+        guard let data = try? Data(contentsOf: url),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let t = root["transcript"] as? [String: Any] else { return (nil, nil, nil) }
+        return (t["status"] as? String, t["reason"] as? String, t["engine"] as? String)
+    }
+
+    /// The summary shown when a meeting stops with no transcript. A failed
+    /// engine is named; only a genuinely silent meeting talks about speech.
+    static func emptyMeetingSummary(dir: String) -> String {
+        let meta = readMeta(dir: dir)
+        switch meta.status {
+        case "failed":
+            return "No transcript. \(cause(engine: meta.engine ?? "", reason: meta.reason ?? "")) The audio is saved: use Regenerate transcript."
+        case "silent":
+            return "Nothing was recorded, no speech was detected. Try moving closer to the microphone, checking input device settings, or recording for longer."
+        case "empty":
+            return "No transcript: the recording is too short."
+        default:
+            return "No transcript was produced. Use Regenerate transcript to transcribe the audio."
+        }
     }
 }
 

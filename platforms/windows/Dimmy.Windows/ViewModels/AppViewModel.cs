@@ -395,6 +395,15 @@ public partial class AppViewModel : ObservableObject
     /// problem. Arg: the engine that fell behind (whisper|parakeet|cloud).</summary>
     public event Action<string>? MeetingTranscriptionBehind;
 
+    /// <summary>Raised when a meeting's transcriber stops producing text
+    /// (engine refused at start, or windows failing in a row). Args: engine,
+    /// reason code from core/src/transcriber_health.rs. Once per transition.</summary>
+    public event Action<string, string>? MeetingTranscriptionUnavailable;
+
+    /// <summary>Raised when the transcriber produces text again after
+    /// MeetingTranscriptionUnavailable. Arg: engine.</summary>
+    public event Action<string>? MeetingTranscriptionRecovered;
+
     /// <summary>Raised once per launch when Nemotron cannot load on the GPU.</summary>
     public event Action? NemotronCpuFallback;
 
@@ -814,6 +823,24 @@ public partial class AppViewModel : ObservableObject
                             ? (enEl.GetString() ?? "") : "";
                         Log?.Invoke($"transcription behind (engine={engine}) — audio recording unaffected", "Meeting");
                         MeetingTranscriptionBehind?.Invoke(engine);
+                    }
+                    break;
+                case "meeting_transcription_unavailable":
+                    {
+                        var engine = payload.TryGetProperty("engine", out var enEl)
+                            ? (enEl.GetString() ?? "") : "";
+                        var reason = payload.TryGetProperty("reason", out var rEl)
+                            ? (rEl.GetString() ?? "") : "";
+                        Log?.Invoke($"transcription unavailable (engine={engine}, reason={reason}); audio recording unaffected", "Meeting");
+                        MeetingTranscriptionUnavailable?.Invoke(engine, reason);
+                    }
+                    break;
+                case "meeting_transcription_recovered":
+                    {
+                        var engine = payload.TryGetProperty("engine", out var enEl)
+                            ? (enEl.GetString() ?? "") : "";
+                        Log?.Invoke($"transcription recovered (engine={engine})", "Meeting");
+                        MeetingTranscriptionRecovered?.Invoke(engine);
                     }
                     break;
                 case "nemotron_gpu_limited":

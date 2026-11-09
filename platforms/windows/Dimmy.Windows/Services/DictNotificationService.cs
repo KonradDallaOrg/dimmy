@@ -207,6 +207,15 @@ public static class DictNotificationService
              $"Your recording is safe and continues normally. {hint} You can also regenerate the transcript from the audio after the meeting.");
     }
 
+    /// <summary>The meeting's transcriber produces no text, with the reason
+    /// the core gave. The recording continues either way.</summary>
+    public static void ShowTranscriptionUnavailable(string engine, string reason) =>
+        Show(Helpers.TranscriptHealthText.UnavailableTitle,
+             Helpers.TranscriptHealthText.UnavailableBody(engine, reason));
+
+    public static void ShowTranscriptionRecovered() =>
+        Show(Helpers.TranscriptHealthText.RecoveredTitle, Helpers.TranscriptHealthText.RecoveredBody);
+
     /// <summary>A power limit set outside Dimmy holds the GPU back.</summary>
     public static void ShowGpuLimited()
     {

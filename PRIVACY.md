@@ -164,6 +164,7 @@ counts, durations or true/false. Free text is never sent.
 - `meeting.stop_timeout`: stopping a meeting took too long.
 - `meeting.capture_ratio`: recorded audio against real time (bucket).
 - `meeting.transcription_behind`: transcription could not keep up; engine, and how far into the meeting (bucket).
+- `meeting.transcription_unavailable`: a meeting's transcriber produced no text; engine, and a reason category (for example not enough memory, or no API key).
 - `audio.loopback_rate_mismatch`: system audio arrived at a different sample rate than announced (two rate labels).
 - `meeting.recap_completed`: a recap finished; provider, model family, length bucket, success, error category.
 - `meeting.imported_from_file`: a file was turned into a meeting.

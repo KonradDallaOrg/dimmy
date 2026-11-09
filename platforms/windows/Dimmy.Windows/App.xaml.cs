@@ -185,6 +185,24 @@ public partial class App : Application
         catch (Exception ex) { PttLog($"OnMeetingTranscriptionBehind exc: {ex.Message}"); }
     }
 
+    private void OnMeetingTranscriptionUnavailable(string engine, string reason)
+    {
+        try
+        {
+            RunOnUI(() => Services.DictNotificationService.ShowTranscriptionUnavailable(engine, reason));
+        }
+        catch (Exception ex) { PttLog($"OnMeetingTranscriptionUnavailable exc: {ex.Message}"); }
+    }
+
+    private void OnMeetingTranscriptionRecovered(string engine)
+    {
+        try
+        {
+            RunOnUI(() => Services.DictNotificationService.ShowTranscriptionRecovered());
+        }
+        catch (Exception ex) { PttLog($"OnMeetingTranscriptionRecovered exc: {ex.Message}"); }
+    }
+
     private void OnNemotronGpuLimited()
     {
         try
@@ -641,6 +659,8 @@ public partial class App : Application
             // from its window, so closing the window must not silence the one
             // warning the user can still act on.
             _appViewModel.MeetingTranscriptionBehind += OnMeetingTranscriptionBehind;
+            _appViewModel.MeetingTranscriptionUnavailable += OnMeetingTranscriptionUnavailable;
+            _appViewModel.MeetingTranscriptionRecovered += OnMeetingTranscriptionRecovered;
             _appViewModel.NemotronCpuFallback += OnNemotronCpuFallback;
             _appViewModel.NemotronGpuLimited += OnNemotronGpuLimited;
 

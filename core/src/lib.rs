@@ -101,6 +101,7 @@ pub mod stream_bounds;
 pub mod telegram;
 pub mod telemetry;
 pub mod transcribe;
+pub mod transcriber_health;
 pub mod whistle;
 #[cfg(target_os = "windows")]
 mod win_paths;

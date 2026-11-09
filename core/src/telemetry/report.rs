@@ -230,6 +230,9 @@ pub fn failure_of(event: &super::Event) -> Option<(Subsystem, String, &'static s
         E::MeetingTranscriptionBehind { engine, .. } => {
             r(Subsystem::Meeting, "transcription_behind", engine)
         }
+        E::MeetingTranscriptionUnavailable { engine, reason } => {
+            r(Subsystem::Meeting, reason, engine)
+        }
         E::MeetingCaptureRatio { ratio_bucket } if *ratio_bucket != "ge_95" => {
             r(Subsystem::Meeting, "capture_ratio_low", ratio_bucket)
         }

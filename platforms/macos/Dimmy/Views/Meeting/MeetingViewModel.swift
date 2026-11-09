@@ -819,9 +819,10 @@ final class MeetingViewModel: ObservableObject {
                     self.isWorking = false
                     self.phase = .done
                     self.doneSections = [
-                        "TLDR": "Nothing was recorded, no speech was detected. Try moving closer to the microphone, checking input device settings, or recording for longer.",
+                        "TLDR": TranscriptHealthText.emptyMeetingSummary(dir: result.dir),
                     ]
-                    self.statusLabel = "Empty recording"
+                    let failed = TranscriptHealthText.readMeta(dir: result.dir).status == "failed"
+                    self.statusLabel = failed ? "Transcription failed" : "Empty recording"
                     self.subStatusLabel = "No transcript was produced"
                     self.loadHistory()
                 } else if wantRecap {

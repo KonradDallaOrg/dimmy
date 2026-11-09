@@ -624,7 +624,7 @@ public sealed partial class MeetingWindow : Window
             LoadDoneSpeakers(dir);
             _doneTurnAnchors = Helpers.TranscriptRenderer.Render(RawTranscriptText,
                 string.IsNullOrEmpty(transcript)
-                    ? "(no transcript: VAD may have removed all audio)"
+                    ? Helpers.TranscriptHealthText.EmptyTranscriptFor(dir)
                     : HumanizeTranscript(transcript),
                 SpeakerColorMap());
             await LoadDoneAudioAsync(dir);

@@ -14508,14 +14508,14 @@ pub(crate) mod tests {
         }
     }
 
-    fn reset_event_capture() {
+    pub(crate) fn reset_event_capture() {
         if let Ok(mut v) = captured_events_slot().lock() {
             v.clear();
         }
         dimmy_set_event_callback(capture_event_to_slot);
     }
 
-    fn drain_event_capture() -> Vec<String> {
+    pub(crate) fn drain_event_capture() -> Vec<String> {
         let out = captured_events_slot()
             .lock()
             .map(|v| v.clone())
