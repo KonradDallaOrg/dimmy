@@ -5154,7 +5154,7 @@ mod meta_records {
             let ogg_len = std::fs::metadata(&ogg).unwrap().len();
             assert!(ogg_len * 4 < wav_len, "compressed: {ogg_len} vs {wav_len}");
         }
-        let (samples, rate) = crate::ffi::decode_via_symphonia(ogg.to_str().unwrap()).unwrap();
+        let (samples, rate) = crate::ffi::decode_audio_any(ogg.to_str().unwrap()).unwrap();
         assert_eq!(rate, 44_100);
         let secs = samples.len() as f64 / rate as f64;
         assert!((secs - 2.0).abs() < 0.05, "mono, same length: {secs} s");
