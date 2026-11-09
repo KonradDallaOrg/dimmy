@@ -756,13 +756,18 @@ impl CallDetectorState {
                 // Without this the detector stayed sure a recording of ours
                 // was running after a declined consent: every later call was
                 // Suppressed(RecordingAccepted) until a meeting was started
-                // and stopped by hand. Declining is "not this call".
+                // and stopped by hand. Declining is "not THIS call": held
+                // like a hand-pressed Stop, released the moment the
+                // microphone is really free. A first version used the
+                // 30-minute "Not now" cooldown, and the user's next calls
+                // went unoffered (2026-11-09 17:12, two Teams calls).
+                let _ = now;
                 let key = self.recorded_app.take().unwrap_or(key);
                 self.recording_active_from_us = false;
                 self.has_tracked_origin = false;
                 self.stop_is_automatic = false;
-                self.cooldown_until
-                    .insert(key, now + self.cooldown_secs as i64);
+                self.barred = Some(key);
+                self.mic_free_since = None;
                 self.detection_emitted = false;
                 self.mic_active_since = None;
                 assert!(
@@ -1075,22 +1080,18 @@ mod tests {
         s.signal(true, Some("teams".into()), false, 1005); // Detected
         s.record_response(Some("teams".into()), NudgeResponse::RecordNow, 1006);
         s.record_response(Some("teams".into()), NudgeResponse::RecordAborted, 1010);
-        // The same call is not offered again straight away: declining was
-        // "not this call".
+        // The same call is not offered again: declining was "not this call".
         let out = s.signal(true, Some("teams".into()), false, 1020);
         assert!(
-            matches!(
-                out,
-                CallSignalOutcome::Suppressed(SuppressionReason::Cooldown(_))
-            ),
+            matches!(out, CallSignalOutcome::Suppressed(_)),
             "same call right after the decline, got {out:?}"
         );
-        // A later call is offered again: nothing is left believing a
-        // recording of ours is running.
-        let later = 1010 + s.cooldown_secs as i64 + 10;
-        s.signal(false, None, false, later);
-        s.signal(true, Some("teams".into()), false, later + 1);
-        let out = s.signal(true, Some("teams".into()), false, later + 10);
+        // The call ends (the OS says the microphone is free) and the user
+        // dials again a few seconds later: offered, no 30-minute cooldown.
+        s.signal(false, None, false, 1030);
+        s.note_mic_confirmed_free();
+        s.signal(true, Some("teams".into()), false, 1032);
+        let out = s.signal(true, Some("teams".into()), false, 1040);
         assert!(
             matches!(out, CallSignalOutcome::Detected { .. }),
             "the next call must be offered, got {out:?}"
