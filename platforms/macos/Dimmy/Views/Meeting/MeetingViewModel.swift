@@ -629,13 +629,21 @@ final class MeetingViewModel: ObservableObject {
         AppState.shared.meetingLastChunkSpeaker = ""
 
         DispatchQueue.global(qos: .userInitiated).async {
-            let id = DimmyCore.shared.meetingStart()
+            let start = DimmyCore.shared.meetingStartResult()
+            let id = start.id
             DispatchQueue.main.async {
                 self.isWorking = false
                 guard let id, !id.isEmpty else {
                     self.phase = .idle
-                    self.statusLabel = "Couldn't start"
-                    self.subStatusLabel = "Check microphone permissions and try again."
+                    if start.rc == -4 {
+                        // Refused by the core: ending that dictation used to
+                        // stop the meeting's capture.
+                        self.statusLabel = "A dictation is recording"
+                        self.subStatusLabel = "Finish it, then start the meeting."
+                    } else {
+                        self.statusLabel = "Couldn't start"
+                        self.subStatusLabel = "Check microphone permissions and try again."
+                    }
                     return
                 }
                 self.sessionId = id

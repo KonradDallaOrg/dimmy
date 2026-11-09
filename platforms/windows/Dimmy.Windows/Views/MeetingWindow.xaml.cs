@@ -430,6 +430,14 @@ public sealed partial class MeetingWindow : Window
                     GenerateRecapCheck.IsChecked == true;
             var buf = new byte[256];
             int rc = DimmyNative.dimmy_meeting_start(buf, buf.Length);
+            if (rc == -4)
+            {
+                // The core refuses a meeting under a running dictation:
+                // ending that dictation used to stop the meeting's capture.
+                App.Log("meeting start refused: a dictation is recording", "Meeting");
+                ShowToast("A dictation is recording. Finish it, then start the meeting.");
+                return false;
+            }
             if (rc <= 0)
             {
                 App.Log($"meeting start failed rc={rc}", "Meeting");

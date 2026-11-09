@@ -108,7 +108,7 @@ public partial class App : Application
             if (rc <= 0)
             {
                 PttLog($"Meeting hotkey: start failed rc={rc}");
-                _appViewModel.SetError($"Meeting start failed ({rc})");
+                _appViewModel.SetError(rc == -4 ? "Finish the dictation first" : $"Meeting start failed ({rc})");
                 return;
             }
             PttLog("Meeting hotkey: recording started (background)");

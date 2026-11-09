@@ -1255,10 +1255,11 @@ enum MeetingShortcut {
             NSLog("[MeetingShortcut] consent declined")
             return
         }
-        let startedMeetingId = DimmyCore.shared.meetingStart()
+        let start = DimmyCore.shared.meetingStartResult()
+        let startedMeetingId = start.id
         if startedMeetingId == nil {
-            NSLog("[MeetingShortcut] meeting start failed")
-            appState.lastError = "Meeting start failed"
+            NSLog("[MeetingShortcut] meeting start failed rc=\(start.rc)")
+            appState.lastError = start.rc == -4 ? "Finish the dictation first" : "Meeting start failed"
         } else {
             // A meeting started from the shortcut never touches
             // MeetingViewModel.start, so the calendar lookup that hangs

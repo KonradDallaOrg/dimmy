@@ -159,7 +159,13 @@ extension DimmyCore {
     /// Start a meeting recording. Returns the session id (UUID), or nil
     /// on failure (already active, audio start failure, etc.).
     func meetingStart() -> String? {
-        guard isInitialized else { return nil }
+        meetingStartResult().id
+    }
+
+    /// `meetingStart` with the core's rc: -4 = a dictation is recording
+    /// (the core refuses to start a meeting under it).
+    func meetingStartResult() -> (id: String?, rc: Int32) {
+        guard isInitialized else { return (nil, -1) }
         let bufLen: Int32 = 256
         let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
         defer { buffer.deallocate() }
@@ -167,9 +173,9 @@ extension DimmyCore {
         let rc = dimmy_meeting_start(buffer, bufLen)
         guard rc > 0 else {
             print("[DimmyCore] meeting_start failed rc=\(rc)")
-            return nil
+            return (nil, rc)
         }
-        return String(cString: buffer)
+        return (String(cString: buffer), rc)
     }
 
     /// Stop the active meeting. Returns the parsed JSON dictionary, or
