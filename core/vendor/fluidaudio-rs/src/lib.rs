@@ -137,9 +137,7 @@ impl FluidAudio {
     /// Load one variant, downloading it first if needed. The first load
     /// compiles the models for the Neural Engine.
     pub fn init_qwen3(&self, int8: bool) -> Result<(), FluidAudioError> {
-        self.bridge
-            .initialize_qwen3(int8)
-            .map_err(FluidAudioError::from)
+        self.bridge.initialize_qwen3(int8).map_err(FluidAudioError::from)
     }
 
     /// Transcribe 16 kHz mono f32 samples. `language` None = auto-detect.

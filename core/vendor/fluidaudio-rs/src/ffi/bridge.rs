@@ -122,11 +122,7 @@ impl FluidAudioBridge {
         }
     }
 
-    pub fn transcribe_qwen3(
-        &self,
-        samples: &[f32],
-        language: Option<&str>,
-    ) -> Result<String, String> {
+    pub fn transcribe_qwen3(&self, samples: &[f32], language: Option<&str>) -> Result<String, String> {
         let lang = language
             .map(|l| CString::new(l).map_err(|e| e.to_string()))
             .transpose()?;
@@ -143,9 +139,7 @@ impl FluidAudioBridge {
         if rc != 0 || out.is_null() {
             return Err(format!("Qwen3-ASR transcribe failed ({rc})"));
         }
-        let text = unsafe { CStr::from_ptr(out) }
-            .to_string_lossy()
-            .into_owned();
+        let text = unsafe { CStr::from_ptr(out) }.to_string_lossy().into_owned();
         unsafe { fluidaudio_free_string(out) };
         Ok(text)
     }
