@@ -75,8 +75,9 @@ enum TerminalRunner {
             for: .applicationSupportDirectory, in: .userDomainMask
         ).first ?? URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Library/Application Support")
+        // The install's own config folder, never a hard-coded "dimmy".
         return appSupport
-            .appendingPathComponent("dimmy")
+            .appendingPathComponent(DimmyCore.shared.configDirName)
             .appendingPathComponent("installers")
     }
 }

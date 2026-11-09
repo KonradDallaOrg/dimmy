@@ -38,8 +38,7 @@ public class HotkeyService : IDisposable
     /// stale, so toggle behaved like push-to-talk.</summary>
     private readonly Func<string> _shortcutMode;
 
-    private static readonly string LogPath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "dimmy", "ptt.log");
+    private static string LogPath => Path.Combine(BuildInfo.ConfigDirPath, "ptt.log");
 
     private static void Log(string msg)
     {

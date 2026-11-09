@@ -398,8 +398,9 @@ public partial class App : Application
     // concurrent rc -9 stop) from running the pipeline twice.
     private volatile bool _stopInProgress;
 
-    private static readonly string PttLogPath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "dimmy", "ptt.log");
+    // The install's own config folder: a staging build wrote its log into
+    // the production folder (hard-coded "dimmy").
+    private static string PttLogPath => Path.Combine(Services.BuildInfo.ConfigDirPath, "ptt.log");
 
     private static void PttLog(string msg) => Log(msg, "PTT");
 
@@ -517,9 +518,7 @@ public partial class App : Application
         // disks — audit 2026-07-02; the logger itself is deleted).
         try
         {
-            File.Delete(Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "dimmy", "app-rules-diag.log"));
+            File.Delete(Path.Combine(Services.BuildInfo.ConfigDirPath, "app-rules-diag.log"));
         }
         catch { }
 
@@ -742,8 +741,7 @@ public partial class App : Application
             PttLog(msg);
             System.Diagnostics.Debug.WriteLine(msg);
             try { System.IO.File.WriteAllText(
-                System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "dimmy", "crash.log"), msg); } catch { }
+                System.IO.Path.Combine(Services.BuildInfo.ConfigDirPath, "crash.log"), msg); } catch { }
         }
     }
 
