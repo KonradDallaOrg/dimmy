@@ -3262,13 +3262,15 @@ public sealed partial class MeetingWindow : Window
             }
             var txt = Path.Combine(row.Dir, "transcripts.txt");
             LoadDoneSpeakers(row.Dir);
-            if (File.Exists(txt))
-            {
-                _doneTurnAnchors = Helpers.TranscriptRenderer.Render(
-                    RawTranscriptText,
-                    HumanizeTranscript(ReadWhileWritten(txt)),
-                    SpeakerColorMap());
-            }
+            var rawTranscript = File.Exists(txt) ? ReadWhileWritten(txt) : "";
+            // No speech, or the transcriber failed: say which, whichever
+            // surface stopped the meeting (only this window's own stop did).
+            _doneTurnAnchors = Helpers.TranscriptRenderer.Render(
+                RawTranscriptText,
+                string.IsNullOrWhiteSpace(rawTranscript)
+                    ? Helpers.TranscriptHealthText.EmptyTranscriptFor(row.Dir)
+                    : HumanizeTranscript(rawTranscript),
+                SpeakerColorMap());
             await LoadDoneAudioAsync(row.Dir);
             await LoadNotesAsync(row.Dir);
             SetState(MeetingState.Done);

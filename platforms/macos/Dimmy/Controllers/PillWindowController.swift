@@ -455,14 +455,27 @@ final class PillWindowController {
 
     // MARK: - Pill Stop → meeting recap
 
-    /// Called by PillView's Stop button branch when a meeting is
-    /// active. Spins up the recap pipeline on a background thread. It is
-    /// background work, like a loaded file: the pill says "Transcribing..."
-    /// through `transcribesRunning` until the transcript is final, then
-    /// "Recap..." through `recapsRunning`, and the dictation state is never
-    /// touched, so a dictation can start while the meeting saves.
+    @MainActor private static var stopInFlight = false
+
+    /// The one way a meeting stops: the pill, the meeting window's Stop,
+    /// the meeting shortcut and the call-detect popup all land here (Win
+    /// mirror: MeetingStopService). Spins up the recap pipeline on a
+    /// background thread. It is background work, like a loaded file: the
+    /// pill says "Transcribing..." through `transcribesRunning` until the
+    /// transcript is final, then "Recap..." through `recapsRunning`, and the
+    /// dictation state is never touched, so a dictation can start while the
+    /// meeting saves. An open meeting window follows through
+    /// `meetingRecapSaved` (an empty `dir` = the stop failed).
     nonisolated static func stopMeetingFromPill(appState: AppState) {
         Task { @MainActor in
+            // A second press while a stop runs would reach the core as a stop
+            // of nothing.
+            guard !stopInFlight else {
+                dimmyHostLog("[Meeting] stop already running — this press is dropped")
+                return
+            }
+            stopInFlight = true
+            defer { stopInFlight = false }
             appState.transcribesRunning += 1
             let notionAutoSend = appState.notionAutoSend
             // Capture the recap flag pinned at meeting START (set by
