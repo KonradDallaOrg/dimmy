@@ -228,8 +228,10 @@ public sealed class TelegramService : IDisposable
         {
             if (!_drivingPill) return;
             _drivingPill = false;
+            // A dictation that started meanwhile keeps the pill: it used to
+            // be reset to Idle while that dictation was transcribing.
             if (_vm.CurrentState is ViewModels.AppState.Transcribing or ViewModels.AppState.Processing)
-                _vm.SetState(ViewModels.AppState.Idle);
+                _vm.ReturnToRest();
         });
     }
 

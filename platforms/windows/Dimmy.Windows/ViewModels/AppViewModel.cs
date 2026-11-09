@@ -253,6 +253,37 @@ public partial class AppViewModel : ObservableObject
         return transcribesRunning > 0 ? AppState.Transcribing : AppState.Idle;
     }
 
+    /// <summary>The core's dictation phase, from the `dictation_phase`
+    /// event: "idle" | "recording" | "finishing". The truth the pill comes
+    /// back to; never written by the host.</summary>
+    [ObservableProperty] private string _coreDictationPhase = "idle";
+
+    /// <summary>Whether the host's dictation pipeline (stop, paste,
+    /// delivery) is still running. Injected by App so this view-model stays
+    /// free of FFI and testable.</summary>
+    public Func<bool>? DictationBusy { get; set; }
+
+    /// <summary>Where the pill goes when an overlay (the checkmark, an
+    /// error) or a background job lets go of it. Pure, one place: the
+    /// overlay timers, Telegram and the meeting stop used to each write
+    /// Idle, and a timer armed by an earlier dictation set Idle in the
+    /// middle of the next one.</summary>
+    public static AppState RestState(bool coreRecording, bool meetingActive, bool dictationBusy, AppState current)
+    {
+        if (coreRecording || meetingActive) return AppState.Recording;
+        if (dictationBusy)
+            return current is AppState.Transcribing or AppState.Processing ? current : AppState.Transcribing;
+        return AppState.Idle;
+    }
+
+    public void ReturnToRest() =>
+        SetState(RestState(CoreDictationPhase == "recording", MeetingActive, DictationBusy?.Invoke() ?? false, CurrentState));
+
+    /// <summary>An error that must not take the pill away from a recording
+    /// the core is still making: raised instead of the Error state so the
+    /// host can show it as a toast.</summary>
+    public event Action<string>? ErrorWhileRecording;
+
     /// <summary>True when the app is doing something (recording, transcribing, processing) and should not start a new recording.</summary>
     public bool IsBusy => CurrentState is AppState.Recording or AppState.Transcribing or AppState.Processing;
 
@@ -272,6 +303,14 @@ public partial class AppViewModel : ObservableObject
     public void SetError(string message)
     {
         ErrorMessage = message.Length > 200 ? message[..200] : message;
+        // The red dot means "recording": while the core records, an error
+        // (the meeting hotkey pressed mid-dictation, a core error during a
+        // meeting) is said beside it, not instead of it.
+        if (CurrentState == AppState.Recording && (CoreDictationPhase == "recording" || MeetingActive))
+        {
+            ErrorWhileRecording?.Invoke(ErrorMessage);
+            return;
+        }
         SetState(AppState.Error);
     }
 
@@ -654,6 +693,10 @@ public partial class AppViewModel : ObservableObject
                     break;
                 case "recording_cancelled":
                     SetState(AppState.Idle);
+                    break;
+                case "dictation_phase":
+                    CoreDictationPhase = payload.TryGetProperty("phase", out var dp)
+                        ? (dp.GetString() ?? "idle") : "idle";
                     break;
                 case "status":
                     var stateStr = payload.GetProperty("state").GetString();

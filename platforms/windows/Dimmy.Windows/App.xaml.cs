@@ -660,6 +660,11 @@ public partial class App : Application
             // warning the user can still act on.
             _appViewModel.MeetingTranscriptionBehind += OnMeetingTranscriptionBehind;
             _appViewModel.MeetingTranscriptionUnavailable += OnMeetingTranscriptionUnavailable;
+            // The pill's rest state reads the host's own dictation pipeline,
+            // and an error during a recording becomes a toast beside it.
+            _appViewModel.DictationBusy = () => !Services.DictationSession.IsIdle;
+            _appViewModel.ErrorWhileRecording += msg =>
+                RunOnUI(() => Services.DictNotificationService.ShowErrorBesideRecording(msg));
             _appViewModel.MeetingTranscriptionRecovered += OnMeetingTranscriptionRecovered;
             _appViewModel.NemotronCpuFallback += OnNemotronCpuFallback;
             _appViewModel.NemotronGpuLimited += OnNemotronGpuLimited;

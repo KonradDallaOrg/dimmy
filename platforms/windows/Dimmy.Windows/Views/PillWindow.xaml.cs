@@ -117,10 +117,12 @@ public sealed partial class PillWindow : Window
         {
             // Meeting just ended. If WE put the pill into Recording,
             // clean up. If dictation owns the state, leave alone.
-            if (_pillRecordingDueToMeeting && _vm.CurrentState == AppState.Recording)
+            if (_vm.CurrentState == AppState.Recording && _vm.CoreDictationPhase != "recording")
             {
+                // The red dot was the meeting's (set here, or restored after
+                // an overlay): the pill rests on what the core does now.
                 _pillRecordingDueToMeeting = false;
-                _vm.SetState(AppState.Idle);
+                _vm.ReturnToRest();
             }
             else if (_vm.CurrentState != AppState.Recording)
             {
@@ -802,6 +804,12 @@ public sealed partial class PillWindow : Window
 
         _currentVisiblePanel = newPanel;
 
+        // One overlay at a time, and only while it is showing: a timer armed
+        // by an earlier checkmark or error used to fire SetState(Idle) in the
+        // middle of the next recording.
+        _completingTimer?.Stop();
+        _errorTimer?.Stop();
+
         switch (_vm.CurrentState)
         {
             case AppState.Idle:
@@ -868,7 +876,11 @@ public sealed partial class PillWindow : Window
                     _completingTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1200) };
                 if (!_completingHandlerAttached)
                 {
-                    _completingTimer.Tick += (_, _) => { _completingTimer.Stop(); _vm.SetState(AppState.Idle); };
+                    _completingTimer.Tick += (_, _) =>
+                    {
+                        _completingTimer.Stop();
+                        if (_vm.CurrentState == AppState.Completing) _vm.ReturnToRest();
+                    };
                     _completingHandlerAttached = true;
                 }
                 _completingTimer.Start();
@@ -887,7 +899,11 @@ public sealed partial class PillWindow : Window
                     _errorTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
                 if (!_errorHandlerAttached)
                 {
-                    _errorTimer.Tick += (_, _) => { _errorTimer.Stop(); _vm.SetState(AppState.Idle); };
+                    _errorTimer.Tick += (_, _) =>
+                    {
+                        _errorTimer.Stop();
+                        if (_vm.CurrentState == AppState.Error) _vm.ReturnToRest();
+                    };
                     _errorHandlerAttached = true;
                 }
                 _errorTimer.Start();

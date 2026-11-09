@@ -207,6 +207,11 @@ public static class DictNotificationService
              $"Your recording is safe and continues normally. {hint} You can also regenerate the transcript from the audio after the meeting.");
     }
 
+    /// <summary>An error raised while the core is still recording: the pill
+    /// keeps its red dot, so the message goes here instead.</summary>
+    public static void ShowErrorBesideRecording(string message) =>
+        Show("Still recording", message);
+
     /// <summary>The meeting's transcriber produces no text, with the reason
     /// the core gave. The recording continues either way.</summary>
     public static void ShowTranscriptionUnavailable(string engine, string reason) =>
