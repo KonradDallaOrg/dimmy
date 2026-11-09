@@ -282,6 +282,28 @@ extension DimmyCore {
         return arr
     }
 
+    /// Meetings a crash left behind, marked interrupted by the core (once).
+    func meetingRecoverInterrupted() -> [[String: Any]] {
+        guard isInitialized else { return [] }
+        let bufLen: Int32 = 64 * 1024
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
+        defer { buffer.deallocate() }
+        buffer[0] = 0
+        let rc = dimmy_meeting_recover_interrupted(buffer, bufLen)
+        guard rc > 0 else { return [] }
+        guard let data = String(cString: buffer).data(using: .utf8),
+              let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+        else { return [] }
+        return arr
+    }
+
+    /// The core writes meta.json; hosts set a title through it.
+    @discardableResult
+    func meetingSetTitle(dir: String, title: String) -> Bool {
+        guard isInitialized else { return false }
+        return dir.withCString { d in title.withCString { t in dimmy_meeting_set_title(d, t) } } == 0
+    }
+
     // MARK: - Model catalog
 
     /// The embedded model catalog JSON (single source of truth for cloud

@@ -441,6 +441,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 // phase=no_credentials) on a build without the feature.
                 TelegramService.shared.start(appState: self.appState)
 
+                // Meetings a crash left behind: the audio is on disk and
+                // nothing ever said so. The core marks them once; say it once.
+                let interrupted = DimmyCore.shared.meetingRecoverInterrupted().count
+                if interrupted > 0 {
+                    DictToastWindow.show(
+                        kind: .workflowHint,
+                        title: interrupted == 1 ? "A meeting was interrupted" : "\(interrupted) meetings were interrupted",
+                        body: "Dimmy closed while recording. The audio up to that moment is saved: open Meetings and use Regenerate transcript.")
+                }
+
                 // Preload Parakeet during onboarding so by the time the
                 // user reaches the model-download step the bundle is
                 // already on disk (or downloading). Mirrors the Win

@@ -1466,16 +1466,8 @@ final class MeetingViewModel: ObservableObject {
         guard let dir = selectedDir ?? activeDir, !dir.isEmpty else { return }
         let trimmed = newTitle.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty, trimmed.count <= 200, trimmed != doneTitle else { return }
-        let metaPath = (dir as NSString).appendingPathComponent("meta.json")
-        var obj: [String: Any] = [:]
-        if let data = try? Data(contentsOf: URL(fileURLWithPath: metaPath)),
-           let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            obj = existing
-        }
-        obj["title"] = trimmed
-        if let data = try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys]) {
-            try? data.write(to: URL(fileURLWithPath: metaPath), options: .atomic)
-        }
+        // The core is meta.json's one writer (Win does the same).
+        DimmyCore.shared.meetingSetTitle(dir: dir, title: trimmed)
         doneTitle = trimmed
         if let idx = historyRows.firstIndex(where: { $0.dir == dir }) {
             let old = historyRows[idx]

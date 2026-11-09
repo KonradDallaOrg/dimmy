@@ -5018,6 +5018,59 @@ pub unsafe extern "C" fn dimmy_meeting_save_post_process(
     }
 }
 
+/// Mark the meetings a crash left behind (`.recording` marker, not the live
+/// meeting) as `interrupted`, once, and return them as a JSON array of
+/// {id, dir, transcript_size_bytes}. Hosts call it at launch and tell the
+/// user the audio is saved and can be transcribed again. Returns the byte
+/// length of the JSON, or -1 on a bad buffer.
+///
+/// # Safety
+/// `out_buf` must be a valid writable buffer of `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_meeting_recover_interrupted(
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let live = MEETING
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|s| s.dir().to_path_buf()));
+    let recovered = crate::meeting::recover_interrupted(live.as_deref());
+    let json = serde_json::to_string(&recovered).unwrap_or_else(|_| "[]".to_string());
+    write_to_buf(&json, out_buf, buf_len)
+}
+
+/// Set a meeting's title in its meta.json, through the core's one atomic
+/// writer. Hosts used to rewrite meta.json themselves. Returns 0, or -1 on
+/// a bad argument.
+///
+/// # Safety
+/// `dir_ptr` and `title_ptr` must be valid null-terminated UTF-8 strings.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_meeting_set_title(
+    dir_ptr: *const c_char,
+    title_ptr: *const c_char,
+) -> c_int {
+    if dir_ptr.is_null() || title_ptr.is_null() {
+        return -1;
+    }
+    let (Ok(dir), Ok(title)) = (
+        CStr::from_ptr(dir_ptr).to_str(),
+        CStr::from_ptr(title_ptr).to_str(),
+    ) else {
+        return -1;
+    };
+    let dir = std::path::Path::new(dir);
+    if dir.as_os_str().is_empty() || !dir.is_dir() {
+        return -1;
+    }
+    crate::meeting::update_meeting_meta_title(dir, title.trim());
+    0
+}
+
 /// Return JSON array of meeting sessions left with a `.recording`
 /// marker (i.e. crashed before clean stop). UI surfaces this as a
 /// "recover meeting?" prompt at startup. Returns the byte length of
@@ -14819,6 +14872,69 @@ pub(crate) mod tests {
         );
         crate::capture::release_dictation();
         st.audio_buffer.lock().unwrap().clear();
+    }
+
+    /// A crash leaves the `.recording` marker: the meeting is reported once,
+    /// marked interrupted, and keeps its other fields; a title set through
+    /// the core goes through the same atomic writer.
+    #[test]
+    #[serial]
+    fn an_interrupted_meeting_is_reported_once_and_can_be_renamed() {
+        ensure_test_state();
+        let base = crate::meetings_dir().expect("meetings dir in tests");
+        let dir = base.join(format!("interrupted-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("meta.json"), r#"{"started_at": 7.5}"#).unwrap();
+        std::fs::write(dir.join(".recording"), "1").unwrap();
+        let dir_s = dir.to_string_lossy().to_string();
+
+        let recover = || -> Vec<serde_json::Value> {
+            let mut out = vec![0 as c_char; 64 * 1024];
+            let n =
+                unsafe { dimmy_meeting_recover_interrupted(out.as_mut_ptr(), out.len() as c_int) };
+            assert!(n > 0);
+            let s = unsafe { CStr::from_ptr(out.as_ptr()) }
+                .to_str()
+                .unwrap()
+                .to_string();
+            serde_json::from_str(&s).unwrap()
+        };
+        let first = recover();
+        assert!(
+            first.iter().any(|m| m["dir"] == dir_s.as_str()),
+            "{first:?}"
+        );
+        assert!(!dir.join(".recording").exists(), "the marker is consumed");
+        let second = recover();
+        assert!(
+            !second.iter().any(|m| m["dir"] == dir_s.as_str()),
+            "reported once"
+        );
+
+        let meta = || -> serde_json::Value {
+            serde_json::from_str(&std::fs::read_to_string(dir.join("meta.json")).unwrap()).unwrap()
+        };
+        let m = meta();
+        assert_eq!(m["stage"], "interrupted");
+        assert_eq!(m["transcript"]["status"], "unknown");
+        assert_eq!(m["started_at"], 7.5);
+
+        let d = CString::new(dir_s.clone()).unwrap();
+        let t = CString::new("  Renamed  ").unwrap();
+        assert_eq!(
+            unsafe { dimmy_meeting_set_title(d.as_ptr(), t.as_ptr()) },
+            0
+        );
+        let m = meta();
+        assert_eq!(m["title"], "Renamed");
+        assert_eq!(m["schema"], crate::meeting::META_SCHEMA);
+        assert_eq!(m["started_at"], 7.5);
+        let bad = CString::new("").unwrap();
+        assert_eq!(
+            unsafe { dimmy_meeting_set_title(bad.as_ptr(), t.as_ptr()) },
+            -1
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A meeting no longer starts under a running dictation: ending that

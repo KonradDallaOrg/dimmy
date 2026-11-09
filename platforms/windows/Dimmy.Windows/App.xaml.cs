@@ -185,6 +185,22 @@ public partial class App : Application
         catch (Exception ex) { PttLog($"OnMeetingTranscriptionBehind exc: {ex.Message}"); }
     }
 
+    private void ReportInterruptedMeetings()
+    {
+        try
+        {
+            var buf = new byte[64 * 1024];
+            int n = DimmyNative.dimmy_meeting_recover_interrupted(buf, buf.Length);
+            if (n <= 0) return;
+            using var doc = System.Text.Json.JsonDocument.Parse(System.Text.Encoding.UTF8.GetString(buf, 0, n));
+            int count = doc.RootElement.GetArrayLength();
+            if (count == 0) return;
+            PttLog($"interrupted meetings recovered: {count}");
+            RunOnUI(() => Services.DictNotificationService.ShowInterruptedMeetings(count));
+        }
+        catch (Exception ex) { PttLog($"ReportInterruptedMeetings exc: {ex.Message}"); }
+    }
+
     private void OnMeetingTranscriptionUnavailable(string engine, string reason)
     {
         try
@@ -668,6 +684,11 @@ public partial class App : Application
             _appViewModel.MeetingTranscriptionRecovered += OnMeetingTranscriptionRecovered;
             _appViewModel.NemotronCpuFallback += OnNemotronCpuFallback;
             _appViewModel.NemotronGpuLimited += OnNemotronGpuLimited;
+
+            // 2g. Meetings a crash left behind: their audio is on disk and
+            // nothing ever said so (dimmy_meeting_list_orphans had no
+            // caller). The core marks them interrupted once; say it once.
+            ReportInterruptedMeetings();
 
             // 3. Load config into ViewModel
             LoadConfigIntoViewModel();

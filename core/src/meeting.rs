@@ -369,6 +369,8 @@ impl MeetingSession {
         std::fs::write(&marker, "1").map_err(|e| format!("marker write: {}", e))?;
 
         let meta_initial = serde_json::json!({
+            "schema": META_SCHEMA,
+            "stage": "recording",
             "id": id,
             "started_at": SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -2931,9 +2933,17 @@ pub fn save_post_process(
         // Title sync: best-effort, never fail the save. Parse the ORIGINAL:
         // the marker is placed so it cannot disturb this, but not depending
         // on that is free.
-        if let Some(title) = parse_recap_title(recap_md) {
-            update_meeting_meta_title(meeting_dir, &title);
-        }
+        let title = parse_recap_title(recap_md);
+        update_meta(meeting_dir, |obj| {
+            if let Some(title) = &title {
+                obj.insert("title".into(), serde_json::Value::String(title.clone()));
+            }
+            obj.insert("stage".into(), "recapped".into());
+            obj.insert(
+                "recap".into(),
+                serde_json::json!({ "status": "saved", "at": unix_now_secs() }),
+            );
+        });
     }
     if !actions_json.trim().is_empty() {
         std::fs::write(meeting_dir.join("actions.json"), actions_json)
@@ -3207,14 +3217,46 @@ pub fn meeting_has_title(meeting_dir: &std::path::Path) -> bool {
 }
 
 pub fn update_meeting_meta_title(meeting_dir: &std::path::Path, title: &str) {
+    update_meta(meeting_dir, |obj| {
+        obj.insert("title".into(), serde_json::Value::String(title.to_string()));
+    });
+}
+
+/// The `meta.json` layout this core writes. 2 = `schema`, `stage`,
+/// `transcript` and `recap` are present; a folder without `schema` was
+/// written by an older build and its stage is derived from its files.
+pub const META_SCHEMA: u32 = 2;
+
+fn unix_now_secs() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
+}
+
+/// The one way the core changes a meeting's `meta.json`: read, change,
+/// write atomically (a crash mid-write used to leave a truncated file and
+/// a meeting the lists could not date). Every field the change does not
+/// touch survives: the list orders by `started_at`, and a wholesale
+/// rewrite that dropped it made a renamed meeting jump to the top.
+pub fn update_meta(
+    meeting_dir: &std::path::Path,
+    change: impl FnOnce(&mut serde_json::Map<String, serde_json::Value>),
+) {
     let path = meeting_dir.join("meta.json");
     let mut obj: serde_json::Map<String, serde_json::Value> = std::fs::read_to_string(&path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
-    obj.insert("title".into(), serde_json::Value::String(title.to_string()));
-    if let Ok(serialized) = serde_json::to_string_pretty(&obj) {
-        let _ = std::fs::write(&path, serialized);
+    change(&mut obj);
+    obj.insert("schema".into(), serde_json::json!(META_SCHEMA));
+    match serde_json::to_string_pretty(&obj) {
+        Ok(serialized) => {
+            if let Err(e) = crate::write_atomic(&path, serialized.as_bytes()) {
+                crate::log(&format!("[Meeting] meta.json write failed: {e}"));
+            }
+        }
+        Err(e) => crate::log(&format!("[Meeting] meta.json serialize failed: {e}")),
     }
 }
 
@@ -3232,25 +3274,14 @@ fn finalize_meeting_meta(
     chunk_count: u32,
     transcript: serde_json::Value,
 ) {
-    let path = meeting_dir.join("meta.json");
-    let mut obj: serde_json::Map<String, serde_json::Value> = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default();
-    obj.insert("id".into(), serde_json::Value::String(id.to_string()));
-    obj.insert("duration_secs".into(), serde_json::json!(duration_secs));
-    obj.insert("chunk_count".into(), serde_json::json!(chunk_count));
-    obj.insert("transcript".into(), transcript);
-    obj.insert(
-        "ended_at".into(),
-        serde_json::json!(SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs_f64())
-            .unwrap_or(0.0)),
-    );
-    if let Ok(serialized) = serde_json::to_string_pretty(&obj) {
-        let _ = std::fs::write(&path, serialized);
-    }
+    update_meta(meeting_dir, |obj| {
+        obj.insert("id".into(), serde_json::Value::String(id.to_string()));
+        obj.insert("duration_secs".into(), serde_json::json!(duration_secs));
+        obj.insert("chunk_count".into(), serde_json::json!(chunk_count));
+        obj.insert("transcript".into(), transcript);
+        obj.insert("stage".into(), "stopped".into());
+        obj.insert("ended_at".into(), serde_json::json!(unix_now_secs()));
+    });
 }
 
 /// Lazy backfill: if `meta.json` has no `title` but `recap.md` exists
@@ -3316,6 +3347,101 @@ pub fn list_orphans() -> Vec<serde_json::Value> {
         }));
     }
     out
+}
+
+/// Meetings a crash or a forced quit left with the `.recording` marker: their
+/// audio is on disk up to the last page written, and nothing ever offered it
+/// back (`list_orphans` had no caller). Marks each `interrupted` in
+/// meta.json, with a transcript status of `unknown` unless the stop got as
+/// far as writing one, and removes the marker so it is reported once.
+/// `live` is the meeting recording now, whose marker is real.
+pub fn recover_interrupted(live: Option<&std::path::Path>) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    for orphan in list_orphans() {
+        let Some(dir) = orphan["dir"].as_str().map(std::path::PathBuf::from) else {
+            continue;
+        };
+        if live.is_some_and(|l| l == dir.as_path()) {
+            continue;
+        }
+        let marker = dir.join(".recording");
+        let ended = std::fs::metadata(&marker)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_secs_f64());
+        update_meta(&dir, |obj| {
+            obj.insert("stage".into(), "interrupted".into());
+            obj.entry("transcript")
+                .or_insert_with(|| serde_json::json!({ "status": "unknown" }));
+            if let Some(ended) = ended {
+                obj.entry("ended_at").or_insert(serde_json::json!(ended));
+            }
+        });
+        if let Err(e) = std::fs::remove_file(&marker) {
+            crate::log(&format!("[Meeting] interrupted marker not removed: {e}"));
+            continue;
+        }
+        crate::log(&format!(
+            "[Meeting] interrupted meeting recovered ({} bytes of transcript)",
+            orphan["transcript_size_bytes"].as_u64().unwrap_or(0)
+        ));
+        out.push(serde_json::json!({
+            "id": orphan["id"],
+            "dir": orphan["dir"],
+            "transcript_size_bytes": orphan["transcript_size_bytes"],
+        }));
+    }
+    out
+}
+
+#[cfg(test)]
+mod meta_schema {
+    use super::*;
+
+    fn tmp_meeting() -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("dimmy-meta-{}", uuid_v4_simple()));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn read(d: &std::path::Path) -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(d.join("meta.json")).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn every_core_write_stamps_the_schema_and_keeps_other_fields() {
+        let d = tmp_meeting();
+        std::fs::write(d.join("meta.json"), r#"{"started_at": 12.5, "title": "x"}"#).unwrap();
+        update_meta(&d, |o| {
+            o.insert("stage".into(), "stopped".into());
+        });
+        let v = read(&d);
+        assert_eq!(v["schema"], META_SCHEMA);
+        assert_eq!(v["started_at"], 12.5);
+        assert_eq!(v["title"], "x");
+        assert_eq!(v["stage"], "stopped");
+        // No temp file left behind by the atomic write.
+        let left: Vec<_> = std::fs::read_dir(&d)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(left.is_empty());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_saved_recap_is_recorded_not_guessed_from_files() {
+        let d = tmp_meeting();
+        std::fs::write(d.join("meta.json"), r#"{"started_at": 1.0}"#).unwrap();
+        save_post_process(&d, "# Weekly sync\n\nText", "", None, None).unwrap();
+        let v = read(&d);
+        assert_eq!(v["stage"], "recapped");
+        assert_eq!(v["recap"]["status"], "saved");
+        assert_eq!(v["title"], "Weekly sync");
+        let _ = std::fs::remove_dir_all(&d);
+    }
 }
 
 #[cfg(test)]

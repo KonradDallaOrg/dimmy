@@ -593,6 +593,14 @@ int32_t dimmy_meeting_save_post_process(const char * _Nonnull dir_ptr,
 /// present from a crashed session). UI can offer "recover meeting?".
 int32_t dimmy_meeting_list_orphans(char * _Nonnull out_buf, int32_t buf_len);
 
+/// Mark the meetings a crash left behind as interrupted, once; JSON array of
+/// {id, dir, transcript_size_bytes}. Called at launch.
+int32_t dimmy_meeting_recover_interrupted(char * _Nonnull out_buf, int32_t buf_len);
+
+/// Set a meeting's title through the core's atomic meta.json writer.
+/// 0 = ok, -1 = bad argument.
+int32_t dimmy_meeting_set_title(const char * _Nonnull dir_ptr, const char * _Nonnull title_ptr);
+
 /// 1 = a meeting is currently active, 0 otherwise. Used to gate the
 /// dictation hotkey while a meeting is recording (cpal collision).
 int32_t dimmy_meeting_is_active(void);

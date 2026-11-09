@@ -3579,20 +3579,17 @@ public sealed partial class MeetingWindow : Window
 
     /// Patch (or create) meta.json with a `title` field. Preserves
     /// every other key. Best-effort — title is metadata polish.
+    /// <summary>The core writes meta.json (one atomic writer); this window
+    /// used to rewrite it itself, non-atomically.</summary>
     private static void WriteMetaTitle(string metaPath, string title)
     {
         try
         {
-            var dict = File.Exists(metaPath)
-                ? (System.Text.Json.Nodes.JsonObject?)System.Text.Json.Nodes.JsonNode.Parse(
-                    File.ReadAllText(metaPath))
-                : null;
-            dict ??= new System.Text.Json.Nodes.JsonObject();
-            dict["title"] = title;
-            File.WriteAllText(metaPath, dict.ToJsonString(
-                new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+            var dir = Path.GetDirectoryName(metaPath);
+            if (!string.IsNullOrEmpty(dir))
+                DimmyNative.dimmy_meeting_set_title(dir, title);
         }
-        catch { }
+        catch (Exception ex) { App.Log($"set title exc: {ex.Message}", "Meeting"); }
     }
 
     private static string ResolveDoneTitle(string? dir, string? fallback = null)

@@ -207,6 +207,12 @@ public static class DictNotificationService
              $"Your recording is safe and continues normally. {hint} You can also regenerate the transcript from the audio after the meeting.");
     }
 
+    /// <summary>Dimmy closed while a meeting was recording. Its audio is on
+    /// disk up to that moment; the meeting is in the list.</summary>
+    public static void ShowInterruptedMeetings(int count) =>
+        Show(count == 1 ? "A meeting was interrupted" : $"{count} meetings were interrupted",
+             "Dimmy closed while recording. The audio up to that moment is saved: open Meetings and use Regenerate transcript.");
+
     /// <summary>An error raised while the core is still recording: the pill
     /// keeps its red dot, so the message goes here instead.</summary>
     public static void ShowErrorBesideRecording(string message) =>

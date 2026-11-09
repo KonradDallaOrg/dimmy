@@ -582,6 +582,18 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_meeting_list_orphans(byte[] outBuf, int bufLen);
 
+    /// Mark the meetings a crash left behind as interrupted, once; JSON
+    /// array of {id, dir, transcript_size_bytes}.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_meeting_recover_interrupted(byte[] outBuf, int bufLen);
+
+    /// Set a meeting's title through the core's atomic meta.json writer.
+    /// 0 = ok, -1 = bad argument.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_meeting_set_title(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string dir,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string title);
+
     /// 1 = meeting currently recording; 0 = no active meeting. Used
     /// to gate the dictation hotkey so a parallel recording can't
     /// corrupt the shared cpal audio buffer.
