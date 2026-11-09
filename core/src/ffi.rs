@@ -1042,6 +1042,9 @@ pub extern "C" fn dimmy_set_event_callback(cb: extern "C" fn(*const c_char)) {
 /// the active meeting recording).
 /// True from the moment a stop releases `recording` until it has taken the
 /// audio buffer: the window in which a new recording would destroy it.
+/// Not a `capture::Owner` state: it also covers a stop that runs with no
+/// dictation claim (it still reads and clears the buffer), which the owner
+/// cannot see, so moving it there would not be equivalent.
 static STOP_DRAINING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// The dictation (DICTATION_GEN) whose realtime socket failed; 0 for none.
@@ -1588,6 +1591,13 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
         }
     }
     let _stop_guard = StopGuard;
+    // (STOP_IN_PROGRESS spans the whole stop, transcription included: longer
+    // than the capture claim, which ends when the audio is out of the buffer.)
+
+    // The session machine follows the core's own stop, not only the host's
+    // Stop input: a stop the host called directly still puts it in
+    // Finishing. A no-op when the host already did (Finishing stays).
+    crate::dictation_session::input(crate::dictation_session::Input::Stop);
 
     let st = state();
 
@@ -2489,6 +2499,9 @@ pub extern "C" fn dimmy_cancel_recording() {
         log("[Cancel] a meeting holds the capture — nothing to cancel");
         return;
     }
+    // The session machine follows the core's cancel too (a no-op when the
+    // host already said Cancel or Discard).
+    crate::dictation_session::input(crate::dictation_session::Input::Cancel);
 
     // Compute audio_secs BEFORE clearing, for the telemetry event.
     let sample_rate = st.audio_sample_rate.lock().map(|s| *s).unwrap_or(16_000);
@@ -12303,6 +12316,8 @@ pub unsafe extern "C" fn dimmy_inject_pcm_for_test(
 /// saved config without a separate apply step on init / set_config_json.
 /// Bumped by every meeting start. `dimmy_meeting_stop` hands the shared
 /// audio state back only if it is still the meeting that owns it.
+/// Not the capture claim: that drops to 0 when the meeting worker lets go
+/// (or dies), and the stop must still send the stream its Stop then.
 static MEETING_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Whether a stopping meeting may still tear down the SHARED audio state
@@ -14143,6 +14158,18 @@ pub(crate) mod tests {
         let buf_len = state().audio_buffer.lock().map(|b| b.len()).unwrap_or(999);
         assert!(!is_rec, "recording must be false after cancel");
         assert_eq!(buf_len, 0, "buffer must be cleared after cancel");
+    }
+
+    #[test]
+    #[serial]
+    fn the_session_follows_the_cores_own_cancel() {
+        ensure_test_state();
+        dimmy_dictation_input(6, 0, 0);
+        assert_eq!(dimmy_dictation_input(1, 0, 0), 1, "toggle press starts");
+        assert_eq!(dimmy_dictation_phase(), 1);
+        // The host never says Cancel: the core's cancel is enough.
+        dimmy_cancel_recording();
+        assert_eq!(dimmy_dictation_phase(), 0);
     }
 
     // ── dimmy_cycle_llm_style tests ─────────────────────────────────
