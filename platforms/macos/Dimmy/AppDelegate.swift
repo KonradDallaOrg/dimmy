@@ -494,7 +494,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         didStartParakeetPreload = true
         hkLog("[AppDelegate] Parakeet onboarding preload starting (~466 MB)")
         appState.localSttBackend = "parakeet"
-        appState.parakeetDownloadProgress = 0.0
+        appState.bundleDownloadProgress["parakeet"] = 0
         appState.isDownloadingParakeet = true
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let ok = DimmyCore.shared.downloadParakeetBundle()

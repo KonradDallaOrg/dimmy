@@ -1595,13 +1595,15 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
             appState.llmModelDownloadFilename = payload["filename"] as? String ?? ""
         }
 
-    // Whistle and Nemotron report the same {downloaded,total} and drive the same bar.
+    // Same {downloaded,total} shape, one bar per engine.
     case "parakeet_bundle_download_progress", "whistle_download_progress",
          "nemotron_download_progress":
         if let downloaded = payload["downloaded"] as? Int,
            let total = payload["total"] as? Int,
            total > 0 {
-            appState.parakeetDownloadProgress = Double(downloaded) / Double(total)
+            let engine = event == "whistle_download_progress" ? "whistle"
+                : event == "nemotron_download_progress" ? "nemotron" : "parakeet"
+            appState.bundleDownloadProgress[engine] = Double(downloaded) / Double(total)
         }
 
     case "diarization_download_progress":

@@ -1239,7 +1239,11 @@ final class AppState: ObservableObject {
             return "Whisper \(stem)"
         }
     }
-    @Published var parakeetDownloadProgress: Double = 0.0
+    /// Download progress of the single-bundle engines, keyed by engine
+    /// ("parakeet", "whistle", "nemotron"). One shared value made two
+    /// downloads drive each other's bar (the onboarding Parakeet preload
+    /// running under a Whistle or Nemotron pick).
+    @Published var bundleDownloadProgress: [String: Double] = [:]
     @Published var isDownloadingParakeet: Bool = false
     @Published var parakeetBundlePresent: Bool = false
     /// 1 = on disk, 0 = not downloaded, -1 = no engine for this Mac.

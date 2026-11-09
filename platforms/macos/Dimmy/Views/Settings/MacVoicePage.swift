@@ -916,11 +916,11 @@ struct MacVoicePage: View {
                 }
             }
         } else if localBackendIsWhistle {
-            // Shares Parakeet's progress value: one bundle, one bar.
+            // A single bundle, like Parakeet: its bar is keyed by engine.
             downloadingIsParakeet = true
             downloadingTarget = "whistle"
             downloadingLabel = "Whistle (\(whistleSizeMb) MB)"
-            appState.parakeetDownloadProgress = 0
+            appState.bundleDownloadProgress["whistle"] = 0
             DispatchQueue.global(qos: .userInitiated).async {
                 let ok = DimmyCore.shared.downloadWhistle()
                 DispatchQueue.main.async {
@@ -933,13 +933,13 @@ struct MacVoicePage: View {
                 }
             }
         } else if localBackendIsNemotron {
-            // Shares Parakeet's progress value: one bundle, one bar.
+            // A single bundle, like Parakeet: its bar is keyed by engine.
             downloadingIsParakeet = true
             downloadingTarget = "nemotron"
             let wantsF32 = appState.nemotronModel == "f32"
             let downloadMb = nemotronSizeMb + (wantsF32 ? nemotronFullSizeMb : 0)
             downloadingLabel = "Nemotron 3.5 (\(downloadMb) MB)"
-            appState.parakeetDownloadProgress = 0
+            appState.bundleDownloadProgress["nemotron"] = 0
             DispatchQueue.global(qos: .userInitiated).async {
                 let ok = DimmyCore.shared.downloadNemotron()
                     && (!wantsF32 || DimmyCore.shared.downloadNemotronFull())
@@ -955,7 +955,7 @@ struct MacVoicePage: View {
         } else if localBackendIsParakeet {
             downloadingTarget = "parakeet"
             downloadingLabel = "Parakeet CoreML bundle (about 466 MB)"
-            appState.parakeetDownloadProgress = 0
+            appState.bundleDownloadProgress["parakeet"] = 0
             appState.isDownloadingParakeet = true
             DispatchQueue.global(qos: .userInitiated).async {
                 let ok = DimmyCore.shared.downloadParakeetBundle()
@@ -1084,7 +1084,8 @@ struct MacVoicePage: View {
     /// have a single bundle each, so their own flags are unambiguous.
     private var downloadingProgress: Double {
         if downloadingIsQwen { return appState.qwenDownloadProgress }
-        if downloadingIsParakeet { return appState.parakeetDownloadProgress }
+        // downloadingTarget is the engine key for the single-bundle ones.
+        if downloadingIsParakeet { return appState.bundleDownloadProgress[downloadingTarget] ?? 0 }
         guard appState.modelDownloadFilename == downloadingTarget else { return 0 }
         return appState.modelDownloadProgress
     }
