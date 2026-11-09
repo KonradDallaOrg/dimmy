@@ -2554,6 +2554,23 @@ public partial class App : Application
     /// sees the recap cards populated without having to click around.
     /// No-op when no MeetingWindow is open — the artefacts are on
     /// disk and visible next time it's opened.
+    /// <summary>The pill / hotkey / call-detect stop pipeline is over,
+    /// however it ended. An open meeting window still on "Wrapping up"
+    /// leaves it: to the meeting when there is one, else to the list.</summary>
+    public void NotifyMeetingStopEnded(string? dir)
+    {
+        try
+        {
+            var w = _meetingWindow;
+            w?.DispatcherQueue?.TryEnqueue(() =>
+            {
+                try { w.LeaveWrapUp(dir); }
+                catch (Exception ex) { Log($"NotifyMeetingStopEnded dispatch exc: {ex.Message}", "Meeting"); }
+            });
+        }
+        catch (Exception ex) { Log($"NotifyMeetingStopEnded exc: {ex.Message}", "Meeting"); }
+    }
+
     public void NotifyMeetingRecapSaved(string dir)
     {
         try

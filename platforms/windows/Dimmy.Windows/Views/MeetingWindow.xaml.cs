@@ -28,6 +28,12 @@ public sealed partial class MeetingWindow : Window
     private enum MeetingState { Idle, Recording, Processing, Done }
 
     private DispatcherQueueTimer? _clockTimer;
+    /// <summary>Processing because another surface stopped the meeting:
+    /// the recap runs on the service path, so closing loses nothing.</summary>
+    private bool _externalWrapUp;
+    /// <summary>BeginStartAsync is running: the core's meeting_state for
+    /// our own start must not read as an outside start.</summary>
+    private bool _startInFlight;
     private DispatcherQueueTimer? _toastTimer;
     private DispatcherQueueTimer? _announceTimer;
     private DateTime _startedAt;
@@ -192,7 +198,7 @@ public sealed partial class MeetingWindow : Window
                     // When the user reopens MeetingWindow, the ctor's
                     // dimmy_meeting_is_active() probe re-attaches the
                     // UI to the in-flight session (existing logic).
-                    if (_state == MeetingState.Processing)
+                    if (_state == MeetingState.Processing && !_externalWrapUp)
                     {
                         // The narrow case where we're mid stop-flow
                         // (LLM recap in progress) — let it finish so we
@@ -284,28 +290,7 @@ public sealed partial class MeetingWindow : Window
         {
             if (DimmyNative.dimmy_meeting_is_active() == 1)
             {
-                // NOT DateTime.UtcNow: this window is re-attaching to a meeting
-                // that started earlier, and starting the clock now made it read
-                // 00:00:11 beside a transcript line stamped 00:01:31. The
-                // meeting directory is created when the meeting starts, and
-                // meta.json only lands at stop, so its creation time is the one
-                // start instant available while recording.
-                _startedAt = MeetingStartedAtUtc() ?? DateTime.UtcNow;
-                _liveTranscriptBuilder.Clear();
-                _ampHistory.Clear();
-                _ampHistorySystem.Clear();
-                _recordingActive = true;
-                AppContextName.Text = "Microphone";
-                SetState(MeetingState.Recording);
-                // Everything transcribed before this window opened is already
-                // on disk: the core writes transcripts.txt line by line and
-                // flushes each one. Clearing the pane and showing a
-                // placeholder threw that away, so closing and reopening a
-                // meeting looked like it had lost the conversation — and at a
-                // 30 s window the next chunk can be half a minute away.
-                BackfillLiveTranscript();
-                StartClock();
-                StartAmplitudePoll();
+                AttachToLiveMeeting();
                 App.Log("ctor: re-attached to active meeting", "Meeting");
             }
 
@@ -318,10 +303,60 @@ public sealed partial class MeetingWindow : Window
         catch (Exception ex) { App.Log($"resync exc: {ex.Message}", "Meeting"); }
     }
 
+    /// <summary>Show the meeting the core is recording now. From the ctor
+    /// (window opened mid-meeting) and from an outside start (shortcut,
+    /// menu, call detect) while this window sat on Idle, which used to
+    /// leave it there with Start refused.</summary>
+    private void AttachToLiveMeeting()
+    {
+        // NOT DateTime.UtcNow: this window is re-attaching to a meeting
+        // that started earlier, and starting the clock now made it read
+        // 00:00:11 beside a transcript line stamped 00:01:31. The
+        // meeting directory is created when the meeting starts, and
+        // meta.json only lands at stop, so its creation time is the one
+        // start instant available while recording.
+        _startedAt = MeetingStartedAtUtc() ?? DateTime.UtcNow;
+        _liveTranscriptBuilder.Clear();
+        _ampHistory.Clear();
+        _ampHistorySystem.Clear();
+        _recordingActive = true;
+        AppContextName.Text = "Microphone";
+        StopBtn.IsEnabled = true;
+        SetState(MeetingState.Recording);
+        // Everything transcribed before this window opened is already
+        // on disk: the core writes transcripts.txt line by line and
+        // flushes each one. Clearing the pane and showing a
+        // placeholder threw that away, so closing and reopening a
+        // meeting looked like it had lost the conversation — and at a
+        // 30 s window the next chunk can be half a minute away.
+        BackfillLiveTranscript();
+        StartClock();
+        StartAmplitudePoll();
+    }
+
+    /// <summary>The outside stop pipeline ended (see
+    /// App.NotifyMeetingStopEnded). Still on "Wrapping up" means nothing
+    /// routed us to Done: go to the meeting if there is one, else idle.</summary>
+    public void LeaveWrapUp(string? dir)
+    {
+        if (_state != MeetingState.Processing || !_externalWrapUp) return;
+        App.Log($"stop pipeline ended with the window on Wrapping up (dir={(string.IsNullOrEmpty(dir) ? "none" : "yes")})", "Meeting");
+        if (!string.IsNullOrEmpty(dir))
+        {
+            RefreshAndSelectDir(dir);
+            return;
+        }
+        EndLiveRecap();
+        SetState(MeetingState.Idle);
+        StartBtn.IsEnabled = true;
+        LoadHistory();
+    }
+
     // ── State machine ──────────────────────────────────────────────
 
     private void SetState(MeetingState s)
     {
+        if (s != MeetingState.Processing) _externalWrapUp = false;
         _state = s;
         IdlePanel.Visibility = s == MeetingState.Idle ? Visibility.Visible : Visibility.Collapsed;
         RecordingPanel.Visibility = s == MeetingState.Recording ? Visibility.Visible : Visibility.Collapsed;
@@ -394,6 +429,13 @@ public sealed partial class MeetingWindow : Window
         BeginStartAsync(fromCallDetect: true, autoConsent: autoConsent);
 
     private async Task<bool> BeginStartAsync(bool fromCallDetect, bool autoConsent = false)
+    {
+        _startInFlight = true;
+        try { return await BeginStartCoreAsync(fromCallDetect, autoConsent); }
+        finally { _startInFlight = false; }
+    }
+
+    private async Task<bool> BeginStartCoreAsync(bool fromCallDetect, bool autoConsent)
     {
         StartBtn.IsEnabled = false;
         try
@@ -1160,7 +1202,23 @@ public sealed partial class MeetingWindow : Window
         if (e.PropertyName != nameof(ViewModels.AppViewModel.MeetingActive)) return;
         var vm = App.Instance?.AppViewModel;
         if (vm == null) return;
-        if (vm.MeetingActive) return;        // start transition — handled elsewhere
+        if (vm.MeetingActive)
+        {
+            // Our own start drives the window itself; an outside one did
+            // nothing here and the window stayed Idle.
+            if (_startInFlight || _recordingActive) return;
+            DispatcherQueue?.TryEnqueue(() =>
+            {
+                try
+                {
+                    if (_state != MeetingState.Idle || _startInFlight || _recordingActive) return;
+                    App.Log("meeting_state=true from an outside start — attaching the idle window", "Meeting");
+                    AttachToLiveMeeting();
+                }
+                catch (Exception ex) { App.Log($"outside-start attach exc: {ex.Message}", "Meeting"); }
+            });
+            return;
+        }
         if (!_recordingActive) return;        // already wrapped up locally
         DispatcherQueue?.TryEnqueue(() =>
         {
@@ -1172,6 +1230,7 @@ public sealed partial class MeetingWindow : Window
                 _recordingActive = false;
                 StopBtn.IsEnabled = false;
                 SetState(MeetingState.Processing);
+                _externalWrapUp = true;
                 ResetProcSteps();
                 SetProcStep(1, true);
                 // The recap is running on the SERVICE path (pill stop), which

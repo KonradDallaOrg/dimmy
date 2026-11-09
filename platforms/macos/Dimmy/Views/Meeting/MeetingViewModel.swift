@@ -273,25 +273,7 @@ final class MeetingViewModel: ObservableObject {
         AppState.shared.$meetingIsPaused
             .receive(on: DispatchQueue.main)
             .sink { [weak self] paused in
-                guard let self else { return }
-                if paused != self.isPaused {
-                    self.isPaused = paused
-                    self.statusLabel = paused ? "Paused" : "Recording"
-                    // Freeze / resume the elapsed-time clock so the
-                    // timer label matches the recording the worker
-                    // actually keeps (meeting.rs gap-skips the paused
-                    // window, the WAV + transcript exclude it). On
-                    // pause: stamp the pause-start instant. On resume:
-                    // fold the paused span into pausedAccumulator so
-                    // pollTick subtracts it from the wall-clock delta.
-                    if paused {
-                        self.pauseStartedAt = Date()
-                    } else if let pausedAt = self.pauseStartedAt {
-                        self.pausedAccumulator += Date().timeIntervalSince(pausedAt)
-                        self.pauseStartedAt = nil
-                    }
-                    self.pollTick()
-                }
+                self?.setPaused(paused)
             }
             .store(in: &liveTranscriptBag)
         // Mirror Win: when an EXTERNAL surface (pill stop, call-detect
@@ -318,6 +300,14 @@ final class MeetingViewModel: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] active in
                 guard let self else { return }
+                // Started elsewhere (shortcut, menu, call detect) while this
+                // window sat idle: it used to stay on Idle with Start
+                // refused. Its own start sets .recording before the core's
+                // event, so this only fires for an outside start.
+                if active, self.phase == .idle, !self.isWorking {
+                    self.attachToInflightMeeting()
+                    return
+                }
                 if !active, self.phase == .recording {
                     self.stopPollingForExternalStop()
                     self.phase = .processing
@@ -714,15 +704,34 @@ final class MeetingViewModel: ObservableObject {
         let currentlyPaused = DimmyCore.shared.meetingIsPaused
         if currentlyPaused {
             _ = DimmyCore.shared.meetingResume()
-            isPaused = false
-            statusLabel = "Recording"
+            setPaused(false)
             showToast("Resumed.")
         } else {
             _ = DimmyCore.shared.meetingPause()
-            isPaused = true
-            statusLabel = "Paused"
+            setPaused(true)
             showToast("Paused, audio + transcript skipped until you resume.")
         }
+    }
+
+    /// The one place the pause flag and its clock change, together. The
+    /// button used to set `isPaused` itself before the core's event
+    /// arrived, so the event saw no change and the clock never froze: the
+    /// timer kept counting through every pause started from this window.
+    ///
+    /// The clock matches the recording the worker keeps (meeting.rs
+    /// gap-skips the paused window): on pause stamp the instant, on resume
+    /// fold the span into pausedAccumulator, which pollTick subtracts.
+    func setPaused(_ paused: Bool) {
+        guard paused != isPaused else { return }
+        isPaused = paused
+        statusLabel = paused ? "Paused" : "Recording"
+        if paused {
+            pauseStartedAt = Date()
+        } else if let pausedAt = pauseStartedAt {
+            pausedAccumulator += Date().timeIntervalSince(pausedAt)
+            pauseStartedAt = nil
+        }
+        pollTick()
     }
 
     // MARK: - Stop

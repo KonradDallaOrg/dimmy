@@ -1940,6 +1940,7 @@ public sealed partial class PillWindow : Window
     /// - On error: surface a brief pill error tag.
     internal async System.Threading.Tasks.Task StopMeetingFromPillAsync()
     {
+        string? stoppedDir = null;
         try
         {
             App.Log("Pill Stop while meeting active — calling dimmy_meeting_stop", "Pill");
@@ -1981,6 +1982,7 @@ public sealed partial class PillWindow : Window
                 _vm.SetError($"Meeting stop rc={rc}");
                 return;
             }
+            stoppedDir = dir;
             if (stopError != null)
             {
                 App.Log($"Pill Stop: meeting stop reported error: {stopError}", "Pill");
@@ -2048,10 +2050,14 @@ public sealed partial class PillWindow : Window
         }
         finally
         {
+            // Every way out lets an open meeting window leave "Wrapping
+            // up": a failed stop (rc <= 0, an exception, no folder) used to
+            // return without a word, and the window refused to close for good.
+            App.Instance?.NotifyMeetingStopEnded(stoppedDir);
             // Always exit the Transcribing state — Idle on success, Error
             // already sets its own state.
             if (_vm.CurrentState == AppState.Transcribing)
-                _vm.SetState(AppState.Idle);
+                _vm.ReturnToRest();
             // The meeting just ended; clear our internal flag so the
             // meeting-state poll doesn't immediately push us back to
             // Recording on the next tick.
