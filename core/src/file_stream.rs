@@ -290,7 +290,7 @@ fn open_symphonia(
         .unwrap_or(1)
         .max(1);
     let total_frames = track.codec_params.n_frames;
-    let decoder = symphonia::default::get_codecs()
+    let decoder = codecs()
         .make(&track.codec_params, &DecoderOptions::default())
         .map_err(|e| format!("decoder: {e}"))?;
     Ok((
@@ -481,6 +481,26 @@ where
     }
 }
 
+/// The decoders every file path uses: Symphonia's own, plus Opus through
+/// libopus, which Symphonia lacks. A Telegram voice note is Opus in Ogg; with
+/// `symphonia::default::get_codecs()` alone it was "unsupported codec".
+pub fn codecs() -> &'static symphonia::core::codecs::CodecRegistry {
+    static CODECS: std::sync::LazyLock<symphonia::core::codecs::CodecRegistry> =
+        std::sync::LazyLock::new(|| {
+            let mut registry = symphonia::core::codecs::CodecRegistry::new();
+            symphonia::default::register_enabled_codecs(&mut registry);
+            registry.register_all::<symphonia_adapter_libopus::OpusDecoder>();
+            assert!(
+                registry
+                    .get_codec(symphonia::core::codecs::CODEC_TYPE_OPUS)
+                    .is_some(),
+                "the Opus decoder is registered"
+            );
+            registry
+        });
+    &CODECS
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -585,6 +605,41 @@ mod tests {
             "streamed decode: {streamed_secs:.3}s, expected ~2s"
         );
         assert_eq!(n as usize, mono.len(), "both decoders agree");
+    }
+
+    /// A Telegram voice note is Opus in an Ogg file (`voice-N.ogg`). The
+    /// Symphonia build has no Opus decoder, and both decoders answered
+    /// "unsupported codec": no voice note could be transcribed, and the Mac
+    /// could not play one. 11 s of speech, encoded with libopusenc.
+    #[test]
+    fn a_telegram_voice_note_in_opus_decodes_at_its_real_length() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/jfk_opus_voice_note.ogg"
+        );
+
+        let (mono, rate) = crate::ffi::decode_via_symphonia(path).unwrap();
+        let whole_secs = mono.len() as f64 / rate as f64;
+        assert!(
+            (whole_secs - 11.0).abs() < 0.1,
+            "whole-file decode: {whole_secs:.3}s, expected ~11s"
+        );
+        assert!(mono.iter().all(|s| s.is_finite()));
+        let peak = mono.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!(peak > 0.1, "speech, not silence: peak {peak}");
+
+        let mut stream = FileAudioStream::open(path).unwrap();
+        let mut n = 0u64;
+        let mut block = Vec::new();
+        while stream.read_block(&mut block) {
+            n += block.len() as u64;
+            block.clear();
+        }
+        let streamed_secs = n as f64 / stream.sample_rate as f64;
+        assert!(
+            (streamed_secs - 11.0).abs() < 0.1,
+            "streamed decode: {streamed_secs:.3}s, expected ~11s"
+        );
     }
 
     #[test]
