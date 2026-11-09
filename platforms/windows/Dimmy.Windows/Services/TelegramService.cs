@@ -33,9 +33,6 @@ public sealed class TelegramService : IDisposable
     private bool _promptShowing;
     private bool _autoProcess;
     private bool _disposed;
-    /// True while this service is the one driving the pill. Telegram work ran
-    /// for minutes with the pill idle, which read as a frozen app.
-    private bool _drivingPill;
 
     private const string StartedReply =
         "Dimmy got it. Transcribing now, I will reply here when the recap is ready.";
@@ -148,7 +145,7 @@ public sealed class TelegramService : IDisposable
         // The worker downloaded the file; transcribe + recap off the UI
         // thread, reusing the exact file-load pipeline the Settings card uses.
         // dimmy_transcribe_file saves the transcript to History itself.
-        BeginPillActivity(ViewModels.AppState.Transcribing);
+        var endPill = BeginPillActivity();
         _ = System.Threading.Tasks.Task.Run(async () =>
         {
             try
@@ -158,7 +155,7 @@ public sealed class TelegramService : IDisposable
                 if (rc <= 0)
                 {
                     App.Log($"Telegram transcribe rc={rc} file={filename}", "Telegram");
-                    EndPillActivity();
+                    endPill();
                     DictNotificationService.ShowTelegramFailed(filename);
                     DimmyNative.dimmy_telegram_reply(msgId,
                         "Dimmy could not transcribe this one. It stays in the inbox, so sending it again is not needed.");
@@ -170,14 +167,14 @@ public sealed class TelegramService : IDisposable
                 // pill says so itself ("Recap...", from the recap counter).
                 // Holding Processing here gave the same work two different
                 // labels depending on where it started. Mac parity.
-                EndPillActivity();
+                endPill();
                 var result = await FileLoadToMeetingService.RunAsync(path, transcript);
 
                 // Transcript is saved to History regardless of recap outcome,
                 // so mark the message done either way (retrying wouldn't help
                 // if the recap failed on missing LLM config).
                 DimmyNative.dimmy_telegram_mark_processed(msgId);
-                EndPillActivity();
+                endPill();
 
                 if (result.Success)
                 {
@@ -197,7 +194,7 @@ public sealed class TelegramService : IDisposable
             catch (Exception ex)
             {
                 App.Log($"Telegram OnAudioReady EXC: {ex.Message}", "Telegram");
-                EndPillActivity();
+                endPill();
                 DictNotificationService.ShowTelegramFailed(filename);
             }
         });
@@ -208,31 +205,21 @@ public sealed class TelegramService : IDisposable
         App.Log($"Telegram worker error: {message}", "Telegram");
     }
 
-    /// <summary>Light up the pill, but never take it from a dictation or a
-    /// meeting: those own the same state and their stop paths would then be
-    /// fighting this one.</summary>
-    private void BeginPillActivity(ViewModels.AppState state)
+    /// <summary>Background work, like a loaded file: the pill says
+    /// "Transcribing..." through TranscribesRunning while the dictation is
+    /// idle, and a dictation started meanwhile takes the pill. Telegram used
+    /// to hold the dictation's Transcribing state, which refused that
+    /// dictation. Mac parity: TelegramService.swift. Returns the job's end,
+    /// which counts down once however many exits call it.</summary>
+    private Action BeginPillActivity()
     {
-        _dispatcher.TryEnqueue(() =>
+        _dispatcher.TryEnqueue(() => _vm.TranscribesRunning++);
+        int ended = 0;
+        return () =>
         {
-            if (!_drivingPill && _vm.CurrentState != ViewModels.AppState.Idle) return;
-            _drivingPill = true;
-            _vm.SetState(state);
-        });
-    }
-
-    /// <summary>Back to idle, unless something else took the pill over.</summary>
-    private void EndPillActivity()
-    {
-        _dispatcher.TryEnqueue(() =>
-        {
-            if (!_drivingPill) return;
-            _drivingPill = false;
-            // A dictation that started meanwhile keeps the pill: it used to
-            // be reset to Idle while that dictation was transcribing.
-            if (_vm.CurrentState is ViewModels.AppState.Transcribing or ViewModels.AppState.Processing)
-                _vm.ReturnToRest();
-        });
+            if (System.Threading.Interlocked.Exchange(ref ended, 1) == 0)
+                _dispatcher.TryEnqueue(() => _vm.TranscribesRunning--);
+        };
     }
 
     /// <summary>The finished-work reply, from the recap.md the pipeline just

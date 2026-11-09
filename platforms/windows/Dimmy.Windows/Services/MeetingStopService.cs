@@ -29,12 +29,22 @@ public static class MeetingStopService
             return false;
         }
         string? stoppedDir = null;
+        // Background work, like a loaded file: the pill says
+        // "Transcribing..." through TranscribesRunning until the transcript
+        // is final, then "Recap..." through RecapsRunning. The dictation
+        // state is never written, so a dictation can start while the meeting
+        // saves. Mac parity: PillWindowController.stopMeetingFromPill.
+        bool transcribing = true;
+        vm.TranscribesRunning++;
+        void TranscriptFinal()
+        {
+            if (!transcribing) return;
+            transcribing = false;
+            vm.TranscribesRunning--;
+        }
         try
         {
             App.Log("meeting stop — calling dimmy_meeting_stop", "Meeting");
-            // The pill says "Transcribing..." until the transcript is final
-            // and the recap (RecapsRunning) takes over. ReturnToRest below.
-            vm.SetState(AppState.Transcribing);
 
             var (rc, dir, transcript, stopError, labeled) = await Task.Run(() =>
             {
@@ -77,6 +87,7 @@ public static class MeetingStopService
             // transcript before the recap reads it.
             if (!string.IsNullOrEmpty(dir))
                 transcript = await DiarizationService.RelabelIfEnabledAsync(dir, transcript, labeled);
+            TranscriptFinal();
             if (wantRecap && !string.IsNullOrEmpty(dir) && !string.IsNullOrWhiteSpace(transcript))
             {
                 var result = await MeetingPostProcessService.RunRecapAsync(dir, transcript);
@@ -115,9 +126,8 @@ public static class MeetingStopService
             // Every way out lets an open meeting window leave "Wrapping up":
             // a failed stop (rc <= 0, an exception, no folder) used to return
             // without a word, and the window refused to close for good.
+            TranscriptFinal();
             App.Instance?.NotifyMeetingStopEnded(stoppedDir);
-            if (vm.CurrentState == AppState.Transcribing)
-                vm.ReturnToRest();
             Volatile.Write(ref _inFlight, 0);
         }
     }

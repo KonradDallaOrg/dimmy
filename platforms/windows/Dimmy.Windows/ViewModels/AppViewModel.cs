@@ -245,6 +245,13 @@ public partial class AppViewModel : ObservableObject
     /// start while a meeting re-transcribes.</summary>
     [ObservableProperty] private int _transcribesRunning;
 
+    /// <summary>Whether the pill should say a background transcription is
+    /// running (a meeting that saves, a loaded file, Telegram). Only while
+    /// otherwise idle, and the recap label wins. Mac parity:
+    /// PillView.showsBackgroundTranscribe.</summary>
+    public static bool ShowsBackgroundTranscribe(AppState state, int recapsRunning, int transcribesRunning)
+        => state == AppState.Idle && recapsRunning == 0 && transcribesRunning > 0;
+
     /// <summary>The state the taskbar and the tray show: the app's own,
     /// or, while idle, the background work. A recap wins over a
     /// transcription.</summary>

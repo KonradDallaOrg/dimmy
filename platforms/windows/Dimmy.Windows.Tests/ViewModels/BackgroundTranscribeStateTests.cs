@@ -37,6 +37,38 @@ public class BackgroundTranscribeStateTests
         Assert.Equal(state, AppViewModel.IndicatedState(state, 1, 1));
     }
 
+    // A meeting that saves is background work, as on the Mac
+    // (PillView.showsBackgroundTranscribe): the pill says so while idle,
+    // and a dictation started meanwhile takes the pill.
+    [Fact]
+    public void An_idle_pill_with_a_transcription_running_says_so()
+    {
+        Assert.True(AppViewModel.ShowsBackgroundTranscribe(AppState.Idle, 0, 1));
+    }
+
+    [Fact]
+    public void An_idle_pill_with_nothing_running_stays_idle()
+    {
+        Assert.False(AppViewModel.ShowsBackgroundTranscribe(AppState.Idle, 0, 0));
+    }
+
+    [Fact]
+    public void The_recap_label_wins_over_the_transcription_label()
+    {
+        Assert.False(AppViewModel.ShowsBackgroundTranscribe(AppState.Idle, 1, 1));
+    }
+
+    [Theory]
+    [InlineData(AppState.Recording)]
+    [InlineData(AppState.Transcribing)]
+    [InlineData(AppState.Processing)]
+    [InlineData(AppState.Completing)]
+    [InlineData(AppState.Error)]
+    public void A_dictation_keeps_the_pill_during_a_meeting_save(AppState state)
+    {
+        Assert.False(AppViewModel.ShowsBackgroundTranscribe(state, 0, 1));
+    }
+
     [Fact]
     public void Overlapping_transcriptions_are_counted_not_flagged()
     {

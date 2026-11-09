@@ -158,7 +158,8 @@ public sealed partial class PillWindow : Window
     {
         if (e.PropertyName == nameof(AppViewModel.CurrentState) || e.PropertyName == nameof(AppViewModel.BorderStyle)
             || e.PropertyName == nameof(AppViewModel.Theme)
-            || e.PropertyName == nameof(AppViewModel.RecapsRunning))
+            || e.PropertyName == nameof(AppViewModel.RecapsRunning)
+            || e.PropertyName == nameof(AppViewModel.TranscribesRunning))
             DispatcherQueue.TryEnqueue(UpdateVisualState);
         if (e.PropertyName == nameof(AppViewModel.LlmStyle)
             || e.PropertyName == nameof(AppViewModel.CommandMode)
@@ -788,12 +789,15 @@ public sealed partial class PillWindow : Window
         // Apply text colors for theme
         ApplyThemeColors();
 
-        // A recap owns the pill only while nothing else does, so the panel
-        // cannot be derived from the state alone.
+        // Background work (a recap, a meeting that saves, a loaded file)
+        // owns the pill only while nothing else does, so the panel cannot
+        // be derived from the state alone.
+        bool backgroundTranscribe = AppViewModel.ShowsBackgroundTranscribe(
+            _vm.CurrentState, _vm.RecapsRunning, _vm.TranscribesRunning);
         FrameworkElement? newPanel =
-            AppViewModel.ShowsRecap(_vm.CurrentState, _vm.RecapsRunning)
-                ? RecapPanel
-                : GetPanelForState(_vm.CurrentState);
+            AppViewModel.ShowsRecap(_vm.CurrentState, _vm.RecapsRunning) ? RecapPanel
+            : backgroundTranscribe ? TranscribingPanel
+            : GetPanelForState(_vm.CurrentState);
 
         // Make new panel visible (animation will fade it in from 0)
         if (newPanel != null && newPanel != oldPanel)
@@ -812,6 +816,18 @@ public sealed partial class PillWindow : Window
 
         switch (_vm.CurrentState)
         {
+            case AppState.Idle when backgroundTranscribe:
+                // The Transcribing capsule, but the dictation stays idle: a
+                // press starts a dictation, which takes the pill.
+                SetPillBodyColor(IsGlass ? BgGlassActive : BgDark);
+                RootGrid.Opacity = 1.0;
+                Waveform.IsActive = false;
+                ChunkText.Text = "";
+                StopRainbowAnimation();
+                AnimateToCapsule(ColorTranscribing, newPanel, oldPanel);
+                UpdateGlow(ColorTranscribing);
+                break;
+
             case AppState.Idle:
                 RefreshStyleDot();
                 RootGrid.Opacity = 1.0;
@@ -1172,11 +1188,16 @@ public sealed partial class PillWindow : Window
             AnimateToCapsule(GetBorderColorForRecording(), newPanel, oldPanel, skipBorderColor: rainbow);
     }
 
+    // The hover capsule and the idle circle would replace the Transcribing
+    // capsule of a meeting that saves.
+    private bool BackgroundTranscribeShown => AppViewModel.ShowsBackgroundTranscribe(
+        _vm.CurrentState, _vm.RecapsRunning, _vm.TranscribesRunning);
+
     private void Pill_PointerEntered(object sender, PointerRoutedEventArgs e)
     {
         _pointerOver = true;
         if (_vm.CurrentState == AppState.Recording) AnimateRecordingShape();
-        if (_vm.CurrentState == AppState.Idle)
+        if (_vm.CurrentState == AppState.Idle && !BackgroundTranscribeShown)
         {
             RootGrid.Opacity = 0.95;
             // Pill language label = output TRANSLATION target, NOT STT input.
@@ -1202,7 +1223,7 @@ public sealed partial class PillWindow : Window
     {
         _pointerOver = false;
         if (_vm.CurrentState == AppState.Recording) AnimateRecordingShape();
-        if (_vm.CurrentState == AppState.Idle)
+        if (_vm.CurrentState == AppState.Idle && !BackgroundTranscribeShown)
         {
             RootGrid.Opacity = 1.0;
             LanguageHost.Visibility = Visibility.Collapsed;
