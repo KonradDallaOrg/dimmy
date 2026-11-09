@@ -44,6 +44,29 @@ the brief). Not runnable here: Mac XCTest (no GUI session over SSH); FlaUI
 not run locally (it kills the running Dimmy and deletes the real
 `.onboarding_done`), it runs in CI on the PR.
 
+### Session 3, after the fresh review
+
+- Review (fresh agent, report in this session): clippy clean, lib 1406/1406,
+  `ffi_e2e` 14/14. HIGH, fixed in `8c87da36`: the stop guard was held through
+  the recap, so a meeting started meanwhile could not be stopped (Win + Mac).
+  Also fixed there: a recap error took the pill from a dictation.
+  Still open, all LOW: dictation release without an id (`capture.rs:141`,
+  latent), `dimmy_stop_recording` has no meeting guard (older), live-typing
+  failure flag reads the current DICTATION_GEN, `TranscriberHealth::status`
+  ignores dropped windows, `Reason::classify` matches "401"/"403" anywhere,
+  `update_meta` has no lock, `pending_pause` overwritten by a second edge,
+  window in Wrap-up does not attach a new meeting.
+- Import (user: "WAV to ogg, rest as-is"), `5514ce62`: a WAV is re-encoded
+  with `TrackSink`; any other file keeps its bytes and extension; oga/opus/webm
+  in every track list. Mac preflight OK on `5514ce62`.
+- **Opus is not decodable** (proven with a real Ogg Opus file made from
+  `jfk_16k_mono.wav` with libopusenc): `FileAudioStream::open` and
+  `decode_via_symphonia` both answer `unsupported codec`. So a Telegram voice
+  note cannot be transcribed on any OS, nor played on the Mac. Fix needs an
+  Opus decoder (new native dependency): the user decides; separate branch.
+- Flaky under full parallel load (debug): `encoding_is_not_the_bottleneck::
+  three_tracks_cost_a_small_fraction_of_the_audio_they_encode`; passes alone.
+
 ## Session 2 (2026-11-09 evening): items 1-7 done, read this first
 
 Moving to the other PC. 10 more commits on the branch (25 in all), from
