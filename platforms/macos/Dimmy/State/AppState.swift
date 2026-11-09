@@ -2287,6 +2287,9 @@ final class AppState: ObservableObject {
                                                 autoRecord: callDetectAutoRecord)
             guard MeetingWindowController.shared.viewModel.start(consent: auto ? .announceOnly : .modal) else {
                 dimmyHostLog("[CallDetect] record_now for \(app ?? "<unknown app>") not started (window refused or consent declined)")
+                // The nudge was answered: tell the core it is "not this
+                // call", so it neither re-offers it at once nor stays armed.
+                _ = DimmyCore.shared.callSignalResponse(appId: app, response: "record_aborted")
                 break
             }
             _ = DimmyCore.shared.callSignalResponse(appId: app, response: response)

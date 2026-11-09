@@ -12391,6 +12391,7 @@ pub unsafe extern "C" fn dimmy_call_signal_response(
         "stop_and_recap" => NudgeResponse::StopAndRecap,
         "keep_recording" => NudgeResponse::KeepRecording,
         "stop_timeout" => NudgeResponse::StopTimeout,
+        "record_aborted" => NudgeResponse::RecordAborted,
         _ => return -2,
     };
     let app: Option<String> = if app_id.is_null() {

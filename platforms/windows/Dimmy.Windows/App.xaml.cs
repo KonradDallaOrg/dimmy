@@ -2502,6 +2502,7 @@ public partial class App : Application
             if (_meetingWindow == null)
             {
                 Log("StartMeetingFromCallDetect: no meeting window", "CallDetect");
+                AbortCallRecord();
                 return;
             }
             await _meetingWindow.EnsureDialogRootAsync();
@@ -2509,6 +2510,7 @@ public partial class App : Application
             if (!started)
             {
                 Log("StartMeetingFromCallDetect: not started (declined or failed)", "CallDetect");
+                AbortCallRecord();
                 return;
             }
             Log("StartMeetingFromCallDetect: meeting started via window", "CallDetect");
@@ -2526,7 +2528,17 @@ public partial class App : Application
         catch (Exception ex)
         {
             Log($"StartMeetingFromCallDetect EXC: {ex.Message}", "CallDetect");
+            if (DimmyNative.dimmy_meeting_is_active() != 1) AbortCallRecord();
         }
+    }
+
+    /// "Record" was accepted (record_now already told the core) but no
+    /// meeting started. Without this the detector believed a recording of
+    /// ours was running and stayed quiet for every later call.
+    private void AbortCallRecord()
+    {
+        try { DimmyNative.dimmy_call_signal_response(null, "record_aborted"); }
+        catch (Exception ex) { Log($"record_aborted EXC: {ex.Message}", "CallDetect"); }
     }
 
     /// the Settings home → Meeting card.
