@@ -810,15 +810,17 @@ const LOGIN_ARGS: [&str; 3] = ["login", "--region", "global"];
 pub fn spawn_login() -> Result<(), KimiError> {
     let binary = detect_binary().ok_or(KimiError::NotInstalled)?;
 
+    // Windows: `kimi` gets a console of its own, with a real stdin. The
+    // Codex pattern (`cmd /c start` with null stdio) does not work here:
+    // started from the GUI app, `kimi login` saw a closed stdin and quit
+    // before opening the browser (2026-11-09; from a terminal it worked).
     #[cfg(target_os = "windows")]
     {
-        let mut cmd = Command::new("cmd");
-        cmd.args(["/c", "start", ""]);
-        cmd.arg(&binary);
+        use std::os::windows::process::CommandExt;
+        const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+        let mut cmd = Command::new(&binary);
         cmd.args(LOGIN_ARGS);
-        cmd.stdin(std::process::Stdio::null());
-        cmd.stdout(std::process::Stdio::null());
-        cmd.stderr(std::process::Stdio::null());
+        cmd.creation_flags(CREATE_NEW_CONSOLE);
         cmd.spawn().map_err(|e| KimiError::Spawn(e.to_string()))?;
     }
     #[cfg(target_os = "macos")]
