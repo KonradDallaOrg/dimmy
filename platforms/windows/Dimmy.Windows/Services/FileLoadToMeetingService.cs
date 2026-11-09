@@ -52,10 +52,12 @@ public static class FileLoadToMeetingService
             // meta.json) in the shape a live one has: this service used to
             // write all of it, with its own folder names and a local-time
             // `started_at` string where every other meeting has Unix seconds.
+            // Off the UI thread: a WAV is re-encoded to Ogg here, seconds
+            // for a long file.
             var buf = new byte[4096];
-            int n = Dimmy.Windows.Interop.DimmyNative.dimmy_meeting_import(
+            int n = await Task.Run(() => Dimmy.Windows.Interop.DimmyNative.dimmy_meeting_import(
                 string.IsNullOrEmpty(sourceWavPath) ? null : sourceWavPath,
-                transcript, durationSecs, buf, buf.Length);
+                transcript, durationSecs, buf, buf.Length));
             if (n <= 0)
                 return new Result { Success = false, Error = $"could not create the meeting (rc {n})" };
             var dir = System.Text.Encoding.UTF8.GetString(buf, 0, n);

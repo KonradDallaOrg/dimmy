@@ -12927,7 +12927,7 @@ pub unsafe extern "C" fn dimmy_telegram_pending(out_buf: *mut c_char, buf_len: c
 /// in. The Mac file-load bridge keeps the source's own extension, so
 /// `audio.m4a` has to be found here as well as in the host; Symphonia decodes
 /// all of them.
-fn resolve_meeting_track(dir: &std::path::Path, base: &str) -> Option<String> {
+pub(crate) fn resolve_meeting_track(dir: &std::path::Path, base: &str) -> Option<String> {
     crate::meeting::TRACK_EXTENSIONS
         .iter()
         .map(|ext| dir.join(format!("{base}.{ext}")))

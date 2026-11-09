@@ -1306,7 +1306,7 @@ final class MeetingViewModel: ObservableObject {
     /// containers a loaded file or a Telegram audio arrives in. File load used
     /// to copy every source as `audio.wav`, so an .m4a lost its waveform, its
     /// duration and its language detection; it now keeps its own extension.
-    nonisolated static let meetingAudioExtensions = ["ogg", "wav", "m4a", "mp3", "aac", "flac", "mp4"]
+    nonisolated static let meetingAudioExtensions = ["ogg", "wav", "m4a", "mp3", "aac", "flac", "mp4", "oga", "opus", "webm"]
 
     /// Resolve a meeting audio track to its on-disk URL, preferring the
     /// newer Ogg/Vorbis file (`feat/meeting-live-notes`) over the older

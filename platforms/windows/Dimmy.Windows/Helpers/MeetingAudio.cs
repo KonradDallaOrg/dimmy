@@ -7,9 +7,9 @@ namespace Dimmy.Windows.Helpers;
 /// Where a meeting's audio lives on disk (a loaded file is saved by the core,
 /// `meeting::import_from_file`, with the same extension list).
 ///
-/// <para>A loaded or Telegram file keeps its OWN container rather than being
-/// decoded to WAV: an hour of m4a is a tenth of the WAV, and the decode pass
-/// cost minutes on the very files people share from a phone. Everything
+/// <para>A loaded or Telegram file keeps its OWN container (a WAV is
+/// re-encoded to Ogg by the core): an hour of m4a is a tenth of the WAV, and
+/// a decode pass cost minutes on the very files people share from a phone. Everything
 /// downstream already copes - peaks go through the Rust decoder, the media
 /// player handles m4a/mp3 natively, and the Rust re-transcribe resolver knows
 /// the same list.</para>
@@ -21,7 +21,7 @@ public static class MeetingAudio
     /// `resolve_meeting_track`, so host and core agree on which file wins when
     /// a folder somehow holds two.
     public static readonly string[] Extensions =
-        { "ogg", "wav", "m4a", "mp3", "aac", "flac", "mp4" };
+        { "ogg", "wav", "m4a", "mp3", "aac", "flac", "mp4", "oga", "opus", "webm" };
 
     /// <summary>Resolve `baseName` (audio / audio_mic / audio_system) to the
     /// file on disk, or null. `exists` is injected so the rule is testable

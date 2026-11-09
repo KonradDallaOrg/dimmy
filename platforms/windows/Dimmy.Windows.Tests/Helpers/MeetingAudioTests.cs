@@ -43,7 +43,7 @@ public class MeetingAudioTests
         // core/src/ffi.rs::resolve_meeting_track. A file the host saves and
         // the core cannot find back is a meeting that will not re-transcribe.
         Assert.Equal(
-            new[] { "ogg", "wav", "m4a", "mp3", "aac", "flac", "mp4" },
+            new[] { "ogg", "wav", "m4a", "mp3", "aac", "flac", "mp4", "oga", "opus", "webm" },
             MeetingAudio.Extensions);
     }
 }

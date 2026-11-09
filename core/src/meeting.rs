@@ -3302,19 +3302,101 @@ fn finalize_meeting_meta(
 /// tries them. A loaded file keeps its own container (an hour of m4a is a
 /// tenth of the WAV it would decode to); anything else is copied as `.wav`,
 /// which is what the hosts did.
-pub const TRACK_EXTENSIONS: [&str; 7] = ["ogg", "wav", "m4a", "mp3", "aac", "flac", "mp4"];
+pub const TRACK_EXTENSIONS: [&str; 10] = [
+    "ogg", "wav", "m4a", "mp3", "aac", "flac", "mp4", "oga", "opus", "webm",
+];
 
-fn imported_audio_name(source: &std::path::Path) -> String {
-    let ext = source
+/// The audio of an imported meeting. A WAV is re-encoded with the meeting
+/// sink to `audio.ogg` (a tenth of the size, and what a live meeting
+/// writes); if that fails the WAV is kept as it is. Any other file is copied
+/// byte for byte under its own extension: m4a/mp3 are already compressed,
+/// and Opus (a Telegram voice note) cannot be decoded here to re-encode it.
+/// It used to be copied as `audio.wav`, so the player read Opus as a WAV.
+fn import_audio(src: &std::path::Path, dir: &std::path::Path) -> Result<PathBuf, String> {
+    let ext = src
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase())
         .unwrap_or_default();
-    if TRACK_EXTENSIONS.contains(&ext.as_str()) {
-        format!("audio.{ext}")
-    } else {
-        "audio.wav".to_string()
+    if ext == "wav" {
+        match wav_to_meeting_track(src, dir) {
+            Ok(path) => return Ok(path),
+            Err(e) => {
+                crate::log(&format!("[Meeting] import: WAV kept as it is ({e})"));
+                for leftover in ["audio.ogg", "audio.wav"] {
+                    let _ = std::fs::remove_file(dir.join(leftover));
+                }
+            }
+        }
     }
+    let name = if ext.is_empty() {
+        "audio".to_string()
+    } else {
+        format!("audio.{ext}")
+    };
+    let dest = dir.join(name);
+    std::fs::copy(src, &dest).map_err(|e| format!("copy: {e}"))?;
+    Ok(dest)
+}
+
+/// Mono, at the WAV's own rate, through `TrackSink` (Ogg/Vorbis, or WAV
+/// when the encoder cannot start). Streams in blocks: the whole file is
+/// never in memory.
+fn wav_to_meeting_track(src: &std::path::Path, dir: &std::path::Path) -> Result<PathBuf, String> {
+    let mut reader = hound::WavReader::open(src).map_err(|e| format!("open: {e}"))?;
+    let spec = reader.spec();
+    let channels = spec.channels as usize;
+    if channels == 0 || spec.sample_rate == 0 {
+        return Err(format!(
+            "bad header: {channels} ch, {} Hz",
+            spec.sample_rate
+        ));
+    }
+    let samples: Box<dyn Iterator<Item = Result<f32, hound::Error>>> = match spec.sample_format {
+        hound::SampleFormat::Float => Box::new(reader.samples::<f32>()),
+        hound::SampleFormat::Int => {
+            if !(1..=32).contains(&spec.bits_per_sample) {
+                return Err(format!("{} bits", spec.bits_per_sample));
+            }
+            let scale = 1.0 / (1u64 << (spec.bits_per_sample - 1)) as f32;
+            Box::new(
+                reader
+                    .samples::<i32>()
+                    .map(move |s| s.map(|v| v as f32 * scale)),
+            )
+        }
+    };
+    let mut sink = TrackSink::create(dir, "audio", spec.sample_rate)?;
+    let mut block: Vec<f32> = Vec::with_capacity(4096);
+    let mut frame_sum = 0.0f32;
+    let mut in_frame = 0usize;
+    let mut frames = 0u64;
+    for s in samples {
+        let s = s.map_err(|e| format!("read: {e}"))?;
+        frame_sum += if s.is_finite() { s } else { 0.0 };
+        in_frame += 1;
+        if in_frame == channels {
+            block.push((frame_sum / channels as f32).clamp(-1.0, 1.0));
+            frame_sum = 0.0;
+            in_frame = 0;
+            frames += 1;
+            if block.len() == block.capacity() {
+                sink.write(&block);
+                block.clear();
+            }
+        }
+    }
+    sink.write(&block);
+    if frames == 0 {
+        let _ = sink.finalize();
+        return Err("no samples".into());
+    }
+    sink.finalize()?;
+    let path = crate::ffi::resolve_meeting_track(dir, "audio")
+        .map(PathBuf::from)
+        .ok_or("the encoded track is missing")?;
+    assert!(path.is_file(), "import track {path:?}");
+    Ok(path)
 }
 
 /// A meeting made from an audio file (a loaded file, a Telegram voice
@@ -3343,7 +3425,7 @@ pub fn import_from_file(
     crate::write_atomic(&dir.join("transcripts.txt"), line.as_bytes())
         .map_err(|e| format!("transcripts.txt: {e}"))?;
     if let Some(src) = source.filter(|s| s.is_file()) {
-        if let Err(e) = std::fs::copy(src, dir.join(imported_audio_name(src))) {
+        if let Err(e) = import_audio(src, &dir) {
             crate::log(&format!("[Meeting] import: audio copy failed: {e}"));
         }
     }
@@ -5010,14 +5092,86 @@ mod meta_records {
     }
 
     #[test]
-    fn an_import_without_a_file_still_has_a_title_and_an_unknown_container_is_wav() {
+    fn an_import_without_a_file_still_has_a_title() {
         let root = tempdir();
         let dir = import_from_file(root.path(), None, "x", 0.0).unwrap();
         assert_eq!(meta(&dir)["title"], "File: Imported audio");
-        let src = root.path().join("note.opus");
-        std::fs::write(&src, b"x").unwrap();
+    }
+
+    // A Telegram voice note is Opus. It used to be copied under the name
+    // audio.wav, so the player opened Opus bytes as a WAV and played nothing.
+    #[test]
+    fn an_import_keeps_any_other_container_byte_for_byte_under_its_own_extension() {
+        let root = tempdir();
+        for name in ["note.opus", "voice.OGA", "clip.webm", "memo.m4a"] {
+            let src = root.path().join(name);
+            std::fs::write(&src, b"opus bytes, not a wav").unwrap();
+            let dir = import_from_file(root.path(), Some(&src), "x", 1.0).unwrap();
+            let ext = name.rsplit('.').next().unwrap().to_ascii_lowercase();
+            let copy = dir.join(format!("audio.{ext}"));
+            assert_eq!(
+                std::fs::read(&copy).unwrap(),
+                b"opus bytes, not a wav",
+                "{name}"
+            );
+            assert!(!dir.join("audio.wav").exists(), "{name}");
+            assert_eq!(
+                crate::ffi::resolve_meeting_track(&dir, "audio").as_deref(),
+                Some(copy.to_str().unwrap()),
+                "the core finds {name} again"
+            );
+        }
+    }
+
+    // A WAV is ten times the Ogg the meeting sink writes: an import is
+    // re-encoded, like a live meeting's audio.
+    #[test]
+    fn an_imported_wav_is_saved_as_ogg_with_the_same_length() {
+        let root = tempdir();
+        let src = root.path().join("call.wav");
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: 44_100,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(&src, spec).unwrap();
+        for i in 0..44_100 * 2 {
+            let s = ((i as f32 * 0.05).sin() * 8000.0) as i16;
+            w.write_sample(s).unwrap();
+            w.write_sample(s).unwrap();
+        }
+        w.finalize().unwrap();
+        let dir = import_from_file(root.path(), Some(&src), "x", 2.0).unwrap();
+        // Linux meetings still record WAV (TrackSink::create), so there the
+        // import is the same mono track as a WAV.
+        let ogg_here = cfg!(any(target_os = "windows", target_os = "macos"));
+        let ogg = dir.join(if ogg_here { "audio.ogg" } else { "audio.wav" });
+        assert!(ogg.is_file(), "re-encoded with the meeting sink");
+        if ogg_here {
+            assert!(!dir.join("audio.wav").exists());
+            let wav_len = std::fs::metadata(&src).unwrap().len();
+            let ogg_len = std::fs::metadata(&ogg).unwrap().len();
+            assert!(ogg_len * 4 < wav_len, "compressed: {ogg_len} vs {wav_len}");
+        }
+        let (samples, rate) = crate::ffi::decode_via_symphonia(ogg.to_str().unwrap()).unwrap();
+        assert_eq!(rate, 44_100);
+        let secs = samples.len() as f64 / rate as f64;
+        assert!((secs - 2.0).abs() < 0.05, "mono, same length: {secs} s");
+        assert!(samples.iter().all(|s| s.is_finite()));
+    }
+
+    #[test]
+    fn a_wav_that_cannot_be_read_is_kept_as_it_is() {
+        let root = tempdir();
+        let src = root.path().join("broken.wav");
+        std::fs::write(&src, b"RIFF but not really").unwrap();
         let dir = import_from_file(root.path(), Some(&src), "x", 1.0).unwrap();
-        assert!(dir.join("audio.wav").is_file());
+        assert_eq!(
+            std::fs::read(dir.join("audio.wav")).unwrap(),
+            b"RIFF but not really"
+        );
+        assert!(!dir.join("audio.ogg").exists(), "no half-written Ogg left");
     }
 
     #[test]
