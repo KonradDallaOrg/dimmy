@@ -73,7 +73,7 @@ enum ProviderTagging {
         }
         // Kimi ids (k3, kimi-for-coding…) have no vendor prefix: same set as
         // the catalog's `kimi` provider.
-        if lower == "k3" || lower.hasPrefix("k3-") || lower.hasPrefix("kimi-") { return "kimi" }
+        if lower.hasPrefix("k3") || lower.hasPrefix("kimi-") { return "kimi" }
         return ""
     }
 }
