@@ -122,6 +122,27 @@ Side effect: Kimi loads user MCP servers in every session, including the
 ones Dimmy opens for the subscription, so with the bridge on each Kimi
 call also starts `dimmy-mcp`. Its tools are never approved there.
 
+### Kimi Code Desktop wizard and "Open in Kimi Code"
+
+Integrations has a **Kimi Code Desktop** card (Win + Mac) with a 3-step
+wizard, the sibling of the Claude Desktop one: (1) install Kimi Code
+Desktop (Windows: one button, `winget install --id
+MoonshotAI.KimiCodeDesktop`; both: link to kimi.com/code), (2) connect
+dimmy-mcp in `mcp.json`, (3) open a new Kimi session and wait for the
+heartbeat. Our `mcp.json` entry sets `DIMMY_MCP_CLIENT=kimi`, so dimmy-mcp
+writes `mcp.heartbeat.kimi` and a running Claude Desktop (plain
+`mcp.heartbeat`) cannot fake the check. Detection: Windows looks for a
+"kimi" folder with a "kimi" .exe under `%LOCALAPPDATA%\Programs` or
+`%ProgramFiles%`; macOS for `*Kimi Code*.app` in `/Applications` or
+`~/Applications`.
+
+The meeting toolbar shows an official-Kimi-mark button when Kimi Code
+Desktop is installed. Kimi Code's only desktop deep link is
+`kimi-code://open?root=<dir>&new=1` (verified in the 2.5.2 binary; no
+prompt pre-fill), so the button opens a new chat in the meeting's folder
+and puts the recap prompt on the clipboard: the MCP prompt when Dimmy is
+connected, a `transcripts.txt` prompt otherwise.
+
 ## Setup CLI
 
 `dimmy-setup profile apply … --recap kimi-sub [--recap-model k3]` and
