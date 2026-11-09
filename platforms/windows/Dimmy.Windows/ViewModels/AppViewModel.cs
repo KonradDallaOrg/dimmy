@@ -284,6 +284,10 @@ public partial class AppViewModel : ObservableObject
     /// host can show it as a toast.</summary>
     public event Action<string>? ErrorWhileRecording;
 
+    /// <summary>Live typing stopped mid-dictation (the realtime socket
+    /// failed); the dictation goes on and is transcribed at stop.</summary>
+    public event Action? StreamFailed;
+
     /// <summary>True when the app is doing something (recording, transcribing, processing) and should not start a new recording.</summary>
     public bool IsBusy => CurrentState is AppState.Recording or AppState.Transcribing or AppState.Processing;
 
@@ -693,6 +697,10 @@ public partial class AppViewModel : ObservableObject
                     break;
                 case "recording_cancelled":
                     SetState(AppState.Idle);
+                    break;
+                case "stt_stream_failed":
+                    Log?.Invoke("live typing stopped: the realtime connection failed", "Dictation");
+                    StreamFailed?.Invoke();
                     break;
                 case "dictation_phase":
                     CoreDictationPhase = payload.TryGetProperty("phase", out var dp)

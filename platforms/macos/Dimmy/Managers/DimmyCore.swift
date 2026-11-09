@@ -1737,6 +1737,16 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
             body: "Your recording is safe and continues normally. \(hint) "
                 + "You can also regenerate the transcript from the audio after the meeting.")
 
+    case "stt_stream_failed":
+        // The realtime socket failed mid-dictation. The dictation goes on
+        // and is transcribed at stop; before this the text just stopped.
+        NSLog("[DimmyCore] live typing stopped: realtime connection failed")
+        DictToastWindow.show(
+            kind: .error,
+            title: "Live typing stopped",
+            body: "The connection dropped. Keep talking: the whole dictation is transcribed when you "
+                + "finish, and the full text is in History.")
+
     case "meeting_transcription_unavailable":
         // The meeting's transcriber produces no text: the engine could not
         // start (Nemotron refused for memory, 2026-11-09) or windows fail in

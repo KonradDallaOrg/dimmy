@@ -408,6 +408,21 @@ fn resolve_live_final(streaming: Option<String>, chunked: Option<String>) -> Opt
         .or_else(|| chunked.filter(|c| !c.trim().is_empty()))
 }
 
+/// `resolve_live_final`, unless the realtime socket failed mid-dictation:
+/// its text ends where the socket died, so it is dropped and the stop
+/// transcribes the whole buffer (None here means batch).
+fn live_final_to_keep(
+    streaming: Option<String>,
+    chunked: Option<String>,
+    stream_failed: bool,
+) -> Option<String> {
+    if stream_failed {
+        chunked.filter(|c| !c.trim().is_empty())
+    } else {
+        resolve_live_final(streaming, chunked)
+    }
+}
+
 /// Write 16 kHz mono int16 WAV. Used by the history-audio retention
 /// path. Clamps + scales f32 [-1.0, 1.0] to i16 range with int16
 /// saturation so peaking samples don't wrap around. Returns the
@@ -1029,6 +1044,9 @@ pub extern "C" fn dimmy_set_event_callback(cb: extern "C" fn(*const c_char)) {
 /// audio buffer: the window in which a new recording would destroy it.
 static STOP_DRAINING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// The dictation (DICTATION_GEN) whose realtime socket failed; 0 for none.
+static STREAM_FAILED_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 fn stop_drain_settled(flag: &std::sync::atomic::AtomicBool, timeout: std::time::Duration) -> bool {
     let started = std::time::Instant::now();
     while flag.load(std::sync::atomic::Ordering::SeqCst) {
@@ -1476,6 +1494,25 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
     emit_event("recording_started", "{}");
     emit_dictation_phase("recording", dictation_id);
     0
+}
+
+/// Live typing stopped in the middle of a dictation (the realtime socket
+/// failed). The dictation itself goes on: its audio is still captured and
+/// the batch path transcribes it at stop. Before this the host never
+/// learned, and the text simply stopped appearing.
+pub(crate) fn emit_stream_failed(engine: &str) {
+    let gen = DICTATION_GEN.load(std::sync::atomic::Ordering::SeqCst);
+    // The stop then ignores the live text, which ends where the socket
+    // failed, and transcribes the whole recording instead.
+    STREAM_FAILED_GEN.store(gen, std::sync::atomic::Ordering::SeqCst);
+    emit_event(
+        "stt_stream_failed",
+        &serde_json::json!({
+            "engine": engine,
+            "dictation": gen,
+        })
+        .to_string(),
+    );
 }
 
 /// One `dictation_phase` event per transition of the core's dictation:
@@ -1939,7 +1976,19 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
     // segment was injected live, so a zero-segment failure still gets pasted
     // from this batch transcript. Work-loss guard, 2026-06-13.
     let had_live = streaming_final.is_some() || chunked_final.is_some();
-    let live_final = resolve_live_final(streaming_final, chunked_final);
+    // A realtime socket that failed mid-dictation stopped the live text at
+    // that point: everything said after it was captured but would never
+    // have been transcribed. The whole buffer goes to batch STT instead.
+    let stream_failed = STREAM_FAILED_GEN.load(std::sync::atomic::Ordering::SeqCst)
+        == DICTATION_GEN.load(std::sync::atomic::Ordering::SeqCst)
+        && streaming_final.is_some()
+        // Batch needs a key of the selected provider: without one the
+        // partial live text is still better than nothing.
+        && !(stt_mode == "cloud" && api_key.is_none());
+    if stream_failed {
+        log("[StopRec] live stream failed mid-dictation — batch STT on the full recording");
+    }
+    let live_final = live_final_to_keep(streaming_final, chunked_final, stream_failed);
     if had_live && live_final.is_none() {
         log("[StopRec] live streaming/chunked transcript was empty — falling back to batch STT on buffered audio (work-loss guard)");
     }
@@ -14872,6 +14921,19 @@ pub(crate) mod tests {
         );
         crate::capture::release_dictation();
         st.audio_buffer.lock().unwrap().clear();
+    }
+
+    /// 2026-11-09 sweep: a realtime socket that failed mid-dictation left
+    /// the partial live text as the final transcript, and everything said
+    /// after it was lost although its audio was recorded.
+    #[test]
+    fn a_failed_stream_hands_the_dictation_to_batch() {
+        let partial = Some("the first half".to_string());
+        assert_eq!(
+            live_final_to_keep(partial.clone(), None, false).as_deref(),
+            Some("the first half")
+        );
+        assert_eq!(live_final_to_keep(partial, None, true), None, "batch STT");
     }
 
     /// A crash leaves the `.recording` marker: the meeting is reported once,

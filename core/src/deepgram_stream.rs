@@ -239,6 +239,7 @@ async fn run_stream(
             let bytes = pcm_f32_to_i16le(&pcm_16k);
             if let Err(e) = stream_bounds::send(&mut write, Message::Binary(bytes)).await {
                 crate::log(&format!("[dg-stream] send error: {e}"));
+                crate::ffi::emit_stream_failed("deepgram");
                 break;
             }
         }

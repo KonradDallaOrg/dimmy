@@ -213,6 +213,11 @@ public static class DictNotificationService
         Show(count == 1 ? "A meeting was interrupted" : $"{count} meetings were interrupted",
              "Dimmy closed while recording. The audio up to that moment is saved: open Meetings and use Regenerate transcript.");
 
+    /// <summary>The realtime connection failed mid-dictation.</summary>
+    public static void ShowLiveTypingStopped() =>
+        Show("Live typing stopped",
+             "The connection dropped. Keep talking: the whole dictation is transcribed when you finish, and the full text is in History.");
+
     /// <summary>An error raised while the core is still recording: the pill
     /// keeps its red dot, so the message goes here instead.</summary>
     public static void ShowErrorBesideRecording(string message) =>

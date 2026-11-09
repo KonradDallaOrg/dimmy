@@ -2295,6 +2295,11 @@ fn worker_loop(
     // window when writing/transcribing and (b) emit a [paused N s]
     // marker to transcripts.txt on resume.
     let mut was_paused = false;
+    // A `[paused]` line the queue had no room for. It used to be dropped,
+    // and the recap then read the gap as continuous talk. Retried with
+    // `try_send` every pass, ahead of the next window, so it keeps its place
+    // in the timeline and this loop still never waits (THE AUDIO RULE).
+    let mut pending_pause: Option<SttJob> = None;
     let mut pause_started_at: Option<Instant> = None;
     // Sum of paused-window durations, so the stop-time capture-ratio
     // guard compares audio-on-disk against REAL ACTIVE recording time
@@ -2425,10 +2430,15 @@ fn worker_loop(
             // the timeline jump. Queued rather than written here so it
             // keeps its position relative to the surrounding chunks — and
             // so this thread never touches the transcripts file.
-            let _ = stt_tx.try_send(SttJob::Paused {
+            pending_pause = Some(SttJob::Paused {
                 elapsed_ms: started.elapsed().as_millis(),
                 dur_ms,
             });
+        }
+        if let Some(job) = pending_pause.take() {
+            if let Err(std::sync::mpsc::TrySendError::Full(job)) = stt_tx.try_send(job) {
+                pending_pause = Some(job);
+            }
         }
 
         // A mic that is muted, dead or rebuilding must not hold the system
@@ -2756,6 +2766,10 @@ fn worker_loop(
     // inside a model call is abandoned (it holds no lock the audio path
     // needs, and the process is about to be idle) — we keep the chunk
     // count it reached and move on.
+    // The sinks are final: one last try for a pause line still waiting.
+    if let Some(job) = pending_pause.take() {
+        let _ = stt_tx.try_send(job);
+    }
     drop(stt_tx);
     // Say what the wait IS. Stopping a meeting whose transcriber is behind
     // leaves the user on "Wrapping up..." for up to 90 s with nothing
