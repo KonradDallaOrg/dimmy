@@ -15,7 +15,78 @@ https://claude.ai/artifact/35owJxDa2q9BuB8YCrenYS (sections "Plan" and
   whatever the next session adds).
 - Keep everything on this branch; push / PR only when the user says so.
 
-## Done (15 commits)
+## Session 2 (2026-11-09 evening): items 1-7 done, read this first
+
+Moving to the other PC. 10 more commits on the branch (25 in all), from
+`9b3d8e78` to the commit that adds this section. The list below "Remaining,
+in this order" is session 1's; its status now:
+
+1. DONE `9b3d8e78`: license polling gone on both hosts (Win waits for
+   `LicenseChanged`, Mac for `dimmyLicenseChanged`, 8 s budget); Mac
+   `LicenseKind` enum.
+2. DONE `84296c9e`: Mac pill `.error(String)`; all pill errors go through
+   `AppState.showError` (beside a recording: "Still recording" toast; while
+   transcribing: shown at `endDictation`; else 5 s on the pill, token-guarded).
+   The Mac pill meeting stop is background work (`transcribesRunning`), never
+   writes the dictation state. SelfTests `testPillErrorRoute`.
+3. DONE `d3b689d1` (Win) + `d3dcb808` (Mac): ONE meeting stop pipeline,
+   `Services/MeetingStopService.cs` on Windows (pill, window, shortcut,
+   call-detect), `PillWindowController.stopMeetingFromPill` on Mac (the
+   window's Stop calls it too). In-flight guard on both. Window waits via
+   EnterWrapUp / RefreshAndSelectDir / LeaveWrapUp. Win pause label follows
+   `MeetingPaused`; `RecordingStartedUtc` follows `dictation_phase`.
+   **NOT built: the core `meeting_phase` event.** With one pipeline nobody
+   would read it (`meeting_state` + the stop result cover every transition).
+   Ask the user before adding it.
+4. DONE `d440d9dd` (+ `edad5fff`, which undoes an accidental `cargo fmt --all`
+   on `core/vendor/fluidaudio-rs`; use `cargo fmt`, never `--all`):
+   `dimmy_meeting_import` (core makes imported/Telegram meetings, schema 2),
+   `dimmy_meeting_set_recap_status` (pending/failed shown in both Done views),
+   Notion page recorded + auto-send skips a meeting that has one, Regenerate
+   transcript updates `chunk_count`/`transcript` (+ atomic write),
+   `dimmy_consent_has`, `dimmy_onboarding_done` / `_set_done` (Mac UserDefaults
+   key now only means "the wizard ran here"; `configuredByAssistant` = marker
+   && !that key).
+5. PARTLY `b1d1446d`: the core's stop/cancel now feed `dictation_session`.
+   The three statics STAY (each has a comment saying why): not provably
+   equivalent if moved into `capture.rs`.
+6. PARTLY `16a91d83`: Mac download bars keyed per engine
+   (`bundleDownloadProgress`). NOT done, and to be decided with the user
+   before coding: legacy blocking download FFIs -> download center (a UX
+   change on both hosts), onboarding step enums, update phase enum, Telegram
+   login phase, command arming enum, engine slots / Nemotron failure latch.
+   These are refactors with no reported bug behind them.
+7. DONE `21349222`: no more hard-coded `%APPDATA%\dimmy` on Windows (ptt.log
+   x4, crash.log, ModelPaths: the staging prefetch used the PROD models
+   folder). Mac TerminalRunner same fix.
+
+Open questions for the user (raise them, don't decide):
+- Parity gap: on the Mac a dictation may start while a meeting saves (stop
+  is background work); on Windows the pill still shows Transcribing and
+  blocks it (MeetingStopService sets `AppState.Transcribing`). Make Windows
+  match (needs a "background transcribe" pill panel like `RecapPanel`)?
+- `meeting_phase` core event: skip (recommended) or build?
+- Item 6 leftovers: which, if any.
+- Lost on the window-stop path: the "⚠ audio incomplete" suffix on DoneMeta
+  (the toast remains) and the actionable "Open recap settings" CTA on a
+  failed recap (the Done view now says "The recap failed: <reason>").
+- Imported audio with an unknown extension is now saved as `audio.wav`
+  (Windows rule); the Mac used to keep any extension.
+
+Gates run in session 2 (this PC, namespace `dimmy-agenttest`):
+- clippy `-D warnings` OK; lib tests 1405/1405 OK; `ffi_e2e` release 14/14 OK.
+- C# build OK, `dotnet test` 609/609 OK.
+- Mac preflight (MacinCloud) after every Mac commit: static lib, xcodebuild,
+  6 s launch without SelfTests trip OK. Mac lib tests 1389/1390: only the
+  known environmental `process_raw_prompt_with_claude_code_url_...` failure.
+- NOT run yet: `v2_ffi` (new round-trip tests for import / recap status /
+  consent / onboarding are in it), `meeting_pause_resume`, FlaUI smoke tests,
+  Mac XCTest (`DimmyTests`, one test removed there).
+- Then: update `verification-brief.md` (add items 1-7 above, especially
+  MeetingStopService, the import FFI, the onboarding/consent migration),
+  fresh-agent review, and only then push/PR when the user says so.
+
+## Done in session 1 (15 commits)
 
 Phase 0 docs; 1a `core/src/transcriber_health.rs` (+ Win/Mac toasts, meta
 `transcript`); 1b call-detect `record_aborted` (holds THAT call until the mic is
