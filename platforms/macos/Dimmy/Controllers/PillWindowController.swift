@@ -468,14 +468,15 @@ final class PillWindowController {
     /// `meetingRecapSaved` (an empty `dir` = the stop failed).
     nonisolated static func stopMeetingFromPill(appState: AppState) {
         Task { @MainActor in
-            // A second press while a stop runs would reach the core as a stop
-            // of nothing.
+            // A second press while the core stop runs would reach the core as
+            // a stop of nothing. The guard covers `meetingStop()` only: held
+            // through the speaker pass and the recap (minutes), it dropped the
+            // Stop of a meeting started meanwhile, which went on recording.
             guard !stopInFlight else {
                 dimmyHostLog("[Meeting] stop already running — this press is dropped")
                 return
             }
             stopInFlight = true
-            defer { stopInFlight = false }
             appState.transcribesRunning += 1
             let notionAutoSend = appState.notionAutoSend
             // Capture the recap flag pinned at meeting START (set by
@@ -494,6 +495,7 @@ final class PillWindowController {
             SystemAudioCaptureService.shared.stop()
             await Task.detached(priority: .userInitiated) {
                 let stopResult = DimmyCore.shared.meetingStop()
+                await MainActor.run { PillWindowController.stopInFlight = false }
                 // WAV finalize errors (disk full, IO) ride MeetingResult.
                 // The meeting-window stop path appends them to the done
                 // meta; this path (pill + hotkey + call-nudge all land

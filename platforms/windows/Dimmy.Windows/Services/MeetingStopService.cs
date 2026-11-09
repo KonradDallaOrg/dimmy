@@ -18,9 +18,12 @@ public static class MeetingStopService
 {
     private static int _inFlight;
 
-    /// <summary>False when another stop was already running: the second
-    /// press is dropped instead of reaching the core as a stop of nothing
-    /// (rc -1, shown as an error).</summary>
+    /// <summary>False when another press is already inside
+    /// dimmy_meeting_stop: it is dropped instead of reaching the core as a
+    /// stop of nothing (rc -1, shown as an error). The guard covers that call
+    /// only. Held through the speaker pass and the recap (minutes), it
+    /// dropped the Stop of a meeting started meanwhile (call-detect, the
+    /// shortcut), which then went on recording with no word.</summary>
     public static async Task<bool> StopAsync(AppViewModel vm)
     {
         if (Interlocked.Exchange(ref _inFlight, 1) == 1)
@@ -36,6 +39,13 @@ public static class MeetingStopService
         // saves. Mac parity: PillWindowController.stopMeetingFromPill.
         bool transcribing = true;
         vm.TranscribesRunning++;
+        bool guarded = true;
+        void ReleaseGuard()
+        {
+            if (!guarded) return;
+            guarded = false;
+            Volatile.Write(ref _inFlight, 0);
+        }
         void TranscriptFinal()
         {
             if (!transcribing) return;
@@ -67,6 +77,7 @@ public static class MeetingStopService
                 catch { return (code, "", "", (string?)null, false); }
             });
             App.Log($"meeting stop rc={rc} dir='{dir}' transcript={transcript.Length} chars", "Meeting");
+            ReleaseGuard();
 
             if (rc <= 0)
             {
@@ -95,7 +106,12 @@ public static class MeetingStopService
                 if (!result.Success)
                 {
                     App.Log($"meeting stop: recap failed: {result.Error}", "Meeting");
-                    vm.SetError(result.Error ?? "Recap failed");
+                    // The recap toast already says why. The pill says it too
+                    // only while it is idle: a dictation started while the
+                    // meeting saved owns the pill, and an Error there kept
+                    // its checkmark from ever showing.
+                    if (vm.CurrentState == AppState.Idle)
+                        vm.SetError(result.Error ?? "Recap failed");
                     // The meeting window must leave "Wrapping up" on a failed
                     // recap too: to the transcript + audio that did succeed,
                     // where the recap can be regenerated. Burned 2026-06-02.
@@ -128,8 +144,8 @@ public static class MeetingStopService
             // a failed stop (rc <= 0, an exception, no folder) used to return
             // without a word, and the window refused to close for good.
             TranscriptFinal();
+            ReleaseGuard();
             App.Instance?.NotifyMeetingStopEnded(stoppedDir);
-            Volatile.Write(ref _inFlight, 0);
         }
     }
 }
