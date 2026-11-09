@@ -2476,7 +2476,9 @@
                 </Grid>
               </Border>
 
-              <!-- Kimi Code Desktop (MCP): Kimi Code Desktop reads Dimmy's
+              <!-- Kimi Work (the Kimi app) reads Dimmy's meetings through a Dimmy
+                   personal plugin (dimmy-mcp). The same Connect also registers
+                   Dimmy in ~/.kimi-code/mcp.json for Kimi Code. Earlier note:
                    meetings and dictations through dimmy-mcp. Same shape as
                    the Claude Desktop card; the wizard installs, connects and
                    verifies. -->
@@ -2495,7 +2497,7 @@
                          Width="36" Height="36" VerticalAlignment="Top"
                          Source="{ThemeResource KimiMarkSource}" />
                   <StackPanel Grid.Column="1" Grid.Row="0" Spacing="{StaticResource DimmySpaceXS}">
-                    <TextBlock Text="Kimi Code Desktop" Style="{StaticResource DimmyCardTitle}" />
+                    <TextBlock Text="Kimi Work" Style="{StaticResource DimmyCardTitle}" />
                     <TextBlock x:Name="KimiDesktopStatusText" Text="Probing…"
                                Style="{StaticResource DimmySecondary}" TextWrapping="Wrap"/>
                   </StackPanel>
@@ -2505,7 +2507,7 @@
                   <StackPanel Grid.Column="1" Grid.ColumnSpan="2" Grid.Row="1"
                               Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
                     <Button x:Name="KimiDesktopWizardBtn" Click="KimiDesktopWizard_Click"
-                            ToolTipService.ToolTip="Install Kimi Code Desktop, connect Dimmy, verify">
+                            ToolTipService.ToolTip="Install Kimi, add the Dimmy plugin, verify">
                       <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceS}">
                         <FontIcon Glyph="&#xE8FC;" FontSize="{StaticResource DimmyIconM}"/>
                         <TextBlock x:Name="KimiDesktopWizardLabel" Text="Connect"/>

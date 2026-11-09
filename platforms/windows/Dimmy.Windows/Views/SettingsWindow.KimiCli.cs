@@ -102,41 +102,44 @@ public sealed partial class SettingsWindow
     private void RefreshKimiDesktopCard()
     {
         var s = Interop.DimmyNative.GetKimiMcpStatus();
-        var installed = !string.IsNullOrEmpty(s.DesktopPath);
+        var app = !string.IsNullOrEmpty(s.WorkAppPath);
         string text;
         bool good = false;
-        if (s.Registered && s.HeartbeatAgeSecs is long age && age <= 120)
+        if (s.WorkInstalled && s.WorkHeartbeatAgeSecs is long age && age <= 120)
         {
-            text = "Connected. Kimi Code is using Dimmy right now.";
+            text = "Connected. Kimi Work is using Dimmy right now.";
             good = true;
         }
-        else if (s.Registered)
+        else if (s.WorkInstalled)
         {
-            text = installed
-                ? "Connected. Start a new Kimi Code session to use Dimmy's tools."
-                : "Registered for Kimi Code CLI. Kimi Code Desktop is not installed.";
+            text = "Connected. In Kimi Work, ask about your Dimmy meetings.";
             good = true;
+        }
+        else if (s.WorkRegistered)
+        {
+            text = "Almost there: in Kimi, open Plugins → Personal and press Install on Dimmy.";
         }
         else
         {
-            text = installed
-                ? "Kimi Code Desktop installed. Click Connect to let it read your meetings."
-                : "Let Kimi Code Desktop read your meetings and dictations. Click Connect to set it up.";
+            text = app
+                ? "Kimi is installed. Click Connect to let Kimi Work read your meetings."
+                : "Let Kimi Work read your meetings and dictations. Click Connect to set it up.";
         }
         KimiDesktopStatusText.Text = text;
-        KimiDesktopStatusGlyph.Glyph = good ? "" : "";
+        KimiDesktopStatusGlyph.Glyph = good ? "\uE73E" : "\uE946";
         KimiDesktopStatusGlyph.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[
             good ? "SystemFillColorSuccessBrush" : "TextFillColorTertiaryBrush"];
-        KimiDesktopWizardLabel.Text = s.Registered ? "Re-run setup" : "Connect";
+        var connected = s.WorkRegistered || s.Registered;
+        KimiDesktopWizardLabel.Text = connected ? "Re-run setup" : "Connect";
         KimiDesktopWizardBtn.Style = (Style)Application.Current.Resources[
-            s.Registered ? "DefaultButtonStyle" : "AccentButtonStyle"];
-        KimiDesktopDisconnectBtn.Visibility = s.Registered ? Visibility.Visible : Visibility.Collapsed;
+            good ? "DefaultButtonStyle" : "AccentButtonStyle"];
+        KimiDesktopDisconnectBtn.Visibility = connected ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private async void KimiDesktopWizard_Click(object sender, RoutedEventArgs e)
     {
         var s = Interop.DimmyNative.GetKimiMcpStatus();
-        var step = s.Registered ? 3 : !string.IsNullOrEmpty(s.DesktopPath) ? 2 : 1;
+        var step = s.WorkInstalled ? 3 : s.WorkFound && !string.IsNullOrEmpty(s.WorkAppPath) ? 2 : 1;
         try
         {
             var dialog = new KimiDesktopConnectDialog
@@ -159,8 +162,8 @@ public sealed partial class SettingsWindow
         var confirm = new Microsoft.UI.Xaml.Controls.ContentDialog
         {
             RequestedTheme = Helpers.ThemeHelper.ResolvedElementTheme(),
-            Title = "Disconnect Kimi Code Desktop?",
-            Content = "Dimmy removes its entry from ~/.kimi-code/mcp.json. Your other servers stay in place. New Kimi Code sessions will no longer see Dimmy.",
+            Title = "Disconnect Kimi?",
+            Content = "Dimmy removes its plugin from Kimi's Personal plugins and its entry from ~/.kimi-code/mcp.json. If Dimmy is installed in Kimi, remove it there too (Plugins → Installed).",
             PrimaryButtonText = "Disconnect",
             CloseButtonText = "Cancel",
             DefaultButton = Microsoft.UI.Xaml.Controls.ContentDialogButton.Close,

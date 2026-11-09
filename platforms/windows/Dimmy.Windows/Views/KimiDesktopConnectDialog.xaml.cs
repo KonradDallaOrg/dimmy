@@ -9,10 +9,11 @@ using Dimmy.Windows.Interop;
 namespace Dimmy.Windows.Views;
 
 /// <summary>
-/// 3-step Kimi Code Desktop MCP wizard (Install -> Connect -> Verify), the
-/// Kimi sibling of <see cref="ClaudeDesktopConnectDialog"/>. The install is
-/// one button (winget in a visible terminal), the connect writes one key in
-/// ~/.kimi-code/mcp.json, the verify waits for dimmy-mcp's Kimi heartbeat.
+/// 3-step Kimi (Kimi Work) wizard: Install -> Add the Dimmy plugin -> Try it.
+/// The Kimi sibling of <see cref="ClaudeDesktopConnectDialog"/>. "Add to Kimi"
+/// registers Dimmy as a Personal plugin (and in ~/.kimi-code/mcp.json for
+/// Kimi Code); Kimi only activates it after the user presses Install in its
+/// Plugins page, which this page watches for.
 /// </summary>
 public sealed partial class KimiDesktopConnectDialog : ContentDialog
 {
@@ -21,8 +22,10 @@ public sealed partial class KimiDesktopConnectDialog : ContentDialog
     private const string GlyphSuccess = "\uE73E";
     private const string GlyphPending = "\uE9F5";
     private const string CmdInstall =
-        "winget install --id MoonshotAI.KimiCodeDesktop -e --source winget --accept-package-agreements --accept-source-agreements";
-    /// A heartbeat younger than this means Kimi started dimmy-mcp just now.
+        "winget install --id MoonshotAI.Kimi -e --source winget --accept-package-agreements --accept-source-agreements";
+    /// Kimi Work's only external deep link that does something: open Work.
+    internal const string WorkLink = "kimi-work://home";
+    /// A heartbeat younger than this means Kimi Work started dimmy-mcp just now.
     private const long FreshHeartbeatSecs = 90;
 
     private int _step = 1;
@@ -38,8 +41,14 @@ public sealed partial class KimiDesktopConnectDialog : ContentDialog
 
     private void Probe() => _status = DimmyNative.GetKimiMcpStatus();
 
-    private bool DesktopOk => !string.IsNullOrEmpty(_status.DesktopPath);
-    private bool HeartbeatFresh => _status.HeartbeatAgeSecs is long a && a <= FreshHeartbeatSecs;
+    private bool AppOk => !string.IsNullOrEmpty(_status.WorkAppPath);
+    /// Set up = opened once and signed in: Kimi Work's data folder exists.
+    private bool ReadyOk => AppOk && _status.WorkFound;
+    private bool HeartbeatFresh =>
+        _status.WorkHeartbeatAgeSecs is long a && a <= FreshHeartbeatSecs;
+
+    private static Brush Success => (Brush)Application.Current.Resources["SystemFillColorSuccessBrush"];
+    private static Brush Neutral => (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
 
     private void Enter(int step)
     {
@@ -56,23 +65,18 @@ public sealed partial class KimiDesktopConnectDialog : ContentDialog
         Dot3.Fill = step >= 3 ? accent : inactive;
         SecondaryButtonText = step == 1 ? "" : "Back";
         PrimaryButtonText = step == 3 ? "Done" : "Next";
+        Refresh();
         StopPoll();
-        switch (step)
+        StartPoll();
+    }
+
+    private void Refresh()
+    {
+        switch (_step)
         {
-            case 1:
-                UpdateStep1();
-                if (!DesktopOk) StartPoll();
-                break;
-            case 2:
-                ConfigPathText.Text = _status.ConfigPath ?? "~/.kimi-code/mcp.json";
-                BinaryPathText.Text = ClaudeDesktopConnectDialog.ResolveMcpBinaryPath()
-                                      ?? "dimmy-mcp.exe not found next to Dimmy.exe";
-                UpdateStep2();
-                break;
-            case 3:
-                UpdateStep3();
-                if (!HeartbeatFresh) StartPoll();
-                break;
+            case 1: UpdateStep1(); break;
+            case 2: UpdateStep2(); break;
+            default: UpdateStep3(); break;
         }
     }
 
@@ -80,22 +84,28 @@ public sealed partial class KimiDesktopConnectDialog : ContentDialog
 
     private void UpdateStep1()
     {
-        var success = (Brush)Application.Current.Resources["SystemFillColorSuccessBrush"];
-        var neutral = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
-        DetectGlyph.Glyph = DesktopOk ? GlyphSuccess : GlyphPending;
-        DetectGlyph.Foreground = DesktopOk ? success : neutral;
-        if (DesktopOk)
+        DetectGlyph.Glyph = ReadyOk ? GlyphSuccess : GlyphPending;
+        DetectGlyph.Foreground = ReadyOk ? Success : Neutral;
+        if (ReadyOk)
         {
-            DetectStatus.Text = "Kimi Code Desktop installed.";
+            DetectStatus.Text = "Kimi is installed and set up.";
+            DetectRing.IsActive = false;
+            DetectRing.Visibility = Visibility.Collapsed;
+        }
+        else if (AppOk)
+        {
+            DetectStatus.Text = "Kimi is installed. Open it once and sign in.";
             DetectRing.IsActive = false;
             DetectRing.Visibility = Visibility.Collapsed;
         }
         else if (!DetectRing.IsActive)
         {
-            DetectStatus.Text = "Kimi Code Desktop is not installed.";
+            DetectStatus.Text = "Kimi is not installed.";
         }
-        InstallBtn.Visibility = DesktopOk ? Visibility.Collapsed : Visibility.Visible;
-        IsPrimaryButtonEnabled = DesktopOk;
+        InstallBtn.Visibility = AppOk ? Visibility.Collapsed : Visibility.Visible;
+        DownloadLink.Visibility = AppOk ? Visibility.Collapsed : Visibility.Visible;
+        OpenKimi1Btn.Visibility = AppOk && !ReadyOk ? Visibility.Visible : Visibility.Collapsed;
+        IsPrimaryButtonEnabled = ReadyOk;
     }
 
     private void Install_Click(object sender, RoutedEventArgs e)
@@ -109,14 +119,14 @@ public sealed partial class KimiDesktopConnectDialog : ContentDialog
                 UseShellExecute = true,
                 WorkingDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             });
-            DetectStatus.Text = "Installing in the terminal. It appears here when done.";
+            DetectStatus.Text = "Installing in the terminal. Then open Kimi once and sign in.";
             DetectRing.IsActive = true;
             DetectRing.Visibility = Visibility.Visible;
         }
         catch (Exception ex)
         {
-            App.Log($"KimiDesktop: install spawn failed {ex.Message}", "Kimi");
-            DetectStatus.Text = "Couldn't open a terminal. Download it from kimi.ai/code.";
+            App.Log($"KimiWork: install spawn failed {ex.Message}", "Kimi");
+            DetectStatus.Text = "Couldn't open a terminal. Download Kimi from kimi.ai.";
         }
     }
 
@@ -124,76 +134,73 @@ public sealed partial class KimiDesktopConnectDialog : ContentDialog
 
     private void UpdateStep2()
     {
-        ConnectOkGlyph.Visibility = _status.Registered ? Visibility.Visible : Visibility.Collapsed;
-        ConnectBtn.Content = _status.Registered ? "Connect again" : "Connect";
-        if (_status.Registered && string.IsNullOrEmpty(ConnectStatus.Text))
-            ConnectStatus.Text = "Dimmy is registered.";
-        IsPrimaryButtonEnabled = _status.Registered;
+        RegisterGlyph.Glyph = _status.WorkRegistered ? GlyphSuccess : GlyphPending;
+        RegisterGlyph.Foreground = _status.WorkRegistered ? Success : Neutral;
+        RegisterStatus.Text = _status.WorkRegistered
+            ? "Dimmy is in Kimi's Personal plugins."
+            : "Not added yet.";
+        ConnectBtn.Content = _status.WorkRegistered ? "Add again" : "Add to Kimi";
+
+        InstalledGlyph.Glyph = _status.WorkInstalled ? GlyphSuccess : GlyphPending;
+        InstalledGlyph.Foreground = _status.WorkInstalled ? Success : Neutral;
+        InstalledStatus.Text = _status.WorkInstalled
+            ? "Installed in Kimi."
+            : "In Kimi: Plugins → Personal → Dimmy → Install.";
+        var waiting = _status.WorkRegistered && !_status.WorkInstalled;
+        InstalledRing.IsActive = waiting;
+        InstalledRing.Visibility = waiting ? Visibility.Visible : Visibility.Collapsed;
+        IsPrimaryButtonEnabled = _status.WorkInstalled;
     }
 
     private void Connect_Click(object sender, RoutedEventArgs e)
     {
         var binary = ClaudeDesktopConnectDialog.ResolveMcpBinaryPath();
         var rc = binary == null ? -2 : DimmyNative.InstallKimiMcp(binary);
-        App.Log($"KimiDesktop: connect rc={rc}", "Kimi");
+        App.Log($"KimiWork: add plugin rc={rc}", "Kimi");
         ConnectStatus.Text = rc switch
         {
-            0 => "Connected.",
+            0 => "",
             -2 => "dimmy-mcp.exe was not found next to Dimmy.exe.",
             -3 => "~/.kimi-code/mcp.json is not valid JSON. Dimmy left it untouched; fix it and try again.",
-            _ => "Could not write ~/.kimi-code/mcp.json. See dimmy.log.",
+            _ => "Could not write the plugin. See dimmy.log.",
         };
         Probe();
         UpdateStep2();
+        if (rc == 0) OpenKimi_Click(sender, e);
     }
 
     // ── Step 3 ────────────────────────────────────────────────────────
 
     private void UpdateStep3()
     {
-        var success = (Brush)Application.Current.Resources["SystemFillColorSuccessBrush"];
-        var neutral = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
         var ok = HeartbeatFresh;
         HeartbeatGlyph.Glyph = ok ? GlyphSuccess : GlyphPending;
-        HeartbeatGlyph.Foreground = ok ? success : neutral;
+        HeartbeatGlyph.Foreground = ok ? Success : Neutral;
         HeartbeatStatus.Text = ok
-            ? "Kimi Code started Dimmy. You can ask it about your meetings."
-            : "Waiting for Kimi Code to start Dimmy...";
+            ? "Kimi Work started Dimmy. Ask it about your meetings."
+            : "Waiting for Kimi to start Dimmy...";
         HeartbeatRing.IsActive = !ok;
         HeartbeatRing.Visibility = ok ? Visibility.Collapsed : Visibility.Visible;
-        OpenKimiBtn.IsEnabled = DesktopOk;
-        // Done stays available: verifying is a courtesy, the entry is written.
+        // Done stays available: the plugin is installed, verifying is a courtesy.
         IsPrimaryButtonEnabled = true;
     }
 
     private void OpenKimi_Click(object sender, RoutedEventArgs e)
     {
-        if (!DesktopOk) return;
-        try
-        {
-            Process.Start(new ProcessStartInfo { FileName = _status.DesktopPath!, UseShellExecute = true });
-        }
-        catch (Exception ex)
-        {
-            App.Log($"KimiDesktop: open failed {ex.Message}", "Kimi");
-        }
+        try { Process.Start(new ProcessStartInfo(WorkLink) { UseShellExecute = true }); }
+        catch (Exception ex) { App.Log($"KimiWork: open failed {ex.Message}", "Kimi"); }
     }
 
     // Documented exception to the no-FFI-polling rule (CLAUDE.md): what we
-    // wait for happens in another process (an installer, Kimi Code starting
-    // dimmy-mcp). 2 s while a step waits; stops on success and on close.
+    // wait for happens in another process (an installer, the user pressing
+    // Install in Kimi, Kimi starting dimmy-mcp). 2 s while the dialog is
+    // open; stops on close.
     private void StartPoll()
     {
-        StopPoll();
         _poll = DispatcherQueue.GetForCurrentThread().CreateTimer();
         _poll.Interval = TimeSpan.FromSeconds(2);
         _poll.IsRepeating = true;
-        _poll.Tick += (_, _) =>
-        {
-            Probe();
-            if (_step == 1) { UpdateStep1(); if (DesktopOk) StopPoll(); }
-            else if (_step == 3) { UpdateStep3(); if (HeartbeatFresh) StopPoll(); }
-        };
+        _poll.Tick += (_, _) => { Probe(); Refresh(); };
         _poll.Start();
     }
 

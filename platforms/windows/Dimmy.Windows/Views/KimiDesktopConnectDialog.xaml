@@ -1,20 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Kimi Code Desktop MCP bridge wizard. Sibling of ClaudeDesktopConnectDialog.
+  Kimi (Kimi Work) wizard. Sibling of ClaudeDesktopConnectDialog.
 
-    Step 1 - Install : detect Kimi Code Desktop; one button installs it with
-                       winget (MoonshotAI.KimiCodeDesktop) in a visible
-                       terminal.
-    Step 2 - Connect : register dimmy-mcp in ~/.kimi-code/mcp.json (other
-                       entries kept, original backed up).
-    Step 3 - Verify  : open a NEW session in Kimi Code Desktop; Dimmy sees
-                       dimmy-mcp's Kimi heartbeat and turns green.
+    Step 1 - Install : the Kimi app (winget MoonshotAI.Kimi, or kimi.ai),
+                       opened once and signed in.
+    Step 2 - Connect : Dimmy registers its plugin in Kimi's Personal plugins
+                       (and in ~/.kimi-code/mcp.json for Kimi Code); the user
+                       presses Install in Kimi's Plugins page.
+    Step 3 - Verify  : a Work chat starts dimmy-mcp; its kimi-work heartbeat
+                       turns the step green.
 -->
 <ContentDialog
     x:Class="Dimmy.Windows.Views.KimiDesktopConnectDialog"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    Title="Connect Kimi Code Desktop"
+    Title="Connect Kimi"
     PrimaryButtonText="Next"
     SecondaryButtonText="Back"
     CloseButtonText="Cancel"
@@ -44,46 +44,53 @@
 
       <!-- Step 1 - Install -->
       <StackPanel x:Name="Step1Panel" Spacing="{StaticResource DimmySpaceM}" Visibility="Visible">
-        <TextBlock Text="1 - Install Kimi Code Desktop" Style="{StaticResource DimmyHeadline}"/>
+        <TextBlock Text="1 - Install Kimi" Style="{StaticResource DimmyHeadline}"/>
         <TextBlock TextWrapping="Wrap" Style="{StaticResource DimmySecondary}"
-                   Text="Dimmy talks to Kimi Code Desktop over MCP. You can then ask Kimi about your meetings and dictations. It needs a Kimi plan that includes Kimi Code."/>
+                   Text="Kimi Work, in the Kimi desktop app, can read your Dimmy meetings and dictations through a Dimmy plugin. Install Kimi, open it once and sign in."/>
         <Border Style="{StaticResource DimmyCard}" Padding="{StaticResource DimmyCardPaddingCompact}">
           <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}">
             <FontIcon x:Name="DetectGlyph" Glyph="&#xE9F5;" FontSize="{StaticResource DimmyIconXL}"
                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
             <TextBlock x:Name="DetectStatus" Style="{StaticResource DimmyBody}" VerticalAlignment="Center"
-                       TextWrapping="Wrap" Text="Looking for Kimi Code Desktop..."/>
+                       TextWrapping="Wrap" Text="Looking for Kimi..."/>
             <ProgressRing x:Name="DetectRing" Width="16" Height="16" IsActive="False" Visibility="Collapsed"/>
           </StackPanel>
         </Border>
         <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}">
-          <Button x:Name="InstallBtn" Content="Install Kimi Code Desktop" Click="Install_Click"
+          <Button x:Name="InstallBtn" Content="Install Kimi" Click="Install_Click"
                   Style="{ThemeResource AccentButtonStyle}"/>
-          <HyperlinkButton Content="Or download it from kimi.ai/code"
-                           NavigateUri="https://www.kimi.ai/code" VerticalAlignment="Center"/>
+          <Button x:Name="OpenKimi1Btn" Content="Open Kimi" Click="OpenKimi_Click" Visibility="Collapsed"/>
+          <HyperlinkButton x:Name="DownloadLink" Content="Or download it from kimi.ai"
+                           NavigateUri="https://www.kimi.ai/products/download" VerticalAlignment="Center"/>
         </StackPanel>
       </StackPanel>
 
       <!-- Step 2 - Connect -->
       <StackPanel x:Name="Step2Panel" Spacing="{StaticResource DimmySpaceM}" Visibility="Collapsed">
-        <TextBlock Text="2 - Connect Dimmy" Style="{StaticResource DimmyHeadline}"/>
+        <TextBlock Text="2 - Add the Dimmy plugin" Style="{StaticResource DimmyHeadline}"/>
         <TextBlock TextWrapping="Wrap" Style="{StaticResource DimmySecondary}"
-                   Text="Dimmy adds itself to Kimi Code's MCP servers. Your other servers stay as they are, and Dimmy keeps a copy of the original file."/>
+                   Text="Dimmy adds its plugin to Kimi's Personal plugins. Then, in Kimi, open Plugins → Personal and press Install on Dimmy."/>
         <Border Style="{StaticResource DimmyCard}" Padding="{StaticResource DimmyCardPaddingCompact}">
-          <StackPanel Spacing="{StaticResource DimmySpaceXS}">
-            <TextBlock Text="Kimi Code MCP file" Style="{StaticResource DimmyCaption}"/>
-            <TextBlock x:Name="ConfigPathText" FontFamily="Consolas" TextWrapping="Wrap"
-                       Style="{StaticResource DimmyLabel}" IsTextSelectionEnabled="True"/>
-            <TextBlock Text="Dimmy MCP server" Style="{StaticResource DimmyCaption}" Margin="0,8,0,0"/>
-            <TextBlock x:Name="BinaryPathText" FontFamily="Consolas" TextWrapping="Wrap"
-                       Style="{StaticResource DimmyLabel}" IsTextSelectionEnabled="True"/>
+          <StackPanel Spacing="{StaticResource DimmySpaceM}">
+            <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}">
+              <FontIcon x:Name="RegisterGlyph" Glyph="&#xE9F5;" FontSize="{StaticResource DimmyIconXL}"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+              <TextBlock x:Name="RegisterStatus" Style="{StaticResource DimmyBody}" VerticalAlignment="Center"
+                         TextWrapping="Wrap" Text="Not added yet."/>
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}">
+              <FontIcon x:Name="InstalledGlyph" Glyph="&#xE9F5;" FontSize="{StaticResource DimmyIconXL}"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+              <TextBlock x:Name="InstalledStatus" Style="{StaticResource DimmyBody}" VerticalAlignment="Center"
+                         TextWrapping="Wrap" Text="In Kimi: Plugins → Personal → Dimmy → Install."/>
+              <ProgressRing x:Name="InstalledRing" Width="16" Height="16" IsActive="False" Visibility="Collapsed"/>
+            </StackPanel>
           </StackPanel>
         </Border>
         <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}">
-          <Button x:Name="ConnectBtn" Content="Connect" Click="Connect_Click"
+          <Button x:Name="ConnectBtn" Content="Add to Kimi" Click="Connect_Click"
                   Style="{ThemeResource AccentButtonStyle}"/>
-          <FontIcon x:Name="ConnectOkGlyph" Glyph="&#xE73E;" FontSize="{StaticResource DimmyIconXL}"
-                    Foreground="{ThemeResource SystemFillColorSuccessBrush}" Visibility="Collapsed"/>
+          <Button x:Name="OpenKimi2Btn" Content="Open Kimi" Click="OpenKimi_Click"/>
           <TextBlock x:Name="ConnectStatus" VerticalAlignment="Center" TextWrapping="Wrap"
                      Style="{StaticResource DimmyBody}"/>
         </StackPanel>
@@ -91,22 +98,19 @@
 
       <!-- Step 3 - Verify -->
       <StackPanel x:Name="Step3Panel" Spacing="{StaticResource DimmySpaceM}" Visibility="Collapsed">
-        <TextBlock Text="3 - Open a new session" Style="{StaticResource DimmyHeadline}"/>
+        <TextBlock Text="3 - Try it" Style="{StaticResource DimmyHeadline}"/>
         <TextBlock TextWrapping="Wrap" Style="{StaticResource DimmySecondary}"
-                   Text="Kimi Code loads MCP servers when a session starts. Open Kimi Code Desktop and start a NEW session; sessions already open do not see Dimmy."/>
+                   Text="In Kimi Work, start a new chat and ask: &quot;List my latest Dimmy meetings&quot;. This page turns green when Kimi starts Dimmy."/>
         <Border Style="{StaticResource DimmyCard}" Padding="{StaticResource DimmyCardPaddingCompact}">
           <StackPanel Orientation="Horizontal" Spacing="{StaticResource DimmySpaceM}">
             <FontIcon x:Name="HeartbeatGlyph" Glyph="&#xE9F5;" FontSize="{StaticResource DimmyIconXL}"
                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
             <TextBlock x:Name="HeartbeatStatus" Style="{StaticResource DimmyBody}" VerticalAlignment="Center"
-                       TextWrapping="Wrap" Text="Waiting for Kimi Code to start Dimmy..."/>
+                       TextWrapping="Wrap" Text="Waiting for Kimi to start Dimmy..."/>
             <ProgressRing x:Name="HeartbeatRing" Width="16" Height="16" IsActive="True"/>
           </StackPanel>
         </Border>
-        <Button x:Name="OpenKimiBtn" Content="Open Kimi Code Desktop" Click="OpenKimi_Click"
-                HorizontalAlignment="Left"/>
-        <TextBlock TextWrapping="Wrap" Style="{StaticResource DimmySecondary}"
-                   Text="Then ask Kimi, for example: &quot;List my recent Dimmy meetings&quot;."/>
+        <Button x:Name="OpenKimi3Btn" Content="Open Kimi Work" Click="OpenKimi_Click" HorizontalAlignment="Left"/>
       </StackPanel>
 
     </Grid>

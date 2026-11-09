@@ -1375,11 +1375,14 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_kimi_mcp_uninstall();
 
+    /// <summary>Kimi Code (CLI / Code Desktop) via mcp.json, plus the Kimi app
+    /// (Kimi Work): app installed, set up (WorkFound), Dimmy's personal plugin
+    /// registered / installed, and the last time each client started dimmy-mcp.</summary>
     public sealed record KimiMcpStatus(
-        bool KimiFound, bool Registered, string? ConfigPath, string? DesktopPath, long? HeartbeatAgeSecs);
+        bool KimiFound, bool Registered, string? ConfigPath, string? DesktopPath, long? HeartbeatAgeSecs,
+        string? WorkAppPath = null, bool WorkFound = false, bool WorkRegistered = false,
+        bool WorkInstalled = false, long? WorkHeartbeatAgeSecs = null);
 
-    /// <summary>Kimi Code on this machine, Dimmy's entry in its mcp.json,
-    /// Kimi Code Desktop's install, and the last time Kimi started dimmy-mcp.</summary>
     public static KimiMcpStatus GetKimiMcpStatus()
     {
         try
@@ -1390,10 +1393,13 @@ public static class DimmyNative
             var r = doc.RootElement;
             static string? Str(System.Text.Json.JsonElement e, string k) =>
                 e.TryGetProperty(k, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String ? v.GetString() : null;
-            long? age = r.TryGetProperty("heartbeat_age_secs", out var h)
-                        && h.ValueKind == System.Text.Json.JsonValueKind.Number ? h.GetInt64() : null;
-            return new(r.GetProperty("kimi_found").GetBoolean(), r.GetProperty("registered").GetBoolean(),
-                       Str(r, "config_path"), Str(r, "desktop_path"), age);
+            static long? Num(System.Text.Json.JsonElement e, string k) =>
+                e.TryGetProperty(k, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.Number ? v.GetInt64() : null;
+            static bool Flag(System.Text.Json.JsonElement e, string k) =>
+                e.TryGetProperty(k, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.True;
+            return new(Flag(r, "kimi_found"), Flag(r, "registered"), Str(r, "config_path"), Str(r, "desktop_path"),
+                       Num(r, "heartbeat_age_secs"), Str(r, "work_app_path"), Flag(r, "work_found"),
+                       Flag(r, "work_registered"), Flag(r, "work_installed"), Num(r, "work_heartbeat_age_secs"));
         }
         catch { return new(false, false, null, null, null); }
     }
