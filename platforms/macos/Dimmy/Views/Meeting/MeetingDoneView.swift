@@ -177,7 +177,8 @@ struct MeetingDoneView: View {
             // MCP extension is installed. Status query is a single FFI
             // call (cheap, no event-callback wiring needed).
             claudeMcpInstalled = DimmyCore.shared.claudeDesktopStatus().extensionInstalled
-            kimiDesktopInstalled = DimmyCore.shared.kimiMcpStatus.desktopPath != nil
+            let kimi = DimmyCore.shared.kimiMcpStatus
+            kimiDesktopInstalled = (kimi.workInstalled && kimi.workAppPath != nil) || kimi.desktopPath != nil
             if claudeMcpInstalled {
                 Task { claudeIconPath = await ClaudeIconExtractor.tryExtract() }
             }
@@ -348,7 +349,7 @@ struct MeetingDoneView: View {
             recapWithClaudeButton
         }
         if kimiDesktopInstalled {
-            ToolbarIconButton(help: "Open in Kimi Code Desktop") {
+            ToolbarIconButton(help: "Recap with Kimi (prompt on the clipboard)") {
                 openInKimi()
             } label: {
                 Image("kimi")
@@ -367,8 +368,13 @@ struct MeetingDoneView: View {
         let dir = vm.selectedDir ?? activeDirFromAudio ?? ""
         let meetingId = (dir as NSString).lastPathComponent
         guard !dir.isEmpty, !meetingId.isEmpty else { return }
+        let kimi = DimmyCore.shared.kimiMcpStatus
+        // Kimi Work with the Dimmy plugin first (opens Work; the prompt uses
+        // Dimmy's tools), else Kimi Code Desktop in the meeting's folder.
+        // Neither app can pre-fill a prompt, so it goes on the pasteboard.
+        let work = kimi.workInstalled && kimi.workAppPath != nil
         let prompt: String
-        if DimmyCore.shared.kimiMcpStatus.registered {
+        if work || kimi.registered {
             prompt =
                 "Recap Dimmy meeting `\(meetingId)`.\n\n" +
                 "1. Call `dimmy_get_recap_template` to fetch Dimmy's house format.\n" +
@@ -383,6 +389,10 @@ struct MeetingDoneView: View {
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.setString(prompt, forType: .string)
+        if work {
+            if let url = URL(string: DimmyCore.kimiWorkLink) { NSWorkspace.shared.open(url) }
+            return
+        }
         var comps = URLComponents()
         comps.scheme = "kimi-code"
         comps.host = "open"

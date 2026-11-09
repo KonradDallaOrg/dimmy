@@ -1,14 +1,15 @@
 import SwiftUI
 import AppKit
 
-/// 3-step Kimi Code Desktop MCP wizard, sheet. Mac mirror of
+/// 3-step Kimi (Kimi Work) wizard, sheet. Mac mirror of
 /// `Views/KimiDesktopConnectDialog.xaml` on Windows.
 ///
-///   Step 1 - Install : detect Kimi Code Desktop; link to the official
-///                      download page (macOS has no package manager entry).
-///   Step 2 - Connect : register dimmy-mcp in ~/.kimi-code/mcp.json.
-///   Step 3 - Verify  : open a NEW Kimi Code session; Dimmy sees dimmy-mcp's
-///                      Kimi-only heartbeat.
+///   Step 1 - Install : the Kimi app (download page on kimi.ai), opened once
+///                      and signed in.
+///   Step 2 - Connect : Dimmy adds its plugin to Kimi's Personal plugins (and
+///                      ~/.kimi-code/mcp.json for Kimi Code); the user presses
+///                      Install in Kimi.
+///   Step 3 - Verify  : a Work chat starts dimmy-mcp (kimi-work heartbeat).
 struct KimiDesktopConnectSheet: View {
     let onClose: () -> Void
     var initialStep: Int = 1
@@ -18,14 +19,15 @@ struct KimiDesktopConnectSheet: View {
     @State private var connectMessage = ""
     @State private var pollTimer: Timer? = nil
 
-    private var desktopOk: Bool { status.desktopPath != nil }
-    private var heartbeatFresh: Bool { (status.heartbeatAgeSecs ?? Int.max) <= 90 }
+    private var appOk: Bool { status.workAppPath != nil }
+    private var readyOk: Bool { appOk && status.workFound }
+    private var heartbeatFresh: Bool { (status.workHeartbeatAgeSecs ?? Int.max) <= 90 }
 
     var body: some View {
         VStack(spacing: 16) {
             HStack(spacing: 10) {
                 Image("kimi").resizable().scaledToFit().frame(width: 20, height: 20)
-                Text("Connect Kimi Code Desktop").font(.system(size: 16, weight: .semibold))
+                Text("Connect Kimi").font(.system(size: 16, weight: .semibold))
                 Spacer()
             }
             HStack(spacing: 8) {
@@ -53,7 +55,7 @@ struct KimiDesktopConnectSheet: View {
                 if step < 3 {
                     Button("Next") { go(step + 1) }
                         .keyboardShortcut(.defaultAction)
-                        .disabled(step == 1 ? !desktopOk : !status.registered)
+                        .disabled(step == 1 ? !readyOk : !status.workInstalled)
                 } else {
                     Button("Done") { onClose() }.keyboardShortcut(.defaultAction)
                 }
@@ -78,41 +80,44 @@ struct KimiDesktopConnectSheet: View {
             Spacer()
         }
         .font(.system(size: 13))
-        .padding(14)
+        .padding(10)
         .background(Color.gray.opacity(0.08))
         .cornerRadius(6)
     }
 
     private var stepInstall: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("1 - Install Kimi Code Desktop").font(.system(size: 18, weight: .semibold))
-            Text("Dimmy talks to Kimi Code Desktop over MCP. You can then ask Kimi about your meetings and dictations. It needs a Kimi plan that includes Kimi Code.")
+            Text("1 - Install Kimi").font(.system(size: 18, weight: .semibold))
+            Text("Kimi Work, in the Kimi desktop app, can read your Dimmy meetings and dictations through a Dimmy plugin. Install Kimi, open it once and sign in.")
                 .font(.system(size: 13)).foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            row(desktopOk, false, desktopOk ? "Kimi Code Desktop installed." : "Kimi Code Desktop is not installed.")
-            if !desktopOk, let url = URL(string: "https://www.kimi.ai/code") {
-                Button("Download Kimi Code Desktop") { NSWorkspace.shared.open(url) }
-                    .buttonStyle(.borderedProminent)
-                Text("Install it, then come back: this page sees it by itself.")
-                    .font(.system(size: 12)).foregroundColor(.secondary)
+            row(readyOk, false,
+                readyOk ? "Kimi is installed and set up."
+                    : appOk ? "Kimi is installed. Open it once and sign in." : "Kimi is not installed.")
+            HStack(spacing: 10) {
+                if !appOk, let url = URL(string: "https://www.kimi.ai/products/download") {
+                    Button("Download Kimi") { NSWorkspace.shared.open(url) }
+                        .buttonStyle(.borderedProminent)
+                }
+                if appOk && !readyOk { Button("Open Kimi") { openWork() } }
             }
         }
     }
 
     private var stepConnect: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("2 - Connect Dimmy").font(.system(size: 18, weight: .semibold))
-            Text("Dimmy adds itself to Kimi Code's MCP servers. Your other servers stay as they are, and Dimmy keeps a copy of the original file.")
+            Text("2 - Add the Dimmy plugin").font(.system(size: 18, weight: .semibold))
+            Text("Dimmy adds its plugin to Kimi's Personal plugins. Then, in Kimi, open Plugins → Personal and press Install on Dimmy.")
                 .font(.system(size: 13)).foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Text(status.configPath ?? "~/.kimi-code/mcp.json")
-                .font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+            row(status.workRegistered, false,
+                status.workRegistered ? "Dimmy is in Kimi's Personal plugins." : "Not added yet.")
+            row(status.workInstalled, status.workRegistered && !status.workInstalled,
+                status.workInstalled ? "Installed in Kimi." : "In Kimi: Plugins → Personal → Dimmy → Install.")
             HStack(spacing: 10) {
-                Button(status.registered ? "Connect again" : "Connect") { connect() }
+                Button(status.workRegistered ? "Add again" : "Add to Kimi") { connect() }
                     .buttonStyle(.borderedProminent)
-                if status.registered {
-                    Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
-                }
+                Button("Open Kimi") { openWork() }
                 Text(connectMessage).font(.system(size: 13))
             }
         }
@@ -120,19 +125,19 @@ struct KimiDesktopConnectSheet: View {
 
     private var stepVerify: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("3 - Open a new session").font(.system(size: 18, weight: .semibold))
-            Text("Kimi Code loads MCP servers when a session starts. Open Kimi Code Desktop and start a NEW session; sessions already open do not see Dimmy.")
+            Text("3 - Try it").font(.system(size: 18, weight: .semibold))
+            Text("In Kimi Work, start a new chat and ask: \"List my latest Dimmy meetings\". This page turns green when Kimi starts Dimmy.")
                 .font(.system(size: 13)).foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             row(heartbeatFresh, !heartbeatFresh,
-                heartbeatFresh ? "Kimi Code started Dimmy. You can ask it about your meetings."
-                               : "Waiting for Kimi Code to start Dimmy...")
-            if let path = status.desktopPath {
-                Button("Open Kimi Code Desktop") { NSWorkspace.shared.open(URL(fileURLWithPath: path)) }
-            }
-            Text("Then ask Kimi, for example: \"List my recent Dimmy meetings\".")
-                .font(.system(size: 12)).foregroundColor(.secondary)
+                heartbeatFresh ? "Kimi Work started Dimmy. Ask it about your meetings."
+                               : "Waiting for Kimi to start Dimmy...")
+            Button("Open Kimi Work") { openWork() }
         }
+    }
+
+    private func openWork() {
+        if let url = URL(string: DimmyCore.kimiWorkLink) { NSWorkspace.shared.open(url) }
     }
 
     private func connect() {
@@ -140,10 +145,10 @@ struct KimiDesktopConnectSheet: View {
         let rc: Int32 = FileManager.default.fileExists(atPath: bin)
             ? DimmyCore.shared.installKimiMcp(binaryPath: bin) : -2
         switch rc {
-        case 0: connectMessage = "Connected."
+        case 0: connectMessage = ""; openWork()
         case -2: connectMessage = "dimmy-mcp was not found in the app bundle."
         case -3: connectMessage = "~/.kimi-code/mcp.json is not valid JSON. Dimmy left it untouched."
-        default: connectMessage = "Could not write ~/.kimi-code/mcp.json. See dimmy.log."
+        default: connectMessage = "Could not write the plugin. See dimmy.log."
         }
         probe()
     }
@@ -153,17 +158,14 @@ struct KimiDesktopConnectSheet: View {
     private func go(_ s: Int) {
         stopPoll()
         step = max(1, min(3, s))
-        if (step == 1 && !desktopOk) || (step == 3 && !heartbeatFresh) { startPoll() }
+        startPoll()
     }
 
     // Documented exception to the no-FFI-polling rule: what is awaited
-    // happens in another process (an install, Kimi Code starting dimmy-mcp).
+    // happens in another process (an install, Install pressed in Kimi, Kimi
+    // starting dimmy-mcp). 2 s while the sheet is open.
     private func startPoll() {
-        stopPoll()
-        let t = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
-            probe()
-            if (step == 1 && desktopOk) || (step == 3 && heartbeatFresh) { stopPoll() }
-        }
+        let t = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in probe() }
         pollTimer = t
         RunLoop.main.add(t, forMode: .common)
     }

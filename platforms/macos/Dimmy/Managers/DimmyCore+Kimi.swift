@@ -83,8 +83,18 @@ extension DimmyCore {
         var configPath: String?
         /// Kimi Code Desktop's app bundle, when installed.
         var desktopPath: String?
-        /// Seconds since Kimi last started dimmy-mcp (its own heartbeat file).
+        /// Seconds since Kimi Code last started dimmy-mcp (its own heartbeat file).
         var heartbeatAgeSecs: Int?
+        /// The Kimi app (Kimi Work), when installed.
+        var workAppPath: String?
+        /// Kimi Work has set itself up (opened once, signed in).
+        var workFound = false
+        /// Dimmy is in Kimi Work's Personal plugins.
+        var workRegistered = false
+        /// The user pressed Install on it in Kimi.
+        var workInstalled = false
+        /// Seconds since Kimi Work last started dimmy-mcp.
+        var workHeartbeatAgeSecs: Int?
     }
 
     var kimiMcpStatus: KimiMcpStatus {
@@ -97,8 +107,16 @@ extension DimmyCore {
             registered: (obj["registered"] as? Bool) ?? false,
             configPath: obj["config_path"] as? String,
             desktopPath: obj["desktop_path"] as? String,
-            heartbeatAgeSecs: obj["heartbeat_age_secs"] as? Int)
+            heartbeatAgeSecs: obj["heartbeat_age_secs"] as? Int,
+            workAppPath: obj["work_app_path"] as? String,
+            workFound: (obj["work_found"] as? Bool) ?? false,
+            workRegistered: (obj["work_registered"] as? Bool) ?? false,
+            workInstalled: (obj["work_installed"] as? Bool) ?? false,
+            workHeartbeatAgeSecs: obj["work_heartbeat_age_secs"] as? Int)
     }
+
+    /// Kimi Work's only external deep link that does something: open Work.
+    static let kimiWorkLink = "kimi-work://home"
 
     /// 0 done; -1 no home, -2 binary missing, -3 mcp.json invalid, -4 write failed.
     func installKimiMcp(binaryPath: String) -> Int32 {

@@ -92,7 +92,8 @@ struct MacIntegrationsPage: View {
             MacGroupFooter(text: "Uses your Kimi plan through the `kimi` CLI, no API key spent. The token stays with Kimi Code in ~/.kimi-code. Dimmy only checks that you're signed in.")
 
             Spacer().frame(height: 12)
-            // Kimi Code Desktop reads Dimmy's meetings over MCP, the Kimi
+            // Kimi Work (the Kimi app) reads Dimmy's meetings through a personal
+            // plugin; Connect also covers Kimi Code via ~/.kimi-code/mcp.json. The Kimi
             // sibling of the Claude Desktop card. Wizard: install, connect, verify.
             MacKimiDesktopCard(onWizardRequested: { step in
                 kimiDesktopStep = step
