@@ -593,6 +593,36 @@ int32_t dimmy_meeting_save_post_process(const char * _Nonnull dir_ptr,
 /// present from a crashed session). UI can offer "recover meeting?".
 int32_t dimmy_meeting_list_orphans(char * _Nonnull out_buf, int32_t buf_len);
 
+/// Mark the meetings a crash left behind as interrupted, once; JSON array of
+/// {id, dir, transcript_size_bytes}. Called at launch.
+int32_t dimmy_meeting_recover_interrupted(char * _Nonnull out_buf, int32_t buf_len);
+
+/// Set a meeting's title through the core's atomic meta.json writer.
+/// 0 = ok, -1 = bad argument.
+int32_t dimmy_meeting_set_title(const char * _Nonnull dir_ptr, const char * _Nonnull title_ptr);
+
+/// A meeting from an already-transcribed audio file: the core makes the
+/// folder, transcript, audio copy and meta.json. Writes the folder path;
+/// returns its length, -1 bad argument, -2 not written.
+int32_t dimmy_meeting_import(const char * _Nullable source_ptr,
+                             const char * _Nonnull transcript_ptr,
+                             double duration_secs,
+                             char * _Nonnull out_buf, int32_t buf_len);
+
+/// Record a recap running (status 0) or failed (1, with a reason) in
+/// meta.json. 0 = ok, -1 = bad argument.
+int32_t dimmy_meeting_set_recap_status(const char * _Nonnull dir_ptr, int32_t status,
+                                       const char * _Nullable reason_ptr);
+
+/// 1 when the consent audit log holds an event of this kind, 0 not, -1 bad arg.
+int32_t dimmy_consent_has(const char * _Nonnull kind_ptr);
+
+/// The core's onboarding marker: 1 done, 0 not.
+int32_t dimmy_onboarding_done(void);
+
+/// Mark onboarding done (1) or not (0). 0 = ok, -1 = failed.
+int32_t dimmy_onboarding_set_done(int32_t done);
+
 /// 1 = a meeting is currently active, 0 otherwise. Used to gate the
 /// dictation hotkey while a meeting is recording (cpal collision).
 int32_t dimmy_meeting_is_active(void);

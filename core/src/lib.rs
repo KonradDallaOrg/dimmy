@@ -11,6 +11,7 @@ pub mod autostart;
 pub mod calendar;
 pub mod call_detector;
 pub mod call_media;
+pub mod capture;
 #[cfg(target_os = "windows")]
 pub mod capture_sessions;
 pub mod catalog;
@@ -101,6 +102,7 @@ pub mod stream_bounds;
 pub mod telegram;
 pub mod telemetry;
 pub mod transcribe;
+pub mod transcriber_health;
 pub mod whistle;
 #[cfg(target_os = "windows")]
 mod win_paths;
@@ -329,6 +331,25 @@ pub fn onboarding_completed() -> bool {
         return true;
     }
     false
+}
+
+/// The marker alone, for the hosts: unlike [`onboarding_completed`] an
+/// existing config.json does not count, because the core writes one at the
+/// first launch, before onboarding has run.
+pub fn onboarding_marker_exists() -> bool {
+    onboarding_marker_path().is_some_and(|p| p.exists())
+}
+
+/// "Run onboarding again": remove the marker. Absent already is fine.
+pub fn clear_onboarding_done() -> Result<(), String> {
+    let path = onboarding_marker_path().ok_or("Cannot determine config directory")?;
+    match std::fs::remove_file(&path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.to_string()),
+    }
+    assert!(!path.exists(), "Onboarding marker must be gone after clear");
+    Ok(())
 }
 
 /// Mark onboarding as completed by creating the marker file.

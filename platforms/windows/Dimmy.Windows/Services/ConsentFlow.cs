@@ -72,16 +72,13 @@ public static class ConsentFlow
         catch { /* clipboard failure must not block the meeting */ }
     }
 
-    private static string AutoRecordMarker =>
-        System.IO.Path.Combine(BuildInfo.ConfigDirPath, ".auto_record_confirmed");
-
     /// One-time confirmation the first time "Start recording automatically"
-    /// is turned on. A marker file, not a UiPreferences field: the App keeps
-    /// a long-lived UiPreferences copy and re-saves it, which would erase a
-    /// flag written by the Settings window.
+    /// is turned on. The answer is the consent audit log's
+    /// `auto_start_confirmed` line (the core also honours the
+    /// `.auto_record_confirmed` marker older builds wrote).
     public static async Task<bool> ConfirmAutoRecordAsync(XamlRoot? xamlRoot, string lang)
     {
-        try { if (System.IO.File.Exists(AutoRecordMarker)) return true; } catch { }
+        if (DimmyNative.dimmy_consent_has("auto_start_confirmed") == 1) return true;
 
         var dialog = new ContentDialog
         {
@@ -107,8 +104,6 @@ public static class ConsentFlow
         catch { return false; }
         if (!ok) return false;
 
-        try { System.IO.File.WriteAllText(AutoRecordMarker, "1"); }
-        catch (Exception ex) { App.Log($"auto-record marker not written: {ex.Message}", "Consent"); }
         DimmyNative.ConsentLogEvent("auto_start_confirmed", lang);
         return true;
     }

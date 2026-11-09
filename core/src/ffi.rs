@@ -408,6 +408,21 @@ fn resolve_live_final(streaming: Option<String>, chunked: Option<String>) -> Opt
         .or_else(|| chunked.filter(|c| !c.trim().is_empty()))
 }
 
+/// `resolve_live_final`, unless the realtime socket failed mid-dictation:
+/// its text ends where the socket died, so it is dropped and the stop
+/// transcribes the whole buffer (None here means batch).
+fn live_final_to_keep(
+    streaming: Option<String>,
+    chunked: Option<String>,
+    stream_failed: bool,
+) -> Option<String> {
+    if stream_failed {
+        chunked.filter(|c| !c.trim().is_empty())
+    } else {
+        resolve_live_final(streaming, chunked)
+    }
+}
+
 /// Write 16 kHz mono int16 WAV. Used by the history-audio retention
 /// path. Clamps + scales f32 [-1.0, 1.0] to i16 range with int16
 /// saturation so peaking samples don't wrap around. Returns the
@@ -1027,7 +1042,13 @@ pub extern "C" fn dimmy_set_event_callback(cb: extern "C" fn(*const c_char)) {
 /// the active meeting recording).
 /// True from the moment a stop releases `recording` until it has taken the
 /// audio buffer: the window in which a new recording would destroy it.
+/// Not a `capture::Owner` state: it also covers a stop that runs with no
+/// dictation claim (it still reads and clears the buffer), which the owner
+/// cannot see, so moving it there would not be equivalent.
 static STOP_DRAINING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The dictation (DICTATION_GEN) whose realtime socket failed; 0 for none.
+static STREAM_FAILED_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 fn stop_drain_settled(flag: &std::sync::atomic::AtomicBool, timeout: std::time::Duration) -> bool {
     let started = std::time::Instant::now();
@@ -1085,6 +1106,19 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
             return -1;
         }
     }
+
+    // The one owner of the capture (crate::capture). Also refuses the short
+    // window in which a stopped meeting is still writing out its audio.
+    let dictation_id = match crate::capture::claim_dictation() {
+        Ok(id) => id,
+        Err(crate::capture::Busy::Dictation) => return -2,
+        Err(busy) => {
+            log(&format!(
+                "[StartRec] suppressed — capture held by {busy:?} (rc=-7)"
+            ));
+            return -7;
+        }
+    };
 
     *recording = true;
 
@@ -1461,7 +1495,38 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
     prewarm_claude_for_dictation(st);
 
     emit_event("recording_started", "{}");
+    emit_dictation_phase("recording", dictation_id);
     0
+}
+
+/// Live typing stopped in the middle of a dictation (the realtime socket
+/// failed). The dictation itself goes on: its audio is still captured and
+/// the batch path transcribes it at stop. Before this the host never
+/// learned, and the text simply stopped appearing.
+pub(crate) fn emit_stream_failed(engine: &str) {
+    let gen = DICTATION_GEN.load(std::sync::atomic::Ordering::SeqCst);
+    // The stop then ignores the live text, which ends where the socket
+    // failed, and transcribes the whole recording instead.
+    STREAM_FAILED_GEN.store(gen, std::sync::atomic::Ordering::SeqCst);
+    emit_event(
+        "stt_stream_failed",
+        &serde_json::json!({
+            "engine": engine,
+            "dictation": gen,
+        })
+        .to_string(),
+    );
+}
+
+/// One `dictation_phase` event per transition of the core's dictation:
+/// `recording` (capture claimed), `finishing` (stop running: audio taken,
+/// transcription and cleanup under way), `idle` (stop returned). Hosts
+/// derive the pill from it instead of guessing with timers.
+fn emit_dictation_phase(phase: &str, id: u64) {
+    emit_event(
+        "dictation_phase",
+        &serde_json::json!({ "phase": phase, "id": id }).to_string(),
+    );
 }
 
 /// Start the `claude` CLI now when this dictation will end in a subscription
@@ -1526,8 +1591,36 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
         }
     }
     let _stop_guard = StopGuard;
+    // (STOP_IN_PROGRESS spans the whole stop, transcription included: longer
+    // than the capture claim, which ends when the audio is out of the buffer.)
+
+    // The session machine follows the core's own stop, not only the host's
+    // Stop input: a stop the host called directly still puts it in
+    // Finishing. A no-op when the host already did (Finishing stays).
+    crate::dictation_session::input(crate::dictation_session::Input::Stop);
 
     let st = state();
+
+    // Which dictation this stop ends (0: none held the capture). The guard
+    // releases the capture on every exit; the normal path releases it as
+    // soon as the audio is out of the buffer, not after transcription.
+    let dictation_id = match crate::capture::owner() {
+        crate::capture::Owner::Dictation { id } => id,
+        _ => 0,
+    };
+    struct CaptureGuard(u64);
+    impl Drop for CaptureGuard {
+        fn drop(&mut self) {
+            crate::capture::release_dictation();
+            if self.0 > 0 {
+                emit_dictation_phase("idle", self.0);
+            }
+        }
+    }
+    let _capture_guard = CaptureGuard(dictation_id);
+    if dictation_id > 0 {
+        emit_dictation_phase("finishing", dictation_id);
+    }
 
     // Consume the recording-start instant up front so it is cleared on EVERY
     // exit path (the early returns below for empty/muted buffer must not leave
@@ -1651,6 +1744,7 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
         Err(_) => return -1,
     };
     drop(drain_guard);
+    crate::capture::release_dictation();
 
     // Diagnostic: log buffer stats
     let buf_len_samples = buffer.len();
@@ -1892,7 +1986,19 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
     // segment was injected live, so a zero-segment failure still gets pasted
     // from this batch transcript. Work-loss guard, 2026-06-13.
     let had_live = streaming_final.is_some() || chunked_final.is_some();
-    let live_final = resolve_live_final(streaming_final, chunked_final);
+    // A realtime socket that failed mid-dictation stopped the live text at
+    // that point: everything said after it was captured but would never
+    // have been transcribed. The whole buffer goes to batch STT instead.
+    let stream_failed = STREAM_FAILED_GEN.load(std::sync::atomic::Ordering::SeqCst)
+        == DICTATION_GEN.load(std::sync::atomic::Ordering::SeqCst)
+        && streaming_final.is_some()
+        // Batch needs a key of the selected provider: without one the
+        // partial live text is still better than nothing.
+        && !(stt_mode == "cloud" && api_key.is_none());
+    if stream_failed {
+        log("[StopRec] live stream failed mid-dictation — batch STT on the full recording");
+    }
+    let live_final = live_final_to_keep(streaming_final, chunked_final, stream_failed);
     if had_live && live_final.is_none() {
         log("[StopRec] live streaming/chunked transcript was empty — falling back to batch STT on buffered audio (work-loss guard)");
     }
@@ -2387,6 +2493,16 @@ fn llm_report_kind(err: &crate::error::LlmError, category: &'static str) -> &'st
 pub extern "C" fn dimmy_cancel_recording() {
     let st = state();
 
+    // Esc during a meeting used to send AudioCommand::Stop and clear the
+    // buffer under the meeting's worker: cancel is a dictation's only.
+    if crate::capture::meeting_holds() {
+        log("[Cancel] a meeting holds the capture — nothing to cancel");
+        return;
+    }
+    // The session machine follows the core's cancel too (a no-op when the
+    // host already said Cancel or Discard).
+    crate::dictation_session::input(crate::dictation_session::Input::Cancel);
+
     // Compute audio_secs BEFORE clearing, for the telemetry event.
     let sample_rate = st.audio_sample_rate.lock().map(|s| *s).unwrap_or(16_000);
     let audio_secs = st
@@ -2412,7 +2528,12 @@ pub extern "C" fn dimmy_cancel_recording() {
     // kept transcribing the mic into every later dictation.
     DICTATION_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     retire_streamer();
+    let cancelled = crate::capture::owner();
+    crate::capture::release_dictation();
     emit_event("recording_cancelled", "{}");
+    if let crate::capture::Owner::Dictation { id } = cancelled {
+        emit_dictation_phase("idle", id);
+    }
 
     crate::telemetry::track(crate::telemetry::Event::TranscriptionCancelled { audio_secs });
 }
@@ -4373,6 +4494,8 @@ pub unsafe extern "C" fn dimmy_command_transform(
     if selection_ptr.is_null() || spoken_ptr.is_null() || out_buf.is_null() || buf_len <= 0 {
         return -1;
     }
+    // Streamed text from here is command output, never a recap.
+    let _purpose = crate::llm::StreamPurpose::Command.mark();
     // Selection is OPTIONAL. With a selection → transform/replace it. Without
     // one → the spoken words are a generation instruction whose result gets
     // inserted at the cursor. Empty/whitespace selection collapses to None.
@@ -4591,7 +4714,8 @@ pub extern "C" fn dimmy_get_version(out_buf: *mut c_char, buf_len: c_int) -> c_i
 /// worker that streams the recorded WAV to disk and transcribes
 /// chunks every 15 s. Returns 0 on success and writes the meeting id
 /// to `out_buf`. Returns -1 if a session is already active, -2 on
-/// audio-capture start failure, -3 on filesystem error.
+/// audio-capture start failure, -3 on filesystem error, -4 while a
+/// dictation is recording (finish it first).
 ///
 /// # Safety
 /// `out_buf` must be a valid writable buffer of `buf_len` bytes.
@@ -4637,12 +4761,26 @@ pub unsafe extern "C" fn dimmy_meeting_start(out_buf: *mut c_char, buf_len: c_in
     if let Ok(mut sr) = st.audio_sample_rate.lock() {
         *sr = device_sr;
     }
-    // Claim the shared audio state: any meeting still stopping in the
-    // background must not tear it down under us from here on.
+    // Claim the capture (crate::capture) before touching the buffers: a
+    // previous worker still finishing must not act on what we are about to
+    // put in them, and a running dictation must not lose its audio to us
+    // (it used to: ending that dictation then killed the meeting's capture).
+    let claim = match crate::capture::claim_meeting() {
+        Ok(c) => c,
+        Err(crate::capture::Busy::Dictation) => {
+            log("[Meeting] start refused — a dictation is recording (rc=-4)");
+            return -4;
+        }
+        Err(busy) => {
+            log(&format!(
+                "[Meeting] start refused — capture held by {busy:?}"
+            ));
+            return -1;
+        }
+    };
+    // Any meeting still stopping in the background must not tear the shared
+    // audio state down under us from here on.
     MEETING_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    // And the capture buffers themselves: a previous worker still finishing
-    // must not act on what we are about to put in them.
-    crate::meeting::claim_capture_buffers();
     // Clear any stale buffers from a previous recording so the meeting
     // worker starts at offset 0 on both primary and secondary streams.
     if let Ok(mut b) = st.audio_buffer.lock() {
@@ -4741,7 +4879,8 @@ pub unsafe extern "C" fn dimmy_meeting_start(out_buf: *mut c_char, buf_len: c_in
         "[Meeting] mic_sr={} system_sr={} source={:?}",
         device_sr, system_sr, mt_source
     ));
-    let session = match crate::meeting::MeetingSession::start(
+    let session = match crate::meeting::MeetingSession::start_claimed(
+        claim,
         st.audio_buffer.clone(),
         st.audio_buffer_secondary.clone(),
         device_sr,
@@ -4751,6 +4890,7 @@ pub unsafe extern "C" fn dimmy_meeting_start(out_buf: *mut c_char, buf_len: c_in
     ) {
         Ok(s) => s,
         Err(e) => {
+            crate::capture::meeting_released(claim, &[]);
             log(&format!("[Meeting] start failed: {}", e));
             crate::telemetry::report(
                 crate::telemetry::Subsystem::Meeting,
@@ -4800,6 +4940,8 @@ pub unsafe extern "C" fn dimmy_meeting_stop(out_buf: *mut c_char, buf_len: c_int
             None => return -1,
         }
     };
+    let claim = session.claim();
+    crate::capture::meeting_stopping(claim);
     // Notify subscribers BEFORE the (potentially seconds-long) drain
     // happens — the pill should leave the meeting-active visual the
     // instant the user clicked Stop, not after the worker finishes
@@ -4840,14 +4982,14 @@ pub unsafe extern "C" fn dimmy_meeting_stop(out_buf: *mut c_char, buf_len: c_int
 
     let result = session.stop();
     crate::coreml_encoder::run_deferred();
-    // Release the whole-meeting capture buffers NOW: nothing reads them
-    // after the worker join (AudioCommand::Stop tears down streams but
-    // never clears, and the next Start clears-then-fills). Leaving them
-    // kept ~0.6-1.3 GB resident after every long meeting AND left a
-    // stale giant buffer for anything that inspects buffer length.
-    if still_ours() {
-        clear_capture_buffers(st);
-    } else {
+    // The worker hands the buffers back (and frees them) as soon as its
+    // audio is on disk. This only covers a worker that never got there
+    // (panicked or abandoned): released here, still only if nothing else
+    // claimed the capture meanwhile. The old unconditional clear at this
+    // point wiped a dictation started during "Wrapping up" (2026-11-09).
+    if crate::capture::meeting_released(claim, &[&st.audio_buffer, &st.audio_buffer_secondary]) {
+        log("[Meeting] capture released at stop (the worker did not get to it)");
+    } else if !still_ours() {
         log("[Meeting] stop finished after the NEXT meeting started — leaving the shared audio state to it");
     }
     let backend = state()
@@ -4871,19 +5013,6 @@ pub unsafe extern "C" fn dimmy_meeting_stop(out_buf: *mut c_char, buf_len: c_int
     })
     .to_string();
     write_to_buf(&json, out_buf, buf_len)
-}
-
-/// Drop the shared capture buffers' contents and reclaim their heap
-/// allocations. Called from `dimmy_meeting_stop` after the worker join;
-/// safe because the audio streams were already sent Stop and the meeting
-/// worker (sole consumer of the cursors) has exited.
-fn clear_capture_buffers(st: &AppState) {
-    for buf in [&st.audio_buffer, &st.audio_buffer_secondary] {
-        if let Ok(mut b) = buf.lock() {
-            b.clear();
-            b.shrink_to_fit();
-        }
-    }
 }
 
 /// Persist the post-process LLM artefacts (recap, actions JSON,
@@ -4949,6 +5078,190 @@ pub unsafe extern "C" fn dimmy_meeting_save_post_process(
             -1
         }
     }
+}
+
+/// Mark the meetings a crash left behind (`.recording` marker, not the live
+/// meeting) as `interrupted`, once, and return them as a JSON array of
+/// {id, dir, transcript_size_bytes}. Hosts call it at launch and tell the
+/// user the audio is saved and can be transcribed again. Returns the byte
+/// length of the JSON, or -1 on a bad buffer.
+///
+/// # Safety
+/// `out_buf` must be a valid writable buffer of `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_meeting_recover_interrupted(
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let live = MEETING
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|s| s.dir().to_path_buf()));
+    let recovered = crate::meeting::recover_interrupted(live.as_deref());
+    let json = serde_json::to_string(&recovered).unwrap_or_else(|_| "[]".to_string());
+    write_to_buf(&json, out_buf, buf_len)
+}
+
+/// Make a meeting from an audio file that was already transcribed (a loaded
+/// file, a Telegram voice note): the folder, `transcripts.txt`, the audio
+/// copy and `meta.json`, in the shape a live meeting has. `source_ptr` may be
+/// null or empty (no audio to copy). `duration_secs` is the host's probe of
+/// the file. Writes the new meeting folder's path to `out_buf` and returns its
+/// byte length; -1 bad argument, -2 the folder could not be written.
+///
+/// # Safety
+/// `source_ptr` must be null or a valid NUL-terminated UTF-8 string;
+/// `transcript_ptr` a valid one; `out_buf` writable for `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_meeting_import(
+    source_ptr: *const c_char,
+    transcript_ptr: *const c_char,
+    duration_secs: f64,
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if transcript_ptr.is_null() || out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let Ok(transcript) = CStr::from_ptr(transcript_ptr).to_str() else {
+        return -1;
+    };
+    if transcript.trim().is_empty() || !duration_secs.is_finite() || duration_secs < 0.0 {
+        return -1;
+    }
+    let source = if source_ptr.is_null() {
+        ""
+    } else {
+        CStr::from_ptr(source_ptr).to_str().unwrap_or("")
+    };
+    let source = (!source.is_empty()).then(|| std::path::Path::new(source));
+    let Some(root) = crate::meetings_dir() else {
+        return -2;
+    };
+    if let Err(e) = std::fs::create_dir_all(&root) {
+        log(&format!("[Meeting] import: meetings dir: {e}"));
+        return -2;
+    }
+    match crate::meeting::import_from_file(&root, source, transcript, duration_secs) {
+        Ok(dir) => write_to_buf(&dir.to_string_lossy(), out_buf, buf_len),
+        Err(e) => {
+            log(&format!("[Meeting] import failed: {e}"));
+            -2
+        }
+    }
+}
+
+/// Record that a meeting's recap is running (`status` 0) or failed
+/// (`status` 1, `reason_ptr` says why, cut to 200 chars). `saved` is written
+/// with the recap by `dimmy_meeting_save_post_process`. Returns 0, or -1 on a
+/// bad argument.
+///
+/// # Safety
+/// `dir_ptr` must be a valid NUL-terminated UTF-8 string; `reason_ptr` null
+/// or one.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_meeting_set_recap_status(
+    dir_ptr: *const c_char,
+    status: c_int,
+    reason_ptr: *const c_char,
+) -> c_int {
+    if dir_ptr.is_null() {
+        return -1;
+    }
+    let Ok(dir) = CStr::from_ptr(dir_ptr).to_str() else {
+        return -1;
+    };
+    let dir = std::path::Path::new(dir);
+    if dir.as_os_str().is_empty() || !dir.is_dir() {
+        return -1;
+    }
+    let outcome = match status {
+        0 => crate::meeting::RecapOutcome::Pending,
+        1 => crate::meeting::RecapOutcome::Failed,
+        _ => return -1,
+    };
+    let reason = if reason_ptr.is_null() {
+        ""
+    } else {
+        CStr::from_ptr(reason_ptr).to_str().unwrap_or("")
+    };
+    crate::meeting::record_recap(dir, outcome, reason);
+    0
+}
+
+/// Whether the consent audit log (`consent.jsonl`) holds an event of this
+/// kind: 1 yes, 0 no, -1 bad argument. The hosts kept their own copy of
+/// "auto-record was confirmed" (a marker file on Windows, UserDefaults on
+/// macOS) next to the audit line that already said so.
+///
+/// # Safety
+/// `kind_ptr` must be a valid NUL-terminated UTF-8 string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_consent_has(kind_ptr: *const c_char) -> c_int {
+    if kind_ptr.is_null() {
+        return -1;
+    }
+    match CStr::from_ptr(kind_ptr).to_str() {
+        Ok(kind) if !kind.is_empty() => crate::consent::has_event(kind) as c_int,
+        _ => -1,
+    }
+}
+
+/// 1 when onboarding was completed on this install, 0 when not. Only the
+/// marker counts (an existing config.json does not: the core writes one
+/// before onboarding ends).
+#[no_mangle]
+pub extern "C" fn dimmy_onboarding_done() -> c_int {
+    crate::onboarding_marker_exists() as c_int
+}
+
+/// Mark onboarding done (`done` 1) or not done (0, "run onboarding again").
+/// Returns 0, or -1 when the marker could not be written or removed.
+#[no_mangle]
+pub extern "C" fn dimmy_onboarding_set_done(done: c_int) -> c_int {
+    let r = match done {
+        1 => crate::mark_onboarding_done(),
+        0 => crate::clear_onboarding_done(),
+        _ => return -1,
+    };
+    match r {
+        Ok(()) => 0,
+        Err(e) => {
+            log(&format!("[Onboarding] marker: {e}"));
+            -1
+        }
+    }
+}
+
+/// Set a meeting's title in its meta.json, through the core's one atomic
+/// writer. Hosts used to rewrite meta.json themselves. Returns 0, or -1 on
+/// a bad argument.
+///
+/// # Safety
+/// `dir_ptr` and `title_ptr` must be valid null-terminated UTF-8 strings.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_meeting_set_title(
+    dir_ptr: *const c_char,
+    title_ptr: *const c_char,
+) -> c_int {
+    if dir_ptr.is_null() || title_ptr.is_null() {
+        return -1;
+    }
+    let (Ok(dir), Ok(title)) = (
+        CStr::from_ptr(dir_ptr).to_str(),
+        CStr::from_ptr(title_ptr).to_str(),
+    ) else {
+        return -1;
+    };
+    let dir = std::path::Path::new(dir);
+    if dir.as_os_str().is_empty() || !dir.is_dir() {
+        return -1;
+    }
+    crate::meeting::update_meeting_meta_title(dir, title.trim());
+    0
 }
 
 /// Return JSON array of meeting sessions left with a `.recording`
@@ -6576,6 +6889,7 @@ pub unsafe extern "C" fn dimmy_notion_send_recap(
                 dir.display(),
                 page.url
             ));
+            crate::meeting::record_notion_page(&dir, &page.id, &page.url);
             serde_json::json!({
                 "ok": true,
                 "page_id": page.id,
@@ -6681,6 +6995,7 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
         Ok(s) if !s.is_empty() => s.to_string(),
         _ => return -1,
     };
+    let _purpose = crate::llm::StreamPurpose::Recap.mark();
     let model_override = if model_override_ptr.is_null() {
         String::new()
     } else {
@@ -10399,7 +10714,7 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
         log("[Retranscribe] produced empty transcript");
         return -5;
     }
-    if let Err(e) = std::fs::write(dir_path.join("transcripts.txt"), out.as_bytes()) {
+    if let Err(e) = crate::write_atomic(&dir_path.join("transcripts.txt"), out.as_bytes()) {
         log(&format!(
             "[Retranscribe] write transcripts.txt failed: {}",
             e
@@ -10412,9 +10727,11 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
         );
         return -3;
     }
+    let engine = if is_local { backend.as_str() } else { "cloud" };
+    crate::meeting::record_retranscribed(dir_path, lines.len(), engine);
     log(&format!(
         "[Retranscribe] {} dir='{}' -> {} lines, {} bytes",
-        if is_local { &backend } else { "cloud" },
+        engine,
         dir,
         lines.len(),
         out.len()
@@ -11999,6 +12316,8 @@ pub unsafe extern "C" fn dimmy_inject_pcm_for_test(
 /// saved config without a separate apply step on init / set_config_json.
 /// Bumped by every meeting start. `dimmy_meeting_stop` hands the shared
 /// audio state back only if it is still the meeting that owns it.
+/// Not the capture claim: that drops to 0 when the meeting worker lets go
+/// (or dies), and the stop must still send the stream its Stop then.
 static MEETING_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Whether a stopping meeting may still tear down the SHARED audio state
@@ -12391,6 +12710,7 @@ pub unsafe extern "C" fn dimmy_call_signal_response(
         "stop_and_recap" => NudgeResponse::StopAndRecap,
         "keep_recording" => NudgeResponse::KeepRecording,
         "stop_timeout" => NudgeResponse::StopTimeout,
+        "record_aborted" => NudgeResponse::RecordAborted,
         _ => return -2,
     };
     let app: Option<String> = if app_id.is_null() {
@@ -12607,8 +12927,8 @@ pub unsafe extern "C" fn dimmy_telegram_pending(out_buf: *mut c_char, buf_len: c
 /// in. The Mac file-load bridge keeps the source's own extension, so
 /// `audio.m4a` has to be found here as well as in the host; Symphonia decodes
 /// all of them.
-fn resolve_meeting_track(dir: &std::path::Path, base: &str) -> Option<String> {
-    ["ogg", "wav", "m4a", "mp3", "aac", "flac", "mp4"]
+pub(crate) fn resolve_meeting_track(dir: &std::path::Path, base: &str) -> Option<String> {
+    crate::meeting::TRACK_EXTENSIONS
         .iter()
         .map(|ext| dir.join(format!("{base}.{ext}")))
         .find(|p| p.exists())
@@ -13840,6 +14160,18 @@ pub(crate) mod tests {
         assert_eq!(buf_len, 0, "buffer must be cleared after cancel");
     }
 
+    #[test]
+    #[serial]
+    fn the_session_follows_the_cores_own_cancel() {
+        ensure_test_state();
+        dimmy_dictation_input(6, 0, 0);
+        assert_eq!(dimmy_dictation_input(1, 0, 0), 1, "toggle press starts");
+        assert_eq!(dimmy_dictation_phase(), 1);
+        // The host never says Cancel: the core's cancel is enough.
+        dimmy_cancel_recording();
+        assert_eq!(dimmy_dictation_phase(), 0);
+    }
+
     // ── dimmy_cycle_llm_style tests ─────────────────────────────────
 
     #[test]
@@ -14508,14 +14840,14 @@ pub(crate) mod tests {
         }
     }
 
-    fn reset_event_capture() {
+    pub(crate) fn reset_event_capture() {
         if let Ok(mut v) = captured_events_slot().lock() {
             v.clear();
         }
         dimmy_set_event_callback(capture_event_to_slot);
     }
 
-    fn drain_event_capture() -> Vec<String> {
+    pub(crate) fn drain_event_capture() -> Vec<String> {
         let out = captured_events_slot()
             .lock()
             .map(|v| v.clone())
@@ -14690,16 +15022,20 @@ pub(crate) mod tests {
     /// they held 0.6-1.3 GB after every long meeting.
     #[test]
     #[serial]
-    fn clear_capture_buffers_releases_meeting_audio() {
+    fn a_released_meeting_frees_the_capture_buffers() {
         ensure_test_state();
         let st = state();
+        let claim = crate::capture::claim_meeting().expect("capture idle in tests");
         if let Ok(mut b) = st.audio_buffer.lock() {
             b.extend_from_slice(&[0.1f32; 1000]);
         }
         if let Ok(mut b) = st.audio_buffer_secondary.lock() {
             b.extend_from_slice(&[0.2f32; 1000]);
         }
-        clear_capture_buffers(st);
+        assert!(crate::capture::meeting_released(
+            claim,
+            &[&st.audio_buffer, &st.audio_buffer_secondary]
+        ));
         assert_eq!(st.audio_buffer.lock().unwrap().len(), 0);
         assert_eq!(st.audio_buffer_secondary.lock().unwrap().len(), 0);
         assert_eq!(
@@ -14707,6 +15043,136 @@ pub(crate) mod tests {
             0,
             "heap must be reclaimed, not just truncated"
         );
+    }
+
+    /// 2026-11-09 report: a dictation started while a meeting was wrapping
+    /// up was wiped by the meeting's final buffer clear.
+    #[test]
+    #[serial]
+    fn a_dictation_after_the_meeting_audio_is_saved_keeps_its_audio() {
+        ensure_test_state();
+        let st = state();
+        let claim = crate::capture::claim_meeting().expect("capture idle in tests");
+        crate::capture::meeting_stopping(claim);
+        // Still writing out its tail: a dictation must wait.
+        assert_eq!(
+            crate::capture::claim_dictation(),
+            Err(crate::capture::Busy::MeetingDraining)
+        );
+        // The worker's audio is on disk: it hands the capture back.
+        assert!(crate::capture::meeting_released(claim, &[&st.audio_buffer]));
+        let dictation = crate::capture::claim_dictation().expect("free after the release");
+        if let Ok(mut b) = st.audio_buffer.lock() {
+            b.extend_from_slice(&[0.3f32; 480]);
+        }
+        // The stop's backstop runs after the transcriber join: it must not
+        // touch a capture someone else now holds.
+        assert!(!crate::capture::meeting_released(
+            claim,
+            &[&st.audio_buffer]
+        ));
+        assert_eq!(
+            st.audio_buffer.lock().unwrap().len(),
+            480,
+            "dictation audio kept"
+        );
+        assert_eq!(
+            crate::capture::owner(),
+            crate::capture::Owner::Dictation { id: dictation }
+        );
+        crate::capture::release_dictation();
+        st.audio_buffer.lock().unwrap().clear();
+    }
+
+    /// 2026-11-09 sweep: a realtime socket that failed mid-dictation left
+    /// the partial live text as the final transcript, and everything said
+    /// after it was lost although its audio was recorded.
+    #[test]
+    fn a_failed_stream_hands_the_dictation_to_batch() {
+        let partial = Some("the first half".to_string());
+        assert_eq!(
+            live_final_to_keep(partial.clone(), None, false).as_deref(),
+            Some("the first half")
+        );
+        assert_eq!(live_final_to_keep(partial, None, true), None, "batch STT");
+    }
+
+    /// A crash leaves the `.recording` marker: the meeting is reported once,
+    /// marked interrupted, and keeps its other fields; a title set through
+    /// the core goes through the same atomic writer.
+    #[test]
+    #[serial]
+    fn an_interrupted_meeting_is_reported_once_and_can_be_renamed() {
+        ensure_test_state();
+        let base = crate::meetings_dir().expect("meetings dir in tests");
+        let dir = base.join(format!("interrupted-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("meta.json"), r#"{"started_at": 7.5}"#).unwrap();
+        std::fs::write(dir.join(".recording"), "1").unwrap();
+        let dir_s = dir.to_string_lossy().to_string();
+
+        let recover = || -> Vec<serde_json::Value> {
+            let mut out = vec![0 as c_char; 64 * 1024];
+            let n =
+                unsafe { dimmy_meeting_recover_interrupted(out.as_mut_ptr(), out.len() as c_int) };
+            assert!(n > 0);
+            let s = unsafe { CStr::from_ptr(out.as_ptr()) }
+                .to_str()
+                .unwrap()
+                .to_string();
+            serde_json::from_str(&s).unwrap()
+        };
+        let first = recover();
+        assert!(
+            first.iter().any(|m| m["dir"] == dir_s.as_str()),
+            "{first:?}"
+        );
+        assert!(!dir.join(".recording").exists(), "the marker is consumed");
+        let second = recover();
+        assert!(
+            !second.iter().any(|m| m["dir"] == dir_s.as_str()),
+            "reported once"
+        );
+
+        let meta = || -> serde_json::Value {
+            serde_json::from_str(&std::fs::read_to_string(dir.join("meta.json")).unwrap()).unwrap()
+        };
+        let m = meta();
+        assert_eq!(m["stage"], "interrupted");
+        assert_eq!(m["transcript"]["status"], "unknown");
+        assert_eq!(m["started_at"], 7.5);
+
+        let d = CString::new(dir_s.clone()).unwrap();
+        let t = CString::new("  Renamed  ").unwrap();
+        assert_eq!(
+            unsafe { dimmy_meeting_set_title(d.as_ptr(), t.as_ptr()) },
+            0
+        );
+        let m = meta();
+        assert_eq!(m["title"], "Renamed");
+        assert_eq!(m["schema"], crate::meeting::META_SCHEMA);
+        assert_eq!(m["started_at"], 7.5);
+        let bad = CString::new("").unwrap();
+        assert_eq!(
+            unsafe { dimmy_meeting_set_title(bad.as_ptr(), t.as_ptr()) },
+            -1
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A meeting no longer starts under a running dictation: ending that
+    /// dictation sent AudioCommand::Stop and the meeting recorded nothing.
+    #[test]
+    #[serial]
+    fn a_meeting_cannot_start_under_a_running_dictation() {
+        ensure_test_state();
+        let _dictation = crate::capture::claim_dictation().expect("capture idle in tests");
+        let mut out = vec![0 as c_char; 256];
+        let rc = unsafe { dimmy_meeting_start(out.as_mut_ptr(), out.len() as c_int) };
+        assert_eq!(rc, -4, "refused with the dictation code");
+        assert!(MEETING.lock().unwrap().is_none());
+        crate::capture::release_dictation();
+        assert_eq!(crate::capture::owner(), crate::capture::Owner::Idle);
     }
 
     #[test]

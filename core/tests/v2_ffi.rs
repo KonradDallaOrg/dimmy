@@ -37,14 +37,16 @@ use serial_test::serial;
 use dimmy_lib::ffi::{
     dimmy_call_end_verdict, dimmy_call_live_media, dimmy_call_meeting_started_external,
     dimmy_call_signal_session_ended, dimmy_claude_code_ping, dimmy_claude_code_status,
-    dimmy_clear_app_context, dimmy_command_transform, dimmy_get_active_mic_sample_rate,
-    dimmy_get_config_json, dimmy_get_loopback_amplitude, dimmy_hardware_json, dimmy_history_save,
-    dimmy_history_update_audio, dimmy_history_update_enhanced,
-    dimmy_history_update_word_timestamps, dimmy_hotkey_combos_conflict, dimmy_hotkey_set_command,
-    dimmy_init, dimmy_license_register_interest, dimmy_license_sales_open,
-    dimmy_license_set_server_url, dimmy_license_text, dimmy_llm_call_raw, dimmy_meeting_is_active,
-    dimmy_meeting_save_post_process, dimmy_model_catalog_json, dimmy_model_delete,
-    dimmy_model_download_cancel, dimmy_model_download_enqueue, dimmy_model_download_snapshot_json,
+    dimmy_clear_app_context, dimmy_command_transform, dimmy_consent_has,
+    dimmy_get_active_mic_sample_rate, dimmy_get_config_json, dimmy_get_loopback_amplitude,
+    dimmy_hardware_json, dimmy_history_save, dimmy_history_update_audio,
+    dimmy_history_update_enhanced, dimmy_history_update_word_timestamps,
+    dimmy_hotkey_combos_conflict, dimmy_hotkey_set_command, dimmy_init,
+    dimmy_license_register_interest, dimmy_license_sales_open, dimmy_license_set_server_url,
+    dimmy_license_text, dimmy_llm_call_raw, dimmy_meeting_import, dimmy_meeting_is_active,
+    dimmy_meeting_save_post_process, dimmy_meeting_set_recap_status, dimmy_model_catalog_json,
+    dimmy_model_delete, dimmy_model_download_cancel, dimmy_model_download_enqueue,
+    dimmy_model_download_snapshot_json, dimmy_onboarding_done, dimmy_onboarding_set_done,
     dimmy_push_loopback_audio, dimmy_set_app_context, dimmy_set_config_json,
     dimmy_set_loopback_sample_rate, dimmy_telemetry_capture_host_exception, dimmy_terms_version,
     dimmy_third_party_notices, dimmy_transcribe_file, dimmy_user_dict_add,
@@ -1869,4 +1871,75 @@ fn license_sales_open_and_register_interest_round_trip() {
     });
     assert_eq!(j["ok"], false);
     drop(rt);
+}
+
+// ── meta.json through the core (import, recap status) + consent/onboarding ──
+
+#[test]
+#[serial]
+fn an_imported_meeting_and_its_recap_status_land_in_meta() {
+    let src_dir = std::env::temp_dir().join(format!("dimmy-import-src-{}", std::process::id()));
+    std::fs::create_dir_all(&src_dir).unwrap();
+    let src = src_dir.join("call.mp3");
+    std::fs::write(&src, b"fake").unwrap();
+    let src_c = CString::new(src.to_string_lossy().to_string()).unwrap();
+    let text = CString::new("hello there").unwrap();
+    let mut buf = vec![0u8; 4096];
+    let n = unsafe {
+        dimmy_meeting_import(
+            src_c.as_ptr(),
+            text.as_ptr(),
+            3.0,
+            buf.as_mut_ptr() as *mut c_char,
+            buf.len() as c_int,
+        )
+    };
+    assert!(n > 0, "import rc {n}");
+    let dir = PathBuf::from(std::str::from_utf8(&buf[..n as usize]).unwrap());
+    assert!(dir.join("audio.mp3").is_file());
+    let dir_c = CString::new(dir.to_string_lossy().to_string()).unwrap();
+    let why = CString::new("HTTP 429").unwrap();
+    assert_eq!(
+        unsafe { dimmy_meeting_set_recap_status(dir_c.as_ptr(), 1, why.as_ptr()) },
+        0
+    );
+    assert_eq!(
+        unsafe { dimmy_meeting_set_recap_status(dir_c.as_ptr(), 7, why.as_ptr()) },
+        -1
+    );
+    let meta: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("meta.json")).unwrap()).unwrap();
+    assert_eq!(meta["origin"], "file-load");
+    assert_eq!(meta["recap"]["status"], "failed");
+    assert_eq!(meta["recap"]["reason"], "HTTP 429");
+    // An empty transcript is refused, nothing is created.
+    let empty = CString::new("  ").unwrap();
+    let rc = unsafe {
+        dimmy_meeting_import(
+            std::ptr::null(),
+            empty.as_ptr(),
+            0.0,
+            buf.as_mut_ptr() as *mut c_char,
+            buf.len() as c_int,
+        )
+    };
+    assert_eq!(rc, -1);
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&src_dir);
+}
+
+#[test]
+#[serial]
+fn onboarding_marker_round_trips_and_consent_answers() {
+    let was = dimmy_onboarding_done();
+    assert_eq!(dimmy_onboarding_set_done(0), 0);
+    assert_eq!(dimmy_onboarding_done(), 0);
+    assert_eq!(dimmy_onboarding_set_done(1), 0);
+    assert_eq!(dimmy_onboarding_done(), 1);
+    assert_eq!(dimmy_onboarding_set_done(2), -1);
+    assert_eq!(dimmy_onboarding_set_done(was), 0);
+
+    let none = CString::new("never_logged_kind").unwrap();
+    assert_eq!(unsafe { dimmy_consent_has(none.as_ptr()) }, 0);
+    assert_eq!(unsafe { dimmy_consent_has(std::ptr::null()) }, -1);
 }

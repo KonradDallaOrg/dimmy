@@ -186,7 +186,7 @@ below runs before `apply_consent` turns the pipeline on.
   event that already says something failed also goes to Sentry —
   `model.download_completed{success:false}`, `license.activation_failed`,
   `license.refresh_failed`, `meeting.stop_timeout`,
-  `meeting.transcription_behind`, low capture ratios, `loopback_rate_mismatch`,
+  `meeting.transcription_behind`, `meeting.transcription_unavailable`, low capture ratios, `loopback_rate_mismatch`,
   failed recap / file load / Notion send, `error.gpu_crash`, failed Claude Code /
   Codex / Gemini CLI invocations. `transcription.failed` / `llm.failed` are not
   mirrored: their call sites report with the message.

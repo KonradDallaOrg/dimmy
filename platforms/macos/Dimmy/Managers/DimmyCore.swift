@@ -1344,6 +1344,9 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
         if case .idle = appState.recordingState {
             break
         }
+        if case .error = appState.recordingState {
+            break
+        }
         if let state = payload["state"] as? String {
             switch state {
             case "transcribing":
@@ -1387,7 +1390,7 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
 
     case "error":
         if let message = payload["message"] as? String {
-            appState.lastError = message
+            appState.showError(message)
             print("[DimmyCore] error event: \(message)")
             // Structured failures (payload carries `source`) also get a
             // toast. The transient error state alone proved invisible
@@ -1592,13 +1595,15 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
             appState.llmModelDownloadFilename = payload["filename"] as? String ?? ""
         }
 
-    // Whistle and Nemotron report the same {downloaded,total} and drive the same bar.
+    // Same {downloaded,total} shape, one bar per engine.
     case "parakeet_bundle_download_progress", "whistle_download_progress",
          "nemotron_download_progress":
         if let downloaded = payload["downloaded"] as? Int,
            let total = payload["total"] as? Int,
            total > 0 {
-            appState.parakeetDownloadProgress = Double(downloaded) / Double(total)
+            let engine = event == "whistle_download_progress" ? "whistle"
+                : event == "nemotron_download_progress" ? "nemotron" : "parakeet"
+            appState.bundleDownloadProgress[engine] = Double(downloaded) / Double(total)
         }
 
     case "diarization_download_progress":
@@ -1648,6 +1653,9 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
         // Gemini-native still answers in one shot and never sends this.
         let phase = (payload["phase"] as? String) ?? ""
         let delta = (payload["delta"] as? String) ?? ""
+        // Only recaps feed the meeting's live recap card: a command-mode
+        // answer used to land there too. `end` is now sent on every exit.
+        if let purpose = payload["purpose"] as? String, purpose != "recap" { break }
         if phase == "start" {
             // The recap is live now, so the backlog wait is over.
             appState.meetingFinishingTranscription = false
@@ -1734,6 +1742,37 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
             body: "Your recording is safe and continues normally. \(hint) "
                 + "You can also regenerate the transcript from the audio after the meeting.")
 
+    case "stt_stream_failed":
+        // The realtime socket failed mid-dictation. The dictation goes on
+        // and is transcribed at stop; before this the text just stopped.
+        NSLog("[DimmyCore] live typing stopped: realtime connection failed")
+        DictToastWindow.show(
+            kind: .error,
+            title: "Live typing stopped",
+            body: "The connection dropped. Keep talking: the whole dictation is transcribed when you "
+                + "finish, and the full text is in History.")
+
+    case "meeting_transcription_unavailable":
+        // The meeting's transcriber produces no text: the engine could not
+        // start (Nemotron refused for memory, 2026-11-09) or windows fail in
+        // a row. Once per transition; the recording continues regardless.
+        // Payload: { dir, engine, reason, elapsed_secs }; reason codes from
+        // core/src/transcriber_health.rs.
+        let engine = (payload["engine"] as? String) ?? ""
+        let reason = (payload["reason"] as? String) ?? ""
+        NSLog("[DimmyCore] transcription unavailable (engine=\(engine), reason=\(reason)), recording unaffected")
+        DictToastWindow.show(
+            kind: .error,
+            title: TranscriptHealthText.unavailableTitle,
+            body: TranscriptHealthText.unavailableBody(engine: engine, reason: reason))
+
+    case "meeting_transcription_recovered":
+        NSLog("[DimmyCore] transcription recovered")
+        DictToastWindow.show(
+            kind: .alreadyPresent,
+            title: TranscriptHealthText.recoveredTitle,
+            body: TranscriptHealthText.recoveredBody)
+
     case "nemotron_cpu_fallback":
         NSLog("[DimmyCore] Nemotron fell back to the CPU engine")
         DictToastWindow.show(
@@ -1801,6 +1840,104 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
 
     default:
         print("[DimmyCore] unhandled event: \(event)")
+    }
+}
+
+/// What to tell the user when a meeting's transcriber produces no text.
+/// Mirror of Windows `Helpers/TranscriptHealthText.cs`: same reason codes
+/// (core/src/transcriber_health.rs), same sentences.
+enum TranscriptHealthText {
+    static func engineName(_ engine: String) -> String {
+        switch engine {
+        case "nemotron": return "Nemotron"
+        case "parakeet": return "Parakeet"
+        case "whisper": return "Whisper"
+        case "whistle": return "Whistle"
+        case "cloud": return "the cloud provider"
+        default: return "the transcription engine"
+        }
+    }
+
+    static func cause(engine: String, reason: String) -> String {
+        switch reason {
+        case "not_enough_memory": return "There is not enough free memory to load \(engineName(engine))."
+        case "model_missing": return "The \(engineName(engine)) model is not downloaded."
+        case "no_api_key": return "There is no API key for the transcription provider."
+        case "auth": return "The transcription provider refused the API key."
+        case "network": return "The transcription provider cannot be reached."
+        case "rate_limit": return "The transcription provider is limiting requests."
+        default:
+            let name = engineName(engine)
+            return name.prefix(1).uppercased() + name.dropFirst() + " returned errors."
+        }
+    }
+
+    static func hint(reason: String) -> String {
+        switch reason {
+        case "not_enough_memory": return "Close some programs, then use Regenerate transcript after the meeting."
+        case "model_missing": return "Download it in Settings, Transcription, then use Regenerate transcript."
+        case "no_api_key", "auth": return "Check the key in Settings, Providers, then use Regenerate transcript."
+        case "network": return "Check your connection. Regenerate transcript can redo it after the meeting."
+        default: return "Regenerate transcript can redo it after the meeting."
+        }
+    }
+
+    static let unavailableTitle = "Transcription stopped"
+    static func unavailableBody(engine: String, reason: String) -> String {
+        "\(cause(engine: engine, reason: reason)) Your recording is safe and continues. \(hint(reason: reason))"
+    }
+    static let recoveredTitle = "Transcription resumed"
+    static let recoveredBody =
+        "The transcript continues from here. Regenerate transcript after the meeting fills the gap."
+
+    /// `transcript.status` / `.reason` / `.engine` from a meeting's meta.json.
+    static func readMeta(dir: String) -> (status: String?, reason: String?, engine: String?) {
+        let t = metaObject(dir: dir, "transcript")
+        return (t?["status"] as? String, t?["reason"] as? String, t?["engine"] as? String)
+    }
+
+    /// `recap.status` / `recap.reason` from meta.json: saved, pending,
+    /// failed, or nil for a meeting with no record of one.
+    static func readRecap(dir: String) -> (status: String?, reason: String?) {
+        let r = metaObject(dir: dir, "recap")
+        return (r?["status"] as? String, r?["reason"] as? String)
+    }
+
+    /// The Notion page the recap went to, or nil when it was never sent.
+    static func notionPageUrl(dir: String) -> String? {
+        metaObject(dir: dir, "notion")?["page_url"] as? String
+    }
+
+    /// What the Done view says in place of a recap that failed. Win parity.
+    static func recapFailed(reason: String?) -> String {
+        guard let reason, !reason.trimmingCharacters(in: .whitespaces).isEmpty else {
+            return "The recap failed. Use Regenerate recap to try again."
+        }
+        return "The recap failed: \(reason). Use Regenerate recap to try again."
+    }
+
+    private static func metaObject(dir: String, _ name: String) -> [String: Any]? {
+        let url = URL(fileURLWithPath: dir).appendingPathComponent("meta.json")
+        guard let data = try? Data(contentsOf: url),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        return root[name] as? [String: Any]
+    }
+
+    /// The summary shown when a meeting stops with no transcript. A failed
+    /// engine is named; only a genuinely silent meeting talks about speech.
+    static func emptyMeetingSummary(dir: String) -> String {
+        let meta = readMeta(dir: dir)
+        switch meta.status {
+        case "failed":
+            return "No transcript. \(cause(engine: meta.engine ?? "", reason: meta.reason ?? "")) The audio is saved: use Regenerate transcript."
+        case "silent":
+            return "Nothing was recorded, no speech was detected. Try moving closer to the microphone, checking input device settings, or recording for longer."
+        case "empty":
+            return "No transcript: the recording is too short."
+        default:
+            return "No transcript was produced. Use Regenerate transcript to transcribe the audio."
+        }
     }
 }
 

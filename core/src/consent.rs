@@ -317,6 +317,28 @@ pub fn format_event(kind: &str, lang: &str, now_epoch: i64) -> String {
     .to_string()
 }
 
+/// Whether an audit log holds an event of `kind`. Pure, for the test.
+pub fn log_has_event(jsonl: &str, kind: &str) -> bool {
+    jsonl.lines().any(|line| {
+        serde_json::from_str::<serde_json::Value>(line)
+            .ok()
+            .is_some_and(|v| v["event"].as_str() == Some(kind))
+    })
+}
+
+/// Whether this install's audit log holds an event of `kind`. For
+/// `auto_start_confirmed` the Windows marker of older builds counts too: a
+/// confirmation given before the audit line existed is still a confirmation.
+pub fn has_event(kind: &str) -> bool {
+    let Some(dir) = crate::config_dir_path() else {
+        return false;
+    };
+    if kind == "auto_start_confirmed" && dir.join(".auto_record_confirmed").exists() {
+        return true;
+    }
+    std::fs::read_to_string(dir.join("consent.jsonl")).is_ok_and(|log| log_has_event(&log, kind))
+}
+
 /// Append a consent event to `<config_dir>/consent.jsonl` (append-only audit
 /// trail). Best-effort: a failure to write must never block recording.
 pub fn append_event(kind: &str, lang: &str) {
@@ -353,6 +375,19 @@ pub fn append_event(kind: &str, lang: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_audit_log_answers_whether_an_event_happened() {
+        let log = format!(
+            "{}\n{}\nnot json\n",
+            format_event("confirmed", "it", 1),
+            format_event("auto_start_confirmed", "it", 2)
+        );
+        assert!(log_has_event(&log, "auto_start_confirmed"));
+        assert!(log_has_event(&log, "confirmed"));
+        assert!(!log_has_event(&log, "declined"));
+        assert!(!log_has_event("", "confirmed"));
+    }
 
     // The participant notice says where the audio goes. A meeting whose STT
     // and LLM are both local still sends the transcript to a provider when

@@ -317,6 +317,19 @@ pub enum Event {
         /// meeting the transcriber first fell behind. Bucketed, never raw.
         elapsed_bucket: &'static str,
     },
+    /// Fired ONCE per transition, when a meeting's transcriber stops
+    /// producing text: the engine could not start (Nemotron refused for
+    /// memory) or two windows in a row failed. Before this a failed meeting
+    /// looked exactly like a silent one and reached no dashboard
+    /// (2026-11-09). Categorical only.
+    MeetingTranscriptionUnavailable {
+        /// `whisper` | `parakeet` | `whistle` | `nemotron` | `cloud`.
+        engine: &'static str,
+        /// `transcriber_health::Reason::code`: `not_enough_memory` |
+        /// `model_missing` | `no_api_key` | `auth` | `network` |
+        /// `rate_limit` | `engine_error`.
+        reason: &'static str,
+    },
     /// CANARY: fired when the core MEASURES a loopback delivery rate (raw
     /// samples / wall-clock) that diverges from the rate the host CLAIMED.
     /// The macOS system-audio tap can claim its anchor device's 48 kHz while
@@ -625,6 +638,7 @@ impl Event {
             Event::MeetingStopTimeout => "meeting.stop_timeout",
             Event::MeetingCaptureRatio { .. } => "meeting.capture_ratio",
             Event::MeetingTranscriptionBehind { .. } => "meeting.transcription_behind",
+            Event::MeetingTranscriptionUnavailable { .. } => "meeting.transcription_unavailable",
             Event::LoopbackRateMismatch { .. } => "audio.loopback_rate_mismatch",
             Event::MeetingRecapCompleted { .. } => "meeting.recap_completed",
             Event::MeetingImportedFromFile => "meeting.imported_from_file",

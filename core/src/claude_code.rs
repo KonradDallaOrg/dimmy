@@ -1150,6 +1150,8 @@ fn run_blocking_streaming(
     let timing = std::sync::Arc::new(std::sync::Mutex::new(StreamTiming::default()));
     let timing_writer = std::sync::Arc::clone(&timing);
     let reader = std::thread::spawn(move || {
+        // `end` on every way out of this thread (the reader can also panic).
+        let mut end = Some(crate::llm::StreamEnd::begin());
         let mut started = false;
         let mut answered = false;
         let mark = |f: fn(&mut StreamTiming) -> &mut Option<u128>| {
@@ -1234,9 +1236,7 @@ fn run_blocking_streaming(
                     if let Some(text) = v["result"].as_str() {
                         if !text.is_empty() && !answered {
                             answered = true;
-                            if started {
-                                crate::llm::emit_recap_stream_event("end", "");
-                            }
+                            end.take();
                             let _ = answer_tx.send(Some(text.to_string()));
                         }
                     }
@@ -1245,9 +1245,7 @@ fn run_blocking_streaming(
             }
         }
         if !answered {
-            if started {
-                crate::llm::emit_recap_stream_event("end", "");
-            }
+            end.take();
             let _ = answer_tx.send(None);
         }
     });

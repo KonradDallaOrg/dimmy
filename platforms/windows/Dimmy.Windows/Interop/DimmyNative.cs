@@ -582,6 +582,59 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_meeting_list_orphans(byte[] outBuf, int bufLen);
 
+    /// Mark the meetings a crash left behind as interrupted, once; JSON
+    /// array of {id, dir, transcript_size_bytes}.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_meeting_recover_interrupted(byte[] outBuf, int bufLen);
+
+    /// Set a meeting's title through the core's atomic meta.json writer.
+    /// 0 = ok, -1 = bad argument.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_meeting_set_title(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string dir,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string title);
+
+    /// A meeting from an already-transcribed audio file: the core makes the
+    /// folder, transcript, audio copy and meta.json. Writes the folder path;
+    /// returns its length, -1 bad argument, -2 not written.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_meeting_import(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? source,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string transcript,
+        double durationSecs,
+        byte[] outBuf, int bufLen);
+
+    /// Record a recap running (status 0) or failed (1, with a reason) in
+    /// meta.json. 0 = ok, -1 = bad argument.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_meeting_set_recap_status(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string dir,
+        int status,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? reason);
+
+    public static void MeetingRecapPending(string dir)
+    {
+        if (!string.IsNullOrEmpty(dir)) dimmy_meeting_set_recap_status(dir, 0, null);
+    }
+
+    public static void MeetingRecapFailed(string dir, string? reason)
+    {
+        if (!string.IsNullOrEmpty(dir)) dimmy_meeting_set_recap_status(dir, 1, reason);
+    }
+
+    /// 1 when the consent audit log holds an event of this kind.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_consent_has(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string kind);
+
+    /// The core's onboarding marker: 1 done, 0 not.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_onboarding_done();
+
+    /// Mark onboarding done (1) or not (0). 0 = ok, -1 = failed.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_onboarding_set_done(int done);
+
     /// 1 = meeting currently recording; 0 = no active meeting. Used
     /// to gate the dictation hotkey so a parallel recording can't
     /// corrupt the shared cpal audio buffer.

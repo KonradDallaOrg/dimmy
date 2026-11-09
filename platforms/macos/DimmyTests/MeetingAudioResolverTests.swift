@@ -106,12 +106,4 @@ final class MeetingAudioResolverTests: XCTestCase {
         let url = MeetingViewModel.resolveMeetingAudio(dir: tmp.path, base: "audio")
         XCTAssertEqual(url?.pathExtension, "wav")
     }
-
-    func testLoadedFileKeepsItsOwnExtension() {
-        XCTAssertEqual(FileLoadToMeetingService.meetingAudioFileName(forSource: "/in/11067.m4a"), "audio.m4a")
-        XCTAssertEqual(FileLoadToMeetingService.meetingAudioFileName(forSource: "/in/Voice.MP3"), "audio.mp3")
-        XCTAssertEqual(FileLoadToMeetingService.meetingAudioFileName(forSource: "/in/take.wav"), "audio.wav")
-        // No extension at all: keep the historical name.
-        XCTAssertEqual(FileLoadToMeetingService.meetingAudioFileName(forSource: "/in/noext"), "audio.wav")
-    }
 }

@@ -117,10 +117,12 @@ public sealed partial class PillWindow : Window
         {
             // Meeting just ended. If WE put the pill into Recording,
             // clean up. If dictation owns the state, leave alone.
-            if (_pillRecordingDueToMeeting && _vm.CurrentState == AppState.Recording)
+            if (_vm.CurrentState == AppState.Recording && _vm.CoreDictationPhase != "recording")
             {
+                // The red dot was the meeting's (set here, or restored after
+                // an overlay): the pill rests on what the core does now.
                 _pillRecordingDueToMeeting = false;
-                _vm.SetState(AppState.Idle);
+                _vm.ReturnToRest();
             }
             else if (_vm.CurrentState != AppState.Recording)
             {
@@ -156,7 +158,8 @@ public sealed partial class PillWindow : Window
     {
         if (e.PropertyName == nameof(AppViewModel.CurrentState) || e.PropertyName == nameof(AppViewModel.BorderStyle)
             || e.PropertyName == nameof(AppViewModel.Theme)
-            || e.PropertyName == nameof(AppViewModel.RecapsRunning))
+            || e.PropertyName == nameof(AppViewModel.RecapsRunning)
+            || e.PropertyName == nameof(AppViewModel.TranscribesRunning))
             DispatcherQueue.TryEnqueue(UpdateVisualState);
         if (e.PropertyName == nameof(AppViewModel.LlmStyle)
             || e.PropertyName == nameof(AppViewModel.CommandMode)
@@ -786,12 +789,15 @@ public sealed partial class PillWindow : Window
         // Apply text colors for theme
         ApplyThemeColors();
 
-        // A recap owns the pill only while nothing else does, so the panel
-        // cannot be derived from the state alone.
+        // Background work (a recap, a meeting that saves, a loaded file)
+        // owns the pill only while nothing else does, so the panel cannot
+        // be derived from the state alone.
+        bool backgroundTranscribe = AppViewModel.ShowsBackgroundTranscribe(
+            _vm.CurrentState, _vm.RecapsRunning, _vm.TranscribesRunning);
         FrameworkElement? newPanel =
-            AppViewModel.ShowsRecap(_vm.CurrentState, _vm.RecapsRunning)
-                ? RecapPanel
-                : GetPanelForState(_vm.CurrentState);
+            AppViewModel.ShowsRecap(_vm.CurrentState, _vm.RecapsRunning) ? RecapPanel
+            : backgroundTranscribe ? TranscribingPanel
+            : GetPanelForState(_vm.CurrentState);
 
         // Make new panel visible (animation will fade it in from 0)
         if (newPanel != null && newPanel != oldPanel)
@@ -802,8 +808,26 @@ public sealed partial class PillWindow : Window
 
         _currentVisiblePanel = newPanel;
 
+        // One overlay at a time, and only while it is showing: a timer armed
+        // by an earlier checkmark or error used to fire SetState(Idle) in the
+        // middle of the next recording.
+        _completingTimer?.Stop();
+        _errorTimer?.Stop();
+
         switch (_vm.CurrentState)
         {
+            case AppState.Idle when backgroundTranscribe:
+                // The Transcribing capsule, but the dictation stays idle: a
+                // press starts a dictation, which takes the pill.
+                SetPillBodyColor(IsGlass ? BgGlassActive : BgDark);
+                RootGrid.Opacity = 1.0;
+                Waveform.IsActive = false;
+                ChunkText.Text = "";
+                StopRainbowAnimation();
+                AnimateToCapsule(ColorTranscribing, newPanel, oldPanel);
+                UpdateGlow(ColorTranscribing);
+                break;
+
             case AppState.Idle:
                 RefreshStyleDot();
                 RootGrid.Opacity = 1.0;
@@ -868,7 +892,11 @@ public sealed partial class PillWindow : Window
                     _completingTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1200) };
                 if (!_completingHandlerAttached)
                 {
-                    _completingTimer.Tick += (_, _) => { _completingTimer.Stop(); _vm.SetState(AppState.Idle); };
+                    _completingTimer.Tick += (_, _) =>
+                    {
+                        _completingTimer.Stop();
+                        if (_vm.CurrentState == AppState.Completing) _vm.ReturnToRest();
+                    };
                     _completingHandlerAttached = true;
                 }
                 _completingTimer.Start();
@@ -887,7 +915,11 @@ public sealed partial class PillWindow : Window
                     _errorTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
                 if (!_errorHandlerAttached)
                 {
-                    _errorTimer.Tick += (_, _) => { _errorTimer.Stop(); _vm.SetState(AppState.Idle); };
+                    _errorTimer.Tick += (_, _) =>
+                    {
+                        _errorTimer.Stop();
+                        if (_vm.CurrentState == AppState.Error) _vm.ReturnToRest();
+                    };
                     _errorHandlerAttached = true;
                 }
                 _errorTimer.Start();
@@ -1156,11 +1188,16 @@ public sealed partial class PillWindow : Window
             AnimateToCapsule(GetBorderColorForRecording(), newPanel, oldPanel, skipBorderColor: rainbow);
     }
 
+    // The hover capsule and the idle circle would replace the Transcribing
+    // capsule of a meeting that saves.
+    private bool BackgroundTranscribeShown => AppViewModel.ShowsBackgroundTranscribe(
+        _vm.CurrentState, _vm.RecapsRunning, _vm.TranscribesRunning);
+
     private void Pill_PointerEntered(object sender, PointerRoutedEventArgs e)
     {
         _pointerOver = true;
         if (_vm.CurrentState == AppState.Recording) AnimateRecordingShape();
-        if (_vm.CurrentState == AppState.Idle)
+        if (_vm.CurrentState == AppState.Idle && !BackgroundTranscribeShown)
         {
             RootGrid.Opacity = 0.95;
             // Pill language label = output TRANSLATION target, NOT STT input.
@@ -1186,7 +1223,7 @@ public sealed partial class PillWindow : Window
     {
         _pointerOver = false;
         if (_vm.CurrentState == AppState.Recording) AnimateRecordingShape();
-        if (_vm.CurrentState == AppState.Idle)
+        if (_vm.CurrentState == AppState.Idle && !BackgroundTranscribeShown)
         {
             RootGrid.Opacity = 1.0;
             LanguageHost.Visibility = Visibility.Collapsed;
@@ -1910,135 +1947,20 @@ public sealed partial class PillWindow : Window
         catch (Exception ex) { _vm.SetError(ex.Message); }
     }
 
-    /// Stop a meeting from the pill, then trigger the recap pipeline.
-    /// Behaviour:
-    /// - dimmy_meeting_stop on a background thread → returns transcript
-    ///   + dir as JSON (the Rust side finalises WAVs, deletes the
-    ///   .recording marker, joins the worker thread).
-    /// - Hand off to MeetingPostProcessService.RunRecapAsync which
-    ///   builds the Notion-style prompt, calls the LLM, and persists
-    ///   recap.md + actions plaintext via dimmy_meeting_save_post_process.
-    /// - If MeetingWindow is open, it re-polls dimmy_meeting_is_active
-    ///   and flips to Done state independently — no UI sync needed
-    ///   from here.
-    /// - On error: surface a brief pill error tag.
+    /// Stop the meeting from the pill (also the meeting shortcut and the
+    /// call-detect "Stop & recap"): the shared pipeline in
+    /// MeetingStopService, which the meeting window's Stop uses too.
     internal async System.Threading.Tasks.Task StopMeetingFromPillAsync()
     {
         try
         {
-            App.Log("Pill Stop while meeting active — calling dimmy_meeting_stop", "Pill");
-            // Visual feedback: pill flips to Transcribing state for the
-            // duration of the recap pipeline (~10-30 s with Anthropic
-            // Opus 4.7 adaptive thinking on a typical meeting). Without
-            // this the pill silently disappears as the meeting state
-            // poll sees is_active=0 and the user wonders if anything
-            // happened. Reverts to Idle in the finally block.
-            _vm.SetState(AppState.Transcribing);
-
-            var (rc, dir, transcript, stopError, labeled) = await System.Threading.Tasks.Task.Run(() =>
-            {
-                var buf = new byte[1 << 22];
-                int code = DimmyNative.dimmy_meeting_stop(buf, buf.Length);
-                if (code <= 0) return (code, "", "", (string?)null, false);
-                var json = System.Text.Encoding.UTF8.GetString(buf, 0, code);
-                try
-                {
-                    using var doc = System.Text.Json.JsonDocument.Parse(json);
-                    var root = doc.RootElement;
-                    var d = root.GetProperty("dir").GetString() ?? "";
-                    var t = root.GetProperty("transcript").GetString() ?? "";
-                    // WAV finalize errors (disk full, IO) ride the same
-                    // payload. The MeetingWindow stop button surfaced
-                    // them; this path (pill + hotkey + call-nudge all
-                    // land here) swallowed them.
-                    var err = root.TryGetProperty("error", out var e)
-                        ? e.GetString() : null;
-                    bool lab = !(root.TryGetProperty("speaker_pass", out var sl) && sl.ValueKind == System.Text.Json.JsonValueKind.True);
-                    return (code, d, t, string.IsNullOrWhiteSpace(err) ? null : err, lab);
-                }
-                catch { return (code, "", "", (string?)null, false); }
-            });
-            App.Log($"Pill Stop meeting rc={rc} dir='{dir}' transcript={transcript.Length} chars", "Pill");
-
-            if (rc <= 0)
-            {
-                _vm.SetError($"Meeting stop rc={rc}");
-                return;
-            }
-            if (stopError != null)
-            {
-                App.Log($"Pill Stop: meeting stop reported error: {stopError}", "Pill");
-                Services.DictNotificationService.ShowMeetingAudioIncomplete(stopError);
-            }
-
-            // Fire the recap pipeline. We AWAIT it here so the pill
-            // stays in Transcribing state with its spinner visible
-            // until the LLM call returns — gives the user real visual
-            // feedback ("yes, something is happening"). Without this
-            // the pill flipped back to Idle in 1-2 s while the recap
-            // ran silently in the background, and the user had no
-            // signal that the recap was being generated.
-            // Honour the recap choice captured at meeting start. If the user
-            // started with "Generate recap" unchecked, the stop path (pill OR
-            // call-detect popup, both land here) must NOT recap — same as the
-            // meeting window's own stop.
-            // Speaker labels (when enabled) replace the live per-track
-            // transcript before the recap reads it.
-            // Read BEFORE the speaker pass: the next meeting can start while it
-            // runs and writes its own choice into the same flag.
-            bool wantRecap = App.Instance?.AppViewModel?.MeetingGenerateRecap ?? true;
-            if (!string.IsNullOrEmpty(dir))
-                transcript = await Services.DiarizationService.RelabelIfEnabledAsync(dir, transcript, labeled);
-            if (wantRecap && !string.IsNullOrEmpty(dir) && !string.IsNullOrWhiteSpace(transcript))
-            {
-                var result = await Services.MeetingPostProcessService.RunRecapAsync(dir, transcript);
-                if (!result.Success)
-                {
-                    App.Log($"Pill Stop: recap failed: {result.Error}", "Pill");
-                    _vm.SetError(result.Error ?? "Recap failed");
-                    // CRITICAL: the MeetingWindow was flipped to Processing
-                    // ("Wrapping up…") by the meeting_state event. On a recap
-                    // failure it must still leave Processing, otherwise it
-                    // hangs there forever. Route it to the Done view showing
-                    // the transcript + audio that DID succeed; the recap can
-                    // be regenerated from there. Burned 2026-06-02 (Groq
-                    // Pick-best recap -2 left the window stuck in Wrapping up).
-                    if (!string.IsNullOrEmpty(dir)) App.Instance?.NotifyMeetingRecapSaved(dir);
-                }
-                else
-                {
-                    App.Log($"Pill Stop: recap saved to {result.Dir}", "Pill");
-                    // If MeetingWindow is open, refresh its sidebar +
-                    // jump straight to the just-finished meeting so the
-                    // user sees the recap cards populated without
-                    // having to click anything.
-                    App.Instance?.NotifyMeetingRecapSaved(result.Dir);
-                }
-            }
-            else
-            {
-                App.Log(wantRecap
-                    ? "Pill Stop: no transcript / dir — skipping recap"
-                    : "Pill Stop: recap disabled at start — skipping recap", "Pill");
-                // Even with no recap, surface the finished meeting (transcript
-                // + audio) in the window if it's open.
-                if (!string.IsNullOrEmpty(dir)) App.Instance?.NotifyMeetingRecapSaved(dir);
-            }
-        }
-        catch (Exception ex)
-        {
-            App.Log($"Pill Stop meeting exc: {ex.Message}", "Pill");
-            _vm.SetError(ex.Message);
+            App.Log("Pill Stop while meeting active", "Pill");
+            await Services.MeetingStopService.StopAsync(_vm);
         }
         finally
         {
-            // Always exit the Transcribing state — Idle on success, Error
-            // already sets its own state.
-            if (_vm.CurrentState == AppState.Transcribing)
-                _vm.SetState(AppState.Idle);
             // The meeting just ended; clear our internal flag so the
-            // meeting-state poll doesn't immediately push us back to
-            // Recording on the next tick.
+            // meeting-state handler doesn't push us back to Recording.
             _pillRecordingDueToMeeting = false;
         }
     }

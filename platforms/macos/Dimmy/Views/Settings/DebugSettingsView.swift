@@ -105,6 +105,7 @@ struct DebugSettingsView: View {
         case .transcribing: return "Transcribing"
         case .processing: return "Processing"
         case .completing: return "Completing"
+        case .error(let message): return "Error (\(message))"
         }
     }
 

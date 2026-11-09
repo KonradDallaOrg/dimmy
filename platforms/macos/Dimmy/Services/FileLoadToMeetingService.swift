@@ -6,26 +6,11 @@ import Foundation
 // Mac mirror of Win `Services/FileLoadToMeetingService.cs`. Bridges the
 // File Load card's transcript to the Meeting recap pipeline.
 //
-// Given a successful local transcript + the source WAV path, this:
-//   1. Mints a synthetic meeting directory under
-//      `<configDir>/meetings/<timestamp>-<uuid>` — the same root the
-//      live recorder writes to, so Meeting → History picks it up
-//      automatically.
-//   2. Writes `transcripts.txt` in the `[ELAPSED_MS ms] [LABEL] text`
-//      grammar `MeetingPostProcessService.buildStructuredRecapPrompt`
-//      expects — single line `[0 ms] [file] <text>` for a file-load.
-//   3. Writes `meta.json` with `title`/`started_at`/`duration_secs` so
-//      the History row renders the right subtitle + duration.
-//   4. Best-effort copies the source WAV to `audio.wav` so the Done
-//      view's audio scrubber works. Failure here doesn't abort the
-//      recap — disk-full / permission errors just degrade to "recap
-//      without playback".
-//   5. Hands off to `MeetingPostProcessService.runRecap(dir:transcript:)`
-//      which calls the LLM and persists `recap.md` + `actions.json`.
-//
-// Single-writer rule preserved: only this service writes to the
-// meeting dir on the file-load path; Rust still owns config.json + the
-// live-meeting writers.
+// Given a successful transcript + the source audio path, the core makes the
+// meeting (`dimmy_meeting_import`: folder, transcripts.txt, audio copy,
+// meta.json, the same shape as a live meeting), then
+// `MeetingPostProcessService.runRecap(dir:transcript:)` runs the recap. Only
+// the core writes the meeting folder.
 
 enum FileLoadToMeetingService {
 
@@ -51,89 +36,27 @@ enum FileLoadToMeetingService {
             return Outcome(dir: "", recapMarkdown: nil, error: "empty transcript")
         }
 
-        // Effective meetings dir (honours the user's meeting_storage_path
-        // override) — never re-derive configDir/meetings here.
-        guard let meetingsRoot = DimmyCore.shared.meetingsDirURL else {
-            return Outcome(dir: "", recapMarkdown: nil, error: "meetings dir unavailable")
-        }
-        do {
-            try FileManager.default.createDirectory(at: meetingsRoot, withIntermediateDirectories: true)
-        } catch {
-            return Outcome(dir: "", recapMarkdown: nil,
-                           error: "could not create meetings root: \(error.localizedDescription)")
-        }
-
-        // Dir name shape mirrors the live worker's so the History
-        // sort-by-modified-time keeps file-load entries inline with
-        // recorded ones.
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withYear, .withMonth, .withDay, .withTime]
-        let stamp = Date().formatted(.iso8601.year().month().day().time(includingFractionalSeconds: false))
-            .replacingOccurrences(of: ":", with: "")
-            .replacingOccurrences(of: "-", with: "")
-        let dirName = "\(stamp)-\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
-        let dir = meetingsRoot.appendingPathComponent(dirName, isDirectory: true)
-        do {
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        } catch {
-            return Outcome(dir: dir.path, recapMarkdown: nil,
-                           error: "could not create meeting dir: \(error.localizedDescription)")
-        }
-
-        // transcripts.txt — the recap prompt expects the
-        // `[ELAPSED_MS ms] [LABEL] text` grammar (see
-        // MeetingPostProcessService.buildStructuredRecapPrompt). A
-        // file-load is one big line — the LLM still produces a useful
-        // recap, just without intra-meeting time anchors.
-        let transcriptsURL = dir.appendingPathComponent("transcripts.txt")
-        let transcriptLine = "[0 ms] [file] \(trimmedTranscript)\n"
-        do {
-            try transcriptLine.write(to: transcriptsURL, atomically: true, encoding: .utf8)
-        } catch {
-            return Outcome(dir: dir.path, recapMarkdown: nil,
-                           error: "could not write transcripts.txt: \(error.localizedDescription)")
-        }
-
-        // Audio copy + duration probe. Best-effort. The copy keeps the
-        // source's own extension: see meetingAudioFileName(forSource:).
+        // Probed on the source: the core copies it, keeping its own
+        // container (core `meeting::import_from_file`).
         var durationSecs: Double = 0
-        if !sourceWavPath.isEmpty,
-           FileManager.default.fileExists(atPath: sourceWavPath) {
-            let dest = dir.appendingPathComponent(meetingAudioFileName(forSource: sourceWavPath))
-            do {
-                try? FileManager.default.removeItem(at: dest)
-                try FileManager.default.copyItem(at: URL(fileURLWithPath: sourceWavPath), to: dest)
-                durationSecs = dest.pathExtension == "wav"
-                    ? WavPeaks.readDurationSecs(path: dest.path)
-                    : ((try? AVAudioPlayer(contentsOf: dest))?.duration ?? 0)
-            } catch {
-                NSLog("[FileLoadToMeeting] audio copy failed: \(error.localizedDescription)")
-            }
+        if !sourceWavPath.isEmpty, FileManager.default.fileExists(atPath: sourceWavPath) {
+            let src = URL(fileURLWithPath: sourceWavPath)
+            durationSecs = src.pathExtension.lowercased() == "wav"
+                ? WavPeaks.readDurationSecs(path: src.path)
+                : ((try? AVAudioPlayer(contentsOf: src))?.duration ?? 0)
         }
+        if !durationSecs.isFinite || durationSecs < 0 { durationSecs = 0 }
 
-        // meta.json — Meeting → History reads `started_at` (string)
-        // + `duration_secs` (Double) + `title` (String). Title comes
-        // from the source filename so the user can tell file-load
-        // entries apart from live recordings at a glance.
-        let baseName: String
-        if sourceWavPath.isEmpty {
-            baseName = "Imported audio"
-        } else {
-            baseName = URL(fileURLWithPath: sourceWavPath).deletingPathExtension().lastPathComponent
+        // The core makes the meeting in the shape a live one has: this
+        // service used to write it all, with its own folder names and a
+        // local-time `started_at` string where every other meeting has Unix
+        // seconds. Honours the meeting_storage_path override like a live one.
+        guard let dirPath = DimmyCore.shared.meetingImport(
+            source: sourceWavPath, transcript: trimmedTranscript, durationSecs: durationSecs)
+        else {
+            return Outcome(dir: "", recapMarkdown: nil, error: "could not create the meeting")
         }
-        let metaURL = dir.appendingPathComponent("meta.json")
-        let dateFmt = DateFormatter()
-        dateFmt.dateFormat = "yyyy-MM-dd HH:mm"
-        let meta: [String: Any] = [
-            "title": "File: \(baseName)",
-            "started_at": dateFmt.string(from: Date()),
-            "duration_secs": durationSecs,
-            "origin": "file-load",
-        ]
-        if let json = try? JSONSerialization.data(
-            withJSONObject: meta, options: [.prettyPrinted]) {
-            try? json.write(to: metaURL)
-        }
+        let dir = URL(fileURLWithPath: dirPath, isDirectory: true)
 
         NSLog("[FileLoadToMeeting] dir=\(dir.path) transcript=\(trimmedTranscript.count)c duration=\(durationSecs)s")
 
@@ -169,15 +92,5 @@ enum FileLoadToMeetingService {
         case .failure(let err):
             return Outcome(dir: dir.path, recapMarkdown: nil, error: "\(err)")
         }
-    }
-
-    /// The meeting's audio copy for a loaded file: `audio.` plus the source's
-    /// own extension. Every reader picks its decoder from the extension, so an
-    /// .m4a saved as `audio.wav` lost its waveform, its duration and its
-    /// language detection (a Telegram voice note, 2026-09-15). No extension at
-    /// all keeps the historical name.
-    nonisolated static func meetingAudioFileName(forSource path: String) -> String {
-        let ext = (path as NSString).pathExtension.lowercased()
-        return "audio." + (ext.isEmpty ? "wav" : ext)
     }
 }

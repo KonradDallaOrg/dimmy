@@ -165,23 +165,18 @@ final class TelegramService {
 
     // MARK: - Pill + menu-bar activity
 
-    /// Light up the pill and the menu-bar icon, but never take them from a
-    /// dictation or a meeting: those own the same state and their own stop
-    /// paths would then be fighting this one.
+    /// The pill and the menu-bar icon show a Telegram job as BACKGROUND
+    /// work: `DimmyCore.transcribeFile` counts it in `transcribesRunning`,
+    /// and the recap in `recapsRunning`. It used to hold `recordingState`
+    /// (the dictation's own state), so a dictation pressed meanwhile was
+    /// refused without a word and the job's end could reset a dictation's
+    /// pill. Kept as hooks so the call sites read as before.
     private func beginPillActivity(_ state: RecordingState) {
-        if !drivingPill, AppState.shared.recordingState != .idle { return }
         drivingPill = true
-        AppState.shared.recordingState = state
     }
 
-    /// Back to idle, unless something else took the pill over meanwhile.
     private func endPillActivity() {
-        guard drivingPill else { return }
         drivingPill = false
-        let current = AppState.shared.recordingState
-        if current == .transcribing || current == .processing {
-            AppState.shared.recordingState = .idle
-        }
     }
 
     // MARK: - Telegram reply text

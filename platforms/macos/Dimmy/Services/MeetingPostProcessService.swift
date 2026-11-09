@@ -119,6 +119,9 @@ enum MeetingPostProcessService {
                          meetingType: String = "") -> Swift.Result<Result, Failure> {
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .failure(.emptyTranscript) }
+        // meta.json says a recap is running, then saved or failed: the Done
+        // view could not tell "failed" from "never ran".
+        DimmyCore.shared.meetingRecapPending(dir: dir)
 
         // The pill says "Recap..." while this runs, whichever path started it.
         // DispatchQueue.main rather than two `Task { @MainActor }`: the queue
@@ -171,6 +174,7 @@ enum MeetingPostProcessService {
                 "success": false,
                 "error_category": err.category,
             ])
+            DimmyCore.shared.meetingRecapFailed(dir: dir, reason: "\(err)")
             return .failure(.llm(err))
         case .success(let raw):
             DimmyCore.shared.trackEvent("meeting.recap_completed", [
@@ -195,7 +199,13 @@ enum MeetingPostProcessService {
             // Best-effort: failure is logged but does not block the
             // recap pipeline. The user can always retry manually from
             // the Done view's "Send to Notion" button.
-            if notionAutoSend,
+            // Not when this meeting already has a page: a regenerated recap
+            // used to make a second one.
+            let alreadySent = TranscriptHealthText.notionPageUrl(dir: dir) != nil
+            if notionAutoSend, alreadySent {
+                NSLog("[Dimmy] Notion auto-send skipped: this meeting already has a page")
+            }
+            if notionAutoSend, !alreadySent,
                DimmyCore.shared.notionHasToken {
                 var notionOk = false
                 if let json = DimmyCore.shared.notionSendRecap(meetingDir: dir),

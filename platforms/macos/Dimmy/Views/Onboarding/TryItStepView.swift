@@ -71,6 +71,8 @@ struct TryItStepView: View {
                 trialStatus = ""
             case .idle:
                 trialStatus = ""
+            case .error(let message):
+                trialStatus = message
             }
         }
     }

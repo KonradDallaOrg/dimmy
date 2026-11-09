@@ -46,8 +46,10 @@ final class MeetingWindowController {
                 // call). Opening it would take the window off the live
                 // recording and its Stop button; it is in the sidebar.
                 guard self.viewModel.phase != .recording else { return }
-                if let dir = note.userInfo?["dir"] as? String {
+                if let dir = note.userInfo?["dir"] as? String, !dir.isEmpty {
                     self.viewModel.loadDoneFromDisk(dir: dir)
+                } else {
+                    self.viewModel.leaveWrapUp()
                 }
             }
         }

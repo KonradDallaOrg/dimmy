@@ -446,6 +446,7 @@ async fn run_stream(
             let frame = compose_audio_append(&slice, device_sample_rate);
             if let Err(e) = stream_bounds::send(&mut write, Message::Text(frame)).await {
                 crate::log(&format!("[oai-stream] send error: {e}"));
+                crate::ffi::emit_stream_failed("openai");
                 break;
             }
         }

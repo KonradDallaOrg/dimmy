@@ -287,6 +287,9 @@ fn compute_gpu_backend_status() -> GpuBackendStatus {
             crate::gpu_diag::disable_vulkan_loader(
                 "known-bad marker: prior GPU crash, driver fingerprint unchanged",
             );
+            // Every launch after the crash ran 10-30x slower with no word to
+            // the user: only the recovery run itself announced it.
+            announce_cpu_fallback(true);
             return GpuBackendStatus::Unavailable;
         }
         crate::log(&format!(

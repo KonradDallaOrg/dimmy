@@ -38,6 +38,8 @@
     <Compile Include="..\Dimmy.Windows\Helpers\MeetingAudio.cs" Link="Helpers\MeetingAudio.cs" />
     <Compile Include="..\Dimmy.Windows\Helpers\LiveWaveformLayout.cs" Link="Helpers\LiveWaveformLayout.cs" />
     <Compile Include="..\Dimmy.Windows\Helpers\TranscriptSeek.cs" Link="Helpers\TranscriptSeek.cs" />
+    <Compile Include="..\Dimmy.Windows\Helpers\TranscriptHealthText.cs" Link="Helpers\TranscriptHealthText.cs" />
+    <Compile Include="..\Dimmy.Windows\Helpers\MeetingDoneNotes.cs" Link="Helpers\MeetingDoneNotes.cs" />
     <Compile Include="..\Dimmy.Windows\ViewModels\AppViewModel.cs" Link="ViewModels\AppViewModel.cs" />
     <Compile Include="..\Dimmy.Windows\ViewModels\SettingsViewModel.cs" Link="ViewModels\SettingsViewModel.cs" />
     <Compile Include="..\Dimmy.Windows\ViewModels\OnboardingViewModel.cs" Link="ViewModels\OnboardingViewModel.cs" />
