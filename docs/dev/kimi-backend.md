@@ -143,6 +143,16 @@ prompt pre-fill), so the button opens a new chat in the meeting's folder
 and puts the recap prompt on the clipboard: the MCP prompt when Dimmy is
 connected, a `transcripts.txt` prompt otherwise.
 
+### The Kimi app (chat / Kimi Work) is not an integration target
+
+Checked on Kimi 3.2.26 for Windows (2026-11-09, signed by Beijing Moonshot
+AI): it registers `kimi://` and `kimi-work://`, but none of
+`kimi://chat?prompt=`, `?q=`, `/chat/new`, `kimi-work://chat/?prompt=`
+pre-fills the message (tested signed in). Its main process blocks local
+MCP servers (`"unsupported-local-mcp"`, `"legacy local MCP blocked before
+ready"`); only marketplace plugins (remote MCP + OAuth through Kimi's
+gateway) load. So Dimmy's desktop integration is Kimi Code Desktop only.
+
 ## Setup CLI
 
 `dimmy-setup profile apply … --recap kimi-sub [--recap-model k3]` and
