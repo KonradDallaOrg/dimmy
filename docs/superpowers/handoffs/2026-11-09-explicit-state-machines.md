@@ -15,6 +15,35 @@ https://claude.ai/artifact/35owJxDa2q9BuB8YCrenYS (sections "Plan" and
   whatever the next session adds).
 - Keep everything on this branch; push / PR only when the user says so.
 
+## Session 3 (2026-11-09 night, PC-KONRAD): user answers applied, read this first
+
+The branch moved to PC-KONRAD: worktree `C:\ctwt-sm` (the other PC's `E:\` is
+this PC's `C:\`, so the scripts are in `C:\dimmy-run\state-machines-verify`).
+16 GB RAM here: debug tests use `CARGO_TARGET_DIR=C:/code/dimmy/core/target`,
+`-j 4`, from Git Bash with plain `cargo` (no `cargo-e.ps1`, its paths are the
+other PC's). Never a release build into that target: it holds the dev DLL.
+
+User answers to the session 2 questions:
+- Parity gap: **Windows matches the Mac** — done in `4c6d625e`. The meeting
+  stop and a Telegram audio count `TranscribesRunning` and never write the
+  pill state; the pill shows the Transcribing capsule while idle
+  (`AppViewModel.ShowsBackgroundTranscribe`); `TelegramService._drivingPill`
+  is gone. During the core drain (a few seconds) the core still refuses a
+  dictation on both OSes (`Busy::MeetingDraining`).
+- `meeting_phase` event: user left it to the agent; **skipped** (no reader).
+- Item 6 leftovers: **not done** (no reported bug behind them).
+- Lost UI: **both brought back** — `46b1d8a6`. Win `Helpers/MeetingDoneNotes`
+  (audio incomplete + "Open Recap settings" for rc -5/-6/-7), Mac
+  `MeetingViewModel.audioIncomplete`. In memory per run, as before.
+- Still to ask: imported audio with an unknown extension is saved as
+  `audio.wav` on both OSes now (the Mac used to keep any extension).
+
+Gates in session 3: `v2_ffi` 64/64, `meeting_pause_resume` 5/5 (log
+`gates-c-v2ffi.log`), C# 628/628, Windows host build OK, Mac preflight (see
+the brief). Not runnable here: Mac XCTest (no GUI session over SSH); FlaUI
+not run locally (it kills the running Dimmy and deletes the real
+`.onboarding_done`), it runs in CI on the PR.
+
 ## Session 2 (2026-11-09 evening): items 1-7 done, read this first
 
 Moving to the other PC. 10 more commits on the branch (25 in all), from
