@@ -301,10 +301,12 @@ final class MeetingViewModel: ObservableObject {
             .sink { [weak self] active in
                 guard let self else { return }
                 // Started elsewhere (shortcut, menu, call detect) while this
-                // window sat idle: it used to stay on Idle with Start
-                // refused. Its own start sets .recording before the core's
-                // event, so this only fires for an outside start.
-                if active, self.phase == .idle, !self.isWorking {
+                // window sat idle or showed a past meeting: it used to stay
+                // there with Start refused. Its own start sets .recording
+                // before the core's event, so this only fires for an outside
+                // start. Not while a stop is wrapping up (.processing).
+                if active, self.phase == .idle || self.phase == .done, !self.isWorking {
+                    self.selectedDir = nil
                     self.attachToInflightMeeting()
                     return
                 }

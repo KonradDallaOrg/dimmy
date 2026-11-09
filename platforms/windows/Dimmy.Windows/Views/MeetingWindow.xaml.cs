@@ -322,6 +322,7 @@ public sealed partial class MeetingWindow : Window
         _recordingActive = true;
         AppContextName.Text = "Microphone";
         StopBtn.IsEnabled = true;
+        HistoryList.SelectedItem = null;
         SetState(MeetingState.Recording);
         // Everything transcribed before this window opened is already
         // on disk: the core writes transcripts.txt line by line and
@@ -1211,8 +1212,11 @@ public sealed partial class MeetingWindow : Window
             {
                 try
                 {
-                    if (_state != MeetingState.Idle || _startInFlight || _recordingActive) return;
-                    App.Log("meeting_state=true from an outside start — attaching the idle window", "Meeting");
+                    // Idle, or showing a past meeting (the window opens on the
+                    // latest one): both go to the live recording. Not while a
+                    // stop is wrapping up.
+                    if (_state is not (MeetingState.Idle or MeetingState.Done) || _startInFlight || _recordingActive) return;
+                    App.Log($"meeting_state=true from an outside start — attaching the window (was {_state})", "Meeting");
                     AttachToLiveMeeting();
                 }
                 catch (Exception ex) { App.Log($"outside-start attach exc: {ex.Message}", "Meeting"); }
