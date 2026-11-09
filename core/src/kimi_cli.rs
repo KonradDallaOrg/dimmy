@@ -860,11 +860,13 @@ mod tests {
     use super::*;
     use std::collections::VecDeque;
 
+    type Responder = Box<dyn FnMut(&Value) -> Vec<Value>>;
+
     /// A scripted Kimi: answers each request by method, records what we sent.
     struct Script {
         sent: Vec<Value>,
         inbox: VecDeque<String>,
-        on: Box<dyn FnMut(&Value) -> Vec<Value>>,
+        on: Responder,
     }
 
     impl Script {

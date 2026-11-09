@@ -347,7 +347,7 @@ fn dispatch(args: &mut Vec<String>, out: &mut dyn Write) -> CmdResult {
             match (action.as_deref(), cli.as_deref()) {
                 (Some(a @ ("status" | "start" | "test")), Some(c)) => login(a, c),
                 _ => Err(CliError::usage(
-                    "login status|start|test claude|codex|gemini",
+                    "login status|start|test claude|codex|gemini|kimi",
                 )),
             }
         }
@@ -436,9 +436,9 @@ fn help() -> Value {
         "commands": [
             "info", "schema", "check", "config get",
             "config set key=value ... [--json '{...}'] [--dry-run]",
-            "profile apply --use meeting|dictation|both --lang <code|auto> --stt local|cloud [--stt-provider <id>] [--stt-backend <engine>] --recap claude-sub|codex-sub|api|local|off [--recap-model <id>] [--dry-run]",
+            "profile apply --use meeting|dictation|both --lang <code|auto> --stt local|cloud [--stt-provider <id>] [--stt-backend <engine>] --recap claude-sub|codex-sub|kimi-sub|api|local|off [--recap-model <id>] [--dry-run]",
             "models list", "models download <id>", "models prepare [<id>]",
-            "login status|start|test claude|codex|gemini",
+            "login status|start|test claude|codex|gemini|kimi",
             "key status", "key test <provider>",
             "test stt --file <wav>", "test recap",
             "onboarding status|done", "last",
@@ -496,11 +496,13 @@ fn cli_states() -> (Value, bool, bool) {
     let claude = crate::claude_code::status();
     let codex = crate::codex::status();
     let gemini = crate::gemini_cli::status();
+    let kimi = crate::kimi_cli::status();
     let c = crate::claude_code::status_label(&claude);
     let x = crate::codex::status_label(&codex);
     let g = crate::gemini_cli::status_label(&gemini);
+    let k = crate::kimi_cli::status_label(&kimi);
     (
-        json!({ "claude": c, "codex": x, "gemini": g }),
+        json!({ "claude": c, "codex": x, "gemini": g, "kimi": k }),
         c == "ready",
         x == "ready",
     )
@@ -977,14 +979,15 @@ fn install_hint(cli: &str) -> &'static str {
     match cli {
         "claude" => "npm install -g @anthropic-ai/claude-code",
         "codex" => "npm install -g @openai/codex",
+        "kimi" => crate::kimi_cli::install_command(),
         _ => "npm install -g @google/gemini-cli",
     }
 }
 
 fn login(action: &str, cli: &str) -> CmdResult {
-    if !matches!(cli, "claude" | "codex" | "gemini") {
+    if !matches!(cli, "claude" | "codex" | "gemini" | "kimi") {
         return Err(CliError::usage(format!(
-            "'{cli}' is not claude, codex or gemini"
+            "'{cli}' is not claude, codex, gemini or kimi"
         )));
     }
     match action {
@@ -996,6 +999,7 @@ fn login(action: &str, cli: &str) -> CmdResult {
             let r: Result<(), String> = match cli {
                 "claude" => crate::claude_code::spawn_login().map_err(|e| e.to_string()),
                 "codex" => crate::codex::spawn_login().map_err(|e| e.to_string()),
+                "kimi" => crate::kimi_cli::spawn_login().map_err(|e| e.to_string()),
                 _ => crate::gemini_cli::spawn_login().map_err(|e| e.to_string()),
             };
             r.map_err(|e| CliError::failed("login_failed", e, install_hint(cli)))?;
@@ -1016,6 +1020,11 @@ fn login(action: &str, cli: &str) -> CmdResult {
                 "codex" => crate::codex::run_blocking(PING_PROMPT, "", Duration::from_secs(30))
                     .map(|_| ())
                     .map_err(|e| (crate::codex::error_category(&e), e.to_string())),
+                "kimi" => {
+                    crate::kimi_cli::run_blocking(PING_PROMPT, "", Duration::from_secs(60), true)
+                        .map(|_| ())
+                        .map_err(|e| (crate::kimi_cli::error_category(&e), e.to_string()))
+                }
                 _ => crate::gemini_cli::run_blocking(PING_PROMPT, "", Duration::from_secs(60))
                     .map(|_| ())
                     .map_err(|e| (crate::gemini_cli::error_category(&e), e.to_string())),
@@ -1039,7 +1048,7 @@ fn login(action: &str, cli: &str) -> CmdResult {
     }
 }
 
-const KEY_PROVIDERS: [Provider; 9] = [
+const KEY_PROVIDERS: [Provider; 10] = [
     Provider::Groq,
     Provider::OpenAI,
     Provider::Anthropic,
@@ -1048,6 +1057,7 @@ const KEY_PROVIDERS: [Provider; 9] = [
     Provider::OpenRouter,
     Provider::Together,
     Provider::Fireworks,
+    Provider::Kimi,
     Provider::Custom,
 ];
 
