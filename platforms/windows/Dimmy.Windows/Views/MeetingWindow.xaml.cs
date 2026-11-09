@@ -859,6 +859,8 @@ public sealed partial class MeetingWindow : Window
         NextStepsCard.Visibility = Visibility.Collapsed;
         FollowupsCard.Visibility = Visibility.Collapsed;
         DoneWaveCard.Visibility = Visibility.Collapsed;
+        // Shown again only by the meeting whose recap failed.
+        OpenRecapSettingsButton.Visibility = Visibility.Collapsed;
         _lastDoneSections = new();
         ContextText.Blocks.Clear();
         TldrText.Blocks.Clear();
@@ -2440,6 +2442,7 @@ public sealed partial class MeetingWindow : Window
                 TrackRecapCompleted(modelOverride, recapTimer.ElapsedMilliseconds, false,
                     Helpers.MeetingRecapHelpers.RecapRcToCategory(rc));
                 DimmyNative.MeetingRecapFailed(dir, msg);
+                Helpers.MeetingDoneNotes.Shared.RecapFailed(dir, actionable);
                 ShowDoneFallback(transcript, msg, actionable);
                 return;
             }
@@ -2451,6 +2454,7 @@ public sealed partial class MeetingWindow : Window
 
             var recapMarkdown = Helpers.MeetingRecapHelpers.BuildMarkdownFromSections(sections);
             var actionsPlain = sections.GetValueOrDefault("ACTIONS", "");
+            Helpers.MeetingDoneNotes.Shared.RecapSaved(dir);
             DimmyNative.dimmy_meeting_save_post_process(dir, recapMarkdown, actionsPlain, null,
                 string.IsNullOrWhiteSpace(modelOverride) ? null : modelOverride);
 
@@ -2462,6 +2466,7 @@ public sealed partial class MeetingWindow : Window
         {
             App.Log($"post-process exc: {ex}", "Meeting");
             DimmyNative.MeetingRecapFailed(dir, ex.Message);
+            Helpers.MeetingDoneNotes.Shared.RecapFailed(dir, fixableInSettings: false);
             ShowDoneFallback(transcript, $"Post-process failed: {ex.Message}");
         }
         finally
@@ -3231,7 +3236,7 @@ public sealed partial class MeetingWindow : Window
             // to the sidebar row's pre-computed title which itself
             // already falls back to the meeting id.
             DoneTitle.Text = ResolveDoneTitle(row.Dir, fallback: row.Title);
-            DoneMeta.Text = row.Subtitle;
+            DoneMeta.Text = Helpers.MeetingDoneNotes.Shared.MetaLine(row.Subtitle, row.Dir);
             RefreshDoneCalendarRow(row.Dir);
             ClearDoneCards();
 
@@ -3269,6 +3274,9 @@ public sealed partial class MeetingWindow : Window
                 // it; only the window's own stop used to say so, and only then.
                 Helpers.MarkdownRenderer.Render(TldrText, Helpers.TranscriptHealthText.RecapFailed(recapReason));
                 TldrCard.Visibility = Visibility.Visible;
+                // The window's own stop offered this; the shared stop lost it.
+                OpenRecapSettingsButton.Visibility = Helpers.MeetingDoneNotes.Shared.OffersRecapSettings(row.Dir)
+                    ? Visibility.Visible : Visibility.Collapsed;
             }
             var txt = Path.Combine(row.Dir, "transcripts.txt");
             LoadDoneSpeakers(row.Dir);

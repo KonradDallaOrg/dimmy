@@ -23,6 +23,14 @@ import Combine
 
 @MainActor
 final class MeetingViewModel: ObservableObject {
+    /// Meetings whose audio came out incomplete in this run of the app,
+    /// dir -> the finalize error. Written by the shared stop
+    /// (PillWindowController.stopMeetingFromPill), read by
+    /// `loadDoneFromDisk`: the window's own stop used to append it to the
+    /// Done metadata, and the shared stop lost it. Win mirror:
+    /// Helpers/MeetingDoneNotes.cs.
+    static var audioIncomplete: [String: String] = [:]
+
     enum Phase: Equatable {
         case idle
         case recording
@@ -1378,6 +1386,9 @@ final class MeetingViewModel: ObservableObject {
         // Meeting date from meta.json `started_at` (stable across title
         // edits), not the dir mtime, see MeetingHistoryRow.dateFor.
         doneMeta = MeetingHistoryRow.subtitleFor(date: MeetingHistoryRow.dateFor(dirURL: url))
+        if let stopError = Self.audioIncomplete[dir] {
+            doneMeta += " · ⚠ audio incomplete (\(stopError))"
+        }
         refreshDoneCalendarLine(meetingDir: url.path)
 
         let recapURL = url.appendingPathComponent("recap.md")

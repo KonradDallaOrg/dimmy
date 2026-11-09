@@ -502,6 +502,9 @@ final class PillWindowController {
                 if let stopError = stopResult?.error {
                     dimmyHostLog("[Pill stop] meeting stop reported error: \(stopError)")
                     await MainActor.run {
+                        if let dir = stopResult?.dir, !dir.isEmpty {
+                            MeetingViewModel.audioIncomplete[dir] = stopError
+                        }
                         DictToastWindow.show(
                             kind: .error,
                             title: "Meeting audio incomplete",

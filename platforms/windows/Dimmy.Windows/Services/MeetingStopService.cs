@@ -78,6 +78,7 @@ public static class MeetingStopService
             {
                 App.Log($"meeting stop reported error: {stopError}", "Meeting");
                 DictNotificationService.ShowMeetingAudioIncomplete(stopError);
+                if (!string.IsNullOrEmpty(dir)) Helpers.MeetingDoneNotes.Shared.AudioIncomplete(dir);
             }
 
             // Read BEFORE the speaker pass: the next meeting can start while

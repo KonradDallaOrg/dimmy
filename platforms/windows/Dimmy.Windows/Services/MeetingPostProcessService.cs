@@ -100,6 +100,7 @@ public static class MeetingPostProcessService
                 Services.DictNotificationService.ShowRecapFailed(
                     TelemetryBuckets.Provider(ReadLlmApiUrl()), msg, category);
                 DimmyNative.MeetingRecapFailed(dir, msg);
+                Helpers.MeetingDoneNotes.Shared.RecapFailed(dir, Helpers.MeetingDoneNotes.FixableInRecapSettings(rc));
                 return new RecapResult { Success = false, Dir = dir, Error = msg };
             }
 
@@ -177,6 +178,7 @@ public static class MeetingPostProcessService
                 }
             }
 
+            Helpers.MeetingDoneNotes.Shared.RecapSaved(dir);
             return new RecapResult { Success = true, Dir = dir, Sections = sections };
         }
         catch (Exception ex)
@@ -184,6 +186,7 @@ public static class MeetingPostProcessService
             App.Log($"recap (shared) exc: {ex}", "MeetingRecap");
             Helpers.CrashReporter.Report(ex, "meeting_recap");
             DimmyNative.MeetingRecapFailed(dir, ex.Message);
+            Helpers.MeetingDoneNotes.Shared.RecapFailed(dir, fixableInSettings: false);
             return new RecapResult { Success = false, Dir = dir, Error = ex.Message };
         }
         finally
