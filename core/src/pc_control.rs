@@ -8,7 +8,7 @@
 //! - the **hands** (Windows only for now): open windows, Start-menu apps,
 //!   bring to front, snap left / right / full / other monitor, tile two,
 //!   open an app, Explorer search by date, cursor to the end;
-//! - the **brain**: a closed list of actions. `plan_with_claude` asks Haiku
+//! - the **brain**: a closed list of actions. `plan_with_llm` asks a fast model, or Haiku
 //!   (prewarmed, no thinking) for a JSON plan; a local router is the next step.
 //!
 //! Nothing here deletes, sends or buys: the action list has no such verb.
@@ -52,8 +52,10 @@ pub enum Step {
     Browser { action: String },
     /// A media key: play_pause, next, previous, volume_up, volume_down, mute.
     Media { action: String },
-    /// An editing key in the named (or front) app: new_line, select_all,
-    /// copy, paste, undo, redo, top, bottom, save.
+    /// Keys for the named (or front) app: a named action (new_line,
+    /// select_all, copy, cut, paste, undo, redo, top, bottom, save, find,
+    /// enter, escape, tab, backtab, space, backspace, delete, up, down, left,
+    /// right, page_up, page_down, home, end) or a chord like "ctrl+shift+t".
     Key {
         #[serde(default)]
         app: String,
@@ -75,6 +77,24 @@ pub enum Step {
         #[serde(default)]
         app: String,
         text: String,
+    },
+    /// Write `text` where the cursor is.
+    Type { text: String },
+    /// Close a window as its X button does: the app still asks about
+    /// unsaved work. An empty `app` is the window in front.
+    Close {
+        #[serde(default)]
+        app: String,
+    },
+    /// Back to the window that was in front before this one.
+    SwitchWindow,
+    /// Click something the window in front shows: its number in the list
+    /// of what is on the screen. `double` opens a file or an icon, which a
+    /// single click only selects.
+    Click {
+        item: usize,
+        #[serde(default)]
+        double: bool,
     },
 }
 
@@ -129,10 +149,98 @@ pub struct Outcome {
 pub fn live_safe(plan: &Plan) -> bool {
     !plan.steps.is_empty()
         && plan.steps.iter().all(|s| match s {
-            Step::TypeAtEnd { .. } | Step::Key { .. } | Step::AppCommand { .. } => false,
+            Step::TypeAtEnd { .. }
+            | Step::Type { .. }
+            | Step::AppCommand { .. }
+            | Step::Click { .. }
+            | Step::Close { .. } => false,
+            Step::Key { action, .. } => LIVE_KEYS.contains(&action.as_str()),
             Step::Browser { action } => action != "close_tab",
             _ => true,
         })
+}
+
+/// Keys that only move or copy: a wrong one changes nothing in a document.
+const LIVE_KEYS: &[&str] = &[
+    "copy",
+    "select_all",
+    "top",
+    "bottom",
+    "page_up",
+    "page_down",
+    "up",
+    "down",
+    "left",
+    "right",
+];
+
+/// The virtual keys of one key name, as people and the planner write them.
+fn key_code(name: &str) -> Option<u8> {
+    Some(match name {
+        "ctrl" | "control" => 0x11,
+        "alt" => 0x12,
+        "shift" | "maiusc" => 0x10,
+        "win" | "windows" => 0x5B,
+        "enter" | "invio" | "return" => 0x0D,
+        "escape" | "esc" => 0x1B,
+        "tab" => 0x09,
+        "space" | "spazio" => 0x20,
+        "backspace" => 0x08,
+        "delete" | "canc" | "del" => 0x2E,
+        "up" | "su" => 0x26,
+        "down" | "giu" | "giù" => 0x28,
+        "left" | "sinistra" => 0x25,
+        "right" | "destra" => 0x27,
+        "page_up" | "pageup" | "pagsu" => 0x21,
+        "page_down" | "pagedown" | "paggiu" => 0x22,
+        "home" | "inizio" => 0x24,
+        "end" | "fine" => 0x23,
+        _ => {
+            let b = name.as_bytes();
+            match b {
+                [c @ b'a'..=b'z'] => c.to_ascii_uppercase(),
+                [c @ b'0'..=b'9'] => *c,
+                [b'f', d @ b'1'..=b'9'] => 0x70 + (d - b'1'),
+                [b'f', b'1', d @ b'0'..=b'2'] => 0x79 + (d - b'0'),
+                _ => return None,
+            }
+        }
+    })
+}
+
+/// The keys of a `key` step, in press order: a named action, or a chord of
+/// up to four keys ("ctrl+shift+t"). None for anything else: an unknown
+/// name is refused, never guessed.
+pub fn key_chord(action: &str) -> Option<Vec<u8>> {
+    let named: &[u8] = match action {
+        "new_line" => &[0x0D],
+        "select_all" => &[0x11, 0x41],
+        "copy" => &[0x11, 0x43],
+        "cut" => &[0x11, 0x58],
+        "paste" => &[0x11, 0x56],
+        "undo" => &[0x11, 0x5A],
+        "redo" => &[0x11, 0x59],
+        "top" => &[0x11, 0x24],
+        "bottom" => &[0x11, 0x23],
+        "save" => &[0x11, 0x53],
+        "find" => &[0x11, 0x46],
+        "backtab" => &[0x10, 0x09],
+        _ => &[],
+    };
+    if !named.is_empty() {
+        return Some(named.to_vec());
+    }
+    let keys: Vec<u8> = action
+        .split('+')
+        .map(|k| key_code(k.trim().to_lowercase().as_str()))
+        .collect::<Option<_>>()?;
+    let modifier = |k: &u8| matches!(k, 0x10 | 0x11 | 0x12 | 0x5B);
+    // Modifiers first, one last key that is not one: "s+ctrl" is not a chord.
+    let ok = keys.len() == 1
+        || (2..=4).contains(&keys.len())
+            && keys[..keys.len() - 1].iter().all(modifier)
+            && !modifier(&keys[keys.len() - 1]);
+    ok.then_some(keys)
 }
 
 fn percent_encode(s: &str) -> String {
@@ -215,6 +323,11 @@ const ALIASES: &[(&str, &[&str])] = &[
     ("files", &["explorer"]),
 ];
 
+/// A spoken word that stands for an app ("posta", "browser").
+pub fn is_alias(word: &str) -> bool {
+    ALIASES.iter().any(|(alias, _)| *alias == word)
+}
+
 fn similarity(a: &str, b: &str) -> f32 {
     let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
     if a.is_empty() || b.is_empty() {
@@ -281,9 +394,38 @@ fn best<'a, T>(spoken: &str, items: &'a [T], key: impl Fn(&T) -> (&str, &str)) -
 
 // ── Brain: Haiku ─────────────────────────────────────────────────────
 
-fn planner_prompt(command: &str, windows: &[String], app: &str, app_cmds: &[String]) -> String {
+fn planner_prompt(
+    command: &str,
+    windows: &[String],
+    app: &str,
+    app_cmds: &[String],
+    in_order: bool,
+    history: &[(String, String)],
+) -> String {
+    let history_part = if history.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\nEarlier in this session, oldest first (said -> done). The new command continues from there: \
+             a search that names no site goes to the site already open, \"it\" is the app just named, \
+             words that are no command after a site was opened are a search on it.\n{}\n",
+            history
+                .iter()
+                .map(|(said, did)| format!("\"{said}\" -> {did}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    };
     let app_part = if app_cmds.is_empty() {
         String::new()
+    } else if in_order {
+        format!(
+            "\nWhat the window in front ({app}) shows on the screen now, in reading order. To click one, use \
+             {{\"do\":\"click\",\"item\":<its number>,\"double\":<true to open a file or an icon>}}. \"The third video\" is the third item that reads like \
+             a video title (skip menus, buttons, filters, channel names); \"the video by X\" is the title \
+             that names X. Click what is shown rather than searching for it again:\n{}\n",
+            app_cmds.join("\n")
+        )
     } else {
         format!(
             "\nCommands the app in front ({app}) offers, most likely first. To run one, use \
@@ -305,41 +447,75 @@ fn planner_prompt(command: &str, windows: &[String], app: &str, app_cmds: &[Stri
          {{\"do\":\"web\",\"site\":\"youtube|google|amazon|wikipedia|maps|gmail|<site>\",\"query\":\"<search words, may be empty>\"}}  open or search a site in the browser\n\
          {{\"do\":\"browser\",\"action\":\"new_tab|close_tab|reopen_tab|back|forward|reload|next_tab|previous_tab\"}}\n\
          {{\"do\":\"media\",\"action\":\"play_pause|next|previous|volume_up|volume_down|mute\"}}\n\
-         {{\"do\":\"key\",\"app\":\"<app, may be empty>\",\"action\":\"new_line|select_all|copy|paste|undo|redo|top|bottom|save\"}}\n\
+         {{\"do\":\"key\",\"app\":\"<app, may be empty>\",\"action\":\"new_line|select_all|copy|cut|paste|undo|redo|top|bottom|save|find|enter|escape|tab|backtab|space|backspace|delete|up|down|left|right|page_up|page_down|home|end, or a chord like ctrl+shift+t\"}}  press keys in the app (scrolling is page_down / page_up)\n\
+         {{\"do\":\"close\",\"app\":\"<app, may be empty for the window in front>\"}}  close a window\n\
+         {{\"do\":\"switch_window\"}}  back to the previous window\n\
+         {{\"do\":\"type\",\"text\":\"<text to write>\"}}  write the text where the cursor is\n\
          {{\"do\":\"open_folder\",\"folder\":\"downloads|documents|desktop|pictures|music|videos|latest_download\"}}\n\
          {{\"do\":\"settings\",\"page\":\"bluetooth|wifi|sound|display|notifications\"}}\n\
          {{\"do\":\"screenshot\"}}\n\
          {{\"do\":\"find_files\",\"query\":\"<words, may be empty>\",\"when\":\"any|today|yesterday|this_week|last_week\"}}\n\
          {{\"do\":\"type_at_end\",\"app\":\"<app>\",\"text\":\"<text to write>\"}}  cursor to the end of the document, write the text\n\
          Rules: only these actions. Use the app names as the user said them, or the name from the open windows list. \
-         \"this window\" / \"questa finestra\" means the first window in the list. If the command asks for something \
+         \"this window\" / \"questa finestra\" / \"it\" means the first window in the list. The words come from speech \
+         recognition: read through spelling mistakes (\"aprint browser\" is \"apri il browser\"). If the command asks for something \
          outside these actions, reply {{\"steps\": [], \"say\": \"<what you cannot do>\"}}.\n\
-         Open windows, front-most first (process: title):\n{}\n{}\n\
+         Open windows, front-most first (process: title):\n{}\n{}{}\n\
          Command: {}",
         windows.join("\n"),
         app_part,
+        history_part,
         command
     )
 }
 
-/// Ask Claude (the user's subscription, prewarmed, no thinking) for a plan.
-pub fn plan_with_claude(command: &str, model: &str) -> Result<Plan, String> {
+/// Ask a model for a plan. `fast` is an HTTPS provider that answers in well
+/// under a second, when the user has a key for one; the Claude CLI (the
+/// user's subscription, prewarmed, no thinking) is the fallback: its API
+/// call alone measured 2.0-2.4 s per command (2026-11-08, ~6k tokens in).
+/// Returns the plan and the engine that made it.
+pub fn plan_with_llm(
+    command: &str,
+    model: &str,
+    fast: impl Fn(&str) -> Option<String>,
+) -> Result<(Plan, &'static str), String> {
     let windows: Vec<String> = hands::open_windows()
         .iter()
         .take(25)
         .map(|w| format!("{}: {}", w.process, w.title))
         .collect();
-    let (app, app_cmds) = crate::pc_appcmds::candidates(command, 12);
-    let prompt = planner_prompt(command, &windows, &app, &app_cmds);
+    // The planner sees the screen whenever there is one to see: what is
+    // shown is the context of what is said. A menu app has only commands.
+    let (shown_app, shown) = crate::pc_appcmds::screen_lines(60);
+    let in_order = !shown.is_empty();
+    let (app, app_cmds) = if in_order {
+        (shown_app, shown)
+    } else {
+        crate::pc_appcmds::candidates(command, 12)
+    };
+    let history = context().history.clone();
+    let prompt = planner_prompt(command, &windows, &app, &app_cmds, in_order, &history);
+    if let Some(raw) = fast(&prompt) {
+        match parse_plan(&raw) {
+            Ok(plan) => return Ok((plan, "fast")),
+            Err(e) => crate::log(&format!(
+                "[PcControl] fast planner answer unusable ({e}), asking Claude"
+            )),
+        }
+    }
     let raw =
         crate::claude_code::run_blocking(&prompt, model, std::time::Duration::from_secs(30), true)
-            .map_err(|e| e.to_string())?;
-    parse_plan(&raw)
+            .map_err(|e| e.to_string());
+    // A started CLI answers one prompt: start the next one now, so the next
+    // command does not pay its half second of start-up.
+    crate::claude_code::prewarm(model);
+    parse_plan(&raw?).map(|p| (p, "claude"))
 }
 
 /// Start the Claude CLI, load the local router and read the Start menu
 /// while the user talks.
 pub fn prepare(model: &str) {
+    reset_context();
     crate::claude_code::prewarm(model);
     crate::pc_appcmds::capture_foreground();
     #[cfg(feature = "pc-router")]
@@ -364,6 +540,61 @@ pub fn known_names() -> Vec<(String, String)> {
             .into_iter()
             .map(|n| (n, String::new())),
     );
+    v
+}
+
+/// Words an execute session is likely to hear: the commands' own words and
+/// the names of the open apps. The recognizer leans toward them, so "apri"
+/// is not heard as "April" and an app's name is spelled as the app spells it.
+pub fn bias_words() -> Vec<String> {
+    const COMMAND_WORDS: &[&str] = &[
+        "apri",
+        "chiudi",
+        "affianca",
+        "riduci a icona",
+        "ingrandisci",
+        "massimizza",
+        "ripristina",
+        "sposta",
+        "mettilo",
+        "a sinistra",
+        "a destra",
+        "schermo intero",
+        "altro monitor",
+        "nuova scheda",
+        "chiudi la scheda",
+        "finestra",
+        "cartella",
+        "download",
+        "impostazioni",
+        "cerca",
+        "vai su",
+        "scorri",
+        "premi",
+        "invio",
+        "copia",
+        "incolla",
+        "annulla",
+        "salva",
+        "seleziona tutto",
+        "volume",
+        "pausa",
+        "screenshot",
+        "desktop",
+        "browser",
+        "scrivi",
+        "clicca",
+        "YouTube",
+        "Google",
+    ];
+    let mut v: Vec<String> = COMMAND_WORDS.iter().map(|s| s.to_string()).collect();
+    for w in hands::open_windows().iter().take(25) {
+        for name in [say_name(&w.process, &w.title), w.process.clone()] {
+            if name.chars().count() >= 3 && !v.iter().any(|x| x.eq_ignore_ascii_case(&name)) {
+                v.push(name);
+            }
+        }
+    }
     v
 }
 
@@ -393,10 +624,259 @@ pub(crate) fn say_name(process: &str, title: &str) -> String {
     }
 }
 
+/// Every open window (handle, process, title), front-most first: for the
+/// read-only check of what the screen layer sees.
+#[cfg(all(test, target_os = "windows"))]
+pub(crate) fn window_handles() -> Vec<(isize, String, String)> {
+    hands::open_windows()
+        .into_iter()
+        .map(|w| (w.hwnd, w.process, w.title))
+        .collect()
+}
+
 /// The executable name (no extension) of a process, for the app-commands log.
 #[cfg(target_os = "windows")]
 pub fn process_name_of(pid: u32) -> String {
     hands::process_name_of(pid)
+}
+
+/// What the session's earlier commands leave for the next one. People talk
+/// to it as to a person: "vai su YouTube", then only the words to search,
+/// then "clicca il terzo video", then "mettilo a destra".
+struct Context {
+    /// The app the last command named: what "mettilo" and "ripristinalo" mean.
+    last_app: String,
+    /// The site of the last `web` step: where a bare "cerca ..." searches.
+    site: String,
+    /// The last `web` step opened a site with nothing to search: words that
+    /// are not a command are the search.
+    awaiting_query: bool,
+    /// The browser tab in front is one this session opened or filled: the
+    /// next `web` step goes into it instead of opening another.
+    own_tab: bool,
+    /// The last commands, oldest first: (what was said, what was done).
+    history: Vec<(String, String)>,
+}
+
+static CONTEXT: std::sync::Mutex<Context> = std::sync::Mutex::new(Context {
+    last_app: String::new(),
+    site: String::new(),
+    awaiting_query: false,
+    own_tab: false,
+    history: Vec::new(),
+});
+
+fn context() -> std::sync::MutexGuard<'static, Context> {
+    CONTEXT.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// A new session starts with no context.
+pub(crate) fn reset_context() {
+    let mut c = context();
+    c.last_app.clear();
+    c.site.clear();
+    c.awaiting_query = false;
+    c.own_tab = false;
+    c.history.clear();
+}
+
+pub fn last_app() -> String {
+    context().last_app.clone()
+}
+
+#[cfg(test)]
+pub(crate) fn set_last_app(app: &str) {
+    context().last_app = app.to_string();
+}
+
+/// The site of the session's last `web` step, or "".
+pub fn last_site() -> String {
+    context().site.clone()
+}
+
+fn own_tab() -> bool {
+    context().own_tab
+}
+
+/// Keep what a command did, for the planner of the next one.
+pub fn remember(said: &str, did: &str) {
+    let mut c = context();
+    c.history.push((
+        crate::truncate_utf8(said, 120).to_string(),
+        crate::truncate_utf8(did, 120).to_string(),
+    ));
+    if c.history.len() > 6 {
+        c.history.remove(0);
+    }
+}
+
+/// Sites that take a search: after "vai su YouTube", words are a search.
+const SEARCHABLE: &[&str] = &["youtube", "google", "amazon", "wikipedia", "maps", "mappe"];
+
+/// What a step that ran leaves behind.
+fn note_step(step: &Step) {
+    let mut c = context();
+    match step {
+        Step::Web { site, query } => {
+            let site = norm(site);
+            c.site = if site.is_empty() {
+                "google".into()
+            } else {
+                site
+            };
+            c.awaiting_query = query.trim().is_empty() && SEARCHABLE.contains(&c.site.as_str());
+            c.own_tab = true;
+        }
+        Step::Browser { action } => {
+            c.awaiting_query = false;
+            c.own_tab = action == "new_tab"
+                || (c.own_tab && matches!(action.as_str(), "back" | "forward" | "reload"));
+        }
+        // These leave the window in front where it is.
+        Step::Key { app, .. } if app.trim().is_empty() => c.awaiting_query = false,
+        Step::Type { .. } | Step::AppCommand { .. } | Step::Click { .. } | Step::Media { .. } => {
+            c.awaiting_query = false
+        }
+        _ => {
+            c.awaiting_query = false;
+            c.own_tab = false;
+        }
+    }
+    if let Some(app) = named_app(step) {
+        c.last_app = app.to_string();
+    }
+}
+
+/// Words that start a command, not a search: "clicca il primo", "apri ...".
+const COMMAND_STARTS: &[&str] = &[
+    "clicca",
+    "click",
+    "premi",
+    "press",
+    "apri",
+    "aprimi",
+    "open",
+    "chiudi",
+    "close",
+    "vai",
+    "go",
+    "torna",
+    "metti",
+    "mettilo",
+    "sposta",
+    "scrivi",
+    "type",
+    "seleziona",
+    "scegli",
+    "vediamo",
+    "guarda",
+    "riproduci",
+    "play",
+    "fammi",
+    "mostra",
+    "mostrami",
+    "show",
+    "passa",
+    "riduci",
+    "ingrandisci",
+    "nuova",
+    "new",
+    "scorri",
+    "scroll",
+    "alza",
+    "abbassa",
+    "cosa",
+    "what",
+];
+
+const SEARCH_VERBS: &[&str] = &["cerca", "cercami", "cerco", "search"];
+
+/// A search that leans on the session: "cerca gatti" goes to the site
+/// already open, and after "cerca su YouTube" (the site opened, nothing
+/// searched yet) the words alone are the search. None when the session has
+/// no site, or the words start like a command.
+pub fn search_in_context(said: &str) -> Option<Plan> {
+    let (site, awaiting) = {
+        let c = context();
+        (c.site.clone(), c.awaiting_query)
+    };
+    if site.is_empty() {
+        return None;
+    }
+    let edge = |c: char| !c.is_alphanumeric();
+    let said = said.trim().trim_matches(edge);
+    let first = said
+        .split_whitespace()
+        .next()?
+        .trim_matches(edge)
+        .to_lowercase();
+    let query = if SEARCH_VERBS.contains(&first.as_str()) {
+        said.split_whitespace()
+            .skip(1)
+            .collect::<Vec<_>>()
+            .join(" ")
+    } else if awaiting && !COMMAND_STARTS.contains(&first.as_str()) {
+        said.to_string()
+    } else {
+        return None;
+    };
+    if query.is_empty() {
+        return None;
+    }
+    Some(Plan {
+        say: format!("Cerco \"{query}\" su {site}"),
+        steps: vec![Step::Web { site, query }],
+    })
+}
+
+/// Words that count or name the things a page shows.
+#[cfg(test)]
+const LISTING_WORDS: &[&str] = &[
+    "primo",
+    "prima",
+    "secondo",
+    "seconda",
+    "terzo",
+    "terza",
+    "quarto",
+    "quarta",
+    "quinto",
+    "quinta",
+    "sesto",
+    "sesta",
+    "ultimo",
+    "ultima",
+    "first",
+    "second",
+    "third",
+    "fourth",
+    "fifth",
+    "last",
+    "video",
+    "risultato",
+    "risultati",
+    "link",
+    "result",
+    "results",
+];
+
+#[cfg(test)]
+fn wants_listing(command: &str) -> bool {
+    command
+        .split(|c: char| !c.is_alphanumeric())
+        .any(|w| LISTING_WORDS.contains(&w.to_lowercase().as_str()))
+}
+
+fn named_app(step: &Step) -> Option<&str> {
+    match step {
+        Step::Open { app }
+        | Step::Focus { app }
+        | Step::Place { app, .. }
+        | Step::Minimize { app }
+        | Step::Restore { app }
+        | Step::Tile { right: app, .. } => Some(app.as_str()).filter(|a| !a.trim().is_empty()),
+        _ => None,
+    }
 }
 
 /// Run a plan, step by step; stop at the first step that fails.
@@ -407,6 +887,7 @@ pub fn run(plan: &Plan) -> Result<Option<String>, String> {
         if let Some(text) = hands::act(step)? {
             paste = Some(text);
         }
+        note_step(step);
     }
     Ok(paste)
 }
@@ -456,6 +937,28 @@ mod hands {
         fn SetWindowPos(h: Hwnd, after: Hwnd, x: i32, y: i32, cx: i32, cy: i32, flags: u32) -> i32;
         fn keybd_event(vk: u8, scan: u8, flags: u32, extra: usize);
         fn MapVirtualKeyW(code: u32, map: u32) -> u32;
+        fn GetForegroundWindow() -> Hwnd;
+        fn PostMessageW(h: Hwnd, msg: u32, wp: usize, lp: isize) -> i32;
+    }
+
+    const BROWSERS: [&str; 6] = ["chrome", "msedge", "firefox", "brave", "opera", "vivaldi"];
+
+    fn front_is_browser() -> bool {
+        let mut pid = 0u32;
+        unsafe { GetWindowThreadProcessId(GetForegroundWindow(), &mut pid) };
+        let process = process_name(pid);
+        BROWSERS.iter().any(|b| process.eq_ignore_ascii_case(b))
+    }
+
+    /// Load `url` in the browser tab in front: address bar, the address,
+    /// Enter. Delete first drops what the bar completed by itself.
+    fn navigate_tab(url: &str) {
+        chord(&[0x11, 0x4C]); // Ctrl+L
+        std::thread::sleep(std::time::Duration::from_millis(80));
+        crate::hotkey::type_text(url);
+        std::thread::sleep(std::time::Duration::from_millis(40));
+        chord(&[0x2E]);
+        chord(&[0x0D]);
     }
     #[link(name = "kernel32")]
     extern "system" {
@@ -730,11 +1233,11 @@ mod hands {
 
     /// Wait for a just-launched app's window to show up.
     fn wait_window(app: &str) -> Option<Win> {
-        for _ in 0..30 {
+        for _ in 0..120 {
             if let Some(w) = find_window(app) {
                 return Some(w);
             }
-            std::thread::sleep(std::time::Duration::from_millis(200));
+            std::thread::sleep(std::time::Duration::from_millis(50));
         }
         None
     }
@@ -758,6 +1261,16 @@ mod hands {
         wait_window(app)
             .or_else(|| wait_window(&hit.name))
             .ok_or(format!("{} non si è aperta in 6 s", hit.name))
+    }
+
+    /// Put `h` in front and give it time to take the keyboard. A window
+    /// already in front gets its keys at once.
+    fn front_for_keys(h: Hwnd) {
+        if unsafe { GetForegroundWindow() } == h {
+            return;
+        }
+        bring_forward(h);
+        std::thread::sleep(std::time::Duration::from_millis(120));
     }
 
     fn need(app: &str) -> Result<Win, String> {
@@ -834,8 +1347,16 @@ mod hands {
             }
             Step::Web { site, query } => {
                 let url = super::web_url(site, query).ok_or("niente da aprire")?;
-                crate::log(&format!("[PcControl] web {url}"));
-                shell_open(&url)
+                // The tab this session opened takes the next address: "cerca
+                // su YouTube", then the words, is one tab, not two.
+                let same_tab = super::own_tab() && front_is_browser();
+                crate::log(&format!("[PcControl] web {url} same_tab={same_tab}"));
+                if same_tab {
+                    navigate_tab(&url);
+                    Ok(None)
+                } else {
+                    shell_open(&url)
+                }
             }
             Step::Browser { action } => {
                 let keys: &[u8] = match action.as_str() {
@@ -851,14 +1372,9 @@ mod hands {
                 };
                 let w = open_windows()
                     .into_iter()
-                    .find(|w| {
-                        ["chrome", "msedge", "firefox", "brave", "opera", "vivaldi"]
-                            .iter()
-                            .any(|b| w.process.eq_ignore_ascii_case(b))
-                    })
+                    .find(|w| BROWSERS.iter().any(|b| w.process.eq_ignore_ascii_case(b)))
                     .ok_or("nessun browser aperto")?;
-                bring_forward(w.hwnd);
-                std::thread::sleep(std::time::Duration::from_millis(120));
+                front_for_keys(w.hwnd);
                 chord(keys);
                 Ok(None)
             }
@@ -878,23 +1394,28 @@ mod hands {
                 Ok(None)
             }
             Step::Key { app, action } => {
-                let keys: &[u8] = match action.as_str() {
-                    "new_line" => &[0x0D],
-                    "select_all" => &[0x11, 0x41],
-                    "copy" => &[0x11, 0x43],
-                    "paste" => &[0x11, 0x56],
-                    "undo" => &[0x11, 0x5A],
-                    "redo" => &[0x11, 0x59],
-                    "top" => &[0x11, 0x24],
-                    "bottom" => &[0x11, 0x23],
-                    "save" => &[0x11, 0x53],
-                    other => return Err(format!("tasto sconosciuto: {other}")),
-                };
+                let keys = super::key_chord(action)
+                    .ok_or_else(|| format!("tasto sconosciuto: {action}"))?;
                 if !app.trim().is_empty() {
-                    bring_forward(need(app)?.hwnd);
-                    std::thread::sleep(std::time::Duration::from_millis(120));
+                    front_for_keys(need(app)?.hwnd);
                 }
-                chord(keys);
+                chord(&keys);
+                Ok(None)
+            }
+            Step::Type { text } => Ok(Some(text.clone())),
+            Step::Click { item, double } => {
+                crate::pc_appcmds::click_listed(*item, *double).map(|_| None)
+            }
+            Step::Close { app } => need(app).map(|w| {
+                unsafe { PostMessageW(w.hwnd, 0x0010, 0, 0) }; // WM_CLOSE
+                None
+            }),
+            Step::SwitchWindow => {
+                let w = open_windows()
+                    .into_iter()
+                    .nth(1)
+                    .ok_or("non c'è un'altra finestra")?;
+                bring_forward(w.hwnd);
                 Ok(None)
             }
             Step::OpenFolder { folder } => {
@@ -953,8 +1474,7 @@ mod hands {
             }
             Step::TypeAtEnd { app, text } => {
                 let w = need(app)?;
-                bring_forward(w.hwnd);
-                std::thread::sleep(std::time::Duration::from_millis(120));
+                front_for_keys(w.hwnd);
                 tap(0x11, false); // Ctrl
                 tap(0x23, false); // End
                 tap(0x23, true);
@@ -1090,5 +1610,153 @@ mod tests {
         // A live partial cut mid-word ("Apri no…") must not name an app yet.
         assert_eq!(name_score("no", "notepad++", "nuovo 2 - Notepad++"), 0.0);
         assert_eq!(name_score("not", "notepad++", ""), 0.0);
+    }
+    #[test]
+    fn key_chords_are_named_keys_or_refused() {
+        assert_eq!(key_chord("copy"), Some(vec![0x11, 0x43]));
+        assert_eq!(key_chord("enter"), Some(vec![0x0D]));
+        assert_eq!(key_chord("ctrl+shift+t"), Some(vec![0x11, 0x10, 0x54]));
+        assert_eq!(key_chord("alt+f4"), Some(vec![0x12, 0x73]));
+        assert_eq!(key_chord("f12"), Some(vec![0x7B]));
+        assert_eq!(key_chord("win"), Some(vec![0x5B]));
+        assert_eq!(key_chord("Ctrl+S"), Some(vec![0x11, 0x53]));
+        for bad in [
+            "",
+            "banana",
+            "ctrl+banana",
+            "s+ctrl",
+            "ctrl+alt",
+            "a+b",
+            "ctrl+alt+shift+win+s",
+            "f13",
+        ] {
+            assert_eq!(key_chord(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn the_planner_can_close_switch_and_type() {
+        let plan = parse_plan(
+            r#"{"steps":[{"do":"close","app":"notepad"},{"do":"close"},{"do":"switch_window"},{"do":"type","text":"ciao"},{"do":"key","action":"ctrl+shift+t"}],"say":"ok"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            plan.steps,
+            vec![
+                Step::Close {
+                    app: "notepad".into()
+                },
+                Step::Close { app: String::new() },
+                Step::SwitchWindow,
+                Step::Type {
+                    text: "ciao".into()
+                },
+                Step::Key {
+                    app: String::new(),
+                    action: "ctrl+shift+t".into()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn only_harmless_steps_run_before_the_user_is_done() {
+        let live = |s: Step| {
+            live_safe(&Plan {
+                steps: vec![s],
+                say: String::new(),
+            })
+        };
+        let key = |a: &str| Step::Key {
+            app: String::new(),
+            action: a.into(),
+        };
+        assert!(live(key("copy")));
+        assert!(live(key("page_down")));
+        assert!(live(Step::SwitchWindow));
+        for step in [
+            key("save"),
+            key("enter"),
+            key("delete"),
+            key("alt+f4"),
+            Step::Close { app: String::new() },
+            Step::Type { text: "x".into() },
+        ] {
+            assert!(!live(step.clone()), "{step:?}");
+        }
+    }
+    // The user's own case (2026-11-10): "cerca su YouTube" opened YouTube,
+    // and the words said next opened a second tab, on Google.
+    #[test]
+    #[serial_test::serial]
+    fn words_after_a_site_are_a_search_on_it() {
+        reset_context();
+        assert!(
+            search_in_context("gatti che suonano").is_none(),
+            "no site yet"
+        );
+        note_step(&Step::Web {
+            site: "YouTube".into(),
+            query: String::new(),
+        });
+        assert_eq!(last_site(), "youtube");
+        let steps = |said: &str| search_in_context(said).map(|p| p.steps);
+        let search = |q: &str| {
+            Some(vec![Step::Web {
+                site: "youtube".into(),
+                query: q.into(),
+            }])
+        };
+        assert_eq!(
+            steps("Gatti che suonano il piano."),
+            search("Gatti che suonano il piano")
+        );
+        assert_eq!(steps("cerca gatti"), search("gatti"));
+        assert_eq!(steps("clicca il terzo video"), None);
+        assert_eq!(steps("apri Notepad"), None);
+        // The search ran: the tab is ours, and words alone are no search now.
+        note_step(&Step::Web {
+            site: "youtube".into(),
+            query: "gatti".into(),
+        });
+        assert!(own_tab());
+        assert_eq!(steps("cani"), None);
+        assert_eq!(steps("cerca cani"), search("cani"));
+        // A click on the page keeps the tab; another app in front does not.
+        note_step(&Step::AppCommand { label: "x".into() });
+        assert!(own_tab());
+        note_step(&Step::Open {
+            app: "notepad".into(),
+        });
+        assert!(!own_tab());
+        assert_eq!(last_app(), "notepad");
+        reset_context();
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn the_planner_gets_the_session_and_the_page_in_order() {
+        reset_context();
+        remember("vai su YouTube", "Apro youtube");
+        let history = context().history.clone();
+        let prompt = planner_prompt(
+            "clicca il terzo video",
+            &[],
+            "chrome",
+            &["Home".to_string(), "Gatti buffi".to_string()],
+            true,
+            &history,
+        );
+        assert!(prompt.contains("\"vai su YouTube\" -> Apro youtube"));
+        assert!(prompt.contains("in reading order"));
+        assert!(prompt.contains("Gatti buffi"));
+        assert!(wants_listing("clicca il terzo video"));
+        assert!(wants_listing("apri l'ultimo risultato"));
+        assert!(!wants_listing("apri Notepad"));
+        for i in 0..10 {
+            remember(&format!("comando {i}"), "ok");
+        }
+        assert_eq!(context().history.len(), 6);
+        reset_context();
     }
 }

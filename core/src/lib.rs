@@ -91,6 +91,7 @@ pub mod pc_control;
 pub mod pc_help;
 #[cfg(feature = "pc-router")]
 pub mod pc_router;
+pub mod pc_screen;
 pub mod preprocess;
 pub mod provider;
 pub mod qwen_asr;

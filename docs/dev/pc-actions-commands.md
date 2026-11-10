@@ -8,6 +8,86 @@ while the user is still talking when it is "sure + stable" and harmless.
 Status: ✅ done (local router and Haiku) · 🟡 Haiku only · ⬜ to do · ⛔ excluded
 Live: ⚡ may run while you talk · ⏸ waits for the stop
 
+## The session is a conversation (2026-11-10)
+
+What the earlier commands did stays for the next one (`pc_control::Context`,
+reset when a session starts):
+
+- **A search goes where the session already is.** "Cerca su YouTube" opens
+  YouTube; the words said next ("gatti che suonano") are the search, on
+  YouTube, in the SAME tab (address bar, the address, Enter). Before, they
+  opened a second tab on Google. "Cerca X" with no site named also goes to
+  the site already open. Words that start like a command ("clicca ...",
+  "apri ...") are never taken as a search.
+- **"Mettilo a destra", "ripristinalo", "chiudila"** mean the app the last
+  command named; "questa finestra" means the window in front.
+- **The planner sees the session**: the last six commands and what was done.
+- **"Clicca il terzo video", "apri il primo risultato"**: the planner gets
+  what the window in front shows, in page order, and picks the item. A
+  title said in part ("vediamo ...") gets the 12 closest items, as before.
+- The window in front is read again at the first words of every command,
+  so a page that loaded since the last command is the one clicked.
+
+### What is on the screen (`pc_screen.rs`, 2026-11-10)
+
+"Apri il primo video", "il terzo risultato", "il video di Michele Cotti",
+a title read aloud: the answer is on the screen, so no model is asked.
+
+- The capture keeps, for every clickable control of the window in front,
+  its text (up to 200 characters), its kind and its rectangle, and only
+  what lies inside the window: "the first" is the first on the SCREEN, an
+  item scrolled away is not counted. Before, every name over 60 characters
+  was dropped, which is every video title: neither the rules nor Claude
+  could click a video.
+- Items are put in reading order (rows, then columns). A counted reference
+  picks the Nth item of the kind named (a video is a long link; a channel
+  name is short); a name or a title picks the item that holds the words,
+  give or take one or two letters ("contrus" for "contro"). A title read
+  with no verb needs three matching words.
+- The click is a real click in the middle of the item.
+- Order in `pc_execute_text`: basic command, then the screen, then the
+  app's own commands, the classifier, the session's search, the planner.
+  The planner gets the same numbered list and answers
+  `{"do":"click","item":N}`.
+- Measured on the user's session before this: the same requests took
+  2.4-4.9 s through the Claude CLI (Groq answered HTTP 403 to the VPN's
+  address) and came back as a new search, a scroll to the top, or nothing.
+  Now they are decided in about a millisecond.
+- Not covered: windows with no accessibility tree (a game, a remote
+  desktop, a canvas). A screenshot read by OCR or a vision model is the
+  next step for those; it was not needed for a browser.
+
+Speed and reliability, same date:
+
+- The planner call goes to Groq (`openai/gpt-oss-20b`, low reasoning, JSON
+  mode) when the user has a Groq key; the Claude CLI is the fallback. The
+  CLI's API call alone measured 2.0-2.4 s (~6k tokens in). `DIMMY_PC_FAST=0`
+  keeps every plan on Claude. Open-window titles go to the planner, as they
+  did to Claude.
+- An execute session runs on the engine the user chose, and stays open:
+  one press, then command after command. Nemotron streams. For the others
+  (Parakeet, Whisper, Qwen, Whistle) the audio is cut where the speaker
+  pauses (550 ms of silence) and each utterance is transcribed whole
+  (`ChunkedTranscriber::start_utterances`). A fixed chunk of 5-15 s arrived
+  when the command was long over, so the shortcut had to be pressed after
+  every command. Forcing Nemotron was tried for one build and dropped: it is
+  not the user's choice, and it needs 4.6 GB of free memory to load.
+- The session listens in the Windows locale's language (it/en) when no
+  language is set, and the recognizer is biased toward the command words
+  and the open apps' names: "apri il browser" had come back as "āprī
+  browzer" and once in Devanagari. `DIMMY_PC_LANG=auto` restores guessing.
+- A command runs on a pause in the words INCLUDING the word still being
+  said (Nemotron held it back, so "questa sche" looked like a pause), and
+  only when its last word is whole. A command still being said ("apri",
+  "metti Chrome a") is not dropped at the end of a segment.
+- Basic commands wait 450 ms, sure classifier plans 600 ms, the rest
+  1200 ms. The 700 ms wait after every command is gone.
+
+New word rules (no model): close a window, restore, switch to an app,
+previous window, show desktop, screenshot, keys ("premi invio", "premi
+control s", "copia", "scorri giù"), "scrivi <testo>" at the cursor, "vai su
+<sito>".
+
 ## How the local router decides (measured 2026-11-07)
 
 Test set: `core/tests/fixtures/pc_testset.jsonl`, 326 commands written
@@ -71,18 +151,24 @@ Electron (new Outlook, Teams), whose accessibility tree stays empty.
 | Action | Example (it / en) | Status | Live |
 |---|---|---|---|
 | open | "apri Teams" / "open Outlook" | ✅ | ⚡ |
-| focus | "porta in primo piano Notepad" | 🟡 | ⚡ |
+| focus | "porta in primo piano Notepad", "passa a Teams", "vai su Chrome" | ✅ | ⚡ |
+| previous window | "finestra precedente", "cambia finestra" | ✅ | ⚡ |
+| close a window (WM_CLOSE: the app asks about unsaved work) | "chiudi Notepad", "chiudi questa finestra" | ✅ | ⏸ |
 | place left / right / full / other monitor | "metti Chrome a destra", "porta Teams sull'altro monitor" | ✅ | ⚡ |
 | tile two windows | "affianca Teams e Outlook" | ✅ | ⚡ |
-| minimize / restore / show desktop | "nascondi Notepad", "ripristina Notepad", "mostra il desktop" | ✅ / 🟡 / 🟡 | ⚡ |
+| minimize / restore / show desktop | "nascondi Notepad", "ripristina Notepad", "mostra il desktop" | ✅ | ⚡ |
 | find files by words and date | "trova i file di ieri" | ✅ | ⚡ |
 | web: open or search a site | "naviga su YouTube", "cerca su Google il meteo" | ✅ | ⚡ |
 | browser keys | "nuova scheda", "torna indietro", "ricarica" | ✅ | ⚡ (close tab ⏸) |
 | media keys | "metti in pausa", "prossima canzone", "alza il volume" | ✅ | ⚡ |
 | folders, latest download (selected, never opened) | "apri la cartella download", "l'ultimo file scaricato" | ✅ | ⚡ |
 | Windows Settings pages | "impostazioni bluetooth" | ✅ | ⚡ |
-| screenshot (snip) | "fai uno screenshot" | 🟡 | ⚡ |
-| editing keys | "seleziona tutto", "annulla", "vai in fondo", "salva" | 🟡 | ⏸ |
+| screenshot (snip) | "fai uno screenshot" | ✅ | ⚡ |
+| editing keys | "seleziona tutto", "annulla", "vai in fondo", "salva" | ✅ | ⏸ (copy, select all, top, bottom, scroll ⚡) |
+| any key or chord | "premi invio", "premi control s", "premi alt f4" | ✅ | ⏸ |
+| scroll | "scorri giù", "scorri su" | ✅ | ⚡ |
+| write at the cursor | "scrivi ciao a tutti" | ✅ | ⏸ |
+| click what the page or app shows | "clicca il terzo video", a title said aloud | 🟡 (planner) | ⏸ |
 | write at the end of a document | "scrivi in fondo a Notepad ciao" | 🟡 | ⏸ |
 
 ## From Atticus (MIT, SaarthurR/atticus-mac and FindlayHi/atticus-windows)

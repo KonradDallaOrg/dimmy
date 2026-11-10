@@ -2336,6 +2336,8 @@ public partial class App : Application
                 Views.PcLiveWindow.Finish(said, error == null
                     ? (engineUsed == "e5" ? "✓ Fatto (ho capito da solo)"
                         : engineUsed == "app" ? "✓ Fatto (comando dell'app)"
+                        : engineUsed == "screen" ? "✓ Fatto (l'ho visto a schermo)"
+                        : engineUsed == "fast" ? "✓ Fatto (ho chiesto al modello veloce)"
                         : "✓ Fatto (ho chiesto a Claude)")
                     : $"Non ci sono riuscito: {error}");
             if (!string.IsNullOrEmpty(paste))

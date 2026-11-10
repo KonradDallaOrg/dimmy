@@ -36,6 +36,16 @@ enum Intent {
     Media,
     Folder,
     Settings,
+    // The intents below are decided by their words alone (`basic_plan`):
+    // the classifier has no examples of them and never answers one.
+    Focus,
+    Close,
+    Restore,
+    Desktop,
+    Switch,
+    Screenshot,
+    Keys,
+    Type,
     /// Not a PC command: dictation, a question, an unsupported request.
     None,
 }
@@ -194,6 +204,19 @@ fn web_of(w: &[String]) -> Option<(String, String)> {
     }
 }
 
+/// `web_of`, in the session: a search that names no site goes to the site
+/// the session already opened ("vai su YouTube", then "cerca gatti").
+fn web_in_context(w: &[String]) -> Option<(String, String)> {
+    let (site, query) = web_of(w)?;
+    let named = w.iter().any(|t| SITES.contains(&t.as_str()));
+    let last = crate::pc_control::last_site();
+    Some(if named || last.is_empty() {
+        (site, query)
+    } else {
+        (last, query)
+    })
+}
+
 fn browser_action_of(w: &[String]) -> Option<&'static str> {
     let has = |x: &str| w.iter().any(|t| t == x);
     let tab = has("scheda") || has("tab");
@@ -258,7 +281,11 @@ fn folder_of(w: &[String]) -> Option<&'static str> {
         Some("pictures")
     } else if has("musica") || has("music") {
         Some("music")
-    } else if has("video") || has("videos") {
+    } else if has("videos")
+        || (has("video") && (has("cartella") || has("folder") || has("i") || has("miei")))
+    {
+        // "Apri il video" names something on the screen, not the folder
+        // (2026-11-10: it opened Explorer over a page of videos).
         Some("videos")
     } else {
         None
@@ -478,9 +505,9 @@ fn side_of(w: &[String]) -> Option<Side> {
     } else if pair("schermo", "intero")
         || pair("tutto", "schermo")
         || pair("full", "screen")
-        || has("massimizza")
-        || has("ingrandisci")
         || has("maximize")
+        || w.iter()
+            .any(|t| t.starts_with("massimizza") || t.starts_with("ingrandisci"))
     {
         Some(Side::Full)
     } else {
@@ -504,20 +531,31 @@ fn when_of(w: &[String]) -> When {
     }
 }
 
+/// A word that carries an action, a place or a time, never an app's name.
+fn not_a_name(t: &str) -> bool {
+    STOP.contains(&t)
+        || CLOSE_WORDS.contains(&t)
+        || RESTORE_WORDS.contains(&t)
+        || FOCUS_WORDS.contains(&t)
+        || PRESS_VERBS.contains(&t)
+        // "Apri il video" is something on the screen, not "Editor video".
+        || t == "video"
+}
+
 /// App names said in the command, in order, matched against `names`
 /// (open windows' processes and titles, Start-menu apps).
 fn apps_in(w: &[String], names: &[(String, String)]) -> Vec<String> {
     let mut found: Vec<(String, String)> = Vec::new();
     let mut i = 0;
     while i < w.len() {
-        if STOP.contains(&w[i].as_str()) {
+        if not_a_name(&w[i]) {
             i += 1;
             continue;
         }
         // Longest n-gram (up to 3 content words) that names an app.
         let mut taken = 0;
         for n in (1..=3).rev() {
-            if i + n > w.len() || w[i..i + n].iter().any(|t| STOP.contains(&t.as_str())) {
+            if i + n > w.len() || w[i..i + n].iter().any(|t| not_a_name(t)) {
                 continue;
             }
             let gram = w[i..i + n].join(" ");
@@ -1145,6 +1183,8 @@ const OPEN_WORDS: &[&str] = &[
 
 const MINIMIZE_WORDS: &[&str] = &[
     "riduci",
+    "riducilo",
+    "riducila",
     "icona",
     "minimizza",
     "minimizzala",
@@ -1318,33 +1358,466 @@ const FOLDER_WORDS: &[&str] = &[
     "show",
 ];
 
+/// Words that point at the window in front.
+const DEICTIC: &[&str] = &[
+    "questa", "questo", "finestra", "window", "this", "corrente", "attiva", "current",
+];
+
+/// Verbs that carry their object: "mettilo" is "metti" and the app the
+/// session's last command named.
+const PRONOUN_VERBS: &[&str] = &[
+    "mettilo",
+    "mettila",
+    "spostalo",
+    "spostala",
+    "portalo",
+    "portala",
+    "ingrandiscilo",
+    "ingrandiscila",
+    "massimizzalo",
+    "massimizzala",
+    "minimizzalo",
+    "minimizzala",
+    "nascondilo",
+    "nascondila",
+    "riducilo",
+    "riducila",
+    "chiudilo",
+    "chiudila",
+    "ripristinalo",
+    "ripristinala",
+];
+
+const CLOSE_WORDS: &[&str] = &["chiudi", "chiudila", "chiudilo", "chiudimi", "close"];
+
+const RESTORE_WORDS: &[&str] = &[
+    "ripristina",
+    "ripristinala",
+    "ripristinalo",
+    "ripristinami",
+    "restore",
+];
+
+const FOCUS_WORDS: &[&str] = &[
+    "passa", "vai", "torna", "porta", "portami", "primo", "piano", "attiva", "mostra", "mostrami",
+    "switch", "go", "bring", "front", "focus", "back",
+];
+
+const DESKTOP_WORDS: &[&str] = &[
+    "mostra",
+    "mostrami",
+    "vai",
+    "show",
+    "go",
+    "desktop",
+    "scrivania",
+    "riduci",
+    "icona",
+    "nascondi",
+    "minimizza",
+    "minimize",
+    "hide",
+    "tutto",
+    "tutte",
+    "finestre",
+    "windows",
+    "everything",
+    "all",
+];
+
+const SWITCH_WORDS: &[&str] = &[
+    "finestra",
+    "precedente",
+    "cambia",
+    "altra",
+    "switch",
+    "window",
+    "previous",
+    "alt",
+    "tab",
+    "torna",
+    "prima",
+    "passa",
+];
+
+const SCREENSHOT_WORDS: &[&str] = &[
+    "fai",
+    "fammi",
+    "screenshot",
+    "schermata",
+    "cattura",
+    "istantanea",
+    "take",
+    "screen",
+    "shot",
+    "schermo",
+    "dello",
+];
+
+/// "vai su YouTube": a site and nothing to search for.
+const WEBNAV_WORDS: &[&str] = &["vai", "naviga", "apri", "open", "go", "sito"];
+
+const PRESS_VERBS: &[&str] = &["premi", "press", "schiaccia", "pigia"];
+
+const TYPE_VERBS: &[&str] = &["scrivi", "scrivimi", "digita", "type", "write"];
+
+/// After "scrivi": the text goes somewhere named, which a model reads better.
+const TYPE_ELSEWHERE: &[&str] = &[
+    "in", "su", "a", "al", "alla", "allo", "dentro", "nel", "nella", "sul", "sulla", "at", "on",
+    "into", "to", "inside",
+];
+
+/// A key action and the ways to ask for it, as content words in any order
+/// (filler dropped, "su" kept: here it is a direction).
+const KEY_PHRASES: &[(&str, &[&str])] = &[
+    ("select_all", &["seleziona tutto", "select all"]),
+    ("copy", &["copia", "copy"]),
+    ("paste", &["incolla", "paste"]),
+    ("cut", &["taglia", "cut"]),
+    ("undo", &["annulla", "undo"]),
+    ("redo", &["ripeti", "rifai", "redo"]),
+    ("save", &["salva", "save"]),
+    ("new_line", &["vai capo", "capo", "nuova riga", "new line"]),
+    ("enter", &["invio", "enter"]),
+    (
+        "bottom",
+        &["vai fondo", "fondo", "scorri fondo", "vai fine", "bottom"],
+    ),
+    (
+        "top",
+        &["vai cima", "cima", "scorri cima", "vai inizio", "top"],
+    ),
+    (
+        "page_down",
+        &[
+            "scorri giù",
+            "scorri giu",
+            "scendi",
+            "pagina giù",
+            "pagina giu",
+            "più giù",
+            "piu giu",
+            "scroll down",
+            "page down",
+        ],
+    ),
+    (
+        "page_up",
+        &[
+            "scorri su",
+            "sali",
+            "pagina su",
+            "più su",
+            "piu su",
+            "scroll up",
+            "page up",
+        ],
+    ),
+];
+
+/// The keys named after "premi": "control s", "ctrl+shift+t", "invio",
+/// "freccia giù", "pagina su". None when a word is not a key.
+fn pressed_keys(tokens: &[String]) -> Option<String> {
+    let mut keys: Vec<&str> = Vec::new();
+    let mut page = false;
+    for t in tokens
+        .iter()
+        .flat_map(|t| t.split('+'))
+        .filter(|t| !t.is_empty())
+    {
+        let key = match t {
+            "il" | "i" | "la" | "tasto" | "tasti" | "e" | "più" | "piu" | "plus" | "key"
+            | "the" | "freccia" | "arrow" | "and" | "spaziatrice" => continue,
+            "pagina" | "page" | "pag" => {
+                page = true;
+                continue;
+            }
+            "control" | "ctrl" | "controllo" => "ctrl",
+            "alt" => "alt",
+            "shift" | "maiusc" | "maiuscolo" => "shift",
+            "windows" | "win" | "start" => "win",
+            "invio" | "enter" | "return" => "enter",
+            "esc" | "escape" => "escape",
+            "tab" | "tabulazione" => "tab",
+            "spazio" | "space" | "barra" => "space",
+            "backspace" => "backspace",
+            "canc" | "cancella" | "delete" | "del" | "elimina" => "delete",
+            "su" | "up" if page => "page_up",
+            "giù" | "giu" | "down" if page => "page_down",
+            "su" | "up" => "up",
+            "giù" | "giu" | "down" => "down",
+            "sinistra" | "left" => "left",
+            "destra" | "right" => "right",
+            "home" | "inizio" => "home",
+            "end" | "fine" => "end",
+            // A letter, a digit, a function key.
+            other if other.len() <= 3 && !other.contains('_') => other,
+            _ => return None,
+        };
+        keys.push(key);
+    }
+    let action = keys.join("+");
+    crate::pc_control::key_chord(&action).map(|_| action)
+}
+
+/// The key action a command asks for: "premi <keys>", or one of KEY_PHRASES
+/// said with nothing else.
+fn key_action_of(w: &[String]) -> Option<String> {
+    let first = w.iter().position(|t| !FILLER.contains(&t.as_str()))?;
+    if PRESS_VERBS.contains(&w[first].as_str()) {
+        return pressed_keys(&w[first + 1..]);
+    }
+    let mut said: Vec<&str> = w
+        .iter()
+        .map(String::as_str)
+        .filter(|t| *t == "su" || !FILLER.contains(t))
+        .collect();
+    said.sort_unstable();
+    KEY_PHRASES.iter().find_map(|(action, ways)| {
+        ways.iter()
+            .any(|way| {
+                let mut way: Vec<&str> = way.split(' ').collect();
+                way.sort_unstable();
+                way == said
+            })
+            .then(|| (*action).to_string())
+    })
+}
+
+fn key_say(action: &str) -> String {
+    match action {
+        "select_all" => "Seleziono tutto".into(),
+        "copy" => "Copio".into(),
+        "paste" => "Incollo".into(),
+        "cut" => "Taglio".into(),
+        "undo" => "Annullo".into(),
+        "redo" => "Ripeto".into(),
+        "save" => "Salvo".into(),
+        "new_line" => "Vado a capo".into(),
+        "bottom" => "Vado in fondo".into(),
+        "top" => "Vado in cima".into(),
+        "page_down" => "Scorro giù".into(),
+        "page_up" => "Scorro su".into(),
+        other => format!("Premo {other}"),
+    }
+}
+
+/// The text after "scrivi", as it was said (its case and punctuation kept).
+/// None when the words name a place for it, or an open app: Claude reads
+/// "scrivi in fondo a Notepad ciao" better than a rule does.
+fn type_text_of(command: &str, names: &[(String, String)]) -> Option<String> {
+    let tokens: Vec<&str> = command.split_whitespace().collect();
+    let key = |t: &str| words(t).into_iter().next().unwrap_or_default();
+    let verb = tokens.iter().position(|t| {
+        let k = key(t);
+        !k.is_empty() && !FILLER.contains(&k.as_str())
+    })?;
+    if !TYPE_VERBS.contains(&key(tokens[verb]).as_str()) {
+        return None;
+    }
+    let rest = tokens[verb + 1..].join(" ");
+    let rest_words = words(&rest);
+    let first = rest_words.first()?;
+    let open: Vec<(String, String)> = names
+        .iter()
+        .filter(|(_, title)| !title.is_empty())
+        .cloned()
+        .collect();
+    if TYPE_ELSEWHERE.contains(&first.as_str()) || !apps_in(&rest_words, &open).is_empty() {
+        return None;
+    }
+    Some(rest)
+}
+
+fn desktop_of(w: &[String]) -> bool {
+    let has = |x: &str| w.iter().any(|t| t == x);
+    let desktop = has("desktop") || has("scrivania");
+    let go = has("mostra") || has("mostrami") || has("vai") || has("show") || has("go");
+    let hide =
+        has("riduci") || has("nascondi") || has("minimizza") || has("minimize") || has("hide");
+    let all = has("tutto") || has("tutte") || has("everything") || has("all");
+    (desktop && go) || (hide && all)
+}
+
+fn switch_of(w: &[String]) -> bool {
+    let has = |x: &str| w.iter().any(|t| t == x);
+    let window = has("finestra") || has("window");
+    (window
+        && (has("precedente")
+            || has("prima")
+            || has("altra")
+            || has("cambia")
+            || has("previous")
+            || has("switch")))
+        || (has("alt") && has("tab"))
+}
+
+fn screenshot_of(w: &[String]) -> bool {
+    let has = |x: &str| w.iter().any(|t| t == x);
+    has("screenshot")
+        || has("istantanea")
+        || (has("screen") && has("shot"))
+        || (has("cattura") && (has("schermo") || has("schermata")))
+}
+
+/// A word some command rule knows: an action, a place, a time, a filler.
+fn known_word(t: &str) -> bool {
+    [
+        STOP,
+        FILLER,
+        SIDE_WORDS,
+        MOVE_WORDS,
+        OPEN_WORDS,
+        MINIMIZE_WORDS,
+        TILE_WORDS,
+        MEDIA_WORDS,
+        BROWSER_WORDS,
+        SETTINGS_WORDS,
+        FOLDER_WORDS,
+        DATE_WORDS,
+        FILE_WORDS,
+        WEB_STOP,
+        SITES,
+        DEICTIC,
+        PRONOUN_VERBS,
+        CLOSE_WORDS,
+        RESTORE_WORDS,
+        FOCUS_WORDS,
+        DESKTOP_WORDS,
+        SWITCH_WORDS,
+        SCREENSHOT_WORDS,
+        PRESS_VERBS,
+        TYPE_VERBS,
+    ]
+    .iter()
+    .any(|list| list.contains(&t))
+        || KEY_PHRASES
+            .iter()
+            .any(|(_, ways)| ways.iter().any(|way| way.split(' ').any(|x| x == t)))
+}
+
+/// The last word of a live partial may be half said: "questa sche" opened
+/// the on-screen keyboard (2026-11-08, "sche" inside "Tastiera su schermo").
+/// It is whole when a command rule knows it, or when it is a full word of a
+/// known app or window name.
+fn last_word_whole(text: &str, names: &[(String, String)]) -> bool {
+    let w = words(text);
+    let Some(last) = w.last() else {
+        return false;
+    };
+    if known_word(last) {
+        return true;
+    }
+    let l = norm(last);
+    !l.is_empty()
+        && (crate::pc_control::is_alias(&l)
+            || names.iter().any(|(name, title)| {
+                norm(name) == l
+                    || words(name)
+                        .iter()
+                        .chain(words(title).iter())
+                        .any(|x| norm(x) == l)
+            }))
+}
+
+/// A command still being said: every word is a command word or an app's
+/// name, and they do not make a plan yet ("apri", "metti Chrome a"). The
+/// end of a segment must not drop it; the next words complete it.
+fn is_dangling(text: &str, names: &[(String, String)]) -> bool {
+    let w = words(text);
+    let app_words: Vec<String> = apps_in(&w, names).iter().flat_map(|g| words(g)).collect();
+    let Some(last) = w.last() else {
+        return false;
+    };
+    // It stops on a word that asks for another ("apri il", "metti Chrome
+    // a"), or it is one lone command word ("apri"). A whole sentence of
+    // known words is not waiting for anything: "fammi vedere il primo
+    // video" sat there until the stop (2026-11-10).
+    (CONTINUES.contains(&last.as_str()) || w.len() == 1)
+        && w.len() <= 5
+        && w.iter().all(|t| known_word(t) || app_words.contains(t))
+}
+
+/// Words a sentence does not end on.
+const CONTINUES: &[&str] = &[
+    "il", "lo", "la", "i", "gli", "le", "l", "un", "una", "uno", "a", "ad", "al", "alla", "allo",
+    "ai", "alle", "su", "sul", "sulla", "in", "di", "del", "della", "dei", "delle", "da", "per",
+    "con", "e", "ed", "o", "the", "an", "to", "on", "of", "and",
+];
+
+/// The plan of a basic command, or None: the word rules alone, no model.
+pub fn basic(command: &str, names: &[(String, String)]) -> Option<Plan> {
+    basic_plan(command, names).map(|(_, plan)| plan)
+}
+
 /// A basic command whose every word is accounted for, and its plan.
 fn basic_plan(command: &str, names: &[(String, String)]) -> Option<(Intent, Plan)> {
     let w = words(command);
+    if let Some(text) = type_text_of(command, names) {
+        let plan = Plan {
+            say: format!("Scrivo \"{}\"", crate::truncate_utf8(&text, 60)),
+            steps: vec![Step::Type { text }],
+        };
+        return Some((Intent::Type, plan));
+    }
+    if let Some(action) = key_action_of(&w) {
+        let plan = Plan {
+            say: key_say(&action),
+            steps: vec![Step::Key {
+                app: String::new(),
+                action,
+            }],
+        };
+        return Some((Intent::Keys, plan));
+    }
     let app_words: Vec<String> = apps_in(&w, names).iter().flat_map(|g| words(g)).collect();
     // Order matters only where two lists share a word: "scheda precedente"
-    // is not media (no "scheda" there), "apri download" is a folder, not an app.
-    let tries: [(Intent, &[&str]); 8] = [
+    // is not media (no "scheda" there), "finestra precedente" is not media
+    // either ("finestra" is filler there), "mostra il desktop" is not the
+    // Desktop folder, "apri download" is a folder, not an app.
+    let tries: [(Intent, &[&str]); 15] = [
         (Intent::Move, MOVE_WORDS),
         (Intent::Minimize, MINIMIZE_WORDS),
         (Intent::Tile, TILE_WORDS),
+        (Intent::Switch, SWITCH_WORDS),
         (Intent::Media, MEDIA_WORDS),
         (Intent::Browser, BROWSER_WORDS),
+        (Intent::Desktop, DESKTOP_WORDS),
         (Intent::Settings, SETTINGS_WORDS),
         (Intent::Folder, FOLDER_WORDS),
+        (Intent::Close, CLOSE_WORDS),
+        (Intent::Restore, RESTORE_WORDS),
+        (Intent::Screenshot, SCREENSHOT_WORDS),
         (Intent::Open, OPEN_WORDS),
+        (Intent::Focus, FOCUS_WORDS),
+        (Intent::Web, WEBNAV_WORDS),
     ];
     for (intent, own) in tries {
         let sides = matches!(intent, Intent::Move | Intent::Open);
         let apps = matches!(
             intent,
-            Intent::Move | Intent::Minimize | Intent::Tile | Intent::Open
+            Intent::Move
+                | Intent::Minimize
+                | Intent::Tile
+                | Intent::Open
+                | Intent::Focus
+                | Intent::Close
+                | Intent::Restore
         );
+        let deictic = matches!(
+            intent,
+            Intent::Move | Intent::Minimize | Intent::Close | Intent::Restore
+        );
+        let sites = intent == Intent::Web;
         let action =
             |t: &String| own.contains(&t.as_str()) || (sides && SIDE_WORDS.contains(&t.as_str()));
-        let covered = w
-            .iter()
-            .all(|t| action(t) || FILLER.contains(&t.as_str()) || (apps && app_words.contains(t)));
+        let covered = w.iter().all(|t| {
+            action(t)
+                || FILLER.contains(&t.as_str())
+                || (apps && app_words.contains(t))
+                || (deictic && DEICTIC.contains(&t.as_str()))
+                || (sites && SITES.contains(&t.as_str()))
+        });
         if covered && w.iter().any(action) {
             if let Some(p) = plan_for(intent, command, names) {
                 return Some((intent, p));
@@ -1404,9 +1877,28 @@ fn plan_for(intent: Intent, command: &str, names: &[(String, String)]) -> Option
         })
         .cloned()
         .collect();
-    let this_window = w
-        .windows(2)
-        .any(|p| (p[0] == "questa" && p[1] == "finestra") || (p[0] == "this" && p[1] == "window"));
+    // "mettilo a destra" means the app the last command named, while its
+    // window is open; "questa finestra" (and a pronoun with nothing named
+    // before it) means the window in front, which the hands call "".
+    let target: Option<String> = if w.iter().any(|t| PRONOUN_VERBS.contains(&t.as_str())) {
+        let last = crate::pc_control::last_app();
+        let open = !last.is_empty()
+            && names
+                .iter()
+                .any(|(n, t)| !t.is_empty() && name_score(&last, n, t) >= 0.7);
+        Some(if open { last } else { String::new() })
+    } else if w.iter().any(|t| t == "finestra" || t == "window") {
+        Some(String::new())
+    } else {
+        None
+    };
+    let window_label = |app: &str| {
+        if app.is_empty() {
+            "la finestra".to_string()
+        } else {
+            app.to_string()
+        }
+    };
     match intent {
         Intent::Open if apps.len() == 1 => {
             let mut steps = vec![Step::Open {
@@ -1437,22 +1929,53 @@ fn plan_for(intent: Intent, command: &str, names: &[(String, String)]) -> Option
                     side,
                 }],
             }),
-            (Some(side), []) if this_window => Some(Plan {
-                say: format!("Sposto la finestra {}", side_label(side)),
-                steps: vec![Step::Place {
-                    app: String::new(),
-                    side,
-                }],
+            (Some(side), []) => target.map(|app| Plan {
+                say: format!("Sposto {} {}", window_label(&app), side_label(side)),
+                steps: vec![Step::Place { app, side }],
             }),
             _ => None,
         },
-        Intent::Minimize if open_apps.len() == 1 => Some(Plan {
-            say: format!("Riduco a icona {}", open_apps[0]),
-            steps: vec![Step::Minimize {
-                app: open_apps[0].clone(),
+        Intent::Minimize | Intent::Close | Intent::Restore => {
+            let app = match open_apps.as_slice() {
+                [app] => app.clone(),
+                [] => target?,
+                _ => return None,
+            };
+            let label = window_label(&app);
+            Some(match intent {
+                Intent::Minimize => Plan {
+                    say: format!("Riduco a icona {label}"),
+                    steps: vec![Step::Minimize { app }],
+                },
+                Intent::Close => Plan {
+                    say: format!("Chiudo {label}"),
+                    steps: vec![Step::Close { app }],
+                },
+                _ => Plan {
+                    say: format!("Ripristino {label}"),
+                    steps: vec![Step::Restore { app }],
+                },
+            })
+        }
+        Intent::Focus if apps.len() == 1 => Some(Plan {
+            say: format!("Passo a {}", apps[0]),
+            steps: vec![Step::Open {
+                app: apps[0].clone(),
             }],
         }),
-        Intent::Web => web_of(&w).map(|(site, query)| Plan {
+        Intent::Desktop if desktop_of(&w) => Some(Plan {
+            say: "Mostro il desktop".into(),
+            steps: vec![Step::ShowDesktop],
+        }),
+        Intent::Switch if switch_of(&w) => Some(Plan {
+            say: "Torno alla finestra di prima".into(),
+            steps: vec![Step::SwitchWindow],
+        }),
+        Intent::Screenshot if screenshot_of(&w) => Some(Plan {
+            say: "Apro la cattura dello schermo".into(),
+            steps: vec![Step::Screenshot],
+        }),
+        Intent::Web => web_in_context(&w).map(|(site, query)| Plan {
             say: if query.is_empty() {
                 format!("Apro {site}")
             } else {
@@ -1556,9 +2079,14 @@ fn live_prob() -> f32 {
 /// "done" signal there is (a second identical partial never arrives).
 const LIVE_QUIET_MS: u64 = 600;
 
+/// A basic command has every word accounted for and a whole last word, so
+/// it needs a shorter pause. Not shorter than this: the recognizer hands
+/// over words in 320 ms chunks, and a gap between two chunks is not a pause.
+const BASIC_QUIET_MS: u64 = 450;
+
 /// Any other command is complete after this long without new words: it then
-/// goes the whole way (app commands, router, Claude), or is dropped.
-const SEGMENT_QUIET_MS: u64 = 1500;
+/// goes the whole way (app commands, router, the planner), or is dropped.
+const SEGMENT_QUIET_MS: u64 = 1200;
 
 struct Obs {
     ms: u128,
@@ -1568,6 +2096,11 @@ struct Obs {
     words: usize,
     plan: Option<Plan>,
     margin: f32,
+    /// The last word is a whole word (`last_word_whole`): only then may the
+    /// plan run before the segment ends.
+    whole: bool,
+    /// A command still being said (`is_dangling`): the segment end leaves it.
+    dangling: bool,
 }
 
 struct Shadow {
@@ -1578,6 +2111,12 @@ struct Shadow {
     used: usize,
     /// Commands handled while the user talked (run, failed or dropped).
     handled: u32,
+    /// The window in front was read for the command being said now.
+    read_front: bool,
+    /// The session gets whole utterances (`utterance`), not partials.
+    utterances: bool,
+    /// Every utterance so far, as the engine wrote it.
+    heard: String,
 }
 
 /// Live execution is on unless DIMMY_PC_LIVE=0.
@@ -1592,7 +2131,67 @@ fn live_enabled() -> bool {
 pub fn session_rest() -> Option<String> {
     let g = SHADOW.lock().unwrap_or_else(|e| e.into_inner());
     let s = g.as_ref()?;
-    (s.handled > 0).then(|| s.obs.last().map(|o| o.text.clone()).unwrap_or_default())
+    (s.handled > 0).then(|| {
+        if s.utterances {
+            segment(&s.heard, s.used)
+                .map(|(text, _)| text)
+                .unwrap_or_default()
+        } else {
+            s.obs.last().map(|o| o.text.clone()).unwrap_or_default()
+        }
+    })
+}
+
+/// A whole utterance arrived: the session runs on an engine that does not
+/// stream, and its audio is cut where the speaker pauses. `cumulative` is
+/// every utterance so far. The words after the last command are a command,
+/// unless they are one still being said ("apri", then "il browser").
+pub fn utterance(cumulative: &str, is_final: bool) {
+    let (text, words) = {
+        let mut g = SHADOW.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(s) = g.as_mut() else { return };
+        s.utterances = true;
+        s.heard = cumulative.to_string();
+        // The stop runs what is left (`session_rest`), not this.
+        if is_final || !recording_execute() {
+            return;
+        }
+        let Some(new) = segment(cumulative, s.used) else {
+            return;
+        };
+        new
+    };
+    std::thread::spawn(move || {
+        let names = crate::pc_control::known_names();
+        let waits = !crate::pc_help::is_help_request(&text)
+            && !crate::pc_help::is_here_request(&text)
+            && basic_plan(&text, &names).is_none()
+            && is_dangling(&text, &names);
+        let payload = serde_json::json!({
+            "text": text,
+            "detail": if waits { "utterance, waiting for the rest" } else { "utterance" },
+            "margin": 0.0,
+            "threshold": live_prob(),
+            "sure": false,
+            "stable": false,
+            "live_safe": false,
+        });
+        crate::ffi::emit_event("pc_live", &payload.to_string());
+        if waits {
+            crate::log(&format!("[PcLive] {text:?} waits for the rest"));
+            return;
+        }
+        {
+            let mut g = SHADOW.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(s) = g.as_mut() else { return };
+            if words <= s.used {
+                return;
+            }
+            s.used = words;
+            s.handled += 1;
+        }
+        run_claimed(text, None, "utterance");
+    });
 }
 
 static SHADOW: Mutex<Option<Shadow>> = Mutex::new(None);
@@ -1607,6 +2206,10 @@ pub fn shadow_begin() {
         obs: Vec::new(),
         used: 0,
         handled: 0,
+        // `prepare` reads it when the session starts.
+        read_front: true,
+        utterances: false,
+        heard: String::new(),
     });
 }
 
@@ -1633,8 +2236,10 @@ fn segment(cumulative: &str, used: usize) -> Option<(String, usize)> {
 /// after them. `live_only` takes it only when its plan is sure and harmless.
 fn claim(s: &mut Shadow, ms: u128, live_only: bool) -> Option<(String, Option<Plan>)> {
     let o = s.obs.last().filter(|o| o.ms == ms)?;
-    let sure = o.margin >= live_prob() && o.plan.as_ref().is_some_and(crate::pc_control::live_safe);
-    if live_only && !sure {
+    let sure = o.whole
+        && o.margin >= live_prob()
+        && o.plan.as_ref().is_some_and(crate::pc_control::live_safe);
+    if !sure && (live_only || o.dangling) {
         return None;
     }
     let taken = (o.text.clone(), o.plan.clone().filter(|_| sure));
@@ -1645,6 +2250,7 @@ fn claim(s: &mut Shadow, ms: u128, live_only: bool) -> Option<(String, Option<Pl
     s.used = o.words;
     s.handled += 1;
     s.obs.clear();
+    s.read_front = false;
     Some(taken)
 }
 
@@ -1664,6 +2270,9 @@ fn run_claimed(text: String, plan: Option<Plan>, why: &str) {
                 error: r.err().map(|e| crate::truncate_utf8(&e, 200).to_string()),
                 ..Default::default()
             };
+            if out.ok {
+                crate::pc_control::remember(&text, &out.said);
+            }
             (out, Some(p))
         }
         // Claude only for two words or more: one word that no rule knows
@@ -1681,7 +2290,10 @@ fn run_claimed(text: String, plan: Option<Plan>, why: &str) {
     fired["text"] = text.into();
     fired["say"] = out.said.clone().into();
     crate::ffi::emit_event("pc_live_fired", &fired.to_string());
-    std::thread::sleep(std::time::Duration::from_millis(700));
+    // The next command must not wait for this: the app-commands layer checks
+    // by itself that its snapshot is of the window in front.
+    drop(_order);
+    std::thread::sleep(std::time::Duration::from_millis(300));
     crate::pc_appcmds::capture_foreground();
 }
 
@@ -1691,25 +2303,40 @@ pub fn shadow_observe(cumulative: &str) {
     if !recording_execute() {
         return;
     }
-    let (ms, text, words) = {
-        let g = SHADOW.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(s) = g.as_ref() else { return };
+    let (ms, text, words, first) = {
+        let mut g = SHADOW.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(s) = g.as_mut() else { return };
         let Some((text, words)) = segment(cumulative, s.used) else {
             return;
         };
         if s.obs.last().is_some_and(|o| o.text == text) {
             return;
         }
-        (s.started.elapsed().as_millis(), text, words)
+        let first = !std::mem::replace(&mut s.read_front, true);
+        (s.started.elapsed().as_millis(), text, words, first)
     };
+    // The first words of a command: read the window in front again while
+    // the rest is said. The page a click loaded since the last command has
+    // other things to click than the one read then.
+    if first {
+        crate::pc_appcmds::capture_foreground();
+    }
     std::thread::spawn(move || {
+        let names = crate::pc_control::known_names();
         // A question is answered at the pause, never run as a command.
         let (plan, margin, detail) = if crate::pc_help::is_help_request(&text) {
             (None, 0.0, "help".to_string())
         } else {
-            route_scored(&text, &crate::pc_control::known_names())
+            route_scored(&text, &names)
         };
-        let sure = plan.is_some() && margin >= live_prob();
+        let whole = last_word_whole(&text, &names);
+        let dangling = plan.is_none() && is_dangling(&text, &names);
+        let sure = whole && plan.is_some() && margin >= live_prob();
+        let quiet_ms = if detail.starts_with(BASIC) {
+            BASIC_QUIET_MS
+        } else {
+            LIVE_QUIET_MS
+        };
         let mut stable = false;
         if let Some(s) = SHADOW.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
             // A basic command is sure from its first words ("apri Chrome"
@@ -1717,7 +2344,8 @@ pub fn shadow_observe(cumulative: &str) {
             stable = sure
                 && !detail.starts_with(BASIC)
                 && s.obs.last().is_some_and(|prev| {
-                    prev.margin >= live_prob()
+                    prev.whole
+                        && prev.margin >= live_prob()
                         && prev
                             .plan
                             .as_ref()
@@ -1730,6 +2358,8 @@ pub fn shadow_observe(cumulative: &str) {
                 words,
                 plan: plan.clone(),
                 margin,
+                whole,
+                dangling,
             });
             s.obs.sort_by_key(|o| o.ms);
         }
@@ -1740,7 +2370,7 @@ pub fn shadow_observe(cumulative: &str) {
             "detail": detail,
             "margin": margin,
             "threshold": live_prob(),
-            "quiet_ms": LIVE_QUIET_MS,
+            "quiet_ms": quiet_ms,
             "say": plan.as_ref().map(|p| p.say.clone()),
             "sure": sure,
             "stable": stable,
@@ -1752,8 +2382,8 @@ pub fn shadow_observe(cumulative: &str) {
         }
         let mut waited = 0;
         if !stable {
-            waited = LIVE_QUIET_MS;
-            std::thread::sleep(std::time::Duration::from_millis(LIVE_QUIET_MS));
+            waited = quiet_ms;
+            std::thread::sleep(std::time::Duration::from_millis(quiet_ms));
         }
         if let Some((text, plan)) = take(ms, true) {
             return run_claimed(text, plan, if stable { "stable" } else { "pause" });
@@ -1809,6 +2439,10 @@ fn same_plan(a: &Plan, b: &Plan) -> bool {
             (Step::Settings { page: a }, Step::Settings { page: b }) => a == b,
             (Step::Screenshot, Step::Screenshot) => true,
             (Step::AppCommand { label: a }, Step::AppCommand { label: b }) => a == b,
+            (Step::Type { text: a }, Step::Type { text: b }) => a == b,
+            (Step::Close { app: p }, Step::Close { app: q }) => app(p, q),
+            (Step::SwitchWindow, Step::SwitchWindow) => true,
+            (Step::Click { item: a, .. }, Step::Click { item: b, .. }) => a == b,
             _ => false,
         })
 }
@@ -2140,6 +2774,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn a_session_runs_each_command_on_its_own_words() {
         assert_eq!(
             segment("apri Notepad++", 0),
@@ -2155,6 +2790,9 @@ mod tests {
             obs: Vec::new(),
             used: 0,
             handled: 0,
+            read_front: true,
+            utterances: false,
+            heard: String::new(),
         };
         let sure = Plan {
             say: String::new(),
@@ -2168,6 +2806,8 @@ mod tests {
             words,
             plan,
             margin,
+            whole: true,
+            dangling: false,
         };
         s.obs.push(obs(10, "pausa", 1, Some(sure.clone()), 1.0));
         assert!(
@@ -2342,5 +2982,296 @@ mod tests {
             apps_in(&words("trova i file di ieri"), &names()),
             Vec::<String>::new()
         );
+    }
+    #[test]
+    fn windows_are_closed_restored_and_switched_by_their_words() {
+        let n = names();
+        let plan = |c: &str| basic_plan(c, &n).map(|(_, p)| p.steps);
+        let one = |s: Step| Some(vec![s]);
+        assert_eq!(
+            plan("chiudi Notepad++"),
+            one(Step::Close {
+                app: "notepad++".into()
+            })
+        );
+        assert_eq!(
+            plan("chiudi questa finestra"),
+            one(Step::Close { app: String::new() })
+        );
+        assert_eq!(
+            plan("chiudi la scheda"),
+            one(Step::Browser {
+                action: "close_tab".into()
+            })
+        );
+        // Nothing says what to close: never the window that happens to be in front.
+        assert_eq!(plan("chiudi"), None);
+        assert_eq!(plan("chiudi tutto"), None);
+        assert_eq!(
+            plan("ripristina Chrome"),
+            one(Step::Restore {
+                app: "chrome".into()
+            })
+        );
+        for c in ["passa a Teams", "vai su Teams", "torna su Teams"] {
+            assert_eq!(
+                plan(c),
+                one(Step::Open {
+                    app: "teams".into()
+                }),
+                "{c}"
+            );
+        }
+        for c in [
+            "finestra precedente",
+            "cambia finestra",
+            "torna alla finestra di prima",
+            "alt tab",
+        ] {
+            assert_eq!(plan(c), one(Step::SwitchWindow), "{c}");
+        }
+        for c in [
+            "mostra il desktop",
+            "vai al desktop",
+            "riduci tutto a icona",
+        ] {
+            assert_eq!(plan(c), one(Step::ShowDesktop), "{c}");
+        }
+        assert_eq!(
+            plan("apri la cartella desktop"),
+            one(Step::OpenFolder {
+                folder: "desktop".into()
+            })
+        );
+        assert_eq!(plan("fai uno screenshot"), one(Step::Screenshot));
+        assert_eq!(
+            plan("vai su YouTube"),
+            one(Step::Web {
+                site: "youtube".into(),
+                query: String::new()
+            })
+        );
+    }
+
+    #[test]
+    fn keys_are_pressed_by_name() {
+        let n = names();
+        let key = |c: &str| {
+            basic_plan(c, &n).map(|(_, p)| match p.steps.as_slice() {
+                [Step::Key { app, action }] if app.is_empty() => action.clone(),
+                other => panic!("{c}: {other:?}"),
+            })
+        };
+        for (said, action) in [
+            ("copia", "copy"),
+            ("incolla", "paste"),
+            ("seleziona tutto", "select_all"),
+            ("vai a capo", "new_line"),
+            ("vai in fondo", "bottom"),
+            ("scorri giù", "page_down"),
+            ("scorri su", "page_up"),
+            ("premi invio", "enter"),
+            ("premi il tasto escape", "escape"),
+            ("premi control s", "ctrl+s"),
+            ("premi ctrl+shift+t", "ctrl+shift+t"),
+            ("premi alt f4", "alt+f4"),
+            ("premi freccia giù", "down"),
+            ("premi pagina giù", "page_down"),
+            ("premi windows", "win"),
+        ] {
+            assert_eq!(key(said).as_deref(), Some(action), "{said}");
+        }
+        // A word that is not a key is not guessed: the planner reads it.
+        for said in ["premi banana", "premi", "salva tutto", "scorri"] {
+            assert!(key(said).is_none(), "{said}");
+        }
+    }
+
+    #[test]
+    fn text_after_scrivi_is_typed_as_it_was_said() {
+        let n = names();
+        let plan = |c: &str| basic_plan(c, &n).map(|(_, p)| p.steps);
+        assert_eq!(
+            plan("Scrivi Ciao a tutti, come va?"),
+            Some(vec![Step::Type {
+                text: "Ciao a tutti, come va?".into()
+            }])
+        );
+        // A place for the text, or an open app: Claude reads those.
+        assert_eq!(plan("scrivi in fondo a Notepad++ ciao"), None);
+        assert_eq!(plan("scrivi ciao su Notepad++"), None);
+        assert_eq!(plan("scrivi"), None);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_pronoun_means_the_app_just_named() {
+        let n = names();
+        let plan = |c: &str| basic_plan(c, &n).map(|(_, p)| p.steps);
+        crate::pc_control::set_last_app("chrome");
+        assert_eq!(
+            plan("mettilo a destra"),
+            Some(vec![Step::Place {
+                app: "chrome".into(),
+                side: Side::Right
+            }])
+        );
+        assert_eq!(
+            plan("riducilo a icona"),
+            Some(vec![Step::Minimize {
+                app: "chrome".into()
+            }])
+        );
+        // Its window is gone, or nothing was named: the window in front.
+        for last in ["paint", ""] {
+            crate::pc_control::set_last_app(last);
+            assert_eq!(
+                plan("ingrandiscilo"),
+                Some(vec![Step::Place {
+                    app: String::new(),
+                    side: Side::Full
+                }]),
+                "{last:?}"
+            );
+        }
+        assert_eq!(
+            plan("ingrandisci"),
+            None,
+            "no target named, none pointed at"
+        );
+    }
+
+    // Burned 2026-11-08: "questa sche" (on its way to "questa scheda") ran
+    // after 600 ms and opened the on-screen keyboard.
+    #[test]
+    fn a_half_said_last_word_does_not_run_live() {
+        let mut n = names();
+        n.push(("Tastiera su schermo".to_string(), String::new()));
+        for whole in [
+            "apri notepad++",
+            "apri il browser",
+            "alza il volume",
+            "metti chrome a destra",
+            "vai su youtube",
+        ] {
+            assert!(last_word_whole(whole, &n), "{whole}");
+        }
+        for cut in [
+            "questa sche",
+            "apri note",
+            "ingrandisci a tutto scher",
+            "cerca su youtube gat",
+            "",
+        ] {
+            assert!(!last_word_whole(cut, &n), "{cut}");
+        }
+    }
+
+    #[test]
+    fn a_command_still_being_said_is_not_dropped() {
+        let n = names();
+        for c in ["apri", "metti chrome a", "apri il", "chiudi la"] {
+            assert!(is_dangling(c, &n), "{c}");
+        }
+        for c in ["se non ne fa", "santura così", ""] {
+            assert!(!is_dangling(c, &n), "{c}");
+        }
+        let mut s = Shadow {
+            started: std::time::Instant::now(),
+            obs: vec![Obs {
+                ms: 10,
+                text: "apri".into(),
+                words: 1,
+                plan: None,
+                margin: 0.0,
+                whole: true,
+                dangling: true,
+            }],
+            used: 0,
+            handled: 0,
+            read_front: true,
+            utterances: false,
+            heard: String::new(),
+        };
+        assert!(
+            claim(&mut s, 10, false).is_none(),
+            "the segment end leaves it"
+        );
+        assert_eq!((s.used, s.handled, s.obs.len()), (0, 0, 1));
+        // A sure plan whose last word is half said waits for the segment end.
+        s.obs[0] = Obs {
+            ms: 10,
+            text: "pausa".into(),
+            words: 1,
+            plan: Some(Plan {
+                say: String::new(),
+                steps: vec![Step::Media {
+                    action: "play_pause".into(),
+                }],
+            }),
+            margin: 1.0,
+            whole: false,
+            dangling: false,
+        };
+        assert!(claim(&mut s, 10, true).is_none());
+        let (_, plan) = claim(&mut s, 10, false).unwrap();
+        assert!(
+            plan.is_none(),
+            "the segment end plans it again on the full words"
+        );
+    }
+    /// The word rules against the independent set, with no model: what they
+    /// take, and where they disagree with the label.
+    /// `cargo test --lib --features pc-router rules_on_the_independent_set -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn rules_on_the_independent_set() {
+        let n = names();
+        let (mut taken, mut total) = (0, 0);
+        let text = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/pc_testset.jsonl"
+        ))
+        .unwrap();
+        for line in text.lines() {
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            let (said, label) = (
+                v["text"].as_str().unwrap_or(""),
+                v["intent"].as_str().unwrap_or(""),
+            );
+            total += 1;
+            if let Some((got, p)) = basic_plan(said, &n) {
+                taken += 1;
+                if Intent::from_key(label) != Some(got) {
+                    eprintln!("DIFF {label}: {said:?} -> {got:?} {:?}", p.steps);
+                }
+            }
+        }
+        eprintln!("rules took {taken}/{total}");
+    }
+
+    // An engine that hands over whole utterances: the stop runs only the
+    // words after the last command, from what the engine wrote.
+    #[test]
+    #[serial_test::serial]
+    fn the_stop_runs_what_the_utterances_left() {
+        let session = |used, handled, heard: &str| Shadow {
+            started: std::time::Instant::now(),
+            obs: Vec::new(),
+            used,
+            handled,
+            read_front: true,
+            utterances: true,
+            heard: heard.into(),
+        };
+        *SHADOW.lock().unwrap() = Some(session(2, 1, "apri chrome chiudi la"));
+        assert_eq!(session_rest().as_deref(), Some("chiudi la"));
+        *SHADOW.lock().unwrap() = Some(session(2, 1, "apri chrome"));
+        assert_eq!(session_rest().as_deref(), Some(""));
+        *SHADOW.lock().unwrap() = Some(session(0, 0, "apri"));
+        assert_eq!(session_rest(), None, "nothing ran: the stop runs it all");
+        *SHADOW.lock().unwrap() = None;
     }
 }

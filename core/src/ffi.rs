@@ -1307,7 +1307,29 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
             "batch"
         };
     }
-    if (local_typing || chunked_captions) && local_backend == "nemotron" {
+    // An execute session runs each command while the user talks, so it needs
+    // words as they are said, on the engine the user chose. Nemotron streams;
+    // the others get the audio cut where the speaker pauses (see
+    // `ChunkedTranscriber::start_utterances`): a fixed chunk (5 s Parakeet,
+    // 15 s Whisper) arrives when a command is long over.
+    let execute = matches!(
+        crate::dictation_session::phase(),
+        crate::dictation_session::Phase::Recording {
+            kind: crate::dictation_session::Kind::Execute,
+            ..
+        }
+    );
+    let execute_live = execute
+        && !streaming_active
+        && is_local
+        && local_backend == "nemotron"
+        && crate::nemotron::bundle_present();
+    let execute_utterances = cfg!(feature = "pc-router")
+        && execute
+        && !streaming_active
+        && is_local
+        && local_backend != "nemotron";
+    if execute_live || (local_typing || chunked_captions) && local_backend == "nemotron" {
         // Nemotron streams for real, so it takes the streaming slot instead
         // of the chunked engine. Typing mode keeps the "local-stream" label
         // the hosts already type at the cursor; caption mode uses the
@@ -1316,6 +1338,19 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
             b.clear();
         }
         let language = st.language.lock().map(|l| l.clone()).unwrap_or_default();
+        let (language, keywords) = if execute {
+            let language = pc_session_language(&language);
+            let mut keywords = dictionary_keywords();
+            keywords.extend(crate::pc_control::bias_words());
+            log(&format!(
+                "[StartRec] execute session: language {:?}, {} bias words",
+                language,
+                keywords.len()
+            ));
+            (language, keywords)
+        } else {
+            (language, dictionary_keywords())
+        };
         let engine = if local_typing {
             "local-stream"
         } else {
@@ -1348,35 +1383,47 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
             st.audio_buffer.clone(),
             crate::audio::MEETING_CANONICAL_RATE,
             language,
-            dictionary_keywords(),
+            keywords,
             on_chunk,
         );
         if let Ok(mut slot) = STREAMING.lock() {
             *slot = Some(ActiveStreamer::Nemotron(streamer));
         }
-    } else if local_typing || chunked_captions {
+    } else if local_typing || chunked_captions || execute_utterances {
         // Clear any zombie buffer from a previous run so the worker
         // doesn't transcribe stale audio. The audio thread refills it.
         if let Ok(mut b) = st.audio_buffer.lock() {
             b.clear();
         }
+        // A command session with no language set listens in the user's own
+        // (see `pc_session_language`); dictation keeps what is configured.
+        let chunk_language = |configured: String| {
+            if execute_utterances {
+                pc_session_language(&configured)
+            } else {
+                configured
+            }
+        };
         // Per-chunk transcriber for the active local backend.
         let transcribe_fn: Arc<crate::chunked_stt::TranscribeFn> = if local_backend == "parakeet" {
             Arc::new(|pcm: &[f32]| crate::parakeet::transcribe(pcm))
         } else if local_backend == "qwen" {
             let variant = qwen_asr_variant();
-            let language = st.language.lock().map(|l| l.clone()).unwrap_or_default();
+            let language =
+                chunk_language(st.language.lock().map(|l| l.clone()).unwrap_or_default());
             Arc::new(move |pcm: &[f32]| {
                 crate::qwen_asr::transcribe(pcm, &variant, &language).map(|t| t.text)
             })
         } else if local_backend == "whistle" {
-            let language = st.language.lock().map(|l| l.clone()).unwrap_or_default();
+            let language =
+                chunk_language(st.language.lock().map(|l| l.clone()).unwrap_or_default());
             let keywords = dictionary_keywords();
             Arc::new(move |pcm: &[f32]| crate::whistle::transcribe(pcm, &language, &keywords))
         } else {
             let model_filename = st.local_model.lock().map(|m| m.clone()).unwrap_or_default();
             let model_path = crate::local_stt::model_path(&model_filename);
-            let language = st.language.lock().map(|l| l.clone()).unwrap_or_default();
+            let language =
+                chunk_language(st.language.lock().map(|l| l.clone()).unwrap_or_default());
             let prompt_base = st.prompt.lock().map(|p| p.clone()).unwrap_or_default();
             let user_dict = st.user_dict.lock().map(|d| d.clone()).unwrap_or_default();
             let prompt = crate::compose_stt_prompt(&prompt_base, &user_dict);
@@ -1411,7 +1458,11 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
                 })
                 .to_string();
                 #[cfg(feature = "pc-router")]
-                crate::pc_router::shadow_observe(cumulative);
+                if execute_utterances {
+                    crate::pc_router::utterance(cumulative, is_final);
+                } else {
+                    crate::pc_router::shadow_observe(cumulative);
+                }
                 emit_event("stt_chunk", &payload);
             });
         // Both chunked modes require `is_local`, so the route decision here
@@ -1422,32 +1473,47 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
             crate::preprocess::preprocess_route(preprocessing_on, "local"),
             crate::preprocess::PreprocessRoute::Full
         );
-        // 3 s chunks + 500 ms overlap (chunked_smoke A/B 2026-05-06).
-        let transcriber = crate::chunked_stt::ChunkedTranscriber::start(
-            st.audio_buffer.clone(),
-            crate::audio::MEETING_CANONICAL_RATE,
-            crate::chunked_stt::chunk_secs_for_backend(
-                &local_backend,
-                // Realtime typing always shows text as you speak; the
-                // chunked path only does when captions are switched on.
-                local_typing
-                    || *st
-                        .live_captions_enabled
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner()),
-            ),
-            500,
-            vad_trim,
-            transcribe_fn,
-            on_chunk,
-        );
+        let transcriber = if execute_utterances {
+            crate::chunked_stt::ChunkedTranscriber::start_utterances(
+                st.audio_buffer.clone(),
+                crate::audio::MEETING_CANONICAL_RATE,
+                vad_trim,
+                transcribe_fn,
+                // The page a click loaded is read while the next command is
+                // being said, so the command finds what is on screen now.
+                Arc::new(crate::pc_appcmds::capture_foreground),
+                on_chunk,
+            )
+        } else {
+            // 3 s chunks + 500 ms overlap (chunked_smoke A/B 2026-05-06).
+            crate::chunked_stt::ChunkedTranscriber::start(
+                st.audio_buffer.clone(),
+                crate::audio::MEETING_CANONICAL_RATE,
+                crate::chunked_stt::chunk_secs_for_backend(
+                    &local_backend,
+                    // Realtime typing always shows text as you speak; the
+                    // chunked path only does when captions are switched on.
+                    local_typing
+                        || *st
+                            .live_captions_enabled
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner()),
+                ),
+                500,
+                vad_trim,
+                transcribe_fn,
+                on_chunk,
+            )
+        };
         if let Ok(mut slot) = CHUNKED.lock() {
             *slot = Some(transcriber);
         }
         log(&format!(
             "[StartRec] chunked-stt worker spawned (backend={}, mode={})",
             local_backend,
-            if typing {
+            if execute_utterances {
+                "utterances"
+            } else if typing {
                 "typing/local-stream"
             } else {
                 "caption"
@@ -8731,6 +8797,169 @@ fn pc_planner_model() -> String {
     "haiku".to_string()
 }
 
+/// One HTTPS client for the fast PC planner, kept so the commands of a
+/// session reuse its TLS connection instead of paying a handshake each.
+static PC_HTTP: std::sync::OnceLock<reqwest::blocking::Client> = std::sync::OnceLock::new();
+
+const PC_FAST_BASE: &str = "https://api.groq.com/openai/v1";
+
+/// The provider refused this network (HTTP 403: it does that to a VPN's
+/// address, 2026-11-10). Asking again costs every command a round trip, so
+/// the session stops asking; the next session tries once more.
+static PC_FAST_REFUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn pc_http() -> Option<&'static reqwest::blocking::Client> {
+    if PC_HTTP.get().is_none() {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .ok()?;
+        let _ = PC_HTTP.set(client);
+    }
+    PC_HTTP.get()
+}
+
+/// The user's Groq key, when there is one (the cloud-STT key counts: one
+/// key per provider). DIMMY_PC_FAST=0 keeps every plan on the Claude CLI.
+fn pc_fast_key() -> Option<String> {
+    if std::env::var("DIMMY_PC_FAST").is_ok_and(|v| v == "0") {
+        return None;
+    }
+    if PC_FAST_REFUSED.load(std::sync::atomic::Ordering::SeqCst) {
+        return None;
+    }
+    let st = try_state()?;
+    let use_kr = st.use_keyring.lock().map(|k| *k).unwrap_or(false);
+    load_key_any_scope(
+        &st.key_store,
+        Provider::Groq,
+        KeyringScope::Llm(Provider::Groq),
+        use_kr,
+    )
+}
+
+/// Open the planner's connection while the user is still talking.
+fn pc_fast_prewarm() {
+    std::thread::spawn(|| {
+        PC_FAST_REFUSED.store(false, std::sync::atomic::Ordering::SeqCst);
+        let (Some(key), Some(http)) = (pc_fast_key(), pc_http()) else {
+            return;
+        };
+        let t = std::time::Instant::now();
+        let answer = match http
+            .get(format!("{PC_FAST_BASE}/models"))
+            .bearer_auth(key)
+            .send()
+        {
+            Ok(r) => {
+                let status = r.status().as_u16();
+                PC_FAST_REFUSED.store(status == 403, std::sync::atomic::Ordering::SeqCst);
+                format!("HTTP {status}")
+            }
+            Err(e) => crate::truncate_utf8(&e.to_string(), 200).to_string(),
+        };
+        log(&format!(
+            "[PcControl] fast planner connection: {answer} in {} ms",
+            t.elapsed().as_millis()
+        ));
+    });
+}
+
+/// The PC planner over HTTPS: the same prompt the Claude CLI gets, answered
+/// in a fraction of the time. None when there is no key or the call fails;
+/// the caller then asks Claude.
+fn pc_fast_plan(prompt: &str) -> Option<String> {
+    assert!(!prompt.is_empty(), "pc_fast_plan: empty prompt");
+    let key = pc_fast_key()?;
+    let model =
+        std::env::var("DIMMY_PC_FAST_MODEL").unwrap_or_else(|_| "openai/gpt-oss-20b".into());
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": [{ "role": "user", "content": prompt }],
+        "temperature": 0,
+        "max_completion_tokens": 1024,
+        "response_format": { "type": "json_object" },
+    });
+    // gpt-oss thinks before it answers; a plan needs little of it.
+    if model.contains("gpt-oss") {
+        body["reasoning_effort"] = "low".into();
+    }
+    let t = std::time::Instant::now();
+    let answer = match pc_http()?
+        .post(format!("{PC_FAST_BASE}/chat/completions"))
+        .bearer_auth(key)
+        .json(&body)
+        .send()
+    {
+        Ok(r) if r.status().is_success() => r.json::<serde_json::Value>().ok().and_then(|v| {
+            v["choices"][0]["message"]["content"]
+                .as_str()
+                .map(str::to_string)
+        }),
+        Ok(r) => {
+            let status = r.status();
+            PC_FAST_REFUSED.store(status.as_u16() == 403, std::sync::atomic::Ordering::SeqCst);
+            let text = r.text().unwrap_or_default();
+            log(&format!(
+                "[PcControl] fast planner HTTP {status}: {}",
+                crate::truncate_utf8(&text, 200)
+            ));
+            None
+        }
+        Err(e) => {
+            log(&format!(
+                "[PcControl] fast planner failed: {}",
+                crate::truncate_utf8(&e.to_string(), 200)
+            ));
+            None
+        }
+    };
+    log(&format!(
+        "[PcControl] fast planner {model}: answer={} in {} ms",
+        answer.is_some(),
+        t.elapsed().as_millis()
+    ));
+    answer.filter(|a| !a.trim().is_empty())
+}
+
+/// The language an execute session listens in. With no language set, the
+/// recognizer guesses from the first words, and a two-word command gave it
+/// too little: "apri il browser" came back as "āprī browzer" and once in
+/// Devanagari (2026-11-08). The user's Windows locale decides instead, when
+/// it is a language the command rules know. DIMMY_PC_LANG overrides
+/// ("auto" = let the recognizer guess).
+fn pc_session_language(configured: &str) -> String {
+    let set = configured.trim();
+    if !set.is_empty() && !set.eq_ignore_ascii_case("auto") {
+        return set.to_string();
+    }
+    if let Ok(forced) = std::env::var("DIMMY_PC_LANG") {
+        let forced = forced.trim().to_lowercase();
+        return if forced == "auto" {
+            String::new()
+        } else {
+            forced
+        };
+    }
+    #[cfg(target_os = "windows")]
+    {
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetUserDefaultLocaleName(buf: *mut u16, len: i32) -> i32;
+        }
+        let mut buf = [0u16; 85]; // LOCALE_NAME_MAX_LENGTH
+        let n = unsafe { GetUserDefaultLocaleName(buf.as_mut_ptr(), buf.len() as i32) };
+        if n > 1 {
+            let locale = String::from_utf16_lossy(&buf[..n as usize - 1]).to_lowercase();
+            let lang = locale.split('-').next().unwrap_or("");
+            if matches!(lang, "it" | "en") {
+                return lang.to_string();
+            }
+        }
+    }
+    String::new()
+}
+
 /// 1 when the local PC-command router model is on disk, 0 when not, -1 when
 /// this build has no local router (Claude only).
 #[no_mangle]
@@ -8829,6 +9058,7 @@ pub unsafe extern "C" fn dimmy_pc_router_size_mb(id_ptr: *const c_char) -> c_int
 #[no_mangle]
 pub extern "C" fn dimmy_pc_prepare() {
     crate::pc_control::prepare(&pc_planner_model());
+    pc_fast_prewarm();
 }
 
 /// Turn a spoken command into PC actions and run them (experiment).
@@ -8917,7 +9147,46 @@ pub(crate) fn pc_execute_text(
     // DIMMY_PC_ENGINE: "auto" (default: local router, Claude when unsure),
     // "e5" (local only), "claude" (Claude only).
     let engine = std::env::var("DIMMY_PC_ENGINE").unwrap_or_else(|_| "auto".into());
-    // A command the app in front offers, named clearly: rules first.
+    // What needs no model comes first, in the order a wrong guess costs
+    // least: a basic command (its every word is accounted for), then
+    // something the screen shows ("il primo video", a title read aloud).
+    #[cfg(feature = "pc-router")]
+    let sure = if engine == "claude" {
+        None
+    } else {
+        crate::pc_router::basic(text, &crate::pc_control::known_names()).map(|p| (p, "e5"))
+    };
+    #[cfg(not(feature = "pc-router"))]
+    let sure: Option<(crate::pc_control::Plan, &str)> = None;
+    let sure = sure.or_else(|| {
+        let (step, label) = crate::pc_appcmds::point(text)?;
+        let plan = crate::pc_control::Plan {
+            say: format!("Apro \"{label}\""),
+            steps: vec![step],
+        };
+        Some((plan, "screen"))
+    });
+    if let Some((plan, by)) = sure {
+        out.engine = by.into();
+        out.said = plan.say.clone();
+        out.plan_ms = t0.elapsed().as_millis() as u64;
+        let t1 = std::time::Instant::now();
+        match crate::pc_control::run(&plan) {
+            Ok(paste) => {
+                out.ok = true;
+                out.paste = paste;
+            }
+            Err(e) => out.error = Some(crate::truncate_utf8(&e, 200).to_string()),
+        }
+        out.act_ms = t1.elapsed().as_millis() as u64;
+        log(&format!(
+            "[PcControl] engine={by} {:?} ok={} plan_ms={} act_ms={} error={:?}",
+            plan.steps, out.ok, out.plan_ms, out.act_ms, out.error
+        ));
+        crate::pc_control::remember(text, if out.ok { &out.said } else { "not done" });
+        return (out, Some(plan));
+    }
+    // A command the app in front offers, named clearly.
     match crate::pc_appcmds::best(text) {
         crate::pc_appcmds::Match::Run(cmd) => {
             out.engine = "app".into();
@@ -8939,6 +9208,9 @@ pub(crate) fn pc_execute_text(
                 "[PcControl] engine=app \"{}\" ok={} error={:?}",
                 cmd.label, out.ok, out.error
             ));
+            if out.ok {
+                crate::pc_control::remember(text, &format!("clicked \"{}\"", cmd.name));
+            }
             return (out, Some(plan));
         }
         crate::pc_appcmds::Match::Refused(cmd) => {
@@ -8965,20 +9237,20 @@ pub(crate) fn pc_execute_text(
     };
     #[cfg(not(feature = "pc-router"))]
     let local: Option<crate::pc_control::Plan> = None;
+    // "cerca su YouTube", then only the words: the session knows the site.
+    let local = local.or_else(|| crate::pc_control::search_in_context(text));
     let planned = match local {
-        Some(plan) => {
-            out.engine = "e5".into();
-            Ok(plan)
-        }
+        Some(plan) => Ok((plan, "e5")),
         None if engine == "e5" || !allow_claude => Err(format!(
             "non ho capito ({})",
             out.router.clone().unwrap_or_default()
         )),
-        None => crate::pc_control::plan_with_claude(text, &pc_planner_model()),
+        None => crate::pc_control::plan_with_llm(text, &pc_planner_model(), pc_fast_plan),
     };
     let mut ran = None;
     match planned {
-        Ok(plan) => {
+        Ok((plan, by)) => {
+            out.engine = by.into();
             out.plan_ms = t0.elapsed().as_millis() as u64;
             out.said = plan.say.clone();
             let t1 = std::time::Instant::now();
@@ -9001,6 +9273,7 @@ pub(crate) fn pc_execute_text(
         "[PcControl] engine={} router={:?} ok={} plan_ms={} act_ms={} error={:?}",
         out.engine, out.router, out.ok, out.plan_ms, out.act_ms, out.error
     ));
+    crate::pc_control::remember(text, if out.ok { &out.said } else { "not done" });
     (out, ran)
 }
 

@@ -687,6 +687,9 @@ pub fn install(log_fn: fn(&str)) {
 // ── Windows implementation ──────────────────────────────────────────
 
 #[cfg(target_os = "windows")]
+pub(crate) use platform::type_text;
+
+#[cfg(target_os = "windows")]
 mod platform {
     use super::*;
     use crate::hotkey_recorder::Decision;
@@ -829,6 +832,38 @@ mod platform {
         };
         unsafe {
             SendInput(1, &input, std::mem::size_of::<INPUT>() as i32);
+        }
+    }
+
+    /// Type `text` as characters, whatever the keyboard layout (PC commands
+    /// put an address into the browser's bar with it).
+    pub(crate) fn type_text(text: &str) {
+        const KEYEVENTF_UNICODE: u32 = 0x0004;
+        let key = |unit: u16, flags: u32| INPUT {
+            r#type: INPUT_KEYBOARD,
+            u: INPUT_U {
+                ki: KEYBDINPUT {
+                    wVk: 0,
+                    wScan: unit,
+                    dwFlags: KEYEVENTF_UNICODE | flags,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        };
+        let inputs: Vec<INPUT> = text
+            .encode_utf16()
+            .flat_map(|u| [key(u, 0), key(u, KEYEVENTF_KEYUP)])
+            .collect();
+        if inputs.is_empty() {
+            return;
+        }
+        unsafe {
+            SendInput(
+                inputs.len() as u32,
+                inputs.as_ptr(),
+                std::mem::size_of::<INPUT>() as i32,
+            );
         }
     }
 
