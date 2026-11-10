@@ -193,6 +193,9 @@ jobs:
         uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           tag_name: staging-latest
+          # The tag must sit on this commit, not on main: GitHub orders releases
+          # by the tagged commit's date, and Velopack reads only the first page.
+          target_commitish: ${{ github.sha }}
           name: "Dimmy ${{ steps.version.outputs.version }} (Native Staging)"
           body_path: changelog.md
           draft: true
