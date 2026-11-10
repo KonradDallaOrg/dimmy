@@ -496,17 +496,14 @@ pub(crate) fn is_key_name(name: &str) -> bool {
 }
 
 /// Set the dictation shortcut combo. An unrecognised combo falls back to the
-/// platform default so the dictation hotkey is never left unbound.
-pub fn set_shortcut(combo: &str) {
-    assert!(!combo.is_empty(), "shortcut combo must not be empty");
-    assert!(
-        combo.contains('+'),
-        "shortcut must contain '+' separator: {}",
-        combo
-    );
-
-    match parse_combo(combo) {
-        Some((k1, k2, k3)) => DICT.set_codes(k1, k2, k3),
+/// platform default so the dictation hotkey is never left unbound; the
+/// return value says whether `combo` itself was bound.
+pub fn set_shortcut(combo: &str) -> bool {
+    let bound = match parse_combo(combo) {
+        Some((k1, k2, k3)) => {
+            DICT.set_codes(k1, k2, k3);
+            true
+        }
         None => {
             // Fallback: cmd+option+D on macOS, win+alt on Windows/Linux.
             #[cfg(target_os = "macos")]
@@ -517,8 +514,14 @@ pub fn set_shortcut(combo: &str) {
             );
             #[cfg(not(target_os = "macos"))]
             DICT.set_codes(group_to_packed(GROUP_WIN), group_to_packed(GROUP_ALT), 0);
+            false
         }
-    }
+    };
+    assert!(
+        DICT.key1_codes.load(Ordering::SeqCst) != 0,
+        "the dictation shortcut must never be left unbound"
+    );
+    bound
 }
 
 /// Set (or clear) the optional dedicated command-mode shortcut. An empty or
@@ -1575,18 +1578,19 @@ mod tests {
         assert_eq!(k2, group_to_packed(GROUP_ALT), "fallback should be Alt");
     }
 
+    // The combo comes from config.json. v0.7.13's recorder saved a lone "F9",
+    // and a panic here aborted the app on every launch (Sentry RUST-1A/1B).
     #[test]
     #[serial]
-    #[should_panic(expected = "shortcut combo must not be empty")]
-    fn set_shortcut_empty_panics() {
-        set_shortcut("");
-    }
-
-    #[test]
-    #[serial]
-    #[should_panic(expected = "shortcut must contain '+' separator")]
-    fn set_shortcut_no_separator_panics() {
-        set_shortcut("winalt");
+    fn set_shortcut_without_a_separator_falls_back() {
+        for combo in ["F9", "", "winalt"] {
+            set_shortcut("ctrl+z");
+            assert!(!set_shortcut(combo), "{combo:?} must report the fallback");
+            let (k1, k2, _k3) = stored_keys();
+            assert_eq!(k1, group_to_packed(GROUP_WIN), "{combo:?}");
+            assert_eq!(k2, group_to_packed(GROUP_ALT), "{combo:?}");
+        }
+        assert!(set_shortcut("ctrl+z"));
     }
 
     #[test]

@@ -2615,7 +2615,11 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
         }
     }
     if let Some(s) = v["shortcut"].as_str() {
-        if let Ok(mut sh) = st.shortcut.lock() {
+        if crate::usable_shortcut(s) != s {
+            crate::log(&format!(
+                "[Config] shortcut {s:?} cannot be bound, keeping the current one"
+            ));
+        } else if let Ok(mut sh) = st.shortcut.lock() {
             *sh = s.to_string();
         }
     }
@@ -8522,8 +8526,14 @@ pub unsafe extern "C" fn dimmy_hotkey_set(combo_ptr: *const c_char) {
         return;
     }
     if let Ok(combo) = CStr::from_ptr(combo_ptr).to_str() {
-        crate::hotkey::set_shortcut(combo);
-        crate::log(&format!("[Hotkey] set_shortcut(\"{}\")", combo));
+        if crate::hotkey::set_shortcut(combo) {
+            crate::log(&format!("[Hotkey] set_shortcut(\"{}\")", combo));
+        } else {
+            crate::log(&format!(
+                "[Hotkey] set_shortcut(\"{}\") cannot be bound, using the default",
+                combo
+            ));
+        }
     }
 }
 
@@ -13069,6 +13079,29 @@ pub(crate) mod tests {
         let clear = CString::new(r#"{"selected_device":""}"#).unwrap();
         assert_eq!(unsafe { dimmy_set_config_json(clear.as_ptr()) }, 0);
         assert_eq!(*state().selected_device.lock().unwrap(), None);
+    }
+
+    #[test]
+    #[serial]
+    fn set_config_json_keeps_the_shortcut_when_the_new_one_cannot_be_bound() {
+        ensure_test_state();
+        let good = CString::new(r#"{"shortcut":"ctrl+shift+x"}"#).unwrap();
+        assert_eq!(unsafe { dimmy_set_config_json(good.as_ptr()) }, 0);
+        for bad in [r#"{"shortcut":"F9"}"#, r#"{"shortcut":""}"#] {
+            let bad = CString::new(bad).unwrap();
+            assert_eq!(unsafe { dimmy_set_config_json(bad.as_ptr()) }, 0);
+            assert_eq!(state().shortcut.lock().unwrap().as_str(), "ctrl+shift+x");
+        }
+    }
+
+    // Sentry RUST-1A: the host passed "F9" and the panic aborted the process.
+    #[test]
+    #[serial]
+    fn hotkey_set_with_a_lone_key_does_not_abort() {
+        let f9 = CString::new("F9").unwrap();
+        unsafe { dimmy_hotkey_set(f9.as_ptr()) };
+        let restore = CString::new("win+alt").unwrap();
+        unsafe { dimmy_hotkey_set(restore.as_ptr()) };
     }
 
     #[test]
