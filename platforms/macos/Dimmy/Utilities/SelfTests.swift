@@ -466,6 +466,16 @@ enum SelfTests {
         assert(ProviderTagging.providerTag(forUrl: "claude-code://default") == "anthropic",
                "claude-code:// → 'anthropic'")
 
+        // Kimi Code membership endpoint, both regions, and its catalog ids.
+        assert(ProviderTagging.providerTag(forUrl: "https://api.kimi.ai/coding/v1/chat/completions") == "kimi",
+               "api.kimi.ai → 'kimi'")
+        assert(ProviderTagging.providerTag(forUrl: "https://api.kimi.com/coding/v1/chat/completions") == "kimi",
+               "api.kimi.com → 'kimi'")
+        for id in ModelCatalog.byId("kimi")?.models.map(\.id) ?? [] {
+            assert(ProviderTagging.providerTag(forRecapModel: id) == "kimi",
+                   "Kimi catalog model '\(id)' must tag as 'kimi' for the recap gate")
+        }
+
         // Unknown / custom → empty.
         assert(ProviderTagging.providerTag(forUrl: "") == "",
                "empty URL → ''")

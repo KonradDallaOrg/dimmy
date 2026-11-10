@@ -188,7 +188,7 @@ below runs before `apply_consent` turns the pipeline on.
   `license.refresh_failed`, `meeting.stop_timeout`,
   `meeting.transcription_behind`, `meeting.transcription_unavailable`, low capture ratios, `loopback_rate_mismatch`,
   failed recap / file load / Notion send, `error.gpu_crash`, failed Claude Code /
-  Codex / Gemini CLI invocations. `transcription.failed` / `llm.failed` are not
+  Codex / Gemini CLI / Kimi CLI invocations. `transcription.failed` / `llm.failed` are not
   mirrored: their call sites report with the message.
 - **Host exceptions — `dimmy_telemetry_capture_host_exception(host, source, type, frames, fatal)`**.
   Windows: `Helpers/CrashReporter.cs` (AppDomain + XAML unhandled = fatal,
@@ -340,6 +340,7 @@ Permissions    PermissionGranted  PermissionDenied
 Claude Code    ClaudeCodeStatusProbed  ClaudeCodeLoginSpawned  ClaudeCodeLoginCompleted  ClaudeCodeInvocation
 Codex          CodexStatusProbed  CodexLoginSpawned  CodexLoginCompleted  CodexInvocation
 Gemini CLI     GeminiCliStatusProbed  GeminiCliLoginSpawned  GeminiCliLoginCompleted  GeminiCliInvocation
+Kimi CLI       KimiCliStatusProbed  KimiCliLoginSpawned  KimiCliLoginCompleted  KimiCliInvocation
 ```
 
 The three `*LoginCompleted` events are sent by the host through

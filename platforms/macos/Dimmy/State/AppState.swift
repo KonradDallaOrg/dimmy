@@ -376,6 +376,7 @@ struct LlmPreset: Identifiable, Hashable {
         if apiUrl.contains("anthropic.com") { return "anthropic" }
         if apiUrl.contains("fireworks.ai") { return "fireworks" }
         if apiUrl.contains("together.xyz") || apiUrl.contains("together.ai") { return "together" }
+        if apiUrl.contains("api.kimi.ai") || apiUrl.contains("api.kimi.com") { return "kimi" }
         return ""
     }
 
@@ -1468,6 +1469,10 @@ final class AppState: ObservableObject {
     /// both Anthropic AND OpenAI when the matching CLI is signed in.
     @Published var codexReady: Bool = false
 
+    /// Same shape for the Kimi membership via the local `kimi` CLI.
+    /// Gates the Kimi branch of the LLM and Recap Authentication pickers.
+    @Published var kimiReady: Bool = false
+
     /// Re-probe Claude Code install + credential state. Cheap (a file
     /// stat + a Keychain query); safe to call from view onAppear /
     /// auth picker change. Updates `claudeCodeReady`.
@@ -1504,6 +1509,21 @@ final class AppState: ObservableObject {
             let ready = (DimmyCore.shared.codexStatus == .ready)
             DispatchQueue.main.async {
                 self.codexReady = ready
+            }
+        }
+    }
+
+    /// Re-probe Kimi Code install + sign-in state. Same dispatch pattern
+    /// as `refreshCodexStatus`.
+    func refreshKimiStatus() {
+        guard DimmyCore.shared.isInitialized else {
+            kimiReady = false
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let ready = (DimmyCore.shared.kimiStatus == .ready)
+            DispatchQueue.main.async {
+                self.kimiReady = ready
             }
         }
     }
@@ -2028,7 +2048,7 @@ final class AppState: ObservableObject {
         // dedicated recap key field). Mirrors Win _llmKeyByProvider +
         // HasRecapKey lookups.
         let llmVendors = ["groq", "openai", "anthropic", "gemini",
-                          "openrouter", "fireworks", "together", "custom"]
+                          "openrouter", "fireworks", "together", "kimi", "custom"]
         var llmMap: [String: Bool] = [:]
         var recapMap: [String: Bool] = [:]
         for v in llmVendors {
@@ -2190,6 +2210,7 @@ final class AppState: ObservableObject {
             // preset used to be that discovery affordance).
             if vendor == "anthropic" && claudeCodeReady { return true }
             if vendor == "openai" && codexReady { return true }
+            if vendor == "kimi" && kimiReady { return true }
             return hasAnyKeyForProvider(vendor)
         }
     }
@@ -2224,6 +2245,10 @@ final class AppState: ObservableObject {
                     || llmKeyByVendor["openai"] == true
                     || hasOpenaiKey
                     || codexReady
+            case .kimi:
+                return recapKeyByVendor["kimi"] == true
+                    || llmKeyByVendor["kimi"] == true
+                    || kimiReady
             }
         }
     }
@@ -2235,6 +2260,7 @@ final class AppState: ObservableObject {
     var hasAnyLlmCapableKey: Bool {
         if claudeCodeReady { return true }
         if codexReady { return true }
+        if kimiReady { return true }
         if llmKeyByVendor.values.contains(true) { return true }
         if recapKeyByVendor.values.contains(true) { return true }
         return hasOpenaiKey || hasGeminiKey || hasGroqKey

@@ -70,6 +70,12 @@ struct MacOutputPage: View {
         llmProviderTag == "openai"
     }
 
+    /// Kimi Code dual-auth path: membership API key (api.kimi.ai) or the
+    /// local `kimi` CLI. Win parity: `LlmUseSubscriptionCard`.
+    private var isKimiLlm: Bool {
+        llmProviderTag == "kimi"
+    }
+
     /// Human-readable label for the STT provider, used in the
     /// "Use same \(provider) key" description so the user knows what
     /// the toggle actually reuses.
@@ -286,6 +292,7 @@ struct MacOutputPage: View {
     private var recapSubscriptionAvailable: Bool {
         (recapProviderTag == "anthropic" && appState.claudeCodeReady)
             || (recapProviderTag == "openai" && appState.codexReady)
+            || (recapProviderTag == "kimi" && appState.kimiReady)
     }
 
     /// True when a Recap-scope key for the chosen vendor is already
@@ -358,7 +365,7 @@ struct MacOutputPage: View {
         // entry needed here.
         let catalog: Set<String> = [
             "anthropic", "openai", "gemini",
-            "groq", "fireworks", "together", "openrouter",
+            "groq", "fireworks", "together", "openrouter", "kimi",
         ]
         return !catalog.contains(recapProviderTag)
     }
@@ -537,6 +544,7 @@ struct MacOutputPage: View {
                 // even when dictation stays on API key.
                 if recapSubscriptionAvailable {
                     let recapSubIsOpenAI = recapProviderTag == "openai"
+                    let recapSubIsKimi = recapProviderTag == "kimi"
                     // Uniformed with the LLM "Authentication" picker in
                     // the LLM section below — same two-way segmented
                     // choice, same labels, same width. The previous
@@ -552,10 +560,14 @@ struct MacOutputPage: View {
                         description: appState.recapAuthMethod == "subscription"
                             ? (recapSubIsOpenAI
                                 ? "ChatGPT Plus / Pro / Team."
-                                : "Claude Pro / Team / Max.")
+                                : recapSubIsKimi
+                                    ? "Kimi membership (Plus and up)."
+                                    : "Claude Pro / Team / Max.")
                             : "Direct API key, pay-as-you-go.",
                         hint: recapSubIsOpenAI
                             ? "Sends the recap through your local Codex CLI instead of an API key. Dictation rewrite keeps its own auth method."
+                            : recapSubIsKimi
+                            ? "Sends the recap through your local Kimi Code CLI instead of an API key. Dictation rewrite keeps its own auth method."
                             : "Sends the recap through your local Claude CLI instead of an API key. Dictation rewrite keeps its own auth method.",
                         hintURL: URL(string: "https://dimmy.app/help/integrations-claude-cli"),
                         showsDivider: recapKeyFieldShouldShow
@@ -765,7 +777,7 @@ struct MacOutputPage: View {
                     // picker even if the connection probe goes red
                     // (e.g. user re-launched without logging back in)
                     // so they can switch back to API key explicitly.
-                    if isAnthropicLlm || isOpenaiLlm {
+                    if isAnthropicLlm || isOpenaiLlm || isKimiLlm {
                         // Anthropic (Claude Code subscription) and OpenAI
                         // (Codex / ChatGPT subscription) both have a CLI
                         // path that bypasses API-key billing. Same UI
@@ -774,14 +786,17 @@ struct MacOutputPage: View {
                         // `LlmUseSubscriptionCard` which already covers
                         // both providers (xaml.cs:1821-1826).
                         let isSubscription = appState.llmAuthMethod == "subscription"
-                        let canSwitchToSubscription = isAnthropicLlm
-                            ? (appState.claudeCodeReady || isSubscription)
-                            : (appState.codexReady || isSubscription)
-                        let vendorName = isAnthropicLlm ? "Claude" : "ChatGPT"
+                        let cliReady = isAnthropicLlm ? appState.claudeCodeReady
+                            : isKimiLlm ? appState.kimiReady
+                            : appState.codexReady
+                        let canSwitchToSubscription = cliReady || isSubscription
+                        let vendorName = isAnthropicLlm ? "Claude" : isKimiLlm ? "Kimi" : "ChatGPT"
                         let subDescription = isAnthropicLlm
                             ? "Claude Pro / Team / Max."
-                            : "ChatGPT Plus / Pro / Team."
-                        let cliName = isAnthropicLlm ? "claude" : "codex"
+                            : isKimiLlm
+                                ? "Kimi membership (Plus and up)."
+                                : "ChatGPT Plus / Pro / Team."
+                        let cliName = isAnthropicLlm ? "claude" : isKimiLlm ? "kimi" : "codex"
                         let integrationHelp = isAnthropicLlm
                             ? "https://dimmy.app/help/integrations-claude-cli"
                             : "https://dimmy.app/help/integrations-codex"
@@ -827,11 +842,13 @@ struct MacOutputPage: View {
                     // tiny "Manage in Integrations" pointer so users
                     // see the auth choice took effect.
                     let onSubscription = appState.llmAuthMethod == "subscription"
-                        && (isAnthropicLlm || isOpenaiLlm)
+                        && (isAnthropicLlm || isOpenaiLlm || isKimiLlm)
                     if onSubscription {
-                        let cliName = isAnthropicLlm ? "claude" : "codex"
-                        let isReady = isAnthropicLlm ? appState.claudeCodeReady : appState.codexReady
-                        let vendorLabel = isAnthropicLlm ? "Claude Code" : "Codex"
+                        let cliName = isAnthropicLlm ? "claude" : isKimiLlm ? "kimi" : "codex"
+                        let isReady = isAnthropicLlm ? appState.claudeCodeReady
+                            : isKimiLlm ? appState.kimiReady
+                            : appState.codexReady
+                        let vendorLabel = isAnthropicLlm ? "Claude Code" : isKimiLlm ? "Kimi Code" : "Codex"
                         MacRow(
                             "Subscription connection",
                             description: isReady
@@ -991,6 +1008,7 @@ struct MacOutputPage: View {
             refreshLocalLlmStatus()
             appState.refreshClaudeCodeStatus()
             appState.refreshCodexStatus()
+            appState.refreshKimiStatus()
         }
         .onChange(of: appState.modelFilesChanged) { _ in
             refreshLocalLlmStatus()

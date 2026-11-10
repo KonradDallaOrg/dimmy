@@ -30,6 +30,8 @@ enum ProviderTagging {
         if url.contains("fireworks.ai") { return "fireworks" }
         if url.contains("together.xyz") || url.contains("together.ai") { return "together" }
         if url.contains("deepgram.com") { return "deepgram" }
+        if url.contains("api.kimi.ai") || url.contains("api.kimi.com")
+            || url.hasPrefix("kimi-cli://") { return "kimi" }
         return ""
     }
 
@@ -69,6 +71,9 @@ enum ProviderTagging {
         if lower.hasPrefix("gpt") || lower.hasPrefix("o1") || lower.hasPrefix("o3") {
             return "openai"
         }
+        // Kimi ids (k3, kimi-for-coding…) have no vendor prefix: same set as
+        // the catalog's `kimi` provider.
+        if lower.hasPrefix("k3") || lower.hasPrefix("kimi-") { return "kimi" }
         return ""
     }
 }

@@ -1309,6 +1309,168 @@ public static class DimmyNative
         catch { return ClaudeCodeStatus.NotInstalled; }
     }
 
+    // ── Kimi Code CLI (Kimi membership) ───────────────────────────
+    //
+    // Use the user's Kimi membership via the official `kimi` CLI, driven
+    // over ACP. Same status codes as the Codex surface. See
+    // `core/src/kimi_cli.rs`.
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_kimi_status();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_kimi_binary_path(byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_kimi_install_command(byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_kimi_git_bash_present();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_kimi_spawn_login();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_kimi_ping();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_kimi_models_json(byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_kimi_recheck();
+
+    public static ClaudeCodeStatus GetKimiStatus()
+    {
+        try { return (ClaudeCodeStatus)dimmy_kimi_status(); }
+        catch { return ClaudeCodeStatus.NotInstalled; }
+    }
+
+    public static string? GetKimiBinaryPath() =>
+        ReadBuffer(dimmy_kimi_binary_path, 4096);
+
+    /// <summary>The vendor's one-line install command (PowerShell on Windows).</summary>
+    public static string GetKimiInstallCommand() =>
+        ReadBuffer(dimmy_kimi_install_command, 1024) ?? string.Empty;
+
+    /// <summary>The Kimi CLI runs its tools through Git Bash on Windows.
+    /// False = install Git for Windows first.</summary>
+    public static bool KimiGitBashPresent()
+    {
+        try { return dimmy_kimi_git_bash_present() == 1; }
+        catch { return false; }
+    }
+
+    public static bool SpawnKimiLogin()
+    {
+        try { return dimmy_kimi_spawn_login() == 0; }
+        catch { return false; }
+    }
+
+    /// <summary>Ping round-trip through `kimi acp`. -5 protocol error maps to
+    /// InvalidUtf8 ("unexpected output"), -6 reported (usage limit) and -7
+    /// refused to Reported, -8 to EmptyResponse.</summary>
+    public static (ClaudeCodePingResult result, int elapsedMs) PingKimi()
+    {
+        int rc;
+        try { rc = dimmy_kimi_ping(); }
+        catch { return (ClaudeCodePingResult.UnknownError, 0); }
+        return rc switch
+        {
+            > 0 => (ClaudeCodePingResult.Ok, rc),
+            -1 => (ClaudeCodePingResult.NotInstalled, 0),
+            -2 => (ClaudeCodePingResult.NotLoggedIn, 0),
+            -3 => (ClaudeCodePingResult.SpawnFailed, 0),
+            -4 => (ClaudeCodePingResult.Timeout, 0),
+            -5 => (ClaudeCodePingResult.InvalidUtf8, 0),
+            -6 or -7 => (ClaudeCodePingResult.Reported, 0),
+            -8 => (ClaudeCodePingResult.EmptyResponse, 0),
+            _ => (ClaudeCodePingResult.UnknownError, 0),
+        };
+    }
+
+    /// <summary>The models this account's plan serves, as (id, name). Empty
+    /// when the CLI is missing, signed out or failed. Blocks up to 30 s:
+    /// call it off the UI thread.</summary>
+    public static System.Collections.Generic.List<(string Id, string Name)> GetKimiModels()
+    {
+        var list = new System.Collections.Generic.List<(string, string)>();
+        try
+        {
+            var json = ReadBuffer(dimmy_kimi_models_json, 16384);
+            if (string.IsNullOrEmpty(json)) return list;
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            foreach (var m in doc.RootElement.EnumerateArray())
+            {
+                var id = m.GetProperty("id").GetString() ?? "";
+                var name = m.GetProperty("name").GetString() ?? id;
+                if (id.Length > 0) list.Add((id, name));
+            }
+        }
+        catch { }
+        return list;
+    }
+
+    public static ClaudeCodeStatus RecheckKimi()
+    {
+        try { return (ClaudeCodeStatus)dimmy_kimi_recheck(); }
+        catch { return ClaudeCodeStatus.NotInstalled; }
+    }
+
+    // Kimi Code MCP bridge: registers dimmy-mcp in ~/.kimi-code/mcp.json.
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_kimi_mcp_status(byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_kimi_mcp_install(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string binaryPath);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_kimi_mcp_uninstall();
+
+    /// <summary>Kimi Code (CLI / Code Desktop) via mcp.json, plus the Kimi app
+    /// (Kimi Work): app installed, set up (WorkFound), Dimmy's personal plugin
+    /// registered / installed, and the last time each client started dimmy-mcp.</summary>
+    public sealed record KimiMcpStatus(
+        bool KimiFound, bool Registered, string? ConfigPath, string? DesktopPath, long? HeartbeatAgeSecs,
+        string? WorkAppPath = null, bool WorkFound = false, bool WorkRegistered = false,
+        bool WorkInstalled = false, long? WorkHeartbeatAgeSecs = null);
+
+    public static KimiMcpStatus GetKimiMcpStatus()
+    {
+        try
+        {
+            var json = ReadBuffer(dimmy_kimi_mcp_status, 8192);
+            if (string.IsNullOrEmpty(json)) return new(false, false, null, null, null);
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var r = doc.RootElement;
+            static string? Str(System.Text.Json.JsonElement e, string k) =>
+                e.TryGetProperty(k, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String ? v.GetString() : null;
+            static long? Num(System.Text.Json.JsonElement e, string k) =>
+                e.TryGetProperty(k, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.Number ? v.GetInt64() : null;
+            static bool Flag(System.Text.Json.JsonElement e, string k) =>
+                e.TryGetProperty(k, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.True;
+            return new(Flag(r, "kimi_found"), Flag(r, "registered"), Str(r, "config_path"), Str(r, "desktop_path"),
+                       Num(r, "heartbeat_age_secs"), Str(r, "work_app_path"), Flag(r, "work_found"),
+                       Flag(r, "work_registered"), Flag(r, "work_installed"), Num(r, "work_heartbeat_age_secs"));
+        }
+        catch { return new(false, false, null, null, null); }
+    }
+
+    /// <summary>0 done; -1 no home dir, -2 binary missing, -3 mcp.json not
+    /// valid JSON (left untouched), -4 write failed.</summary>
+    public static int InstallKimiMcp(string binaryPath)
+    {
+        try { return dimmy_kimi_mcp_install(binaryPath); }
+        catch { return -4; }
+    }
+
+    public static int UninstallKimiMcp()
+    {
+        try { return dimmy_kimi_mcp_uninstall(); }
+        catch { return -4; }
+    }
+
     // ── Gemini CLI (Google account) ────────────────────
     //
     // Use the user's Google account (free tier, AI Pro, AI Ultra) via the

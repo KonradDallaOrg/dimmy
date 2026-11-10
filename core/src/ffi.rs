@@ -2655,6 +2655,17 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         "has_custom_llm_key": st.key_store.has_key(KeyringScope::Llm(Provider::Custom), use_kr),
     });
 
+    // Kimi Code key flags, outside json! for the same recursion limit.
+    json["has_kimi_key"] = has_any_scope_key(&st.key_store, Provider::Kimi, use_kr).into();
+    json["has_kimi_llm_key"] = st
+        .key_store
+        .has_key(KeyringScope::Llm(Provider::Kimi), use_kr)
+        .into();
+    json["has_kimi_recap_key"] = st
+        .key_store
+        .has_key(KeyringScope::Recap(Provider::Kimi), use_kr)
+        .into();
+
     // app_rules added outside the json! macro — including it inline pushes
     // the macro past its expansion-recursion limit (the json! macro is
     // recursive and we've accreted ~50 fields). Mutate the Value directly.
@@ -5867,6 +5878,242 @@ pub extern "C" fn dimmy_codex_recheck() -> c_int {
     crate::codex::status().as_code()
 }
 
+// ── Kimi Code CLI (Kimi membership) bridge ─────────────────────────
+// Same integer contracts as the Codex block above so the hosts reuse the
+// status-card logic. Transport is `kimi acp`; see kimi_cli.rs.
+
+/// Probe local Kimi CLI state. 0 = ready, 1 = installed-not-signed-in,
+/// 2 = not installed. Spawns nothing.
+#[no_mangle]
+pub extern "C" fn dimmy_kimi_status() -> c_int {
+    let s = crate::kimi_cli::status();
+    crate::telemetry::track(crate::telemetry::Event::KimiCliStatusProbed {
+        status: crate::kimi_cli::status_label(&s),
+    });
+    s.as_code()
+}
+
+/// Path search trace + credential / Git Bash presence, as JSON.
+/// Bytes written, -1 on null buf, -2 on too-small buf.
+///
+/// # Safety
+/// `out_buf` must be a valid writable buffer of `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_kimi_diagnostics(out_buf: *mut c_char, buf_len: c_int) -> c_int {
+    if out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let json = crate::kimi_cli::diagnostics_json();
+    if json.len() + 1 > buf_len as usize {
+        return -2;
+    }
+    write_to_buf(&json, out_buf, buf_len)
+}
+
+/// Resolved `kimi` path into `out_buf`. Length on success, 0 if not
+/// installed, -1 on invalid args / too-small buffer.
+///
+/// # Safety
+/// `out_buf` must be a valid writable buffer of `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_kimi_binary_path(out_buf: *mut c_char, buf_len: c_int) -> c_int {
+    if out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    match crate::kimi_cli::detect_binary() {
+        Some(p) => {
+            let s = p.to_string_lossy().to_string();
+            if s.len() + 1 > buf_len as usize {
+                return -1;
+            }
+            write_to_buf(&s, out_buf, buf_len)
+        }
+        None => 0,
+    }
+}
+
+/// The vendor install command for this OS (PowerShell on Windows, a
+/// shell line elsewhere), for the setup wizard. Bytes written, -1 on bad
+/// args / too-small buffer.
+///
+/// # Safety
+/// `out_buf` must be a valid writable buffer of `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_kimi_install_command(out_buf: *mut c_char, buf_len: c_int) -> c_int {
+    if out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let cmd = crate::kimi_cli::install_command();
+    if cmd.len() + 1 > buf_len as usize {
+        return -1;
+    }
+    write_to_buf(cmd, out_buf, buf_len)
+}
+
+/// 1 when the Kimi CLI's shell is available (Git Bash on Windows; always
+/// 1 elsewhere), 0 when the wizard must install Git for Windows first.
+#[no_mangle]
+pub extern "C" fn dimmy_kimi_git_bash_present() -> c_int {
+    crate::kimi_cli::git_bash_present() as c_int
+}
+
+/// Spawn `kimi login` (device-code sign-in) in a visible terminal.
+/// 0 = spawned, -1 = not installed, -2 = spawn failure.
+#[no_mangle]
+pub extern "C" fn dimmy_kimi_spawn_login() -> c_int {
+    match crate::kimi_cli::spawn_login() {
+        Ok(()) => 0,
+        Err(crate::kimi_cli::KimiError::NotInstalled) => -1,
+        Err(_) => -2,
+    }
+}
+
+/// "Test connection" through `kimi acp` with a fixed prompt (no user
+/// content). Elapsed ms on success (> 0). Negative = category:
+///   -1 not installed, -2 not signed in, -3 spawn, -4 timeout,
+///   -5 protocol, -6 reported (usage limit, …), -7 refused, -8 empty.
+#[no_mangle]
+pub extern "C" fn dimmy_kimi_ping() -> c_int {
+    use crate::kimi_cli::{error_category, KimiError};
+    let started = std::time::Instant::now();
+    let result = crate::kimi_cli::run_blocking(
+        "reply with the single word: pong",
+        "",
+        std::time::Duration::from_secs(60),
+        true,
+    );
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    let (success, category) = match &result {
+        Ok(_) => (true, "ok"),
+        Err(e) => (false, error_category(e)),
+    };
+    crate::telemetry::track(crate::telemetry::Event::KimiCliInvocation {
+        kind: "test",
+        processing_ms_bucket: crate::telemetry::sanitize::bucket_processing_ms(elapsed_ms),
+        success,
+        error_category: category,
+    });
+    match result {
+        Ok(_) => (elapsed_ms.min(i32::MAX as u64) as c_int).max(1),
+        Err(KimiError::NotInstalled) => -1,
+        Err(KimiError::NotLoggedIn) => -2,
+        Err(KimiError::Spawn(_)) => -3,
+        Err(KimiError::Timeout) => -4,
+        Err(KimiError::Protocol(_)) => -5,
+        Err(KimiError::Reported { .. }) => -6,
+        Err(KimiError::Refused) => -7,
+        Err(KimiError::Empty) => -8,
+    }
+}
+
+/// The models this account's plan serves, as JSON
+/// `[{"id": "kimi-code/k3", "name": "K3"}, …]`, read from a throwaway
+/// session. Bytes written; -1 bad args, -2 buffer too small, -3 not
+/// installed / not signed in, -4 the CLI failed. Blocks up to 30 s: call
+/// it off the UI thread.
+///
+/// # Safety
+/// `out_buf` must be a valid writable buffer of `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_kimi_models_json(out_buf: *mut c_char, buf_len: c_int) -> c_int {
+    use crate::kimi_cli::KimiError;
+    if out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let models = match crate::kimi_cli::list_models(std::time::Duration::from_secs(30)) {
+        Ok(m) => m,
+        Err(KimiError::NotInstalled | KimiError::NotLoggedIn) => return -3,
+        Err(_) => return -4,
+    };
+    let json = serde_json::Value::Array(
+        models
+            .into_iter()
+            .map(|(id, name)| serde_json::json!({ "id": id, "name": name }))
+            .collect(),
+    )
+    .to_string();
+    if json.len() + 1 > buf_len as usize {
+        return -2;
+    }
+    write_to_buf(&json, out_buf, buf_len)
+}
+
+/// Drop the cached binary lookup and return a fresh `dimmy_kimi_status()`.
+#[no_mangle]
+pub extern "C" fn dimmy_kimi_recheck() -> c_int {
+    crate::kimi_cli::clear_cache();
+    crate::kimi_cli::status().as_code()
+}
+
+// ── Kimi Code MCP bridge (Kimi CLI + Kimi Code Desktop) ───────────
+// Registers `dimmy-mcp` in `~/.kimi-code/mcp.json`. See kimi_mcp.rs.
+
+/// `{"kimi_found","registered","binary_exists","config_path"}` as JSON.
+/// Bytes written, -1 on null buf, -2 on too-small buf.
+///
+/// # Safety
+/// `out_buf` must be a valid writable buffer of `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_kimi_mcp_status(out_buf: *mut c_char, buf_len: c_int) -> c_int {
+    if out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let json = crate::kimi_mcp::status_json(crate::config_dir_name());
+    if json.len() + 1 > buf_len as usize {
+        return -2;
+    }
+    write_to_buf(&json, out_buf, buf_len)
+}
+
+/// Register `binary_path` (the host's `dimmy-mcp`) with Kimi Code.
+/// 0 = done, -1 bad args / no home dir, -2 binary missing,
+/// -3 `mcp.json` is not valid JSON (left untouched), -4 write failed.
+///
+/// # Safety
+/// `binary_path` must be a valid null-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_kimi_mcp_install(binary_path: *const c_char) -> c_int {
+    use crate::kimi_mcp::McpError;
+    if binary_path.is_null() {
+        return -1;
+    }
+    let path = match unsafe { CStr::from_ptr(binary_path) }.to_str() {
+        Ok(s) if !s.is_empty() => s,
+        _ => return -1,
+    };
+    // Compile-time namespace, as for Claude Desktop: see dimmy_claude_desktop_install.
+    let (rc, kind) =
+        match crate::kimi_mcp::install(std::path::Path::new(path), crate::config_dir_name()) {
+            Ok(()) => return 0,
+            Err(McpError::NoHome) => (-1, "no_home"),
+            Err(McpError::BinaryMissing) => (-2, "binary_missing"),
+            Err(McpError::Unreadable) => (-3, "config_unreadable"),
+            Err(McpError::WriteFailed) => (-4, "write_failed"),
+        };
+    crate::telemetry::report(
+        crate::telemetry::Subsystem::Integration,
+        kind,
+        "kimi_mcp",
+        "",
+    );
+    rc
+}
+
+/// Remove our entry from `~/.kimi-code/mcp.json`. 1 removed, 0 nothing to
+/// remove, -1 no home dir, -3 file not valid JSON, -4 write failed.
+#[no_mangle]
+pub extern "C" fn dimmy_kimi_mcp_uninstall() -> c_int {
+    use crate::kimi_mcp::McpError;
+    match crate::kimi_mcp::uninstall(crate::config_dir_name()) {
+        Ok(true) => 1,
+        Ok(false) => 0,
+        Err(McpError::NoHome) => -1,
+        Err(McpError::BinaryMissing) => -2,
+        Err(McpError::Unreadable) => -3,
+        Err(McpError::WriteFailed) => -4,
+    }
+}
+
 // ── Gemini CLI (Google account) bridge ───────────────────
 // Direct mirror of the Codex FFI above, same integer contracts, so the
 // hosts reuse the status-card logic for all three CLI backends.
@@ -7275,9 +7522,11 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
             .map(|v| v.is_anthropic())
             .unwrap_or(false);
         // OpenAI + subscription routes through the Codex CLI (ChatGPT
-        // plan), so a non-Claude OpenAI model is fine — don't fall back.
+        // plan), Kimi + subscription through the Kimi CLI, so a non-Claude
+        // model from either vendor is fine — don't fall back.
         let url_is_openai = Provider::from_url(&effective_url).is_openai();
-        if !model_is_claude && !url_is_openai {
+        let url_is_kimi = Provider::from_url(&effective_url).is_kimi();
+        if !model_is_claude && !url_is_openai && !url_is_kimi {
             log(&format!(
                 "[LlmRaw] subscription requested but model '{}' is neither Claude- nor \
                  OpenAI-family — falling back to api_key path (subscription routes only to \
@@ -7289,7 +7538,8 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
     }
     let is_subscription = auth_method == "subscription"
         || crate::claude_code::is_claude_code_url(&effective_url)
-        || crate::codex::is_codex_url(&effective_url);
+        || crate::codex::is_codex_url(&effective_url)
+        || crate::kimi_cli::is_kimi_cli_url(&effective_url);
     if !is_subscription && (effective_url.is_empty() || effective_key.is_empty()) {
         log(&format!(
             "[LlmRaw] missing recap URL or key (effective_url={}, key_present={})",
@@ -11356,6 +11606,9 @@ pub unsafe extern "C" fn dimmy_telemetry_track_typed(
             outcome: prop_static("outcome", &["success", "timeout", "spawn_failed"]),
         }),
         "gemini_cli.login_completed" => Some(crate::telemetry::Event::GeminiCliLoginCompleted {
+            outcome: prop_static("outcome", &["success", "timeout", "spawn_failed"]),
+        }),
+        "kimi_cli.login_completed" => Some(crate::telemetry::Event::KimiCliLoginCompleted {
             outcome: prop_static("outcome", &["success", "timeout", "spawn_failed"]),
         }),
         // onboarding.* — wizard funnel emitted from the host wizard

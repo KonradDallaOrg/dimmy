@@ -3231,6 +3231,7 @@ public sealed partial class MeetingWindow : Window
             StopDoneMediaPlayback();
             _viewingMeetingDir = row.Dir;
             RefreshRecapWithClaudeButton();
+            RefreshOpenInKimiButton();
             // Prefer meta.json title (set by save_post_process / MCP
             // save_recap from the first H1 of the recap). Falls back
             // to the sidebar row's pre-computed title which itself

@@ -73,8 +73,8 @@ inside the app.
 
 | Destination | When | What |
 |---|---|---|
-| The cloud speech / AI providers you pick (Groq, OpenAI, Anthropic, Google Gemini, Deepgram, OpenRouter, Together, Fireworks, …) | Only if you choose a cloud provider | Audio for transcription, text for cleanup, command mode and recaps, with your own key. |
-| Claude Code, Codex or Gemini CLI on your computer | Only if you choose a subscription backend | The prompt is passed to the CLI, which sends it to its vendor under your account. Dimmy never reads the CLI's credential files. |
+| The cloud speech / AI providers you pick (Groq, OpenAI, Anthropic, Google Gemini, Deepgram, OpenRouter, Together, Fireworks, Kimi Code, …) | Only if you choose a cloud provider | Audio for transcription, text for cleanup, command mode and recaps, with your own key. |
+| Claude Code, Codex, Gemini CLI or Kimi Code CLI on your computer | Only if you choose a subscription backend | The prompt is passed to the CLI, which sends it to its vendor under your account. Dimmy never reads the CLI's credential files. |
 | Notion, Confluence, Telegram | Only if you connect them | Recaps or messages you send, or that you set to be sent automatically. |
 | Hugging Face (`huggingface.co`), GitHub (`github.com`) | When you download a model or an engine | A normal download request. |
 | GitHub (`github.com`, `api.github.com`) | Update checks | A request for the latest release. |
@@ -191,7 +191,7 @@ counts, durations or true/false. Free text is never sent.
 - `pill.visibility_toggled`, `pill.style_scrolled`, `pill.language_scrolled`, `pill.context_menu_opened`.
 - `update.channel_changed` (stable / prerelease), `update.apply_deferred`.
 - `permission.granted`, `permission.denied`: macOS permissions (microphone, accessibility, input monitoring).
-- `claude_code.*`, `codex.*`, `gemini_cli.*` (`status_probed`, `login_spawned`, `login_completed`, `invocation`): state of the subscription backends; ready / not logged in / not installed, login outcome, call site, time bucket, error category. Never the prompt, the answer, the CLI path or its output.
+- `claude_code.*`, `codex.*`, `gemini_cli.*`, `kimi_cli.*` (`status_probed`, `login_spawned`, `login_completed`, `invocation`): state of the subscription backends; ready / not logged in / not installed, login outcome, call site, time bucket, error category. Never the prompt, the answer, the CLI path or its output.
 
 ### Counters and profile properties
 
@@ -332,7 +332,7 @@ before.
 Only Konrad Dalla has access to these accounts.
 
 The speech and AI providers you pick, the subscription CLIs (Claude Code,
-Codex, Gemini CLI), Telegram, Notion and Confluence are **not** our
+Codex, Gemini CLI, Kimi Code), Telegram, Notion and Confluence are **not** our
 processors: Dimmy connects to them on your own account, with your own key or
 login, and they act under their own terms with you.
 

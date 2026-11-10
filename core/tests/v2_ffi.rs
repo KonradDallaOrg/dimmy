@@ -755,6 +755,45 @@ fn config_round_trip_preserves_claude_code_url() {
     );
 }
 
+/// Both ways to reach a Kimi membership survive the config round-trip:
+/// the synthetic `kimi-cli://default` URL, and the Kimi Code HTTPS URL
+/// with `llm_auth_method = "subscription"` (which routes to the CLI).
+#[test]
+#[serial]
+fn config_round_trip_preserves_both_kimi_routes() {
+    ensure_init();
+    let path = dimmy_lib::config_dir_path()
+        .expect("isolated config dir resolvable")
+        .join("config.json");
+    for (url, auth) in [
+        ("kimi-cli://default", "api_key"),
+        (
+            "https://api.kimi.ai/coding/v1/chat/completions",
+            "subscription",
+        ),
+    ] {
+        set_config(
+            &serde_json::json!({
+                "llm_enabled": true,
+                "llm_api_url": url,
+                "llm_api_model": "k3",
+                "llm_auth_method": auth,
+            })
+            .to_string(),
+        );
+        let v = get_config_value();
+        assert_eq!(v["llm_api_url"], url, "in-memory URL rewritten");
+        assert_eq!(v["llm_api_model"], "k3");
+        assert_eq!(v["llm_auth_method"], auth);
+        assert!(v["has_kimi_key"].is_boolean(), "has_kimi_key missing");
+
+        let raw = std::fs::read_to_string(&path).expect("read config.json");
+        let on_disk: serde_json::Value = serde_json::from_str(&raw).expect("valid JSON on disk");
+        assert_eq!(on_disk["llm_api_url"], url, "on-disk URL rewritten");
+        assert_eq!(on_disk["llm_auth_method"], auth);
+    }
+}
+
 // ── recap vendor derivation + per-vendor keystore ───────────────
 //
 // The recap vendor is DERIVED from the chosen model id at dispatch

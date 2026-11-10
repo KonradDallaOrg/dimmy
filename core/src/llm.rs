@@ -557,6 +557,41 @@ struct ChatMessage {
 /// content, and it is the difference between "something went wrong" and
 /// "you have used your 1000 requests for today". Every other variant is
 /// already redacted by its `Display`.
+fn track_kimi(
+    kind: &'static str,
+    started_at: std::time::Instant,
+    result: &Result<String, crate::kimi_cli::KimiError>,
+) {
+    let elapsed_ms = started_at.elapsed().as_millis() as u64;
+    let (success, category) = match result {
+        Ok(_) => (true, "ok"),
+        Err(e) => (false, crate::kimi_cli::error_category(e)),
+    };
+    crate::telemetry::track(crate::telemetry::Event::KimiCliInvocation {
+        kind,
+        processing_ms_bucket: crate::telemetry::sanitize::bucket_processing_ms(elapsed_ms),
+        success,
+        error_category: category,
+    });
+}
+
+fn map_kimi_err(e: crate::kimi_cli::KimiError) -> crate::error::LlmError {
+    use crate::kimi_cli::KimiError as K;
+    match e {
+        K::NotInstalled | K::NotLoggedIn => crate::error::LlmError::NoApiKey("kimi".to_string()),
+        K::Timeout => crate::error::LlmError::Network("kimi timeout".to_string()),
+        K::Spawn(_) | K::Protocol(_) => {
+            crate::error::LlmError::Network("kimi cli failed".to_string())
+        }
+        K::Reported { code, .. } => crate::error::LlmError::Api {
+            status: u16::try_from(code.unsigned_abs()).unwrap_or(0),
+            body: String::new(),
+        },
+        K::Refused => crate::error::LlmError::Network("kimi refused".to_string()),
+        K::Empty => crate::error::LlmError::Network("kimi empty answer".to_string()),
+    }
+}
+
 fn map_gemini_err(e: crate::gemini_cli::GeminiError) -> crate::error::LlmError {
     use crate::gemini_cli::GeminiError as G;
     match e {
@@ -691,6 +726,41 @@ Process the following transcription. Output ONLY the transformed text, nothing e
         });
     }
 
+    // Kimi Code CLI (Kimi membership) branch: kimi-cli:// OR
+    // subscription + the Kimi provider. Before the Claude check, which
+    // matches every other subscription. Quick: thinking off for a rewrite.
+    let kimi_sub =
+        auth_method == "subscription" && crate::provider::Provider::from_url(api_url).is_kimi();
+    if crate::kimi_cli::is_kimi_cli_url(api_url) || kimi_sub {
+        let combined = format!(
+            "{}
+
+---
+Process the following transcription. Output ONLY the transformed text, nothing else.
+
+[TRANSCRIPTION]
+{}
+[/TRANSCRIPTION]",
+            system_prompt, text
+        );
+        let model_owned = model.to_string();
+        let started_at = std::time::Instant::now();
+        let result = tokio::task::spawn_blocking(move || {
+            crate::kimi_cli::run_blocking(
+                &combined,
+                &model_owned,
+                std::time::Duration::from_secs(60),
+                true,
+            )
+        })
+        .await
+        .map_err(|e| crate::error::LlmError::Network(format!("kimi join: {}", e)))?;
+        track_kimi("rewrite", started_at, &result);
+        return result
+            .map(|t| strip_output_scaffolding(&t))
+            .map_err(map_kimi_err);
+    }
+
     // Subscription branch: route the LLM call through the local
     // `claude` CLI. Two triggers — the explicit `auth_method` flag
     // (preferred, set from the new RadioButton in Settings) OR the
@@ -767,6 +837,7 @@ Process the following transcription. Output ONLY the transformed text, nothing e
     );
 
     let client = reqwest::Client::builder()
+        .user_agent(concat!("Dimmy/", env!("CARGO_PKG_VERSION")))
         .timeout(std::time::Duration::from_secs(15))
         .build()?;
 
@@ -1198,6 +1269,30 @@ pub async fn process_raw_prompt(
         });
     }
 
+    // Kimi Code CLI branch — kimi-cli:// OR subscription + Kimi provider.
+    // Recap and command mode keep the model's thinking (quick = false).
+    let kimi_sub =
+        auth_method == "subscription" && crate::provider::Provider::from_url(api_url).is_kimi();
+    if crate::kimi_cli::is_kimi_cli_url(api_url) || kimi_sub {
+        let model_owned = model.to_string();
+        let prompt_owned = user_prompt.to_string();
+        let started_at = std::time::Instant::now();
+        let result = tokio::task::spawn_blocking(move || {
+            crate::kimi_cli::run_blocking(
+                &prompt_owned,
+                &model_owned,
+                std::time::Duration::from_secs(600),
+                false,
+            )
+        })
+        .await
+        .map_err(|e| crate::error::LlmError::Network(format!("kimi join: {}", e)))?;
+        track_kimi("recap", started_at, &result);
+        return result
+            .map(|t| strip_output_scaffolding(&t))
+            .map_err(map_kimi_err);
+    }
+
     // Subscription branch — dispatch via the local `claude` CLI
     // instead of HTTP. Triggered by either the explicit
     // `auth_method = "subscription"` flag (preferred) or the legacy
@@ -1266,6 +1361,7 @@ pub async fn process_raw_prompt(
     // CLAUDE.md "30s + 1s/MB capped at 600s" rule and gives flagship
     // reasoning models actual room to finish.
     let client = reqwest::Client::builder()
+        .user_agent(concat!("Dimmy/", env!("CARGO_PKG_VERSION")))
         .timeout(std::time::Duration::from_secs(600))
         .build()?;
 
@@ -2694,6 +2790,58 @@ mod tests {
 
         assert!(Provider::from_url(anthropic).is_anthropic());
         assert!(!Provider::from_url(anthropic).is_gemini());
+
+        let kimi = "https://api.kimi.ai/coding/v1/chat/completions";
+        assert!(Provider::from_url(kimi).is_kimi());
+        assert!(!Provider::from_url(kimi).is_openai());
+        assert!(!Provider::from_url(kimi).is_anthropic());
+        for other in [gemini, openai, anthropic] {
+            assert!(!Provider::from_url(other).is_kimi(), "{other}");
+        }
+    }
+
+    /// A Kimi subscription call must reach the Kimi CLI, never the Claude
+    /// CLI (which matches every other subscription) and never HTTP. On a
+    /// machine without `kimi` the branch answers NoApiKey("kimi").
+    #[test]
+    fn kimi_subscription_goes_to_the_kimi_cli_not_claude_or_http() {
+        if crate::kimi_cli::status().as_code() == 0 {
+            return; // a signed-in dev box would make a real call
+        }
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        for url in [
+            "https://api.kimi.ai/coding/v1/chat/completions",
+            crate::kimi_cli::PROVIDER_URL,
+        ] {
+            let auth = if url.starts_with("kimi-cli://") {
+                "api_key"
+            } else {
+                "subscription"
+            };
+            let raw = rt.block_on(process_raw_prompt(url, "k3", "", "ping", 100, auth));
+            assert!(
+                matches!(&raw, Err(crate::error::LlmError::NoApiKey(v)) if v == "kimi"),
+                "{url}: {raw:?}"
+            );
+            let text = rt.block_on(process_text(
+                url,
+                "k3",
+                "",
+                "hello there",
+                LlmStyle::Correct,
+                LlmTone::None,
+                "",
+                "",
+                auth,
+            ));
+            assert!(
+                matches!(&text, Err(crate::error::LlmError::NoApiKey(v)) if v == "kimi"),
+                "{url}: {text:?}"
+            );
+        }
     }
 
     /// Each synthetic scheme must be claimed by exactly one backend.
@@ -2702,12 +2850,14 @@ mod tests {
         let schemes = [
             crate::gemini_cli::PROVIDER_URL,
             crate::codex::PROVIDER_URL,
+            crate::kimi_cli::PROVIDER_URL,
             "claude-code://default",
         ];
         for s in schemes {
             let n = [
                 crate::gemini_cli::is_gemini_cli_url(s),
                 crate::codex::is_codex_url(s),
+                crate::kimi_cli::is_kimi_cli_url(s),
                 s.starts_with("claude-code://"),
             ]
             .iter()

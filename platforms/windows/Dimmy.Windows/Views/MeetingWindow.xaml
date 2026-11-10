@@ -773,6 +773,16 @@
                           Background="Transparent" BorderThickness="0" Padding="8">
                     <Image x:Name="RecapWithClaudeIcon" Width="16" Height="16"/>
                   </Button>
+                  <!-- "Open in Kimi Code": Kimi Code Desktop opens a new chat in
+                       this meeting's folder (kimi-code://open), with the recap
+                       prompt on the clipboard. Visible only when Kimi Code
+                       Desktop is installed. Official Kimi mark. -->
+                  <Button x:Name="OpenInKimiBtn" Click="OpenInKimi_Click"
+                          ToolTipService.ToolTip="Open in Kimi Code Desktop"
+                          Visibility="Collapsed"
+                          Background="Transparent" BorderThickness="0" Padding="8">
+                    <Image Width="16" Height="16" Source="{ThemeResource KimiMarkSource}"/>
+                  </Button>
                   </StackPanel>
                   <Button x:Name="OpenFolderBtn" Click="OpenFolder_Click"
                           ToolTipService.ToolTip="Open meeting folder"
