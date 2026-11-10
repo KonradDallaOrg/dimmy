@@ -170,6 +170,19 @@ fn default_shortcut() -> &'static str {
     }
 }
 
+/// `stored` when the dictation hook can bind it, the platform default
+/// otherwise. The shortcut is external data: a v0.7.13 host saved a lone
+/// "F9", and read back verbatim it aborted the app at every launch. The
+/// macOS default "fn" is not in the hook's grammar; the Mac host keeps its
+/// own shortcut and never sends this field.
+pub(crate) fn usable_shortcut(stored: &str) -> &str {
+    if stored == default_shortcut() || hotkey::is_valid_combo(stored) {
+        stored
+    } else {
+        default_shortcut()
+    }
+}
+
 /// Build flavor — "" (prod, default) or "staging". Embedded at compile
 /// time via build.rs from the `DIMMY_BUILD_FLAVOR` env var. A staging
 /// build surfaces a "STAGING" badge in the UI and uses the staging
@@ -1504,9 +1517,7 @@ pub fn load_config_file() -> AppConfig {
                     selected_device: v["selected_device"].as_str().map(|s| s.to_string()),
                     language: v["language"].as_str().unwrap_or("").to_string(),
                     shortcut_mode: v["shortcut_mode"].as_str().unwrap_or("toggle").to_string(),
-                    shortcut: v["shortcut"]
-                        .as_str()
-                        .unwrap_or(default_shortcut())
+                    shortcut: usable_shortcut(v["shortcut"].as_str().unwrap_or(default_shortcut()))
                         .to_string(),
                     prompt: v["prompt"].as_str().unwrap_or(DEFAULT_PROMPT).to_string(),
                     user_dict: v["user_dict"]
@@ -3558,6 +3569,31 @@ mod tests {
             load_config_file().meeting_generate_recap,
             "an upgrade must not silently stop producing recaps"
         );
+
+        save_config_file(&AppConfig::default());
+    }
+
+    /// A v0.7.13 host saved "F9", which the hook cannot bind; read back
+    /// verbatim it aborted the app at every launch (Sentry RUST-1B).
+    #[test]
+    #[serial_test::serial]
+    fn a_stored_shortcut_the_hook_cannot_bind_loads_as_the_default() {
+        let path = config_path().expect("config path");
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        for stored in ["F9", "", "garbage", "ctrl+number1"] {
+            let cfg = serde_json::json!({ "shortcut": stored }).to_string();
+            std::fs::write(&path, cfg).expect("write config");
+            assert_eq!(
+                load_config_file().shortcut,
+                default_shortcut(),
+                "{stored:?}"
+            );
+        }
+        let cfg = serde_json::json!({ "shortcut": "ctrl+shift+x" }).to_string();
+        std::fs::write(&path, cfg).expect("write config");
+        assert_eq!(load_config_file().shortcut, "ctrl+shift+x");
 
         save_config_file(&AppConfig::default());
     }
