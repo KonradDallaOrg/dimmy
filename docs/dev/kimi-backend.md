@@ -132,7 +132,7 @@ dimmy-mcp in `mcp.json`, (3) open a new Kimi session and wait for the
 heartbeat. Our `mcp.json` entry sets `DIMMY_MCP_CLIENT=kimi`, so dimmy-mcp
 writes `mcp.heartbeat.kimi` and a running Claude Desktop (plain
 `mcp.heartbeat`) cannot fake the check. Detection: Windows looks for a
-"kimi" folder with a "kimi" .exe under `%LOCALAPPDATA%\Programs` or
+"Kimi Code" folder (not the Kimi app beside it) with a "kimi" .exe under `%LOCALAPPDATA%\Programs` or
 `%ProgramFiles%`; macOS for `*Kimi Code*.app` in `/Applications` or
 `~/Applications`.
 
@@ -143,15 +143,36 @@ prompt pre-fill), so the button opens a new chat in the meeting's folder
 and puts the recap prompt on the clipboard: the MCP prompt when Dimmy is
 connected, a `transcripts.txt` prompt otherwise.
 
-### The Kimi app (chat / Kimi Work) is not an integration target
+### Kimi Work (the Kimi app): Dimmy as a personal plugin
 
-Checked on Kimi 3.2.26 for Windows (2026-11-09, signed by Beijing Moonshot
-AI): it registers `kimi://` and `kimi-work://`, but none of
-`kimi://chat?prompt=`, `?q=`, `/chat/new`, `kimi-work://chat/?prompt=`
-pre-fills the message (tested signed in). Its main process blocks local
-MCP servers (`"unsupported-local-mcp"`, `"legacy local MCP blocked before
-ready"`); only marketplace plugins (remote MCP + OAuth through Kimi's
-gateway) load. So Dimmy's desktop integration is Kimi Code Desktop only.
+This is the Integrations card ("Kimi Work") on both hosts. Kimi Work runs a
+Kimi Code engine of its own ("daimon") and starts LOCAL MCP servers declared
+by **personal plugins**. Verified on Kimi 3.2.24 for Windows (2026-11-09):
+
+- A plugin written straight into Kimi's installed list
+  (`<daimon-share>/daimon/runtime/kimi-code/home/plugins/installed.json` +
+  `managed/<id>/`) is parsed ("local plugins parsed") but never activated:
+  Kimi's server-side list (`gateway installed=…`) decides. Don't do that.
+- Kimi's own Plugin Builder, importing a local folder, writes exactly one
+  file: `<daimon-share>/daimon/plugin-market/personal/<id>.json`, a record
+  whose `sourcePath` points at the folder. The plugin then shows in
+  Plugins → Personal; Install copies it in, and a Work chat starts the
+  declared MCP server (dimmy-mcp, heartbeat `mcp.heartbeat.kimi-work`).
+- So "Add to Kimi" (`kimi_mcp::register_work_plugin_at`, inside
+  `dimmy_kimi_mcp_install`) writes `<config dir>/kimi-plugin/<id>/`
+  (`kimi.plugin.json` with `hostKind: local` + `mcpServers`, `icon.png`,
+  `locales/it-IT.json`, `iconUrl` = dimmy.app/brand/icon-512.png) and that
+  record. The user presses Install in Kimi; the wizard watches
+  `installed.json` and the heartbeat. `<daimon-share>` is
+  `%APPDATA%\kimi-desktop\daimon-share` on Windows; on macOS the same
+  layout under Application Support is assumed, not yet seen on a Mac.
+- Deep links: `kimi-work://home` opens Work; nothing pre-fills a prompt
+  (`kimi://chat?prompt=` and six other variants tested, signed in) and
+  `kimi-work://plugin?id=` does not open a plugin page from outside. The
+  meeting button therefore opens Work with the recap prompt on the
+  clipboard. With only Kimi Code Desktop installed it opens that instead,
+  in the meeting folder.
+- Install: winget `MoonshotAI.Kimi` (Windows), kimi.ai/products/download.
 
 ## Setup CLI
 

@@ -15,8 +15,11 @@ MacinCloud), docs (`docs/dev/kimi-backend.md`, telemetry, PRIVACY,
 CLAUDE.md), Phase 3 MCP bridge (`kimi_mcp.rs` + a toggle on both cards).
 No Linux UI work (user: no Linux).
 
-**Only step 8 is open: the live check on the user's real Kimi account.**
-Nothing was run against a real `kimi` binary yet.
+**Live check done 2026-11-09/10 on the user's account** (Kimi Code plan,
+global region): ping 4.2 s, rewrite 4.5 s, recap 15-140 s, no session left
+behind, MCP loaded by Kimi Code Desktop and by Kimi Work (personal plugin).
+Integrations card switched to Kimi Work; see docs/dev/kimi-backend.md.
+Open: Kimi Work on macOS (data path assumed, not seen on a Mac).
 
 ## (history) First thing on the other PC
 
