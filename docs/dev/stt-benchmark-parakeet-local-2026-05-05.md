@@ -1,10 +1,32 @@
 # Parakeet TDT v3 FP32 — local-CPU benchmark (chunked)
 
+Status, checked against the code on 2026-11-11:
+
+- This file is a Python benchmark from 2026-05-05 (`onnx-asr` on a WSL CPU). It did
+  not measure the Rust path that ships. Its numbers are kept as measured.
+- The product runs Parakeet through `ort` in `core/src/parakeet.rs` (feature
+  `local-stt-parakeet`, CPU provider), and on macOS through FluidAudio
+  (`parakeet_fluid.rs`). There is no `sherpa-rs`, no `local-stt-onnx` feature and no
+  DirectML. The CUDA provider (`local-stt-parakeet-cuda`) is in no release build.
+- The product does not use the 30 s windows of this run for dictation. Live
+  dictation: 5 s chunks when text is shown, 15 s when it is not, 500 ms overlap
+  (`chunked_stt::chunk_secs_for_backend`, `ffi.rs:1462`). File load: chunks of at
+  most 30 s, cut at pauses, no overlap (`CHUNK_MAX_SECS`, `ffi.rs:10346`). A
+  dictation transcribed in one call is split at 120 s (`MAX_ORT_WINDOW_SECS`).
+- The stitcher is `chunked_stt::dedup_last_3_words`. Despite its name it removes
+  the longest overlap of 2 to 6 words that starts at most 3 words into the new
+  chunk (`MIN_K`, `MAX_K`, `MAX_OFFSET`).
+- A long recording does not need a local engine: cloud STT splits the audio at the
+  provider's file limit (`transcribe::transcribe_chunked`, `cloud_chunk_samples`,
+  `Provider::max_file_bytes`).
+
 > Run date: 2026-05-05, WSL Linux, AMD64 CPU, 8 threads. Model:
 > `nemo-parakeet-tdt-0.6b-v3` FP32 ONNX bundle from
 > `istupakov/parakeet-tdt-0.6b-v3-onnx` (HuggingFace, 2.4 GB on disk),
 > loaded via `onnx-asr` Python library (which itself wraps ONNX Runtime).
-> Repro script: [`tests/stt_benchmark/run_parakeet_bench.py`](../../tests/stt_benchmark/run_parakeet_bench.py).
+> Repro script: `tests/stt_benchmark/run_parakeet_bench.py` (not in the
+> repository; `tests/stt_benchmark/` holds `test_chunked.py`, `test_fp32.py` and
+> `test_local.py`).
 
 ## Methodology
 
@@ -86,8 +108,9 @@ audit but not a blocker for the Phase 4 design.
 ## Cross-reference with cloud benchmarks
 
 Selected sample comparison versus the same fixtures in
-[`tests/results/benchmark_quick_combined_2026-05-04.md`](../../tests/results/benchmark_quick_combined_2026-05-04.md)
-and [`tests/results/benchmark_medium_combined_2026-05-04.md`](../../tests/results/benchmark_medium_combined_2026-05-04.md):
+`tests/results/benchmark_quick_combined_2026-05-04.md`
+and `tests/results/benchmark_medium_combined_2026-05-04.md`
+(`tests/results/` is in `.gitignore`: these files are not in the repository):
 
 | Sample | Local CPU FP32 | Groq cloud (turbo) | Together cloud (Parakeet) | Together cloud (Whisper) |
 |---|---|---|---|---|
@@ -106,10 +129,17 @@ Two distinct regimes:
   provider tested rejects files >25 MB (Groq, OpenAI, Gemini) or
   >100 MB (Fireworks, Together). For 73 min audio Dimmy must have a
   local fallback.
+  This was true of one upload per file, as this benchmark sent them. The product
+  does not depend on it: `transcribe::transcribe_chunked` and the streaming file
+  load cut long audio at the provider's limit (`Provider::max_file_bytes`: 25 MB,
+  Gemini 20 MB, Fireworks and Together 100 MB, Deepgram 2 GB) and send the parts in
+  order.
 
 ## Verdict for Phase 4
 
-The chunked-30 s + 500 ms overlap + last-3-words dedup pattern proves out:
+The chunked-30 s + 500 ms overlap + last-3-words dedup pattern proves out
+(for this Python run; the chunk lengths and the dedup the product uses are in the
+Status block above):
 
 - **Quality**: 100 % match on 7 of 9 ground-truth-having samples,
   one sample at 89 % (Pride — same regime as Together cloud Parakeet
@@ -127,10 +157,14 @@ The chunked-30 s + 500 ms overlap + last-3-words dedup pattern proves out:
 - **GPU speedup expected ~3-5× on Win nativo with DirectML/CUDA** —
   see the handoff in [`docs/superpowers/handoffs/2026-05-05-parakeet-win-validation.md`](../superpowers/handoffs/2026-05-05-parakeet-win-validation.md)
   for the validation plan.
+  This was an expectation, not a measurement. The Windows release builds run
+  Parakeet on the CPU provider.
 
 Phase 4 (`local-stt-onnx` Rust integration with `sherpa-rs` / `ort`)
 unblocked. Phase 3 (Rust spike to confirm cross-platform compile) is
 still the gate.
+(State on 2026-05-05. The integration has since shipped with `ort`, as feature
+`local-stt-parakeet`.)
 
 ## Source artefacts
 
@@ -141,4 +175,4 @@ still the gate.
   - `tests/results/benchmark_parakeet_chunked_long_2026-05-05_132157.md`
 - Audio fixtures: cached in `tests/audio/` after a one-time
   `./tests/test_benchmark.sh download`.
-- Wrapper: [`tests/test_benchmark_parakeet.sh`](../../tests/test_benchmark_parakeet.sh).
+- Wrapper: `tests/test_benchmark_parakeet.sh` (not in the repository).

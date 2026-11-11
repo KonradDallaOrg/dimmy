@@ -14,12 +14,15 @@ Hai due binari paralleli:
 | **Dev** (esistente) | `FvIw…` | `wrangler dev` su localhost:8787 | Sviluppo iterativo + unit tests |
 | **Prod-test** | `uut9…` | `https://license.dimmy.app` | Test e2e con Stripe + Resend reali (test mode) |
 
-Il **prod-test DLL Win** è già buildato in:
+Il **prod-test DLL Win** era un build locale in:
 ```
 platforms/windows/Dimmy.Windows/bin/Release-prod/net8.0-windows10.0.19041.0/win-x64/dimmy_lib.dll
 ```
 
-Lo testi domani con un launch script che lancia Dimmy.exe puntandolo lì.
+Nel repo non esiste nessuna configurazione, script o workflow che produce
+la cartella `Release-prod`: non è ricostruibile da qui. Per un DLL Win con
+prod pubkey servono `DIMMY_LICENSE_PUBKEY` **e** `DIMMY_LICENSE_SERVER_URL`
+(`core/build.rs` rifiuta il solo pubkey), come in `release.yml`.
 
 ## Mac — cosa fare al risveglio
 
@@ -27,23 +30,28 @@ Lo testi domani con un launch script che lancia Dimmy.exe puntandolo lì.
 git pull
 cd core
 
-# Build dylib release con prod pubkey
+# Build static lib release con prod pubkey + URL (build.rs rifiuta una
+# pubkey senza DIMMY_LICENSE_SERVER_URL). Feature set Mac = quello di
+# release.yml / MAC_FEATURES in scripts/dev/preflight-mac.sh:
 DIMMY_LICENSE_PUBKEY=uut9CwgkhU-Q76gguvGJID4D48xAQc4h1LAG829hacE \
+DIMMY_LICENSE_SERVER_URL=https://license.dimmy.app \
   cargo build --release --target aarch64-apple-darwin --lib \
-  --features local-stt-metal,local-llm-metal,license-client
+  --features local-stt-metal,local-stt-coreml,local-llm-metal,local-stt-parakeet-coreml,local-stt-parakeet-fluid,local-dfn,license-client,telegram,local-stt-qwen
 
-# Output: core/target/aarch64-apple-darwin/release/libdimmy_lib.dylib
+# Output: core/target/aarch64-apple-darwin/release/libdimmy_lib.a
+# (release.yml cancella il .dylib per forzare il link statico)
 
-# Embed in Mac app — Xcode steps al solito (vedi platforms/macos/README.md
-# "Build" sezione). Quando l'app gira, è già configurata per parlare a
-# license.dimmy.app perché LicenseService default punta lì in release;
-# in dev override via Settings → License → Advanced → Server URL.
+# Embed in Mac app — Xcode steps al solito (vedi platforms/macos/README.md,
+# sezione "Quick dev loop"). L'URL del server NON si cambia a runtime:
+# è quello incorporato in build (DIMMY_LICENSE_SERVER_URL). L'override
+# `dimmy_license_set_server_url` esiste solo nelle build debug / test-ffi
+# e la UI "Settings → Advanced → server URL" è stata rimossa.
 ```
 
 ## Cosa fare in app per validare
 
-1. **Vergine state**: cancella `~/.config/dimmy/license.json` se esiste
-2. **Settings → License → "Buy Annual"** (o monthly/lifetime, scegli)
+1. **Vergine state**: cancella `license.json` nella config dir (Mac: `~/Library/Application Support/dimmy/`, via `dirs::config_dir()`) se esiste
+2. **Settings → License** → bottone `Annual` (o `Monthly` / `Supporter`, il piano una-tantum da 3 anni = tier `lifetime`), poi email nel dialog "Continue to … checkout". Se il server dice che le vendite sono chiuse, i bottoni registrano solo interesse (nessun checkout)
 3. Si apre Safari su `https://checkout.stripe.com/c/pay/cs_test_…` reale
 4. Email tua, carta `4242 4242 4242 4242`, qualsiasi CVC + scadenza futura
 5. Click **Pay** → Stripe redirige a `https://license.dimmy.app/checkout/success?session_id=…`
@@ -51,13 +59,13 @@ DIMMY_LICENSE_PUBKEY=uut9CwgkhU-Q76gguvGJID4D48xAQc4h1LAG829hacE \
 6. **Gmail/Apple Mail**: arriva email reale via Resend con magic link
 7. Click magic link → Safari apre la HTTPS bridge page → JS dispatch
    `dimmy://activate?code=…` → conferma "Apri Dimmy"
-8. Dimmy attiva → Settings → License → status **Active — annual**, badge **PRO • ANNUAL**
+8. Dimmy attiva → Settings → License → titolo "Pro license, Annual", badge **PRO • ANNUAL**
 9. Click **Manage subscription** → si apre Stripe Customer Portal (vero)
 10. **Click "Cancel subscription"** dal portal → torna su Dimmy
 11. Refresh license → ora vedi subtitle **"Subscription scheduled to cancel on …"**
 12. **Refund test (admin)**: vai su `dashboard.stripe.com/test/payments`,
     trova il charge, click **Refund**. Webhook fires → `charge.refunded` →
-    license revoked → next refresh in Dimmy ti dà status `Expired`
+    license revoked → al refresh successivo Dimmy cancella il token e la pagina torna a "No license on this device" (non esiste uno stato `Revoked`/`Expired` per questo caso)
 
 Tutto questo deve funzionare senza intervento manuale lato Worker o D1.
 Se step 7 non apre Dimmy direttamente, è il discrepancy `dimmy://` registry
@@ -81,7 +89,7 @@ In ordine di precedenza, **non saltare**:
 - [ ] `wrangler deploy` finale
 - [ ] GitHub Action secret `DIMMY_LICENSE_PUBKEY=uut9…` set → release.yml
       builda binari coi token-verify enforcement attivo
-- [ ] Tag `v0.6.27` o successivo → CI builda + Velopack pubblica installer
+- [ ] Tag `vX.Y.Z-rc.N` (forma con il punto, vedi `scripts/check-release-tag.sh`) → `release.yml` builda + Velopack pubblica installer
 - [ ] Test live con carta TUA reale (1 transazione 5€), poi rimborso totale
       per confermare che il flusso `charge.refunded` revoca
 
@@ -92,7 +100,7 @@ Se qualcosa non funziona in prod live:
    parcheggiato)
 2. `wrangler rollback <deployment_id>` per tornare alla versione precedente
 3. I token già emessi continuano a funzionare offline finché `last_online_check`
-   non eccede `max_offline` (30gg per monthly/annual, 1095gg per lifetime)
+   non eccede `max_offline` (claim del token; default del client in `Tier::default_max_offline_days`: 14gg monthly, 30gg annual, 1095gg lifetime; Suspended scatta dopo `max_offline` + 7gg di grace)
 
 ## File coinvolti — riferimento
 

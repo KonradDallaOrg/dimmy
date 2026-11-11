@@ -14,10 +14,21 @@ Two decisions matter, and they fail in opposite directions:
 
 ## Matrix 1 — should this recording stop?
 
-Implemented in `platforms/windows/Dimmy.Windows/Services/CallOriginVerdict.cs`,
-tested in `CallOriginVerdictTests.cs`. The macOS equivalent is
-`CallAudioWatch` in `Services/CallDetectionManager.swift`, which reaches the
-same four outcomes from per-process CoreAudio facts.
+Implemented in `platforms/windows/Dimmy.Windows/Services/CallOriginVerdict.cs`
+(`CallOriginVerdict.Judge`, watched over time by `CallOriginTracker`), tested
+in `Dimmy.Windows.Tests/CallOriginVerdictTests.cs`. The table below is the
+Windows matrix.
+
+The macOS equivalent is not the same table. `CallAudioWatch` in
+`Services/CallDetectionManager.swift` (tested in `CallAudioWatchTests.swift`)
+reads per-process CoreAudio facts and returns `inCall`, `moving` (pushed off
+its device: still on the call), `released` or `gone`. `released` and `gone` do
+not end the recording on their own: `judgeCallEnd` asks the core, which
+decides from the call app's media sockets (`core/src/call_media.rs`, FFI
+`dimmy_call_live_media` + `dimmy_call_end_verdict`). Live media sockets: keep
+recording. No sockets after this call had shown some: the call is over. No
+evidence either way: the call is over once the app has been off audio for
+90 s (`NO_EVIDENCE_GRACE_SECS`).
 
 | # | sessions of the call | someone else on the mic | devices moving | call still playing | call media closed | verdict |
 |---|---|---|---|---|---|---|
@@ -61,25 +72,48 @@ Why every input is needed:
   was released ~8 s later. Sockets are evidence of an END only: a call
   relayed over TCP 443 has none, and "still open" would keep it recording.
 
-The only clock left is a 60 s backstop under row 6, so a recording can
-never run for ever on a process that vanished and never came back. It
-decides nothing that happens normally.
+The only clock left on Windows is a 60 s backstop under row 6
+(`CallDetectionService.OriginGoneConfirm`), so a recording can never run for
+ever on a process that vanished and never came back. It decides nothing that
+happens normally. The macOS clock is the 90 s no-evidence grace above.
+
+When the verdict is ENDED the host calls `dimmy_call_signal_session_ended`.
+The matrix runs only while a call origin is bound to the meeting. A meeting
+started by hand has none until `TryAdoptCallOriginDuringMeeting` finds a call;
+until then `CallDetectionService` sends the microphone and system-audio levels
+to the core (`dimmy_call_signal` + `dimmy_call_signal_sys`) instead.
 
 ## Matrix 2 — should we offer to record?
 
-Implemented in `core/src/call_detector.rs`, tested there (`nudge_row*`).
-Rows 4 and 5 differ only in what the host does with the same outcome.
+Implemented in `core/src/call_detector.rs` (`CallDetectorState::signal`),
+tested there (`nudge_row*`; row 7 is
+`a_call_already_under_way_is_offered_once_and_not_again`).
+Rows 4 and 5 differ only in what the host does with the same outcome
+(`CallSignalOutcome::Detected`, event `call_detected`), so they share one test.
 
 | # | which call | detection | auto-record | meeting active | already offered | excluded / cooldown | outcome |
 |---|---|---|---|---|---|---|---|
 | 1 | any | **off** | — | — | — | — | nothing |
 | 2 | any | on | — | **yes** | — | — | nothing |
-| 3 | any | on | — | no | — | **yes** | nothing |
+| 3 | we saw it start | on | — | no | — | **yes** | nothing |
 | 4 | we saw it start | on | **on** | no | no | no | **record now** |
 | 5 | we saw it start | on | **off** | no | no | no | **ask** |
 | 6 | already under way | on | on **or** off | no | no | no | **ask, never take** |
 | 7 | any | on | — | no | **yes** | — | nothing |
 | 8 | it ended | — | — | — | — | — | forget the offer |
+
+Row 3 holds only for a call we saw start. In `handle_active` the branch for a
+call already under way returns before the exclusion and cooldown checks, so
+such a call is offered once (row 6) even when its app is excluded or in
+cooldown.
+
+The code says nothing for four more reasons the table does not show
+(`SuppressionReason`): the call has not yet held the microphone for
+`min_active_secs` (`Debouncing`), the user already accepted and the meeting
+is starting (`RecordingAccepted`), the user stopped this call's recording by
+hand while the call was still running (`StoppedByUser`), and Dimmy stopped it
+a moment ago and the microphone has not been seen free since
+(`TailOfLastCall`).
 
 Row 6 is why `call_detected_preexisting` is a separate event rather than a
 flag on `call_detected`: a host that does not know the case ignores an

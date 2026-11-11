@@ -1,5 +1,10 @@
 # Licensing — overnight session 2026-05-04 (1:30 CET)
 
+> **Status, checked against the code on 2026-11-11:** This is a dated log; its text is unchanged except one redaction (see below).
+> - Still matches the code: `license::change_plan` (`POST /api/plan-change`, `monthly` or `annual` only) behind FFI `dimmy_license_plan_change`; Windows `BuyTierAsync` and macOS `buy(tier:)` take that path for an `Active` monthly or annual licence and Checkout for everything else; the `cancels_at` claim runs token → `LicenseStatus::Active` → status JSON → both UIs; a tampered token gives `Invalid` (`verify_token_rejects_tampered_signature`); a staging build embeds the staging public key and `https://license-staging.dimmy.app` (`.env.staging`, the staging workflows); `scripts/war-test-staging.mjs` and `scripts/stripe-smoke.sh` are in this repo.
+> - Does not match: the `backend/` files in "Files touched" and the Worker test counts are not in this repo (the Worker moved to the private `dimmy-backend` repo; they were not checked). The test `license.rs::tests::suspended_when_offline_too_long` (edge case 3) does not exist: the offline grace is `check_status` + `days_offline`, and only the `days_offline` part has a test (`a_missing_or_future_online_check_counts_from_the_token_issue_time`). The Buy steps of the smoke test now apply only while `/api/config` says `sales_open`: when sales are closed `BuyTierAsync` opens the "I'd buy this" form (`dimmy_license_register_interest`, `/api/lead`) before any Checkout or plan change. A definitive refresh rejection (revoked, withdrawn, deleted, device removed) now deletes the stored token (`RefreshError::is_revocation`). A signed token with `exp < iat` is `Expired`, not `Invalid`.
+> - Redacted 2026-11-11: the value of `STRIPE_WHSEC` in "Option A" was a staging webhook signing secret committed in clear text. Treat it as exposed (it stays in git history) and rotate the staging `STRIPE_WEBHOOK_SECRET`.
+
 Status drop for the morning. Branch `feat/licensing-poc`, all commits
 pushed and staging deployed.
 
@@ -146,7 +151,7 @@ the resulting state. **15 scenarios, 17 assertions, ~26s runtime, all
 green as of `228d587`.**
 
 ```powershell
-$env:STRIPE_WHSEC = 'whsec_test_warroom_45e02445c2814ad1bc3a9eee7ba716e3'
+$env:STRIPE_WHSEC = '<redacted: staging webhook signing secret>'
 node scripts\war-test-staging.mjs                # all 15
 node scripts\war-test-staging.mjs plan-change    # just /api/plan-change validation
 node scripts\war-test-staging.mjs tier-flip      # just price-flip → tier mirror

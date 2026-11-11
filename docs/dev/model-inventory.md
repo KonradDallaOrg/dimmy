@@ -1,6 +1,6 @@
 # Local model inventory and redistribution licences
 
-Snapshot 2026-10-30. Sources: `core/src/{local_stt,local_llm,parakeet,qwen_asr,whistle,diarize,nemotron,silero,gtcrn,coreml_encoder}.rs`; licences read from the Hugging Face API `cardData` of each source repo (and of its `base_model`). This is an engineering inventory, not legal advice.
+Snapshot 2026-10-30; file names, repos, revisions, sizes and pins re-checked against the code at `ebc0b52f` (v0.7.15). The licence column was not re-read. Sources: `core/src/{local_stt,local_llm,parakeet,parakeet_fluid,qwen_asr,whistle,diarize,nemotron,silero,gtcrn,coreml_encoder}.rs`; licences read on 2026-10-30 from the Hugging Face API `cardData` of each source repo (and of its `base_model`). This is an engineering inventory, not legal advice.
 
 "SHA pinned": **yes** = SHA-256 hard-coded in Dimmy. **runtime** = Dimmy reads HF's `x-linked-etag` at download time (`download.rs`), so integrity is checked but nothing is frozen in source. None of the "runtime" rows pin a revision (`resolve/main`), so a mirror must freeze one.
 
@@ -12,8 +12,8 @@ Snapshot 2026-10-30. Sources: `core/src/{local_stt,local_llm,parakeet,qwen_asr,w
 | 4 | Whisper Core ML encoders (`*-encoder.mlmodelc`) | Mac STT accel | `ggerganov/whisper.cpp` @ main | up to ~1.1 GB | runtime | MIT | yes | keep MIT notice |
 | 5 | Silero VAD v6.2.0 ggml (bundled, not downloaded) | VAD | `ggml-org/whisper-vad` @ main | 885 KB | no (in installer) | MIT | yes | MIT notice (already in THIRD_PARTY_NOTICES) |
 | 6 | Parakeet TDT 0.6B v3 ONNX (5 files) | local STT (Win/Linux) | `istupakov/parakeet-tdt-0.6b-v3-onnx` @ main | ~2.5 GB | runtime | CC-BY-4.0 (base nvidia/parakeet-tdt-0.6b-v3: CC-BY-4.0) | conditional | attribution to NVIDIA, link licence, indicate changes (ONNX conversion) |
-| 7 | Parakeet TDT v3 Core ML (fetched by FluidAudio, not by Dimmy code) | local STT (Mac) | `FluidInference/parakeet-tdt-0.6b-v3-coreml` | ~3 GB | no (FluidAudio) | CC-BY-4.0 | conditional | as #6; Dimmy does not control the URL |
-| 8 | Gemma 4 GGUF: E2B/E4B/12B/26B-A4B, QAT UD-Q4_K_XL and plain Q2-Q8 (13 files) | local LLM (default: E2B QAT) | `unsloth/gemma-4-{E2B,E4B,12B,26B-A4B}-it[-qat]-GGUF` @ main | 2.5 - 13.6 GB | runtime | Apache-2.0 (cards, and google/gemma-4-E2B-it) | yes | licence text; see note A |
+| 7 | Parakeet TDT v3 Core ML (fetched by FluidAudio, not by Dimmy code) | local STT (Mac) | `FluidInference/parakeet-tdt-0.6b-v3-coreml` | 466 MB on disk (`parakeet_fluid::BUNDLE_SIZE_MB`) | no (FluidAudio) | CC-BY-4.0 | conditional | as #6; Dimmy does not control the URL |
+| 8 | Gemma 4 GGUF: QAT UD-Q4_K_XL for E2B/E4B/12B/26B-A4B (4 files) and plain E2B Q4/Q5, E4B Q3/Q4/Q8, 12B Q4/UD-Q2 (7 files); 11 files | local LLM (default: E2B QAT) | `unsloth/gemma-4-{E2B,E4B,12B,26B-A4B}-it-qat-GGUF` and `unsloth/gemma-4-{E2B,E4B,12b}-it-GGUF` @ main | 2.5 - 13.6 GB | runtime | Apache-2.0 (cards, and google/gemma-4-E2B-it) | yes | licence text; see note A |
 | 9 | TranslateGemma 4B / 12B Q4_K_M | local LLM (translate) | `mradermacher/translategemma-{4b,12b}-it-GGUF` @ main | 2.4 / 7.0 GB | runtime | `gemma` (Gemma Terms of Use) | conditional | see note B |
 | 10 | Qwen3-4B-Instruct-2507 Q4_K_M | local LLM | `unsloth/Qwen3-4B-Instruct-2507-GGUF` @ main | 2.4 GB | runtime | Apache-2.0 | yes | licence text |
 | 11 | Qwen3.5 2B / 4B Q4_K_M | local LLM | `unsloth/Qwen3.5-{2B,4B}-GGUF` @ main | 1.2 / 2.6 GB | runtime | Apache-2.0 | yes | licence text |
@@ -27,15 +27,17 @@ Snapshot 2026-10-30. Sources: `core/src/{local_stt,local_llm,parakeet,qwen_asr,w
 | 19 | Whistle `whistle.cact` | local STT (whistle) | `Cactus-Compute/whistle` @ `b358dda` | 16.9 MB | **yes** | Apache-2.0 (repo has LICENSE) | yes | licence text |
 | 20 | Whistle engine (`libneedle3` inside Cactus Python wheels, per OS) | whistle runtime | `Cactus-Compute/needle3` @ `2ae1132` `/python` | 0.5 - 0.7 MB | **yes** (per wheel) | Apache-2.0 (repo has LICENSE) | yes | licence text; ships binaries only, source not in that repo |
 | 21 | GTCRN `gtcrn_simple.onnx` (bundled, not downloaded) | denoise (off by default) | github.com/Xiaobin-Rong/gtcrn | 535 KB | no (in installer) | MIT | yes | MIT notice (already in THIRD_PARTY_NOTICES) |
+| 22 | Nemotron 3.5 ASR streaming 0.6B F32 GGUF (optional, GPU builds only; download-center id `nemotron-f32`) | streaming dictation / meetings | `KonradDallaOrg/dimmy-nemotron-3.5-asr-gguf` @ `76599da` (the project's own conversion of #16's checkpoint) | 2.58 GB | **yes** | card of this repo not read; base is #16 (OpenMDW-1.1) | already hosted by the project | see note E; confirm the repo carries NVIDIA's licence and notices |
 
 Not a model download: the Nemotron engine archives (cpu/cuda/metal) come from our own GitHub release `engine-nemotron-66d50d9`, SHA-256 pinned in `nemotron.rs`. Nothing to mirror there.
 
-## Tally (21 rows)
+## Tally (22 rows)
 
 - Allowed (MIT / Apache-2.0, notice only): 14 (#1-5, 8, 10-13, 15, 19-21)
 - Conditional (attribution or use terms): 6 (#6, 7, 9, 16, 17, 18)
 - Not allowed: 0
 - Unknown: 1 (#14)
+- Not read: 1 (#22, added after the snapshot from `nemotron.rs`; its base model is conditional)
 
 ## Notes on flagged items
 
@@ -45,12 +47,12 @@ Not a model download: the Nemotron engine archives (cpu/cuda/metal) come from ou
 - **D. Qwen3-ASR GGUF (#14).** The ggml-org repos declare no licence, only `base_model`. The base is Apache-2.0, and a quantized derivative of an Apache-2.0 work can be redistributed, but the repo owner gave no statement, so it is recorded as unknown. Options: ask ggml-org to add the tag, or re-convert from `Qwen/Qwen3-ASR-*` ourselves. #15 is a different (Core ML) artifact and does not settle it.
 - **E. Nemotron (#16-18).** OpenMDW-1.1 is a permissive model licence covering weights and code: redistribution is allowed, but the licence text and NVIDIA's copyright/attribution notices must travel with the files. #16's card lists `license: other`, so the notice must be taken from the repo's own LICENSE/NOTICE, not assumed. #18 is a third-party conversion of NVIDIA weights and inherits the same terms.
 - **F. CC-BY-4.0 (#6, 7).** Needs credit to NVIDIA as creator, the licence link, and a statement that the file was converted. No use restrictions.
-- **G. Unpinned (#1-4, 8-15).** No revision or SHA in source. Mirroring is the chance to freeze both (see below).
+- **G. Unpinned (#1-4, 6, 8-14).** No revision or SHA in source (`resolve/main`). Mirroring is the chance to freeze both (see below). #7 and #15 are fetched by FluidAudio, so Dimmy's code holds no URL for them.
 
 ## How to mirror (checklist)
 
 1. Download each file at one exact upstream revision; record the commit hash and the file's SHA-256.
-2. Upload byte-identical (no re-quantizing, no re-compression) so the hash is unchanged. Where Dimmy pins a SHA (#16-20), the mirror must match that value exactly; run `sha256sum` after upload and compare.
+2. Upload byte-identical (no re-quantizing, no re-compression) so the hash is unchanged. Where Dimmy pins a SHA (#16-20, 22), the mirror must match that value exactly; run `sha256sum` after upload and compare.
 3. Put the upstream LICENSE (and NOTICE if any) next to the weights in the mirror repo, and set `license:` in the model card to the same id.
 4. Model card: credit the original authors, link the source repo + revision + SHA-256, and state "unmodified copy" (or what changed, for CC-BY and Gemma).
 5. For Gemma Terms (#9): include the Terms text and Prohibited Use Policy link, and a notice that use is subject to them.

@@ -1,7 +1,36 @@
 # Parakeet TDT v3 FP32 — local STT
 
-> **Branch**: `feat/parakeet-stt-local`
-> **Status**: working end-to-end on Windows (UI + chunked live captions
+Status, checked against the code on 2026-11-11:
+
+- Parakeet is one of five local backends (`whisper`, `parakeet`, `qwen`, `whistle`,
+  `nemotron`; config field `local_stt_backend`). It is the default of a fresh install
+  on macOS only; Windows and Linux start on whisper (`default_local_stt_backend`,
+  `lib.rs:1170`). If the bundle is missing and a whisper model is on disk, whisper
+  runs instead (`transcribe::resolve_local_backend`, event `stt_backend_fallback`).
+- Two engines sit behind `parakeet::transcribe` (`parakeet.rs:261`). Windows and
+  Linux use ONNX Runtime on the CPU (`local-stt-parakeet`, the only Parakeet feature
+  in the Windows release builds). macOS release builds add `local-stt-parakeet-fluid`:
+  FluidAudio on the Neural Engine runs when its bundle is on disk
+  (`parakeet_fluid.rs`), else the ONNX path. On such a build "Parakeet is ready"
+  means the FluidAudio bundle (`active_bundle_present`).
+- Parakeet does not stream. Live dictation runs it in fixed chunks through
+  `chunked_stt.rs`: 5 s when text is shown (Realtime typing or live captions), 15 s
+  when it is not (`chunk_secs_for_backend`), 500 ms overlap, a VAD gate per chunk on
+  the full preprocess route, then `dedup_last_3_words`. With Accelerate transcription
+  and Realtime typing off, the whole recording goes in at stop; the ONNX path splits
+  it at 120 s (`MAX_ORT_WINDOW_SECS`).
+- There is no language argument: the model detects the language itself, whatever the
+  language setting says (`transcribe_audio_local_parakeet`, `transcribe.rs:533`).
+- Word timestamps come from the ONNX path (`transcribe_with_word_timestamps`,
+  80 ms per encoder frame, `FRAME_SEC`). The FluidAudio path returns `"[]"`.
+- Download: `dimmy_parakeet_download_bundle` (download-center id `parakeet:fp32`)
+  through `download::download_resumable`. The FluidAudio bundle is 466 MB
+  (`parakeet_fluid::BUNDLE_SIZE_MB`), the ONNX one about 2.5 GB (`BUNDLE_SIZE_MB`).
+
+> **History** (May 2026, branch `feat/parakeet-stt-local`): the text below is the
+> design note of that branch. Sections that describe a plan say so.
+>
+> **Status at that time**: working end-to-end on Windows (UI + chunked live captions
 > shipped) and on macOS local dev (CLI smoke + 4 e2e tests green
 > against the JFK fixture, see [Mac validation](#mac-validation-2026-05-05)).
 > Mac UI (Settings + Onboarding) is wired and the app builds + signs
@@ -22,7 +51,8 @@ Live benchmark on Italian audio (4 May 2026, see
 
 Chunking 5 s with the same Python pipeline (`tests/stt_benchmark/test_chunked.py`):
 avg 676 ms, max 901 ms → **82 % real-time margin on CPU** for arbitrary-length
-audio. That's the target of this work.
+audio. That was the target of this work. These are Python measurements from May
+2026 on a WSL CPU, not figures of the shipped Rust path.
 
 ## Why FP32 not INT8
 
@@ -107,9 +137,12 @@ into `<config-dir>/parakeet-fp32/`:
 | `decoder_joint-model.onnx` | 73 MB | TDT pred-net + joint |
 | `vocab.txt` | 92 KB | 8193 tokens, one per line |
 
-Streaming download with progress callback already lives in
-`core/src/parakeet.rs::download_bundle`. The FFI / UI hook for "click
-to download" is the natural follow-up.
+The download lives in `core/src/parakeet.rs::download_bundle`: each file goes
+through `download::download_resumable` (resume, SHA-256 from Hugging Face), with a
+progress callback. The FFI entry is `dimmy_parakeet_download_bundle` (event
+`parakeet_bundle_download_progress`), also reachable as download-center id
+`parakeet:fp32`. On a macOS build with `local-stt-parakeet-fluid` the same entry
+fetches FluidAudio's Core ML bundle instead (`download_active_bundle`).
 
 ## Cargo features
 
@@ -120,22 +153,47 @@ local-stt-parakeet-coreml = ["local-stt-parakeet", "ort/coreml"]
 ```
 
 Default builds DON'T pull `ort` — keeps the cold compile time the same
-for everyone not opting in. Bundle path / presence helpers live in the
+for everyone not opting in. The release builds do opt in: Windows with
+`local-stt-parakeet` (CPU; no workflow enables `local-stt-parakeet-cuda`), macOS with
+`local-stt-parakeet-coreml` and `local-stt-parakeet-fluid`. `ort` is built with
+`load-dynamic`, so `onnxruntime` is a library shipped beside the app. The CoreML
+execution provider is compiled in on macOS but runs only with
+`DIMMY_PARAKEET_USE_COREML=1` (`build_session`). Bundle path / presence helpers live in the
 always-on part of the module so the UI can render the "Parakeet not
 yet downloaded" state without a feature dance.
 
 ## What's done in this commit
+
+History: this lists the first commit of the branch. Today `parakeet.rs` holds the
+full inference (`inference::transcribe_with_word_timestamps`), not a stub.
 
 - `core/src/parakeet.rs` — module with bundle paths, download, feature
   gate, stub `transcribe()`. ~250 LoC.
 - `core/Cargo.toml` — `ort = "=2.0.0-rc.10"` (pinned: rc.12 has a
   compile-time bug on the VitisAI EP that breaks even when the feature
   is off), `ndarray = "0.16"`, `reqwest blocking` for the download.
+  (The two pins are still these. The download is now async, through
+  `download::download_resumable`.)
 - 2 unit tests (`vocab_size_and_blank_match_bundle`,
   `bundle_dir_returns_path`).
 - This document + the inline header in `parakeet.rs`.
 
 ## What's next (in priority order)
+
+History: the plan as written in May 2026. What the code does today, item by item:
+
+- Item 1 is done: `parakeet.rs`, `mod inference`.
+- Item 2: the CUDA EP is wired behind `local-stt-parakeet-cuda`, which no workflow
+  enables. The CoreML EP is opt-in by `DIMMY_PARAKEET_USE_COREML=1`. What ships on
+  macOS is FluidAudio on the Neural Engine (`parakeet_fluid.rs`).
+- Item 3 is done, with other names: `dimmy_parakeet_bundle_present`,
+  `dimmy_parakeet_download_bundle` (blocking, emits progress events),
+  `dimmy_parakeet_transcribe`, plus `dimmy_parakeet_warmup`.
+- Item 4 is done on Windows and macOS: Parakeet is an entry of the local model picker.
+- Item 5 was done differently: `chunked_stt.rs` cuts fixed chunks (5 s or 15 s), it
+  is not VAD-driven, and it does dedup at every boundary (`dedup_last_3_words`, with
+  500 ms overlap). The "no special dedup is needed" finding was not kept.
+- Item 6 is done: `core/tests/parakeet_e2e.rs` and `core/tests/parakeet_long_file.rs`.
 
 1. **Native ort inference** — implement `transcribe()` against
    ort 2.0.0-rc.10 API:
@@ -216,7 +274,9 @@ cargo test --lib parakeet
 ## Mac validation (2026-05-05)
 
 Local Mac dev session, M-series Apple Silicon, no microphone (validated
-via committed JFK fixture, not live recording).
+via committed JFK fixture, not live recording). These runs used the ONNX Runtime
+path. The macOS release builds now run FluidAudio on the Neural Engine when its
+bundle is present, which these numbers do not describe.
 
 - `cargo build --release --lib --target aarch64-apple-darwin --features local-stt-metal,local-llm-metal,local-stt-parakeet-coreml` — clean, ~52 s.
 - Xcode `Debug` build of `Dimmy.app` succeeds end-to-end. The new shell-script build phase `Bundle onnxruntime.dylib` (`AE000004`) runs `scripts/download-onnxruntime.sh` and copies + ad-hoc-signs the 33 MB dylib into `Dimmy.app/Contents/Frameworks/libonnxruntime.dylib`. `ENABLE_USER_SCRIPT_SANDBOXING = NO` is required project-wide so the script's `codesign` call doesn't 503 inside Xcode's sandbox.
@@ -259,3 +319,6 @@ Result on this Mac:
 - **Mac GPU**: CoreML EP via ort is documented but I haven't yet
   verified Parakeet TDT specifically runs on it. Worst case: CPU
   fall-back, which is still sub-second on M-series.
+  (Settled since: the CoreML EP gave no gain on this bundle and is off unless
+  `DIMMY_PARAKEET_USE_COREML=1`, see the comment in `parakeet.rs` `build_session`.
+  macOS uses FluidAudio instead.)
