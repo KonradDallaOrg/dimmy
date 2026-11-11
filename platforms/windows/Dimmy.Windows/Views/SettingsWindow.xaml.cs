@@ -1227,7 +1227,7 @@ public sealed partial class SettingsWindow : Window
                     item.SizeBytes = sb.GetInt64();
                 ViewModel.HistoryItems.Add(item);
             }
-            App.Log($"History: loaded {ViewModel.HistoryItems.Count} rows (query='{query}')", "History");
+            App.Log($"History: loaded {ViewModel.HistoryItems.Count} rows (query of {query.Length} chars)", "History");
         }
         catch (Exception ex)
         {

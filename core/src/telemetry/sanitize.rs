@@ -102,61 +102,11 @@ pub fn error_category(message: &str, status: Option<u16>) -> &'static str {
     }
 }
 
-/// Replace any user-identifying segment of a path with placeholders.
-///
-/// Returns a string that is safe to include in telemetry but still
-/// useful for debugging (e.g. the model filename is preserved).
-///
-/// Example: `/Users/mario/Library/Application Support/dimmy/models/ggml-base.bin`
-///       -> `<HOME>/dimmy/models/ggml-base.bin`
-pub fn scrub_path(path: &str) -> String {
-    let p = std::path::Path::new(path);
-
-    if let Some(home) = dirs::home_dir() {
-        let home_str = home.to_string_lossy();
-        if path.starts_with(home_str.as_ref()) {
-            let rest = &path[home_str.len()..];
-            let rest = rest.trim_start_matches(['/', '\\']);
-            return format!(
-                "<HOME>/{}",
-                rest.replace('\\', "/")
-                    .split('/')
-                    .filter(|seg| !seg.is_empty())
-                    .skip_while(|seg| matches!(
-                        *seg,
-                        "Library"
-                            | "Application Support"
-                            | ".config"
-                            | "AppData"
-                            | "Roaming"
-                            | "Local"
-                    ))
-                    .collect::<Vec<_>>()
-                    .join("/")
-            );
-        }
-    }
-
-    // Fallback: keep the last two segments only (typically `dir/file.ext`)
-    let segs: Vec<&std::ffi::OsStr> = p.iter().collect();
-    let n = segs.len();
-    if n >= 2 {
-        format!(
-            "<…>/{}/{}",
-            segs[n - 2].to_string_lossy(),
-            segs[n - 1].to_string_lossy()
-        )
-    } else {
-        "<scrubbed>".to_string()
-    }
-}
-
 /// Replace every user-directory NAME inside a free-text message with
 /// `<USER>`, leaving the rest of the path intact.
 ///
-/// `scrub_path` above handles a string that IS a path. This one handles
-/// the far more common case: a path EMBEDDED in a sentence, which is what
-/// every `format!("… {}", path.display())` error produces. Those strings
+/// This handles a path EMBEDDED in a sentence, which is what every
+/// `format!("… {}", path.display())` error produces. Those strings
 /// reach Sentry through `capture_error` and `before_send`, and until
 /// 2026-09-02 they arrived intact — a real user's Windows account name
 /// sat in an issue TITLE for 59 events:
@@ -223,6 +173,24 @@ pub fn scrub_user_paths(text: &str) -> String {
 
 fn is_path_sep_byte(b: u8) -> bool {
     b == b'/' || b == b'\\'
+}
+
+/// The call a GPU crash marker names, without the path that follows it.
+///
+/// The marker reads `<program>: <call>: <model path>`. The path names the
+/// user's account and a file, and `error.gpu_crash` may send neither. A
+/// path can hold spaces and, on Windows, a colon, so it is recognised by
+/// its separators, and everything from its start on is dropped.
+pub fn crash_call_site(context: &str) -> String {
+    let call: Vec<&str> = context
+        .split(": ")
+        .take_while(|part| !part.contains(['/', '\\']))
+        .filter(|part| !part.is_empty())
+        .collect();
+    if call.is_empty() {
+        return "unknown".to_string();
+    }
+    crate::truncate_utf8(&call.join(": "), 80).to_string()
 }
 
 /// Round a floating-point gain value to 0.1 precision so we don't
@@ -472,14 +440,42 @@ mod tests {
     }
 
     #[test]
-    fn scrub_path_replaces_home() {
-        if let Some(home) = dirs::home_dir() {
-            let p = home.join("dimmy").join("models").join("ggml-base.bin");
-            let scrubbed = scrub_path(&p.to_string_lossy());
-            assert!(scrubbed.starts_with("<HOME>/"));
-            assert!(scrubbed.ends_with("ggml-base.bin"));
-            assert!(!scrubbed.contains(home.to_string_lossy().as_ref()));
-        }
+    fn a_crash_marker_keeps_its_call_and_loses_its_path() {
+        // Windows, an account name with a space.
+        assert_eq!(
+            crash_call_site(
+                r"dimmy.windows.exe: whisper_load: C:\Users\Mario Rossi\AppData\Roaming\dimmy\models\ggml-base.bin"
+            ),
+            "dimmy.windows.exe: whisper_load"
+        );
+        // macOS, a folder name with a space.
+        assert_eq!(
+            crash_call_site(
+                "dimmy: llama_load: /Users/anna/Library/Application Support/dimmy/models/gemma.gguf"
+            ),
+            "dimmy: llama_load"
+        );
+        // A marker from before the owner field.
+        assert_eq!(
+            crash_call_site("whisper_load: /home/luca/.config/dimmy/models/ggml-base.bin"),
+            "whisper_load"
+        );
+        // A model kept outside the home folder.
+        assert_eq!(
+            crash_call_site(r"dimmy.windows.exe: llama_load: D:\Modelli di Mario\gemma.gguf"),
+            "dimmy.windows.exe: llama_load"
+        );
+    }
+
+    #[test]
+    fn a_crash_marker_with_no_call_says_unknown() {
+        assert_eq!(crash_call_site("unknown"), "unknown");
+        assert_eq!(crash_call_site(""), "unknown");
+        assert_eq!(
+            crash_call_site(r"C:\Users\Mario\models\ggml-base.bin"),
+            "unknown"
+        );
+        assert_eq!(crash_call_site("/Users/anna/models/x.gguf"), "unknown");
     }
 
     /// The exact string that leaked. Sentry issue RUST-B carried a real

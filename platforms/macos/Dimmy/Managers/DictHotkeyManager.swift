@@ -403,7 +403,7 @@ enum AddToDictionaryFlow {
     @MainActor
     private static func addToDict(_ text: String) async {
         let result = DimmyCore.shared.userDictAdd(text)
-        NSLog("[Dict] add '\(text)' result=\(result)")
+        NSLog("[Dict] add (\(text.count) chars) result=\(result)")
         switch result {
         case .added:
             DictToastWindow.showAdded(word: text)

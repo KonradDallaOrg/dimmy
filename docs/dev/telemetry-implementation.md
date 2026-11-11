@@ -82,7 +82,7 @@ Core variants, with their properties. This table is not exhaustive: the next tab
 | `error.cloud_llm` | provider, status_code, error_category *(reserved — never emitted)* |
 | `error.local_stt` | model, error_category *(reserved — never emitted)* |
 | `error.local_llm` | model, error_category *(reserved — never emitted)* |
-| `error.gpu_crash` | backend, context *(emitted once at launch when a known-bad GPU marker exists. `context` is the free-form string the GPU sentinel wrote, e.g. `whisper_load: <model path>`. It is NOT path-scrubbed on the PostHog route: `sanitize::scrub_path` is called nowhere on it. Only the Sentry route scrubs account names)* |
+| `error.gpu_crash` | backend, context *(emitted at launch while a known-bad GPU marker exists. The marker on disk reads `<program>: <call>: <model path>`; `ffi.rs::gpu_crash_event` sends only `<program>: <call>`, for example `dimmy.windows.exe: whisper_load`, cut by `sanitize::crash_call_site`. The path, which names the account and the model file, stays on the computer)* |
 | `error.audio_health` | code *(reserved — never emitted)* |
 | `feature.hotkey_triggered` | – |
 | `feature.api_key_set` | scope, provider |
@@ -273,7 +273,7 @@ Pure helpers:
 - `error_category(message, status) -> &'static str` — stable error bucket: from the HTTP status when there is one, else from keywords in the message; never returns the message.
 - `bucket_audio_secs`, `bucket_capture_ratio`, `bucket_processing_ms`, `bucket_word_count`, `bucket_dict_size`, `bucket_app_rules`, `bucket_recap_model`, `round_gain` — bucketing, so a length or a count cannot fingerprint a user.
 - `scrub_user_paths(text) -> String` — replaces the account name inside any `/Users/<x>`, `\Users\<x>`, `/home/<x>` path with `<USER>`. Used by the Sentry route (`scrub_message`, `redact_prose`, host frames, panic messages). The PostHog route does not call it.
-- `scrub_path(path) -> String` — replaces the home-directory prefix with `<HOME>/`, else keeps the last two path segments. Defined and unit-tested, but called by neither pipeline.
+- `crash_call_site(context) -> String` — the call a GPU crash marker names, without the path that follows it; `unknown` when the marker names no call. Used by `error.gpu_crash`.
 - `looks_like_secret(payload) -> bool` — token-prefix and substring detector, see Defenses above. Used by both pipelines.
 
 Unit tests live in the same file.

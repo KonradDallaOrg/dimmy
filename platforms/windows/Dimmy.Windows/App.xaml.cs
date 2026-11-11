@@ -1151,7 +1151,7 @@ public partial class App : Application
                     return;
                 }
                 int rc = Services.DictionaryService.Add(text);
-                Log($"DictHotkey: add '{text}' rc={rc}", "Dict");
+                Log($"DictHotkey: add ({text.Length} chars) rc={rc}", "Dict");
                 // Visible feedback: rc 0 = added, 1 = already present.
                 // Both show a toast so the user knows the hotkey
                 // worked (no silent failures from their perspective).

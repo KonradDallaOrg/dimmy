@@ -757,14 +757,7 @@ fn dimmy_init_inner() -> c_int {
         known_bad: known_bad_found,
     });
     if let Some(rec) = known_bad_record {
-        crate::telemetry::track(crate::telemetry::Event::ErrorGpuCrash {
-            backend: compiled_backend,
-            // `context` is a free-form Rust string written by us at
-            // crash recovery time (e.g. "whisper_load: <path>"); the
-            // sanitize::scrub_path filter applied by `looks_like_secret`
-            // before send guards against any path leakage.
-            context: rec.context,
-        });
+        crate::telemetry::track(gpu_crash_event(compiled_backend, &rec));
     }
 
     match GLOBAL_STATE.set(app_state) {
@@ -2142,19 +2135,10 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
                 text
             };
 
-            let preview: &str = if text.len() > 200 {
-                match text.char_indices().nth(200) {
-                    Some((idx, _)) => &text[..idx],
-                    None => &text,
-                }
-            } else {
-                &text
-            };
             log(&format!(
-                "[StopRec] Final transcript ({} chars, mode={}): {:?}",
+                "[StopRec] Final transcript: {} chars (mode={})",
                 text.len(),
-                stt_mode,
-                preview
+                stt_mode
             ));
 
             // Update stats: word count from transcript, duration from audio samples
@@ -3659,6 +3643,19 @@ fn compiled_gpu_backend() -> &'static str {
     }
 }
 
+/// What `error.gpu_crash` sends: the backend and the call that aborted.
+/// The marker on disk also holds the model's path, which names the user's
+/// account; that part stays on the computer.
+fn gpu_crash_event(
+    backend: &'static str,
+    record: &crate::gpu_health::KnownBadRecord,
+) -> crate::telemetry::Event {
+    crate::telemetry::Event::ErrorGpuCrash {
+        backend,
+        context: crate::telemetry::sanitize::crash_call_site(&record.context),
+    }
+}
+
 // ── GPU diagnostics ─────────────────────────────────────────────────
 
 /// Read the current GPU known-bad marker. Returns a JSON document via the
@@ -4286,16 +4283,10 @@ pub unsafe extern "C" fn dimmy_process_with_llm(
             &dict_lang,
         ) {
             Ok(enhanced) => {
-                let preview = if enhanced.len() > 120 {
-                    format!("{}...", crate::truncate_utf8(&enhanced, 120))
-                } else {
-                    enhanced.clone()
-                };
                 log(&format!(
-                    "Local LLM complete: {} chars → {} chars: {:?}",
+                    "Local LLM complete: {} chars → {} chars",
                     text.len(),
-                    enhanced.len(),
-                    preview
+                    enhanced.len()
                 ));
                 return write_to_buf(&enhanced, out_buf, buf_len);
             }
@@ -5479,14 +5470,10 @@ pub unsafe extern "C" fn dimmy_user_dict_add(word_ptr: *const c_char) -> c_int {
         } else {
             return -1;
         }
-        log(&format!(
-            "[UserDict] added '{}' ({} chars)",
-            word,
-            word.len()
-        ));
+        log(&format!("[UserDict] added a word ({} chars)", word.len()));
         0
     } else {
-        log(&format!("[UserDict] '{}' already present — no-op", word));
+        log("[UserDict] word already present — no-op");
         1
     }
 }
@@ -5525,8 +5512,8 @@ pub unsafe extern "C" fn dimmy_user_dict_remove(word_ptr: *const c_char) -> c_in
             return -1;
         }
         log(&format!(
-            "[UserDict] removed '{}' ({} entries)",
-            word, removed_count
+            "[UserDict] removed a word ({} entries)",
+            removed_count
         ));
     }
     removed_count
@@ -13203,6 +13190,25 @@ pub(crate) mod tests {
     use super::*;
     use serial_test::serial;
     use std::ffi::c_char;
+
+    // The marker on disk holds the model's path, and the path names the
+    // user's account. PRIVACY.md: "backend and call site (paths scrubbed)",
+    // and no file names or user names in telemetry.
+    #[test]
+    fn a_gpu_crash_report_names_the_call_and_no_folder_of_the_user() {
+        let record = crate::gpu_health::KnownBadRecord {
+            timestamp: "2026-11-11 10:00:00".to_string(),
+            context: r"dimmy.windows.exe: whisper_load: C:\Users\Mario Rossi\AppData\Roaming\dimmy\models\ggml-large-v3-turbo-q5_0.bin"
+                .to_string(),
+            fingerprint: "fp".to_string(),
+        };
+        let sent = gpu_crash_event("vulkan", &record).properties().to_string();
+        assert!(sent.contains("vulkan"), "the backend is sent: {sent}");
+        assert!(sent.contains("whisper_load"), "the call is sent: {sent}");
+        for leaked in ["Mario", "Rossi", "Users", "AppData", "ggml-large"] {
+            assert!(!sent.contains(leaked), "{leaked} left the computer: {sent}");
+        }
+    }
 
     #[test]
     #[serial]
