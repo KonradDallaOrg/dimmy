@@ -98,6 +98,43 @@ pub enum Step {
     },
 }
 
+impl Step {
+    /// The step's name, as the planner writes it.
+    fn kind(&self) -> &'static str {
+        match self {
+            Step::Open { .. } => "open",
+            Step::Focus { .. } => "focus",
+            Step::Place { .. } => "place",
+            Step::Tile { .. } => "tile",
+            Step::FindFiles { .. } => "find_files",
+            Step::Minimize { .. } => "minimize",
+            Step::Restore { .. } => "restore",
+            Step::ShowDesktop => "show_desktop",
+            Step::Web { .. } => "web",
+            Step::Browser { .. } => "browser",
+            Step::Media { .. } => "media",
+            Step::Key { .. } => "key",
+            Step::OpenFolder { .. } => "open_folder",
+            Step::Settings { .. } => "settings",
+            Step::Screenshot => "screenshot",
+            Step::AppCommand { .. } => "app_command",
+            Step::TypeAtEnd { .. } => "type_at_end",
+            Step::Type { .. } => "type",
+            Step::Close { .. } => "close",
+            Step::SwitchWindow => "switch_window",
+            Step::Click { .. } => "click",
+        }
+    }
+}
+
+/// A plan for the log: the names of its steps. A step holds what the user
+/// said (a search, a text to type, a file name), and `dimmy.log` holds none
+/// of it.
+pub fn kinds(steps: &[Step]) -> String {
+    let names: Vec<&str> = steps.iter().map(Step::kind).collect();
+    format!("[{}]", names.join(","))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Side {
@@ -1514,6 +1551,30 @@ mod hands {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // PRIVACY.md: the log holds "technical messages, not your transcripts".
+    // A plan carries what was said: the log gets the names of its steps.
+    #[test]
+    fn a_plan_in_the_log_names_its_steps_and_none_of_the_words() {
+        let plan = vec![
+            Step::Web {
+                site: "youtube".into(),
+                query: "gatti che suonano il pianoforte".into(),
+            },
+            Step::Type {
+                text: "caro Mario ti scrivo".into(),
+            },
+            Step::Click {
+                item: 3,
+                double: false,
+            },
+        ];
+        let logged = kinds(&plan);
+        assert_eq!(logged, "[web,type,click]");
+        for word in ["gatti", "pianoforte", "Mario", "youtube"] {
+            assert!(!logged.contains(word), "{word} is in the log: {logged}");
+        }
+    }
 
     #[test]
     fn an_app_is_named_as_a_person_says_it() {

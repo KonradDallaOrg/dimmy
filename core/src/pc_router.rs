@@ -2178,7 +2178,7 @@ pub fn utterance(cumulative: &str, is_final: bool) {
         });
         crate::ffi::emit_event("pc_live", &payload.to_string());
         if waits {
-            crate::log(&format!("[PcLive] {text:?} waits for the rest"));
+            crate::log(&format!("[PcLive] {} chars wait for the rest", text.len()));
             return;
         }
         {
@@ -2280,8 +2280,12 @@ fn run_claimed(text: String, plan: Option<Plan>, why: &str) {
         None => crate::ffi::pc_execute_text(&text, text.split_whitespace().count() >= 2),
     };
     crate::log(&format!(
-        "[PcLive] {why} on {text:?}: {:?} ok={} error={:?} in {} ms",
-        ran.as_ref().map(|p| &p.steps),
+        "[PcLive] {why} on {} chars: {} ok={} error={:?} in {} ms",
+        text.len(),
+        ran.as_ref().map_or_else(
+            || "no plan".to_string(),
+            |p| crate::pc_control::kinds(&p.steps)
+        ),
         out.ok,
         out.error,
         t.elapsed().as_millis()
@@ -2463,24 +2467,31 @@ pub fn shadow_finish(final_plan: Option<&Plan>) {
     let verdict = |o: Option<&Obs>| match (o, final_plan) {
         (None, _) => "never".to_string(),
         (Some(o), Some(f)) => format!(
-            "at {} ms ({} ms before execute) on {:?}: {}",
+            "at {} ms ({} ms before execute) on {} chars: {}",
             o.ms,
             now.saturating_sub(o.ms),
-            o.text,
+            o.text.len(),
             if same_plan(o.plan.as_ref().unwrap(), f) {
                 "SAME plan"
             } else {
                 "DIFFERENT plan"
             }
         ),
-        (Some(o), None) => format!("at {} ms on {:?}: final had no plan", o.ms, o.text),
+        (Some(o), None) => format!(
+            "at {} ms on {} chars: final had no plan",
+            o.ms,
+            o.text.len()
+        ),
     };
     crate::log(&format!(
-        "[PcShadow] partials={} sure: {} | sure+stable: {} | final={:?}",
+        "[PcShadow] partials={} sure: {} | sure+stable: {} | final={}",
         s.obs.len(),
         verdict(first_sure),
         verdict(first_stable.map(|w| &w[1])),
-        final_plan.map(|p| &p.steps)
+        final_plan.map_or_else(
+            || "no plan".to_string(),
+            |p| crate::pc_control::kinds(&p.steps)
+        )
     ));
 }
 

@@ -9892,8 +9892,12 @@ pub(crate) fn pc_execute_text(
         }
         out.act_ms = t1.elapsed().as_millis() as u64;
         log(&format!(
-            "[PcControl] engine={by} {:?} ok={} plan_ms={} act_ms={} error={:?}",
-            plan.steps, out.ok, out.plan_ms, out.act_ms, out.error
+            "[PcControl] engine={by} {} ok={} plan_ms={} act_ms={} error={:?}",
+            crate::pc_control::kinds(&plan.steps),
+            out.ok,
+            out.plan_ms,
+            out.act_ms,
+            out.error
         ));
         crate::pc_control::remember(text, if out.ok { &out.said } else { "not done" });
         return (out, Some(plan));
