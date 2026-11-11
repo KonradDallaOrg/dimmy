@@ -44,7 +44,6 @@
 //!
 //! `detect_binary` walks all the candidates.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::RwLock;
@@ -882,9 +881,6 @@ pub fn run_blocking(
         cmd.arg("--model");
         cmd.arg(model);
     }
-    cmd.stdin(Stdio::piped());
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
 
     // Suppress the console window flash on Windows. Dimmy is a GUI
     // app (no parent console), so without CREATE_NO_WINDOW Windows
@@ -907,53 +903,14 @@ pub fn run_blocking(
         quick
     ));
 
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| ClaudeCodeError::Spawn(format!("{}", e)))?;
-
-    // Pipe prompt to stdin. Drop the handle before waiting so the
-    // CLI sees EOF and starts generating.
-    if let Some(mut stdin) = child.stdin.take() {
-        if let Err(e) = stdin.write_all(prompt.as_bytes()) {
-            // Kill the child to avoid an orphan.
-            let _ = child.kill();
-            return Err(ClaudeCodeError::Spawn(format!("stdin write: {}", e)));
-        }
-        drop(stdin);
-    } else {
-        let _ = child.kill();
-        return Err(ClaudeCodeError::Spawn("no stdin handle".into()));
-    }
-
-    // Wait with timeout. std::process::Child doesn't ship a
-    // built-in timed wait, so we poll. 100 ms granularity keeps
-    // CPU near zero while still terminating within 1 tick after
-    // the model finishes.
-    let deadline = std::time::Instant::now() + timeout;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_status)) => break,
-            Ok(None) => {
-                if std::time::Instant::now() >= deadline {
-                    let _ = child.kill();
-                    return Err(ClaudeCodeError::Timeout);
-                }
-                std::thread::sleep(Duration::from_millis(100));
-            }
-            Err(e) => {
-                let _ = child.kill();
-                return Err(ClaudeCodeError::Spawn(format!("wait: {}", e)));
-            }
-        }
-    }
-
-    let output = child
-        .wait_with_output()
-        .map_err(|e| ClaudeCodeError::Spawn(format!("collect: {}", e)))?;
+    let output = match crate::cli_runner::run(&mut cmd, prompt.as_bytes(), timeout) {
+        Ok(o) => o,
+        Err(crate::cli_runner::RunError::Timeout) => return Err(ClaudeCodeError::Timeout),
+        Err(crate::cli_runner::RunError::Spawn(e)) => return Err(ClaudeCodeError::Spawn(e)),
+    };
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let excerpt: String = stderr.chars().take(500).collect();
+        let excerpt = crate::cli_runner::excerpt(&output.stderr);
         crate::log(&format!(
             "[ClaudeCode] non-zero exit code={:?} stderr={}",
             output.status.code(),
@@ -1002,9 +959,6 @@ fn streaming_command(binary: &Path, model: &str, quick: bool, json_input: bool) 
         cmd.arg("--model");
         cmd.arg(model);
     }
-    cmd.stdin(Stdio::piped());
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
     // See run_blocking: without CREATE_NO_WINDOW a GUI app gets a console
     // flash on every call.
     #[cfg(target_os = "windows")]
@@ -1050,6 +1004,7 @@ pub fn should_prewarm(i: &PrewarmInputs) -> bool {
 /// One process per dictation, so no context ever carries over.
 struct Warm {
     child: Child,
+    tree: crate::cli_runner::Tree,
     model: String,
     born: std::time::Instant,
 }
@@ -1072,6 +1027,7 @@ impl Warm {
         drop(self.child.stdin.take());
         std::thread::spawn(move || {
             let _ = self.child.wait_with_output();
+            drop(self.tree);
         });
     }
 }
@@ -1099,11 +1055,12 @@ pub fn prewarm(model: &str) {
         if let Some(old) = slot.take() {
             old.retire();
         }
-        match streaming_command(&binary, &model, true, true).spawn() {
-            Ok(child) => {
+        match crate::cli_runner::spawn(&mut streaming_command(&binary, &model, true, true)) {
+            Ok((child, tree)) => {
                 crate::log(&format!("[ClaudeCode] prewarmed model={:?}", model));
                 *slot = Some(Warm {
                     child,
+                    tree,
                     model,
                     born: std::time::Instant::now(),
                 });
@@ -1162,33 +1119,29 @@ fn run_blocking_streaming(
     ));
 
     let spawned_at = std::time::Instant::now();
-    let (mut child, payload) = match warm {
-        Some(w) => (w.child, stream_json_user_message(prompt)),
-        None => (
-            streaming_command(binary, model, quick, false)
-                .spawn()
-                .map_err(|e| ClaudeCodeError::Spawn(format!("{}", e)))?,
-            prompt.to_string(),
-        ),
+    let deadline = spawned_at + timeout;
+    let (mut child, tree, payload) = match warm {
+        Some(w) => (w.child, w.tree, stream_json_user_message(prompt)),
+        None => {
+            let (child, tree) =
+                crate::cli_runner::spawn(&mut streaming_command(binary, model, quick, false))
+                    .map_err(|e| ClaudeCodeError::Spawn(format!("{}", e)))?;
+            (child, tree, prompt.to_string())
+        }
     };
 
-    if let Some(mut stdin) = child.stdin.take() {
-        if let Err(e) = stdin.write_all(payload.as_bytes()) {
-            let _ = child.kill();
-            return Err(ClaudeCodeError::Spawn(format!("stdin write: {}", e)));
-        }
-        drop(stdin);
-    } else {
-        let _ = child.kill();
-        return Err(ClaudeCodeError::Spawn("no stdin handle".into()));
+    if let Err(e) = crate::cli_runner::feed_stdin(&mut child, payload.into_bytes()) {
+        tree.kill(&mut child);
+        return Err(ClaudeCodeError::Spawn(e));
     }
+    let stderr_rx = crate::cli_runner::drain(child.stderr.take());
 
     // Read stdout on its own thread: the main thread must stay free to
     // enforce the deadline, and a blocking read would defeat that.
     let stdout = match child.stdout.take() {
         Some(s) => s,
         None => {
-            let _ = child.kill();
+            tree.kill(&mut child);
             return Err(ClaudeCodeError::Spawn("no stdout handle".into()));
         }
     };
@@ -1197,6 +1150,8 @@ fn run_blocking_streaming(
     let timing = std::sync::Arc::new(std::sync::Mutex::new(StreamTiming::default()));
     let timing_writer = std::sync::Arc::clone(&timing);
     let reader = std::thread::spawn(move || {
+        // `end` on every way out of this thread (the reader can also panic).
+        let mut end = Some(crate::llm::StreamEnd::begin());
         let mut started = false;
         let mut answered = false;
         let mark = |f: fn(&mut StreamTiming) -> &mut Option<u128>| {
@@ -1281,9 +1236,7 @@ fn run_blocking_streaming(
                     if let Some(text) = v["result"].as_str() {
                         if !text.is_empty() && !answered {
                             answered = true;
-                            if started {
-                                crate::llm::emit_recap_stream_event("end", "");
-                            }
+                            end.take();
                             let _ = answer_tx.send(Some(text.to_string()));
                         }
                     }
@@ -1292,9 +1245,7 @@ fn run_blocking_streaming(
             }
         }
         if !answered {
-            if started {
-                crate::llm::emit_recap_stream_event("end", "");
-            }
+            end.take();
             let _ = answer_tx.send(None);
         }
     });
@@ -1302,9 +1253,9 @@ fn run_blocking_streaming(
     let answer = match answer_rx.recv_timeout(timeout) {
         Ok(a) => a,
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-            // Killing the child closes stdout, which ends the reader.
-            let _ = child.kill();
-            let _ = reader.join();
+            // The reader ends once the tree is gone and stdout closes; it
+            // is not joined, so a pipe held open elsewhere cannot hang us.
+            tree.kill(&mut child);
             return Err(ClaudeCodeError::Timeout);
         }
         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => None,
@@ -1313,8 +1264,9 @@ fn run_blocking_streaming(
     if let Some(text) = answer {
         let answered_ms = spawned_at.elapsed().as_millis();
         std::thread::spawn(move || {
+            let _ = child.wait();
+            drop(tree);
             let _ = reader.join();
-            let _ = child.wait_with_output();
         });
         let t = timing.lock().map(|t| t.clone()).unwrap_or_default();
         crate::log(&format!(
@@ -1336,20 +1288,25 @@ fn run_blocking_streaming(
         return Ok(text);
     }
 
-    let _ = reader.join();
-    let output = child
-        .wait_with_output()
-        .map_err(|e| ClaudeCodeError::Spawn(format!("collect: {}", e)))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let excerpt: String = stderr.chars().take(500).collect();
+    // The reader has ended, so stdout is closed and the CLI is on its way out.
+    let status = match crate::cli_runner::wait_until(&mut child, &tree, deadline) {
+        Ok(s) => s,
+        Err(crate::cli_runner::RunError::Timeout) => return Err(ClaudeCodeError::Timeout),
+        Err(crate::cli_runner::RunError::Spawn(e)) => return Err(ClaudeCodeError::Spawn(e)),
+    };
+    tree.kill_rest();
+    if !status.success() {
+        let stderr = stderr_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap_or_default();
+        let excerpt = crate::cli_runner::excerpt(&stderr);
         crate::log(&format!(
             "[ClaudeCode] non-zero exit code={:?} stderr={}",
-            output.status.code(),
+            status.code(),
             excerpt
         ));
         return Err(ClaudeCodeError::NonZeroExit {
-            code: output.status.code().unwrap_or(-1),
+            code: status.code().unwrap_or(-1),
             stderr_excerpt: excerpt,
         });
     }

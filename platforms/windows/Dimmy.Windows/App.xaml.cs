@@ -108,7 +108,7 @@ public partial class App : Application
             if (rc <= 0)
             {
                 PttLog($"Meeting hotkey: start failed rc={rc}");
-                _appViewModel.SetError($"Meeting start failed ({rc})");
+                _appViewModel.SetError(rc == -4 ? "Finish the dictation first" : $"Meeting start failed ({rc})");
                 return;
             }
             PttLog("Meeting hotkey: recording started (background)");
@@ -183,6 +183,40 @@ public partial class App : Application
             RunOnUI(() => Services.DictNotificationService.ShowTranscriptionBehind(engine));
         }
         catch (Exception ex) { PttLog($"OnMeetingTranscriptionBehind exc: {ex.Message}"); }
+    }
+
+    private void ReportInterruptedMeetings()
+    {
+        try
+        {
+            var buf = new byte[64 * 1024];
+            int n = DimmyNative.dimmy_meeting_recover_interrupted(buf, buf.Length);
+            if (n <= 0) return;
+            using var doc = System.Text.Json.JsonDocument.Parse(System.Text.Encoding.UTF8.GetString(buf, 0, n));
+            int count = doc.RootElement.GetArrayLength();
+            if (count == 0) return;
+            PttLog($"interrupted meetings recovered: {count}");
+            RunOnUI(() => Services.DictNotificationService.ShowInterruptedMeetings(count));
+        }
+        catch (Exception ex) { PttLog($"ReportInterruptedMeetings exc: {ex.Message}"); }
+    }
+
+    private void OnMeetingTranscriptionUnavailable(string engine, string reason)
+    {
+        try
+        {
+            RunOnUI(() => Services.DictNotificationService.ShowTranscriptionUnavailable(engine, reason));
+        }
+        catch (Exception ex) { PttLog($"OnMeetingTranscriptionUnavailable exc: {ex.Message}"); }
+    }
+
+    private void OnMeetingTranscriptionRecovered(string engine)
+    {
+        try
+        {
+            RunOnUI(() => Services.DictNotificationService.ShowTranscriptionRecovered());
+        }
+        catch (Exception ex) { PttLog($"OnMeetingTranscriptionRecovered exc: {ex.Message}"); }
     }
 
     private void OnNemotronGpuLimited()
@@ -364,8 +398,9 @@ public partial class App : Application
     // concurrent rc -9 stop) from running the pipeline twice.
     private volatile bool _stopInProgress;
 
-    private static readonly string PttLogPath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "dimmy", "ptt.log");
+    // The install's own config folder: a staging build wrote its log into
+    // the production folder (hard-coded "dimmy").
+    private static string PttLogPath => Path.Combine(Services.BuildInfo.ConfigDirPath, "ptt.log");
 
     private static void PttLog(string msg) => Log(msg, "PTT");
 
@@ -419,7 +454,10 @@ public partial class App : Application
         {
             Program.LogCrash($"Xaml.UnhandledException ({e.Message})", e.Exception);
             PttLog($"[Crash] Xaml.UnhandledException: {e.Message} | {e.Exception}");
+            Helpers.CrashReporter.Report(e.Exception, "xaml_unhandled", fatal: true);
         };
+        Helpers.CrashReporter.StartHangWatchdog(
+            Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread());
     }
 
     public void ReloadConfig()
@@ -480,9 +518,7 @@ public partial class App : Application
         // disks — audit 2026-07-02; the logger itself is deleted).
         try
         {
-            File.Delete(Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "dimmy", "app-rules-diag.log"));
+            File.Delete(Path.Combine(Services.BuildInfo.ConfigDirPath, "app-rules-diag.log"));
         }
         catch { }
 
@@ -640,8 +676,22 @@ public partial class App : Application
             // from its window, so closing the window must not silence the one
             // warning the user can still act on.
             _appViewModel.MeetingTranscriptionBehind += OnMeetingTranscriptionBehind;
+            _appViewModel.MeetingTranscriptionUnavailable += OnMeetingTranscriptionUnavailable;
+            // The pill's rest state reads the host's own dictation pipeline,
+            // and an error during a recording becomes a toast beside it.
+            _appViewModel.DictationBusy = () => !Services.DictationSession.IsIdle;
+            _appViewModel.StreamFailed += () =>
+                RunOnUI(() => Services.DictNotificationService.ShowLiveTypingStopped());
+            _appViewModel.ErrorWhileRecording += msg =>
+                RunOnUI(() => Services.DictNotificationService.ShowErrorBesideRecording(msg));
+            _appViewModel.MeetingTranscriptionRecovered += OnMeetingTranscriptionRecovered;
             _appViewModel.NemotronCpuFallback += OnNemotronCpuFallback;
             _appViewModel.NemotronGpuLimited += OnNemotronGpuLimited;
+
+            // 2g. Meetings a crash left behind: their audio is on disk and
+            // nothing ever said so (dimmy_meeting_list_orphans had no
+            // caller). The core marks them interrupted once; say it once.
+            ReportInterruptedMeetings();
 
             // 3. Load config into ViewModel
             LoadConfigIntoViewModel();
@@ -693,8 +743,7 @@ public partial class App : Application
             PttLog(msg);
             System.Diagnostics.Debug.WriteLine(msg);
             try { System.IO.File.WriteAllText(
-                System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "dimmy", "crash.log"), msg); } catch { }
+                System.IO.Path.Combine(Services.BuildInfo.ConfigDirPath, "crash.log"), msg); } catch { }
         }
     }
 
@@ -788,6 +837,23 @@ public partial class App : Application
         }
     }
 
+    /// <summary>A native crash last launch and crash reports off: ask once
+    /// whether to send that one report. Never together with the consent
+    /// question; the core keeps the report for a later launch.</summary>
+    private void ShowCrashReportPromptIfNeeded()
+    {
+        try
+        {
+            if (!Services.CrashReportChoice.ShouldAsk(Services.StatsConsent.NeedsAsking())) return;
+            if (Interop.DimmyNative.dimmy_crash_report_prompt() != 1) return;
+            new Views.CrashReportWindow().Activate();
+        }
+        catch (Exception ex)
+        {
+            PttLog($"[telemetry] crash report prompt failed: {ex.Message}");
+        }
+    }
+
     private void StartNormalMode()
     {
         // Check audio device health before starting
@@ -826,6 +892,7 @@ public partial class App : Application
         InitTelegram();
         ShowTermsIfNeeded();
         ShowStatsConsentIfNeeded();
+        ShowCrashReportPromptIfNeeded();
 
         // If the launch came from a `dimmy://activate?…` URL but no
         // running instance was around to handle it, we stashed the
@@ -879,7 +946,9 @@ public partial class App : Application
     {
         try
         {
-            _commandPipe = new CommandPipeServer(HandleForwardedCommand);
+            _commandPipe = new CommandPipeServer(
+                HandleForwardedCommand,
+                ex => Helpers.CrashReporter.Report(ex, "command_pipe_handler"));
             _commandPipe.Start();
         }
         catch (Exception ex)
@@ -1781,24 +1850,11 @@ public partial class App : Application
 
     private void LoadConfigIntoViewModel()
     {
-        // Always read from config.json file — it's the complete source of truth.
+        // The core's snapshot, never config.json: it holds every persisted
+        // field and cannot lag the core's in-memory state.
         string? json = null;
-        try
-        {
-            var path = Path.Combine(Services.BuildInfo.ConfigDirPath, "config.json");
-            PttLog($"LoadConfig: looking for {path}, exists={File.Exists(path)}");
-            if (File.Exists(path))
-                json = File.ReadAllText(path);
-        }
-        catch (Exception ex) { PttLog($"LoadConfig: file read error: {ex.Message}"); }
-
-        // Fallback to FFI if file not found
-        if (string.IsNullOrEmpty(json))
-        {
-            PttLog("LoadConfig: file empty/missing, falling back to FFI");
-            try { json = DimmyNative.ReadBuffer(DimmyNative.dimmy_get_config_json, 16384); }
-            catch (Exception ex) { PttLog($"LoadConfig: FFI error: {ex.Message}"); }
-        }
+        try { json = DimmyNative.ConfigJson(); }
+        catch (Exception ex) { PttLog($"LoadConfig: FFI error: {ex.Message}"); }
 
         if (json == null) { PttLog("LoadConfig: no config available"); return; }
 
@@ -2563,8 +2619,10 @@ public partial class App : Application
         {
             DimmyNative.dimmy_call_signal_response(appId, "never");
             // Rust persisted the exclusion to disk via save_config_file.
-            // Refresh the VM's mirror so Settings reflects it immediately.
-            _appViewModel.RefreshCallDetectExclusions();
+            // Refresh the VM's mirror, and the open Settings window's list:
+            // that is the list Settings saves.
+            if (_appViewModel.RefreshCallDetectExclusions())
+                _settingsWindow?.ViewModel.ReplaceCallDetectExcludedApps(_appViewModel.CallDetectExcludedApps);
         }
         catch (Exception ex)
         {
@@ -2716,6 +2774,7 @@ public partial class App : Application
             if (_meetingWindow == null)
             {
                 Log("StartMeetingFromCallDetect: no meeting window", "CallDetect");
+                AbortCallRecord();
                 return;
             }
             await _meetingWindow.EnsureDialogRootAsync();
@@ -2723,6 +2782,7 @@ public partial class App : Application
             if (!started)
             {
                 Log("StartMeetingFromCallDetect: not started (declined or failed)", "CallDetect");
+                AbortCallRecord();
                 return;
             }
             Log("StartMeetingFromCallDetect: meeting started via window", "CallDetect");
@@ -2740,7 +2800,17 @@ public partial class App : Application
         catch (Exception ex)
         {
             Log($"StartMeetingFromCallDetect EXC: {ex.Message}", "CallDetect");
+            if (DimmyNative.dimmy_meeting_is_active() != 1) AbortCallRecord();
         }
+    }
+
+    /// "Record" was accepted (record_now already told the core) but no
+    /// meeting started. Without this the detector believed a recording of
+    /// ours was running and stayed quiet for every later call.
+    private void AbortCallRecord()
+    {
+        try { DimmyNative.dimmy_call_signal_response(null, "record_aborted"); }
+        catch (Exception ex) { Log($"record_aborted EXC: {ex.Message}", "CallDetect"); }
     }
 
     /// the Settings home → Meeting card.
@@ -2751,6 +2821,23 @@ public partial class App : Application
     /// sees the recap cards populated without having to click around.
     /// No-op when no MeetingWindow is open — the artefacts are on
     /// disk and visible next time it's opened.
+    /// <summary>The pill / hotkey / call-detect stop pipeline is over,
+    /// however it ended. An open meeting window still on "Wrapping up"
+    /// leaves it: to the meeting when there is one, else to the list.</summary>
+    public void NotifyMeetingStopEnded(string? dir)
+    {
+        try
+        {
+            var w = _meetingWindow;
+            w?.DispatcherQueue?.TryEnqueue(() =>
+            {
+                try { w.LeaveWrapUp(dir); }
+                catch (Exception ex) { Log($"NotifyMeetingStopEnded dispatch exc: {ex.Message}", "Meeting"); }
+            });
+        }
+        catch (Exception ex) { Log($"NotifyMeetingStopEnded exc: {ex.Message}", "Meeting"); }
+    }
+
     public void NotifyMeetingRecapSaved(string dir)
     {
         try
@@ -3017,14 +3104,33 @@ public partial class App : Application
         }
     }
 
-    public async void QuitApp() => await QuitAsync();
+    public async void QuitApp() => await QuitSafelyAsync();
 
     /// <summary>Sync facade for callers that can't await (tray menu
     /// callback delegate, jump-list command pipe). Fire-and-forget —
     /// the UI thread continues normally while the async path tears
     /// services down. Equivalent to QuitApp(); the rename keeps the
     /// public surface intuitive for external callers.</summary>
-    private void Quit() => _ = QuitAsync();
+    private void Quit() => _ = QuitSafelyAsync();
+
+    private bool _coreShutDown;
+
+    /// <summary>QuitApp is async void: an exception from the teardown would
+    /// crash the process instead of quitting it. Log it, and still finish the
+    /// quit the user asked for, so no half-disposed app stays running.</summary>
+    private async Task QuitSafelyAsync()
+    {
+        try
+        {
+            await QuitAsync();
+        }
+        catch (Exception ex)
+        {
+            Log($"QuitAsync EXC: {ex}", "App");
+            try { if (!_coreShutDown) DimmyNative.dimmy_shutdown(); } catch { }
+            try { Exit(); } catch (Exception exitEx) { Log($"Exit EXC: {exitEx.Message}", "App"); }
+        }
+    }
 
     private async Task QuitAsync()
     {
@@ -3079,6 +3185,7 @@ public partial class App : Application
         catch { }
 
         DimmyNative.dimmy_shutdown();
+        _coreShutDown = true;
 
         _singleInstanceMutex?.ReleaseMutex();
         _singleInstanceMutex?.Dispose();
@@ -3121,16 +3228,13 @@ public partial class App : Application
         }
     }
 
-    private static bool IsOnboardingComplete()
-    {
-        var marker = Path.Combine(Services.BuildInfo.ConfigDirPath, ".onboarding_done");
-        return File.Exists(marker);
-    }
+    /// The core's `.onboarding_done` marker, shared with the Mac and
+    /// `Dimmy --setup onboarding done`.
+    private static bool IsOnboardingComplete() => DimmyNative.dimmy_onboarding_done() == 1;
 
     public static void MarkOnboardingComplete()
     {
-        var dimmyDir = Services.BuildInfo.ConfigDirPath;
-        Directory.CreateDirectory(dimmyDir);
-        File.WriteAllText(Path.Combine(dimmyDir, ".onboarding_done"), "1");
+        if (DimmyNative.dimmy_onboarding_set_done(1) != 0)
+            Log("onboarding marker not written", "Onboarding");
     }
 }

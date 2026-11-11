@@ -146,6 +146,7 @@ struct PillView: View {
     private static let commandAmber = Color(red: 1.0, green: 0x9F / 255.0, blue: 0x0A / 255.0)
     private static let sky = Color(red: 0x38 / 255.0, green: 0xbd / 255.0, blue: 0xf8 / 255.0)
     private static let aiPurple = Color(red: 0xa8 / 255.0, green: 0x55 / 255.0, blue: 0xf7 / 255.0)
+    private static let errorRed = Color(red: 0xef / 255.0, green: 0x44 / 255.0, blue: 0x44 / 255.0)
     private static let sparkle = Color(red: 0xc0 / 255.0, green: 0x84 / 255.0, blue: 0xfc / 255.0)
 
     private var activeBorderStyle: BorderStyle {
@@ -262,6 +263,9 @@ struct PillView: View {
             case .idle:
                 if Self.showsRecap(state: effectiveState, recapsRunning: appState.recapsRunning) {
                     recapView
+                } else if Self.showsBackgroundTranscribe(state: effectiveState,
+                                                         transcribesRunning: appState.transcribesRunning) {
+                    transcribingView
                 } else {
                     idleView
                 }
@@ -273,6 +277,8 @@ struct PillView: View {
                 processingView
             case .completing:
                 completionView
+            case .error(let message):
+                errorView(message)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -839,6 +845,14 @@ struct PillView: View {
         return recapsRunning > 0
     }
 
+    /// A file transcription (Telegram, a loaded file, Regenerate transcript)
+    /// runs while the dictation is idle: shown, but it never holds the
+    /// dictation's state, so a press still starts a dictation.
+    static func showsBackgroundTranscribe(state: RecordingState, transcribesRunning: Int) -> Bool {
+        guard case .idle = state else { return false }
+        return transcribesRunning > 0
+    }
+
     /// A meeting recap is running. Its own word and colour: the pill used to
     /// say "Transcribing..." for the whole LLM call when a meeting was stopped
     /// from it, and nothing at all when the recap started from the meeting
@@ -867,6 +881,39 @@ struct PillView: View {
                 .stroke(Color.teal.opacity(0.4), lineWidth: 1.5)
         )
         .shadow(color: .teal.opacity(0.3), radius: 8)
+    }
+
+    // MARK: - Error State
+
+    /// Win parity: the pill's ErrorPanel (red badge + the message). Standing
+    /// vertical there is no room for text: the badge alone, message on hover.
+    private func errorView(_ message: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "exclamationmark.circle.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(Self.errorRed)
+            if !isVertical {
+                Text(message)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(Self.errorRed)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: 160)
+                    .fixedSize()
+            }
+        }
+        .frame(width: isVertical ? pillHeight : nil, height: pillHeight)
+        .padding(.horizontal, isVertical ? 0 : 14)
+        .background(
+            Capsule()
+                .fill(.ultraThickMaterial)
+        )
+        .overlay(
+            Capsule()
+                .stroke(Self.errorRed.opacity(0.5), lineWidth: 1.5)
+        )
+        .shadow(color: Self.errorRed.opacity(0.3), radius: 8)
+        .help(message)
     }
 
     // MARK: - Completion State
@@ -943,6 +990,7 @@ extension RecordingState {
         case .transcribing: return 3
         case .processing: return 4
         case .completing: return 5
+        case .error: return 6
         }
     }
 }

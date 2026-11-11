@@ -11,12 +11,14 @@ pub mod autostart;
 pub mod calendar;
 pub mod call_detector;
 pub mod call_media;
+pub mod capture;
 #[cfg(target_os = "windows")]
 pub mod capture_sessions;
 pub mod catalog;
 pub mod chunked_stt;
 pub mod claude_code;
 pub mod claude_desktop;
+pub mod cli_runner;
 pub mod codex;
 /// Notion REST API client — sends meeting recap markdown to a user-
 /// picked Notion page or database. Internal integration tokens, no
@@ -51,6 +53,8 @@ pub mod history;
 mod hotkey;
 mod hotkey_recorder;
 pub mod keystore;
+pub mod kimi_cli;
+pub mod kimi_mcp;
 pub mod lang_detect;
 pub mod legal_doc;
 /// Licensing — local-server PoC for the v2 architecture (see
@@ -102,9 +106,11 @@ pub mod setup_prefs;
 pub mod silero;
 #[cfg(feature = "sim-audio")]
 pub mod sim_audio;
+pub mod stream_bounds;
 pub mod telegram;
 pub mod telemetry;
 pub mod transcribe;
+pub mod transcriber_health;
 pub mod whistle;
 #[cfg(target_os = "windows")]
 mod win_paths;
@@ -167,6 +173,19 @@ fn default_shortcut() -> &'static str {
     #[cfg(not(target_os = "macos"))]
     {
         "win+alt"
+    }
+}
+
+/// `stored` when the dictation hook can bind it, the platform default
+/// otherwise. The shortcut is external data: a v0.7.13 host saved a lone
+/// "F9", and read back verbatim it aborted the app at every launch. The
+/// macOS default "fn" is not in the hook's grammar; the Mac host keeps its
+/// own shortcut and never sends this field.
+pub(crate) fn usable_shortcut(stored: &str) -> &str {
+    if stored == default_shortcut() || hotkey::is_valid_combo(stored) {
+        stored
+    } else {
+        default_shortcut()
     }
 }
 
@@ -333,6 +352,25 @@ pub fn onboarding_completed() -> bool {
         return true;
     }
     false
+}
+
+/// The marker alone, for the hosts: unlike [`onboarding_completed`] an
+/// existing config.json does not count, because the core writes one at the
+/// first launch, before onboarding has run.
+pub fn onboarding_marker_exists() -> bool {
+    onboarding_marker_path().is_some_and(|p| p.exists())
+}
+
+/// "Run onboarding again": remove the marker. Absent already is fine.
+pub fn clear_onboarding_done() -> Result<(), String> {
+    let path = onboarding_marker_path().ok_or("Cannot determine config directory")?;
+    match std::fs::remove_file(&path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.to_string()),
+    }
+    assert!(!path.exists(), "Onboarding marker must be gone after clear");
+    Ok(())
 }
 
 /// Mark onboarding as completed by creating the marker file.
@@ -1302,104 +1340,167 @@ pub fn save_config_file(cfg: &AppConfig) {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let mut json = serde_json::json!({
-            "api_url": cfg.api_url,
-            "api_model": cfg.api_model,
-            "language": cfg.language,
-            "shortcut_mode": cfg.shortcut_mode,
-            "shortcut": cfg.shortcut,
-            "prompt": cfg.prompt,
-            "user_dict": cfg.user_dict,
-            "llm_enabled": cfg.llm_enabled,
-            "llm_style": cfg.llm_style.as_str(),
-            "llm_tone": cfg.llm_tone.as_str(),
-            "llm_custom_prompt": cfg.llm_custom_prompt,
-            "llm_translate_to": cfg.llm_translate_to,
-            "llm_api_url": cfg.llm_api_url,
-            "llm_api_model": cfg.llm_api_model,
-            "llm_use_same_key": cfg.llm_use_same_key,
-            "llm_log_enabled": cfg.llm_log_enabled,
-            "llm_auth_method": cfg.llm_auth_method,
-            "recap_auth_method": cfg.recap_auth_method,
-            "recap_use_same_key": cfg.recap_use_same_key,
-            "recap_model_override": cfg.recap_model_override,
-            "chunk_streaming_enabled": cfg.chunk_streaming_enabled,
-            "streaming_dictation": cfg.streaming_dictation,
-            "gemini_cli_enabled": cfg.gemini_cli_enabled,
-            "telegram_enabled": cfg.telegram_enabled,
-            "telegram_auto_process": cfg.telegram_auto_process,
-            "preprocessing_enabled": cfg.preprocessing_enabled,
-            "audio_debug_enabled": cfg.audio_debug_enabled,
-            "ggml_debug_logging": cfg.ggml_debug_logging,
-            "use_keyring": cfg.use_keyring,
-            "stt_mode": cfg.stt_mode,
-            "local_model": cfg.local_model,
-            "local_stt_backend": cfg.local_stt_backend,
-            "qwen_asr_model": cfg.qwen_asr_model,
-            "nemotron_model": cfg.nemotron_model,
-            "live_captions_enabled": cfg.live_captions_enabled,
-            "call_detect_enabled": cfg.call_detect_enabled,
-            "call_detect_auto_record": cfg.call_detect_auto_record,
-            "call_detect_excluded_apps": cfg.call_detect_excluded_apps,
-            "call_detect_cooldown_secs": cfg.call_detect_cooldown_secs,
-            "call_detect_min_active_secs": cfg.call_detect_min_active_secs,
-            "call_detect_timeout_cooldown_secs": cfg.call_detect_timeout_cooldown_secs,
-            "save_audio_in_history": cfg.save_audio_in_history,
-            "history_audio_keep_days": cfg.history_audio_keep_days,
-            "history_audio_max_mb": cfg.history_audio_max_mb,
-            "auto_recap_threshold_secs": cfg.auto_recap_threshold_secs,
-            "meeting_generate_recap": cfg.meeting_generate_recap,
-            "diarization_enabled": cfg.diarization_enabled,
-            "filler_removal_enabled": cfg.filler_removal_enabled,
-            "llm_mode": cfg.llm_mode,
-            "local_llm_model": cfg.local_llm_model,
-            "border_style": cfg.border_style,
-            "waveform_style": cfg.waveform_style,
-            "overlay_position": cfg.overlay_position,
-            "keep_in_clipboard": cfg.keep_in_clipboard,
-            "input_gain": cfg.input_gain,
-            "loopback_gain": cfg.loopback_gain,
-            "meeting_chunk_secs": cfg.meeting_chunk_secs,
-            "meeting_storage_path": cfg.meeting_storage_path,
-            "terms_accepted_version": cfg.terms_accepted_version,
-            "analytics_consent": cfg.analytics_consent,
-            "crash_reports_consent": cfg.crash_reports_consent,
-            "notion_target_id": cfg.notion_target_id,
-            "notion_target_kind": cfg.notion_target_kind,
-            "notion_target_title": cfg.notion_target_title,
-            "notion_auto_send": cfg.notion_auto_send,
-            "calendar_context_enabled": cfg.calendar_context_enabled,
-            "confluence_site": cfg.confluence_site,
-            "confluence_email": cfg.confluence_email,
-            "confluence_space_id": cfg.confluence_space_id,
-            "confluence_space_key": cfg.confluence_space_key,
-            "confluence_space_name": cfg.confluence_space_name,
-            "confluence_parent_id": cfg.confluence_parent_id,
-            "confluence_auto_send": cfg.confluence_auto_send,
-            "audio_source": cfg.audio_source,
-            "stats_total_words": cfg.stats_total_words,
-            "stats_total_speaking_secs": cfg.stats_total_speaking_secs,
-        });
-        // app_rules / selected_device / anchors set outside the json! macro:
-        // adding more fields to the macro pushes it past its
-        // recursion-expansion limit.
-        if let Ok(v) = serde_json::to_value(&cfg.app_rules) {
-            json["app_rules"] = v;
+        let json = config_to_json(cfg);
+        let body = serde_json::to_string_pretty(&json).unwrap_or_default();
+        if let Err(e) = write_atomic(&path, body.as_bytes()) {
+            log(&format!("[config] save failed: {e}"));
+            crate::telemetry::report(
+                crate::telemetry::Subsystem::Config,
+                "save_failed",
+                "",
+                &e.to_string(),
+            );
         }
-        if let Some(ref dev) = cfg.selected_device {
-            json["selected_device"] = serde_json::json!(dev);
-        }
-        if let Some(r) = cfg.window_anchor_right {
-            json["window_anchor_right"] = serde_json::json!(r);
-        }
-        if let Some(b) = cfg.window_anchor_bottom {
-            json["window_anchor_bottom"] = serde_json::json!(b);
-        }
-        let _ = std::fs::write(
-            &path,
-            serde_json::to_string_pretty(&json).unwrap_or_default(),
+    }
+}
+
+/// Replace `path` with `bytes` so a crash or power loss mid-write leaves
+/// either the old file or the new one, never a truncated mix: write a
+/// sibling temp file, flush it to disk, rename it over the target.
+/// `std::fs::rename` replaces an existing target on Windows too
+/// (MoveFileExW + MOVEFILE_REPLACE_EXISTING).
+pub fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let name = path
+        .file_name()
+        .ok_or_else(|| std::io::Error::other("write_atomic: path has no file name"))?;
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let tmp = path.with_file_name(format!(
+        "{}.{}.{}.tmp",
+        name.to_string_lossy(),
+        std::process::id(),
+        seq
+    ));
+    let written = (|| {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+        drop(f);
+        std::fs::rename(&tmp, path)
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written?;
+    assert!(!tmp.exists(), "write_atomic: temp file left behind");
+    Ok(())
+}
+
+/// A UI style string from config JSON, with `default` standing in for a
+/// missing or blank value: a blank one would trip the save asserts.
+pub fn non_empty_or(v: &serde_json::Value, default: &str) -> String {
+    assert!(!default.is_empty(), "non_empty_or: empty default");
+    match v.as_str() {
+        Some(s) if !s.trim().is_empty() => s.to_string(),
+        _ => default.to_string(),
+    }
+}
+
+/// The persisted form of `cfg`: exactly what `save_config_file` writes, and
+/// the base of `dimmy_get_config_json`, so the hosts can read every saved
+/// field through the core. API keys and tokens are not in `AppConfig`.
+pub fn config_to_json(cfg: &AppConfig) -> serde_json::Value {
+    let mut json = serde_json::json!({
+        "api_url": cfg.api_url,
+        "api_model": cfg.api_model,
+        "language": cfg.language,
+        "shortcut_mode": cfg.shortcut_mode,
+        "shortcut": cfg.shortcut,
+        "prompt": cfg.prompt,
+        "user_dict": cfg.user_dict,
+        "llm_enabled": cfg.llm_enabled,
+        "llm_style": cfg.llm_style.as_str(),
+        "llm_tone": cfg.llm_tone.as_str(),
+        "llm_custom_prompt": cfg.llm_custom_prompt,
+        "llm_translate_to": cfg.llm_translate_to,
+        "llm_api_url": cfg.llm_api_url,
+        "llm_api_model": cfg.llm_api_model,
+        "llm_use_same_key": cfg.llm_use_same_key,
+        "llm_log_enabled": cfg.llm_log_enabled,
+        "llm_auth_method": cfg.llm_auth_method,
+        "recap_auth_method": cfg.recap_auth_method,
+        "recap_use_same_key": cfg.recap_use_same_key,
+        "recap_model_override": cfg.recap_model_override,
+        "chunk_streaming_enabled": cfg.chunk_streaming_enabled,
+        "streaming_dictation": cfg.streaming_dictation,
+        "gemini_cli_enabled": cfg.gemini_cli_enabled,
+        "telegram_enabled": cfg.telegram_enabled,
+        "telegram_auto_process": cfg.telegram_auto_process,
+        "preprocessing_enabled": cfg.preprocessing_enabled,
+        "audio_debug_enabled": cfg.audio_debug_enabled,
+        "ggml_debug_logging": cfg.ggml_debug_logging,
+        "use_keyring": cfg.use_keyring,
+        "stt_mode": cfg.stt_mode,
+        "local_model": cfg.local_model,
+        "local_stt_backend": cfg.local_stt_backend,
+        "qwen_asr_model": cfg.qwen_asr_model,
+        "nemotron_model": cfg.nemotron_model,
+        "live_captions_enabled": cfg.live_captions_enabled,
+        "call_detect_enabled": cfg.call_detect_enabled,
+        "call_detect_auto_record": cfg.call_detect_auto_record,
+        "call_detect_excluded_apps": cfg.call_detect_excluded_apps,
+        "call_detect_cooldown_secs": cfg.call_detect_cooldown_secs,
+        "call_detect_min_active_secs": cfg.call_detect_min_active_secs,
+        "call_detect_timeout_cooldown_secs": cfg.call_detect_timeout_cooldown_secs,
+        "save_audio_in_history": cfg.save_audio_in_history,
+        "history_audio_keep_days": cfg.history_audio_keep_days,
+        "history_audio_max_mb": cfg.history_audio_max_mb,
+        "auto_recap_threshold_secs": cfg.auto_recap_threshold_secs,
+        "meeting_generate_recap": cfg.meeting_generate_recap,
+        "diarization_enabled": cfg.diarization_enabled,
+        "filler_removal_enabled": cfg.filler_removal_enabled,
+        "llm_mode": cfg.llm_mode,
+        "local_llm_model": cfg.local_llm_model,
+        "border_style": cfg.border_style,
+        "waveform_style": cfg.waveform_style,
+        "overlay_position": cfg.overlay_position,
+        "keep_in_clipboard": cfg.keep_in_clipboard,
+        "input_gain": cfg.input_gain,
+        "loopback_gain": cfg.loopback_gain,
+        "meeting_chunk_secs": cfg.meeting_chunk_secs,
+        "meeting_storage_path": cfg.meeting_storage_path,
+        "terms_accepted_version": cfg.terms_accepted_version,
+        "analytics_consent": cfg.analytics_consent,
+        "crash_reports_consent": cfg.crash_reports_consent,
+        "notion_target_id": cfg.notion_target_id,
+        "notion_target_kind": cfg.notion_target_kind,
+        "notion_target_title": cfg.notion_target_title,
+        "notion_auto_send": cfg.notion_auto_send,
+        "calendar_context_enabled": cfg.calendar_context_enabled,
+        "confluence_site": cfg.confluence_site,
+        "confluence_email": cfg.confluence_email,
+        "confluence_space_id": cfg.confluence_space_id,
+        "confluence_space_key": cfg.confluence_space_key,
+        "confluence_space_name": cfg.confluence_space_name,
+        "confluence_parent_id": cfg.confluence_parent_id,
+        "confluence_auto_send": cfg.confluence_auto_send,
+        "audio_source": cfg.audio_source,
+        "stats_total_words": cfg.stats_total_words,
+        "stats_total_speaking_secs": cfg.stats_total_speaking_secs,
+    });
+    // app_rules / selected_device / anchors set outside the json! macro:
+    // adding more fields to the macro pushes it past its
+    // recursion-expansion limit.
+    if let Ok(v) = serde_json::to_value(&cfg.app_rules) {
+        json["app_rules"] = v;
+    }
+    if let Some(ref dev) = cfg.selected_device {
+        json["selected_device"] = serde_json::json!(dev);
+    }
+    if let Some(r) = cfg.window_anchor_right {
+        json["window_anchor_right"] = serde_json::json!(r);
+    }
+    if let Some(b) = cfg.window_anchor_bottom {
+        json["window_anchor_bottom"] = serde_json::json!(b);
+    }
+    for key in json.as_object().expect("config json is an object").keys() {
+        assert!(
+            !key.contains("api_key") && !key.contains("token") && !key.contains("secret"),
+            "config_to_json: secret-like key {key} must never be persisted"
         );
     }
+    json
 }
 
 /// Load non-sensitive config from file. Missing LLM fields use defaults (backward compatible).
@@ -1422,9 +1523,7 @@ pub fn load_config_file() -> AppConfig {
                     selected_device: v["selected_device"].as_str().map(|s| s.to_string()),
                     language: v["language"].as_str().unwrap_or("").to_string(),
                     shortcut_mode: v["shortcut_mode"].as_str().unwrap_or("toggle").to_string(),
-                    shortcut: v["shortcut"]
-                        .as_str()
-                        .unwrap_or(default_shortcut())
+                    shortcut: usable_shortcut(v["shortcut"].as_str().unwrap_or(default_shortcut()))
                         .to_string(),
                     prompt: v["prompt"].as_str().unwrap_or(DEFAULT_PROMPT).to_string(),
                     user_dict: v["user_dict"]
@@ -1588,12 +1687,12 @@ pub fn load_config_file() -> AppConfig {
                         .as_str()
                         .unwrap_or(&defaults.local_llm_model)
                         .to_string(),
-                    border_style: v["border_style"].as_str().unwrap_or("Rainbow").to_string(),
-                    waveform_style: v["waveform_style"].as_str().unwrap_or("Bars").to_string(),
-                    overlay_position: v["overlay_position"]
-                        .as_str()
-                        .unwrap_or("Bottom Right")
-                        .to_string(),
+                    border_style: non_empty_or(&v["border_style"], &defaults.border_style),
+                    waveform_style: non_empty_or(&v["waveform_style"], &defaults.waveform_style),
+                    overlay_position: non_empty_or(
+                        &v["overlay_position"],
+                        &defaults.overlay_position,
+                    ),
                     keep_in_clipboard: v["keep_in_clipboard"].as_bool().unwrap_or(false),
                     input_gain: v["input_gain"]
                         .as_f64()
@@ -2601,6 +2700,58 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
 }
 
 #[cfg(test)]
+mod config_file_tests {
+    use super::*;
+
+    #[test]
+    fn a_blank_style_string_falls_back_to_the_default() {
+        let v = serde_json::json!({"a": "", "b": "  ", "c": "Solid", "d": 3});
+        assert_eq!(non_empty_or(&v["a"], "Rainbow"), "Rainbow");
+        assert_eq!(non_empty_or(&v["b"], "Rainbow"), "Rainbow");
+        assert_eq!(non_empty_or(&v["c"], "Rainbow"), "Solid");
+        assert_eq!(non_empty_or(&v["d"], "Rainbow"), "Rainbow");
+        assert_eq!(non_empty_or(&v["missing"], "Bars"), "Bars");
+    }
+
+    #[test]
+    fn replaces_an_existing_file_and_leaves_no_temp_behind() {
+        let dir = std::env::temp_dir().join(format!("dimmy-atomic-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("config.json");
+        std::fs::write(&path, "{\"old\":true, \"long\":\"padding padding\"}").expect("seed");
+        write_atomic(&path, b"{\"new\":1}").expect("write");
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), "{\"new\":1}");
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .expect("ls")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name() != "config.json")
+            .collect();
+        assert!(leftovers.is_empty(), "left behind: {leftovers:?}");
+        write_atomic(&dir.join("fresh.json"), b"x").expect("create");
+        assert_eq!(std::fs::read(dir.join("fresh.json")).expect("read"), b"x");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_write_keeps_the_old_file() {
+        let dir = std::env::temp_dir().join(format!("dimmy-atomic-fail-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        // A directory where the file should be: the rename must fail and the
+        // directory (standing in for the old config) must survive.
+        let target = dir.join("config.json");
+        std::fs::create_dir_all(target.join("keep")).expect("blocker");
+        assert!(write_atomic(&target, b"{}").is_err());
+        assert!(target.join("keep").is_dir());
+        assert_eq!(
+            std::fs::read_dir(&dir).expect("ls").count(),
+            1,
+            "temp left behind"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -3424,6 +3575,31 @@ mod tests {
             load_config_file().meeting_generate_recap,
             "an upgrade must not silently stop producing recaps"
         );
+
+        save_config_file(&AppConfig::default());
+    }
+
+    /// A v0.7.13 host saved "F9", which the hook cannot bind; read back
+    /// verbatim it aborted the app at every launch (Sentry RUST-1B).
+    #[test]
+    #[serial_test::serial]
+    fn a_stored_shortcut_the_hook_cannot_bind_loads_as_the_default() {
+        let path = config_path().expect("config path");
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        for stored in ["F9", "", "garbage", "ctrl+number1"] {
+            let cfg = serde_json::json!({ "shortcut": stored }).to_string();
+            std::fs::write(&path, cfg).expect("write config");
+            assert_eq!(
+                load_config_file().shortcut,
+                default_shortcut(),
+                "{stored:?}"
+            );
+        }
+        let cfg = serde_json::json!({ "shortcut": "ctrl+shift+x" }).to_string();
+        std::fs::write(&path, cfg).expect("write config");
+        assert_eq!(load_config_file().shortcut, "ctrl+shift+x");
 
         save_config_file(&AppConfig::default());
     }

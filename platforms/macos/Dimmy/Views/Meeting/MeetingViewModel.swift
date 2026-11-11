@@ -23,6 +23,14 @@ import Combine
 
 @MainActor
 final class MeetingViewModel: ObservableObject {
+    /// Meetings whose audio came out incomplete in this run of the app,
+    /// dir -> the finalize error. Written by the shared stop
+    /// (PillWindowController.stopMeetingFromPill), read by
+    /// `loadDoneFromDisk`: the window's own stop used to append it to the
+    /// Done metadata, and the shared stop lost it. Win mirror:
+    /// Helpers/MeetingDoneNotes.cs.
+    static var audioIncomplete: [String: String] = [:]
+
     enum Phase: Equatable {
         case idle
         case recording
@@ -273,25 +281,7 @@ final class MeetingViewModel: ObservableObject {
         AppState.shared.$meetingIsPaused
             .receive(on: DispatchQueue.main)
             .sink { [weak self] paused in
-                guard let self else { return }
-                if paused != self.isPaused {
-                    self.isPaused = paused
-                    self.statusLabel = paused ? "Paused" : "Recording"
-                    // Freeze / resume the elapsed-time clock so the
-                    // timer label matches the recording the worker
-                    // actually keeps (meeting.rs gap-skips the paused
-                    // window, the WAV + transcript exclude it). On
-                    // pause: stamp the pause-start instant. On resume:
-                    // fold the paused span into pausedAccumulator so
-                    // pollTick subtracts it from the wall-clock delta.
-                    if paused {
-                        self.pauseStartedAt = Date()
-                    } else if let pausedAt = self.pauseStartedAt {
-                        self.pausedAccumulator += Date().timeIntervalSince(pausedAt)
-                        self.pauseStartedAt = nil
-                    }
-                    self.pollTick()
-                }
+                self?.setPaused(paused)
             }
             .store(in: &liveTranscriptBag)
         // Mirror Win: when an EXTERNAL surface (pill stop, call-detect
@@ -318,13 +308,18 @@ final class MeetingViewModel: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] active in
                 guard let self else { return }
+                // Started elsewhere (shortcut, menu, call detect) while this
+                // window sat idle or showed a past meeting: it used to stay
+                // there with Start refused. Its own start sets .recording
+                // before the core's event, so this only fires for an outside
+                // start. Not while a stop is wrapping up (.processing).
+                if active, self.phase == .idle || self.phase == .done, !self.isWorking {
+                    self.selectedDir = nil
+                    self.attachToInflightMeeting()
+                    return
+                }
                 if !active, self.phase == .recording {
-                    self.stopPollingForExternalStop()
-                    self.phase = .processing
-                    self.processingStep = .generatingRecap
-                    self.statusLabel = "Wrapping up..."
-                    self.subStatusLabel = ""
-                    self.armWrapUpWatchdog()
+                    self.enterWrapUp()
                 }
             }
             .store(in: &liveTranscriptBag)
@@ -629,13 +624,21 @@ final class MeetingViewModel: ObservableObject {
         AppState.shared.meetingLastChunkSpeaker = ""
 
         DispatchQueue.global(qos: .userInitiated).async {
-            let id = DimmyCore.shared.meetingStart()
+            let start = DimmyCore.shared.meetingStartResult()
+            let id = start.id
             DispatchQueue.main.async {
                 self.isWorking = false
                 guard let id, !id.isEmpty else {
                     self.phase = .idle
-                    self.statusLabel = "Couldn't start"
-                    self.subStatusLabel = "Check microphone permissions and try again."
+                    if start.rc == -4 {
+                        // Refused by the core: ending that dictation used to
+                        // stop the meeting's capture.
+                        self.statusLabel = "A dictation is recording"
+                        self.subStatusLabel = "Finish it, then start the meeting."
+                    } else {
+                        self.statusLabel = "Couldn't start"
+                        self.subStatusLabel = "Check microphone permissions and try again."
+                    }
                     return
                 }
                 self.sessionId = id
@@ -706,15 +709,34 @@ final class MeetingViewModel: ObservableObject {
         let currentlyPaused = DimmyCore.shared.meetingIsPaused
         if currentlyPaused {
             _ = DimmyCore.shared.meetingResume()
-            isPaused = false
-            statusLabel = "Recording"
+            setPaused(false)
             showToast("Resumed.")
         } else {
             _ = DimmyCore.shared.meetingPause()
-            isPaused = true
-            statusLabel = "Paused"
+            setPaused(true)
             showToast("Paused, audio + transcript skipped until you resume.")
         }
+    }
+
+    /// The one place the pause flag and its clock change, together. The
+    /// button used to set `isPaused` itself before the core's event
+    /// arrived, so the event saw no change and the clock never froze: the
+    /// timer kept counting through every pause started from this window.
+    ///
+    /// The clock matches the recording the worker keeps (meeting.rs
+    /// gap-skips the paused window): on pause stamp the instant, on resume
+    /// fold the span into pausedAccumulator, which pollTick subtracts.
+    func setPaused(_ paused: Bool) {
+        guard paused != isPaused else { return }
+        isPaused = paused
+        statusLabel = paused ? "Paused" : "Recording"
+        if paused {
+            pauseStartedAt = Date()
+        } else if let pausedAt = pauseStartedAt {
+            pausedAccumulator += Date().timeIntervalSince(pausedAt)
+            pauseStartedAt = nil
+        }
+        pollTick()
     }
 
     // MARK: - Stop
@@ -724,13 +746,8 @@ final class MeetingViewModel: ObservableObject {
             dimmyHostLog("[Meeting] stop ignored: phase=\(phase) busy=\(isWorking) active=\(DimmyCore.shared.meetingIsActive)")
             return
         }
-        isWorking = true
-        phase = .processing
-        processingStep = .saving
         // Fresh stop: the core will raise this again if it has a backlog.
         AppState.shared.meetingFinishingTranscription = false
-        statusLabel = "Stopping & finalising..."
-        subStatusLabel = ""
         stopRecordingPolling()
         systemAudioPermissionNeeded = false
         // Snapshot the live transcript into the Done buffer so the
@@ -739,146 +756,36 @@ final class MeetingViewModel: ObservableObject {
         // cleared on the next start().
         doneRawTranscript = AppState.shared.meetingLiveTranscript
         AppState.shared.meetingActiveDir = ""
-
-        // Pinned now: a meeting started before this one's recap runs writes
-        // its own choice into the same AppState field.
-        let wantRecap = AppState.shared.meetingGenerateRecap
-        let generation = meetingGeneration
-        SystemAudioCaptureService.shared.stop()
-        DispatchQueue.global(qos: .userInitiated).async {
-            var result = DimmyCore.shared.meetingStop()
-            // The core is done with this meeting: the next one may start now,
-            // while the speaker pass and the recap below still run.
-            DispatchQueue.main.async { self.isWorking = false }
-            // Speaker labels (when enabled) replace the live per-track
-            // transcript before the recap reads it.
-            if let stopped = result, !stopped.speakersLabeled, DiarizationService.enabled() {
-                DispatchQueue.main.async {
-                    if self.meetingGeneration == generation { self.statusLabel = "Identifying speakers…" }
-                }
-                result?.transcript = DiarizationService.relabelIfEnabled(
-                    dir: stopped.dir, liveTranscript: stopped.transcript,
-                    alreadyLabeled: false)
-                DispatchQueue.main.async {
-                    if self.meetingGeneration == generation { self.clearRetranscribeProgress() }
-                }
-            }
-            let stopped = result
-            DispatchQueue.main.async {
-                let result = stopped
-                // A newer meeting took the window while this one wrapped up.
-                // Its recap still runs, out of sight; the window stays on the
-                // recording.
-                guard self.meetingGeneration == generation else {
-                    if let result {
-                        let transcript = result.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !transcript.isEmpty && wantRecap {
-                            self.runPostProcess(dir: result.dir, transcript: transcript,
-                                                generation: generation)
-                        }
-                    }
-                    self.loadHistory()
-                    return
-                }
-                self.isPaused = false
-                guard let result else {
-                    self.isWorking = false
-                    self.phase = .idle
-                    self.statusLabel = "Stop failed"
-                    self.subStatusLabel = "See dimmy.log for details."
-                    return
-                }
-                self.activeMeetingDir = result.dir
-                let cleanTranscript = result.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-                self.doneRawTranscript = cleanTranscript
-                self.doneTitle = self.titleFromDir(result.dir)
-                self.doneMeta = String(
-                    format: "%.0fs · %d chunks", result.durationSecs, result.chunkCount
-                )
-                self.refreshDoneCalendarLine(meetingDir: result.dir)
-                // Surface a finalize failure (disk-full → incomplete audio on
-                // disk). The core has always serialized `error`; silently
-                // ignoring it meant the user learned about the damage only
-                // when the recap failed. Win parity (MeetingWindow stop).
-                if let stopError = result.error {
-                    dimmyHostLog("[Meeting] stop reported error: \(stopError)")
-                    self.doneMeta += " · ⚠ audio incomplete (\(stopError))"
-                }
-                self.doneAudioURL = self.audioURL(for: result.dir)
-                self.doneAudioMicURL = self.micAudioURL(for: result.dir)
-                self.doneAudioSystemURL = self.systemAudioURL(for: result.dir)
-                self.doneNotes = Self.readNotes(dir: result.dir)
-                self.doneSelectedTab = .recap
-
-                if cleanTranscript.isEmpty {
-                    dimmyHostLog("[Recap] skip (window stop): reason=empty transcript — no recap will run")
-                    // No speech captured (very short recording, VAD
-                    // rejected everything, or STT failed silently).
-                    // Don't pretend the recap "wasn't generated", be
-                    // explicit so the user knows nothing landed.
-                    self.isWorking = false
-                    self.phase = .done
-                    self.doneSections = [
-                        "TLDR": "Nothing was recorded, no speech was detected. Try moving closer to the microphone, checking input device settings, or recording for longer.",
-                    ]
-                    self.statusLabel = "Empty recording"
-                    self.subStatusLabel = "No transcript was produced"
-                    self.loadHistory()
-                } else if wantRecap {
-                    // Read the flag pinned at meeting start, NOT the live
-                    // checkbox (which a reopened window can render stale).
-                    self.processingStep = .generatingRecap
-                    self.runPostProcess(dir: result.dir, transcript: cleanTranscript,
-                                        generation: generation)
-                } else {
-                    dimmyHostLog("[Recap] skip (window stop): reason=meetingGenerateRecap=false (recap toggled off for this meeting) — transcript kept, no recap")
-                    self.isWorking = false
-                    self.phase = .done
-                    self.doneSections = [
-                        "TLDR": "Recap skipped, toggle on \"Generate recap\" before stopping next time, or click Regenerate to run it now.",
-                    ]
-                    self.statusLabel = "Done"
-                    self.loadHistory()
-                }
-            }
-        }
+        isPaused = false
+        // Wrapping up now, before the core is even called. From here this
+        // window waits for the shared stop exactly as it does for a stop from
+        // the pill: `meetingRecapSaved` lands it on Done (or `leaveWrapUp`
+        // when the stop failed), the watchdog is the net.
+        enterWrapUp()
+        PillWindowController.stopMeetingFromPill(appState: AppState.shared)
     }
 
-    private func runPostProcess(dir: String, transcript: String, generation: Int) {
-        if meetingGeneration == generation { statusLabel = "Generating recap with LLM..." }
-        let notionAutoSend = AppState.shared.notionAutoSend
-        let meetingType = selectedMeetingType == "auto" ? "" : selectedMeetingType
-        DispatchQueue.global(qos: .userInitiated).async {
-            let result = MeetingPostProcessService.runRecap(
-                dir: dir,
-                transcript: transcript,
-                notionAutoSend: notionAutoSend,
-                meetingType: meetingType
-            )
-            DispatchQueue.main.async {
-                guard self.meetingGeneration == generation else {
-                    // The recap of an earlier meeting, finished while a newer
-                    // one records: it is on disk and in the sidebar.
-                    self.loadHistory()
-                    return
-                }
-                self.phase = .done
-                switch result {
-                case .success(let recap):
-                    self.processingStep = .extractingActions
-                    self.doneSections = recap.sections
-                    self.statusLabel = "Done"
-                    self.subStatusLabel = "Recap saved to \(URL(fileURLWithPath: dir).lastPathComponent)"
-                    self.recapFailed = false
-                case .failure(let err):
-                    self.doneSections = ["TLDR": "(recap failed, \(err))"]
-                    self.statusLabel = "Recap failed"
-                    self.subStatusLabel = "\(err)"
-                    self.recapFailed = true
-                }
-                self.loadHistory()
-            }
-        }
+    /// "Wrapping up": the recording is over and the shared stop is running,
+    /// started from this window or anywhere else.
+    private func enterWrapUp() {
+        stopPollingForExternalStop()
+        phase = .processing
+        processingStep = .generatingRecap
+        statusLabel = "Wrapping up..."
+        subStatusLabel = ""
+        armWrapUpWatchdog()
+    }
+
+    /// The shared stop failed (no meeting folder came back): leave "Wrapping
+    /// up" instead of loading an empty folder. Win mirror: LeaveWrapUp.
+    func leaveWrapUp() {
+        guard phase == .processing else { return }
+        wrapUpWatchdog?.invalidate()
+        wrapUpWatchdog = nil
+        phase = .idle
+        statusLabel = "Stop failed"
+        subStatusLabel = "See dimmy.log for details."
+        loadHistory()
     }
 
     // MARK: - Regenerate (Done state)
@@ -1399,7 +1306,7 @@ final class MeetingViewModel: ObservableObject {
     /// containers a loaded file or a Telegram audio arrives in. File load used
     /// to copy every source as `audio.wav`, so an .m4a lost its waveform, its
     /// duration and its language detection; it now keeps its own extension.
-    nonisolated static let meetingAudioExtensions = ["ogg", "wav", "m4a", "mp3", "aac", "flac", "mp4"]
+    nonisolated static let meetingAudioExtensions = ["ogg", "wav", "m4a", "mp3", "aac", "flac", "mp4", "oga", "opus", "webm"]
 
     /// Resolve a meeting audio track to its on-disk URL, preferring the
     /// newer Ogg/Vorbis file (`feat/meeting-live-notes`) over the older
@@ -1448,16 +1355,8 @@ final class MeetingViewModel: ObservableObject {
         guard let dir = selectedDir ?? activeDir, !dir.isEmpty else { return }
         let trimmed = newTitle.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty, trimmed.count <= 200, trimmed != doneTitle else { return }
-        let metaPath = (dir as NSString).appendingPathComponent("meta.json")
-        var obj: [String: Any] = [:]
-        if let data = try? Data(contentsOf: URL(fileURLWithPath: metaPath)),
-           let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            obj = existing
-        }
-        obj["title"] = trimmed
-        if let data = try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys]) {
-            try? data.write(to: URL(fileURLWithPath: metaPath), options: .atomic)
-        }
+        // The core is meta.json's one writer (Win does the same).
+        DimmyCore.shared.meetingSetTitle(dir: dir, title: trimmed)
         doneTitle = trimmed
         if let idx = historyRows.firstIndex(where: { $0.dir == dir }) {
             let old = historyRows[idx]
@@ -1487,16 +1386,29 @@ final class MeetingViewModel: ObservableObject {
         // Meeting date from meta.json `started_at` (stable across title
         // edits), not the dir mtime, see MeetingHistoryRow.dateFor.
         doneMeta = MeetingHistoryRow.subtitleFor(date: MeetingHistoryRow.dateFor(dirURL: url))
+        if let stopError = Self.audioIncomplete[dir] {
+            doneMeta += " · ⚠ audio incomplete (\(stopError))"
+        }
         refreshDoneCalendarLine(meetingDir: url.path)
 
         let recapURL = url.appendingPathComponent("recap.md")
+        let transcriptURL = url.appendingPathComponent("transcripts.txt")
+        doneRawTranscript = (try? String(contentsOf: transcriptURL, encoding: .utf8)) ?? ""
+        let recap = TranscriptHealthText.readRecap(dir: dir)
+        recapFailed = false
         if let recapMd = try? String(contentsOf: recapURL, encoding: .utf8), !recapMd.isEmpty {
             doneSections = MeetingPostProcessService.parseMarkdownIntoSections(recapMd)
+        } else if doneRawTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            // No speech, or the transcriber failed: say which, whichever
+            // surface stopped the meeting (only the window's own stop did).
+            doneSections = ["TLDR": TranscriptHealthText.emptyMeetingSummary(dir: dir)]
+        } else if recap.status == "failed" {
+            // Recorded in meta.json whichever surface ran the recap.
+            doneSections = ["TLDR": TranscriptHealthText.recapFailed(reason: recap.reason)]
+            recapFailed = true
         } else {
             doneSections = [:]
         }
-        let transcriptURL = url.appendingPathComponent("transcripts.txt")
-        doneRawTranscript = (try? String(contentsOf: transcriptURL, encoding: .utf8)) ?? ""
         doneAudioURL = audioURL(for: dir)
         doneAudioMicURL = micAudioURL(for: dir)
         doneAudioSystemURL = systemAudioURL(for: dir)
@@ -1832,12 +1744,15 @@ enum MeetingConsentFlow {
             body: "Notice copied: paste it in the meeting chat.")
     }
 
-    private static let autoRecordConfirmedKey = "consent.autoRecordConfirmed"
+    /// Where builds before 2026-11-09 kept the answer. Read, never written:
+    /// the consent audit log is the record now.
+    private static let legacyAutoRecordConfirmedKey = "consent.autoRecordConfirmed"
 
     /// One-time confirmation the first time "Start recording automatically"
     /// is turned on. Returns true when it may be enabled.
     static func confirmAutoRecord(lang: String) -> Bool {
-        if UserDefaults.standard.bool(forKey: autoRecordConfirmedKey) { return true }
+        if DimmyCore.shared.consentHas(kind: "auto_start_confirmed")
+            || UserDefaults.standard.bool(forKey: legacyAutoRecordConfirmedKey) { return true }
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Record calls automatically?"
@@ -1854,7 +1769,6 @@ enum MeetingConsentFlow {
             alert.window.defaultButtonCell = alert.buttons[1].cell as? NSButtonCell
         }
         guard alert.runModal() == .alertFirstButtonReturn else { return false }
-        UserDefaults.standard.set(true, forKey: autoRecordConfirmedKey)
         DimmyCore.shared.consentLogEvent(kind: "auto_start_confirmed", lang: lang)
         return true
     }

@@ -14,6 +14,8 @@ pub enum Provider {
     Anthropic,
     Fireworks,
     Together,
+    /// Kimi Code membership API key (`api.kimi.ai/coding`, CN `api.kimi.com`).
+    Kimi,
     Custom,
     Local,
 }
@@ -41,6 +43,8 @@ impl Provider {
             Self::Fireworks
         } else if url.contains("together.xyz") || url.contains("together.ai") {
             Self::Together
+        } else if url.contains("api.kimi.ai") || url.contains("api.kimi.com") {
+            Self::Kimi
         } else {
             Self::Custom
         }
@@ -58,6 +62,7 @@ impl Provider {
             Self::Anthropic => "anthropic",
             Self::Fireworks => "fireworks",
             Self::Together => "together",
+            Self::Kimi => "kimi",
             Self::Custom => "custom",
             Self::Local => "local",
         }
@@ -134,6 +139,7 @@ impl Provider {
             "anthropic" => Some(Self::Anthropic),
             "fireworks" => Some(Self::Fireworks),
             "together" => Some(Self::Together),
+            "kimi" => Some(Self::Kimi),
             _ => None,
         }
     }
@@ -156,6 +162,7 @@ impl Provider {
             Self::OpenRouter => Some("https://openrouter.ai/api/v1/chat/completions"),
             Self::Fireworks => Some("https://api.fireworks.ai/inference/v1/chat/completions"),
             Self::Together => Some("https://api.together.ai/v1/chat/completions"),
+            Self::Kimi => Some("https://api.kimi.ai/coding/v1/chat/completions"),
             Self::Deepgram | Self::Custom | Self::Local => None,
         }
     }
@@ -203,6 +210,12 @@ impl Provider {
     /// Codex CLI (ChatGPT plan) rather than the Claude CLI.
     pub fn is_openai(&self) -> bool {
         *self == Self::OpenAI
+    }
+
+    /// Kimi Code. An `auth_method == "subscription"` call routes through
+    /// the local `kimi` CLI instead of the membership key.
+    pub fn is_kimi(&self) -> bool {
+        *self == Self::Kimi
     }
 
     /// Whether this provider uses the Deepgram raw-body format.
@@ -256,10 +269,11 @@ impl Provider {
         }
         // Replace full key
         let mut result = text.replace(key, "[REDACTED]");
-        // Also scrub any prefix of 8+ chars (partial key exposure)
-        if key.len() >= 8 {
-            let prefix = &key[..8];
-            result = result.replace(prefix, "[REDACTED]");
+        // Also scrub any prefix of 8+ chars (partial key exposure). By
+        // chars: a byte slice could split a multibyte character and panic.
+        if key.chars().count() >= 8 {
+            let prefix: String = key.chars().take(8).collect();
+            result = result.replace(&prefix, "[REDACTED]");
         }
         result
     }
@@ -353,6 +367,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn scrub_api_key_survives_a_multibyte_key() {
+        // Byte 8 falls inside the fourth "é": `&key[..8]` panicked here.
+        let key = "aéééé-secret";
+        let out = Provider::scrub_api_key("leak: aéééé-se and aéééé-secret", key);
+        assert!(!out.contains("aéééé-se"), "{out}");
+    }
+
+    #[test]
     fn detect_groq() {
         assert_eq!(
             Provider::from_url("https://api.groq.com/openai/v1/audio/transcriptions"),
@@ -430,6 +452,25 @@ mod tests {
             Provider::from_url("https://api.together.ai/v1/chat/completions"),
             Provider::Together
         );
+    }
+
+    #[test]
+    fn detect_kimi_both_regions() {
+        assert_eq!(
+            Provider::from_url("https://api.kimi.ai/coding/v1/chat/completions"),
+            Provider::Kimi
+        );
+        assert_eq!(
+            Provider::from_url("https://api.kimi.com/coding/v1/chat/completions"),
+            Provider::Kimi
+        );
+        assert_eq!(Provider::from_tag("kimi"), Some(Provider::Kimi));
+        assert_eq!(Provider::Kimi.as_str(), "kimi");
+        assert!(Provider::Kimi.is_kimi());
+        assert!(!Provider::Kimi.supports_stt(), "Kimi has no speech API");
+        let url = Provider::Kimi.default_llm_url().unwrap();
+        assert_eq!(Provider::from_url(url), Provider::Kimi);
+        assert!(Provider::validate_url(url).is_ok());
     }
 
     #[test]

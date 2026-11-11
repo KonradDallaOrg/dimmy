@@ -60,7 +60,12 @@ async fn main() -> std::io::Result<()> {
     // Heartbeat — touches a file every 30 s so the Dimmy UI can
     // tell whether Claude Desktop has loaded us. Spawned as a
     // background task; cancelled on process exit.
-    let heartbeat_path = cfg.config_dir.join("mcp.heartbeat");
+    // A client that sets DIMMY_MCP_CLIENT (Kimi Code does, via the entry
+    // Dimmy writes in ~/.kimi-code/mcp.json) gets its own heartbeat file,
+    // so the Kimi wizard is not fooled by a running Claude Desktop.
+    let heartbeat_path = cfg.config_dir.join(heartbeat_file_name(
+        std::env::var("DIMMY_MCP_CLIENT").ok().as_deref(),
+    ));
     tokio::spawn(heartbeat_loop(heartbeat_path));
 
     let stdin = tokio::io::stdin();
@@ -243,6 +248,36 @@ async fn keepalive_loop(
         let _ = out.write_all(frame.as_bytes()).await;
         let _ = out.write_all(b"\n").await;
         let _ = out.flush().await;
+    }
+}
+
+/// `mcp.heartbeat` for Claude Desktop (no client tag), `mcp.heartbeat.<tag>`
+/// otherwise. The tag is reduced to [a-z0-9_-] so it cannot leave the dir.
+fn heartbeat_file_name(client: Option<&str>) -> String {
+    let tag: String = client
+        .unwrap_or("")
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .map(|c| c.to_ascii_lowercase())
+        .take(32)
+        .collect();
+    if tag.is_empty() {
+        "mcp.heartbeat".to_string()
+    } else {
+        format!("mcp.heartbeat.{tag}")
+    }
+}
+
+#[cfg(test)]
+mod heartbeat_name_tests {
+    use super::heartbeat_file_name;
+
+    #[test]
+    fn a_client_tag_gets_its_own_file_and_cannot_escape_the_dir() {
+        assert_eq!(heartbeat_file_name(None), "mcp.heartbeat");
+        assert_eq!(heartbeat_file_name(Some("")), "mcp.heartbeat");
+        assert_eq!(heartbeat_file_name(Some("kimi")), "mcp.heartbeat.kimi");
+        assert_eq!(heartbeat_file_name(Some("../Kimi")), "mcp.heartbeat.kimi");
     }
 }
 

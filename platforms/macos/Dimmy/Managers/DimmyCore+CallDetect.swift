@@ -79,7 +79,8 @@ extension DimmyCore {
     }
 
     /// Record the user's response. `response` ∈ {"record_now","not_now",
-    /// "never","timeout","stop_and_recap","keep_recording","stop_timeout"}.
+    /// "never","timeout","stop_and_recap","keep_recording","stop_timeout",
+    /// "record_aborted"}.
     /// True iff Rust accepted the response (rc=0).
     @discardableResult
     func callSignalResponse(appId: String?, response: String) -> Bool {

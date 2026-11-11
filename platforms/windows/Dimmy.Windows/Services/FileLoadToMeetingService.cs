@@ -1,33 +1,16 @@
 using System;
 using System.IO;
-using System.Text.Json;
 using System.Threading.Tasks;
 
 namespace Dimmy.Windows.Services;
 
 /// <summary>
-/// Bridge between the Settings → "Transcribe a file" card and the
-/// Meeting recap pipeline. Given a successful file-load transcript +
-/// the source WAV path, this:
-///   1. Mints a synthetic meeting directory under the same root the
-///      live recorder uses (<c>%APPDATA%\dimmy\meetings\&lt;guid&gt;</c>),
-///   2. Writes `transcripts.txt` in the same `[ELAPSED_MS ms] [LABEL] text`
-///      grammar the recap LLM prompt expects (so the existing
-///      <see cref="MeetingPostProcessService"/> works without a code
-///      branch),
-///   3. Writes `meta.json` with title/started_at/duration so the
-///      Meeting → History list renders the new entry nicely,
-///   4. Optionally copies the source WAV to `audio.wav` so playback
-///      from the Done view works (small enough to be worth it for
-///      most files; the user can pick a 95-min recording too and a
-///      copy is fine — disk is cheap, we already keep history audio
-///      under retention rules in the Rust core),
-///   5. Hands off to <see cref="MeetingPostProcessService.RunRecapAsync"/>
-///      which does the LLM call + writes `recap.md` / `actions.json`.
-///
-/// Single-writer rule is preserved: only this service writes to the
-/// meeting dir on the file-load path; Rust still owns config.json and
-/// the live-meeting writers.
+/// Bridge between the Settings → "Transcribe a file" card (and Telegram)
+/// and the Meeting recap pipeline. Given a successful file-load transcript +
+/// the source audio path, the core makes the meeting (`dimmy_meeting_import`:
+/// folder, transcripts.txt, audio copy, meta.json, the same shape as a live
+/// meeting), then <see cref="MeetingPostProcessService.RunRecapAsync"/> runs
+/// the recap. Only the core writes the meeting folder.
 /// </summary>
 public static class FileLoadToMeetingService
 {
@@ -50,62 +33,34 @@ public static class FileLoadToMeetingService
 
         try
         {
-            var meetingsRoot = BuildInfo.MeetingsDirPath;
-            Directory.CreateDirectory(meetingsRoot);
-
-            var dirName = $"{DateTime.UtcNow:yyyyMMddTHHmmss}-{Guid.NewGuid():N}";
-            var dir = Path.Combine(meetingsRoot, dirName);
-            Directory.CreateDirectory(dir);
-
-            // transcripts.txt — single line; the recap LLM prompt
-            // tolerates a single `[0 ms] [<label>] <text>` line.
-            var label = "file";
-            var transcriptsPath = Path.Combine(dir, "transcripts.txt");
-            await File.WriteAllTextAsync(
-                transcriptsPath,
-                $"[0 ms] [{label}] {transcript.Trim()}{Environment.NewLine}");
-
-            // Audio sidecar for the Done view (waveform + media player).
-            // The copy keeps the source's OWN container: an hour of m4a is a
-            // tenth of the WAV it used to be decoded into, and that decode
-            // pass ran on exactly the files people share from a phone.
-            // Peaks go through the Rust multi-format decoder, the media
-            // player reads m4a/mp3 natively, and the Rust re-transcribe
-            // resolver knows the same extension list.
+            // Probed on the source: the core copies it, keeping its own
+            // container (an hour of m4a is a tenth of the WAV it used to be
+            // decoded into).
             double durationSecs = 0;
             try
             {
                 if (File.Exists(sourceWavPath))
-                {
-                    var audioDest = Path.Combine(
-                        dir, Helpers.MeetingAudio.FileNameForSource(sourceWavPath));
-                    File.Copy(sourceWavPath, audioDest, overwrite: true);
-                    durationSecs = Helpers.WavPeaks.ReadDurationAny(audioDest);
-                }
+                    durationSecs = Helpers.WavPeaks.ReadDurationAny(sourceWavPath);
             }
             catch (Exception ex)
             {
-                App.Log($"FileLoadToMeeting: audio copy failed: {ex.Message}", "FileLoad");
+                App.Log($"FileLoadToMeeting: duration probe failed: {ex.Message}", "FileLoad");
             }
+            if (!double.IsFinite(durationSecs) || durationSecs < 0) durationSecs = 0;
 
-            // meta.json — the MeetingWindow history loader reads
-            // `started_at` (string) + `duration_secs` (double) + `title`
-            // (string). Title comes from the source filename so the user
-            // can tell loaded files apart from live recordings at a
-            // glance.
-            var fname = string.IsNullOrEmpty(sourceWavPath)
-                ? "Imported audio"
-                : Path.GetFileNameWithoutExtension(sourceWavPath);
-            var meta = new
-            {
-                title = $"File: {fname}",
-                started_at = DateTime.Now.ToString("yyyy-MM-dd HH:mm"),
-                duration_secs = durationSecs,
-                origin = "file-load",
-            };
-            await File.WriteAllTextAsync(
-                Path.Combine(dir, "meta.json"),
-                JsonSerializer.Serialize(meta, new JsonSerializerOptions { WriteIndented = true }));
+            // The core makes the meeting (folder, transcripts.txt, audio copy,
+            // meta.json) in the shape a live one has: this service used to
+            // write all of it, with its own folder names and a local-time
+            // `started_at` string where every other meeting has Unix seconds.
+            // Off the UI thread: a WAV is re-encoded to Ogg here, seconds
+            // for a long file.
+            var buf = new byte[4096];
+            int n = await Task.Run(() => Dimmy.Windows.Interop.DimmyNative.dimmy_meeting_import(
+                string.IsNullOrEmpty(sourceWavPath) ? null : sourceWavPath,
+                transcript, durationSecs, buf, buf.Length));
+            if (n <= 0)
+                return new Result { Success = false, Error = $"could not create the meeting (rc {n})" };
+            var dir = System.Text.Encoding.UTF8.GetString(buf, 0, n);
 
             App.Log($"FileLoadToMeeting: dir created at {dir}, transcript={transcript.Length}c, duration={durationSecs:F1}s", "FileLoad");
             Dimmy.Windows.Interop.DimmyNative.TrackEvent("meeting.imported_from_file");

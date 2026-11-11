@@ -178,9 +178,7 @@ public static class TextInjectionService
             {
                 var line = $"[{DateTime.Now:HH:mm:ss.fff}] [PTT] released phantom-held modifiers: " +
                            string.Join(",", releasedMods);
-                var path = System.IO.Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                    "dimmy", "ptt.log");
+                var path = System.IO.Path.Combine(BuildInfo.ConfigDirPath, "ptt.log");
                 System.IO.File.AppendAllText(path, line + Environment.NewLine);
             }
             catch { }
@@ -203,9 +201,7 @@ public static class TextInjectionService
         {
             var line = $"[{DateTime.Now:HH:mm:ss.fff}] [PTT] SendInput Ctrl+V: sent={sent}/{inputs.Length}" +
                        (lastErr != 0 ? $" lastError={lastErr}" : "");
-            var path = System.IO.Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "dimmy", "ptt.log");
+            var path = System.IO.Path.Combine(BuildInfo.ConfigDirPath, "ptt.log");
             System.IO.File.AppendAllText(path, line + Environment.NewLine);
         }
         catch { }

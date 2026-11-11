@@ -22,6 +22,7 @@ extern "C" fn on_abort(_signum: i32) {
     if let Some(path) = MARKER.get() {
         let _ = std::fs::write(path, marker_text(crate::setup::available_memory_bytes()));
     }
+    super::crash_dump::write_for_abort();
 }
 
 fn marker_text(available: Option<u64>) -> String {

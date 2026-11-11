@@ -376,6 +376,7 @@ struct LlmPreset: Identifiable, Hashable {
         if apiUrl.contains("anthropic.com") { return "anthropic" }
         if apiUrl.contains("fireworks.ai") { return "fireworks" }
         if apiUrl.contains("together.xyz") || apiUrl.contains("together.ai") { return "together" }
+        if apiUrl.contains("api.kimi.ai") || apiUrl.contains("api.kimi.com") { return "kimi" }
         return ""
     }
 
@@ -423,6 +424,9 @@ enum RecordingState: Equatable {
     case transcribing
     case processing
     case completing
+    /// A failure the pill shows for 5 s, then rest. Not busy: a press
+    /// starts a dictation. Win parity: AppState.Error.
+    case error(String)
 }
 
 // MARK: - LLM Style (mirrors Rust LlmStyle, 13 variants)
@@ -992,12 +996,26 @@ final class AppState: ObservableObject {
 
     // MARK: - Recording State
 
-    @Published var recordingState: RecordingState = .idle
+    @Published var recordingState: RecordingState = .idle {
+        didSet {
+            switch recordingState {
+            case .transcribing, .processing: break
+            default: pendingError = nil
+            }
+        }
+    }
+    /// An error that arrived while a dictation was still being transcribed,
+    /// shown by `endDictation` if that dictation ends with nothing to paste.
+    /// Lives only while a dictation is in flight (cleared above).
+    private var pendingError: String?
+    /// Which `.error` the 5 s timer may clear: a newer error, or the same
+    /// text shown again, must not be cut short by an older timer.
+    private var errorToken = 0
     @Published var preferredMode: RecordingMode = .pushToTalk
     @Published var waveformLevels: [CGFloat] = Array(repeating: 0.2, count: 7)
-    /// Mirror of `dimmy_meeting_is_active()`. PillWindowController polls
-    /// every 500 ms so the pill UI knows when a meeting started from
-    /// any surface (meeting window, future tray menu) and can render
+    /// Mirror of the core's meeting state, set from the `meeting_state`
+    /// event (no polling), so the pill knows when a meeting started from
+    /// any surface (meeting window, tray menu, call detect) and can render
     /// the Stop button + recording feedback even with no dictation.
     @Published var meetingActive: Bool = false
     /// Captured at meeting START from `MeetingViewModel.generateRecap`
@@ -1008,9 +1026,9 @@ final class AppState: ObservableObject {
     /// / popup paths stop running the recap unconditionally. Mac
     /// mirror of Win `AppViewModel.MeetingGenerateRecap`.
     @Published var meetingGenerateRecap: Bool = true
-    /// Mirror of `dimmy_meeting_is_paused()`. Also polled from the pill
-    /// state poll so the bar / status reflects pause state regardless
-    /// of which surface flipped it.
+    /// Mirror of the core's pause state, set from the same `meeting_state`
+    /// event, so the bar / status reflects pause state regardless of
+    /// which surface flipped it.
     @Published var meetingIsPaused: Bool = false
     /// Absolute path of the meeting directory currently producing
     /// chunks — pinned on the first `meeting_chunk` event so later
@@ -1041,6 +1059,10 @@ final class AppState: ObservableObject {
     /// renderers that hold their own buffer) can observe a primitive
     /// counter and re-render. Same pattern as `liveCaptionTick`.
     @Published var meetingChunkTick: Int = 0
+    /// Increments by 1 each time a history row is written or changed outside
+    /// the History page (dictation saved, enhanced text backfilled, file
+    /// load). The History page reloads on it instead of polling the core.
+    @Published var historyTick: Int = 0
     @Published var lastTranscript: String = ""
     @Published var lastError: String?
     @Published var hotkeyStatus: HotkeyStatus = .uninstalled
@@ -1051,11 +1073,68 @@ final class AppState: ObservableObject {
         return false
     }
 
+    /// Every error meant for the pill comes through here. Win parity:
+    /// AppViewModel.SetError. While something records, the pill keeps its
+    /// recording look and the error is said beside it; while a dictation is
+    /// still transcribing it waits for `endDictation`.
+    func showError(_ message: String) {
+        let text = String(message.prefix(200))
+        lastError = text
+        switch Self.errorRoute(state: recordingState, meetingActive: meetingActive) {
+        case .besideRecording:
+            DictToastWindow.show(kind: .error, title: "Still recording", body: text)
+        case .afterDictation:
+            pendingError = text
+        case .pill:
+            enterError(text)
+        }
+    }
+
+    enum ErrorRoute: Equatable { case besideRecording, afterDictation, pill }
+
+    nonisolated static func errorRoute(state: RecordingState, meetingActive: Bool) -> ErrorRoute {
+        if meetingActive { return .besideRecording }
+        switch state {
+        case .recording: return .besideRecording
+        case .transcribing, .processing: return .afterDictation
+        case .idle, .completing, .error: return .pill
+        }
+    }
+
+    /// The dictation pipeline is over without a paste: the pill shows the
+    /// error it ran into, or goes to rest.
+    func endDictation() {
+        if let text = pendingError {
+            enterError(text)
+        } else {
+            recordingState = .idle
+        }
+    }
+
+    private func enterError(_ text: String) {
+        errorToken &+= 1
+        let token = errorToken
+        recordingState = .error(text)
+        // 5 s, not 3: the Windows pill found 3 s read as a flash.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+            guard let self, self.errorToken == token, case .error = self.recordingState else { return }
+            self.recordingState = .idle
+        }
+    }
+
     // MARK: - Onboarding & UI
 
+    /// Stored in the core's `.onboarding_done` marker, the one Windows and
+    /// `Dimmy --setup onboarding done` use. The UserDefaults key keeps a
+    /// different fact: the wizard itself ran on this Mac (see
+    /// `configuredByAssistant`).
     @Published var isOnboardingComplete: Bool {
-        didSet { UserDefaults.standard.set(isOnboardingComplete, forKey: "isOnboardingComplete") }
+        didSet {
+            DimmyCore.shared.setOnboardingDone(isOnboardingComplete)
+            UserDefaults.standard.set(isOnboardingComplete, forKey: Self.wizardRanKey)
+        }
     }
+    private static let wizardRanKey = "isOnboardingComplete"
     /// Whether Dimmy shows a Dock icon outside of onboarding.
     /// Onboarding always forces the app into `.regular` activation policy so the user
     /// can find it again after clicking away to System Settings. This preference
@@ -1161,7 +1240,11 @@ final class AppState: ObservableObject {
             return "Whisper \(stem)"
         }
     }
-    @Published var parakeetDownloadProgress: Double = 0.0
+    /// Download progress of the single-bundle engines, keyed by engine
+    /// ("parakeet", "whistle", "nemotron"). One shared value made two
+    /// downloads drive each other's bar (the onboarding Parakeet preload
+    /// running under a Whistle or Nemotron pick).
+    @Published var bundleDownloadProgress: [String: Double] = [:]
     @Published var isDownloadingParakeet: Bool = false
     @Published var parakeetBundlePresent: Bool = false
     /// 1 = on disk, 0 = not downloaded, -1 = no engine for this Mac.
@@ -1249,9 +1332,10 @@ final class AppState: ObservableObject {
     /// through, so the pill reflects all of them.
     @Published var recapsRunning: Int = 0
 
-    /// Transcriptions from a file running right now (Regenerate transcript,
-    /// the speaker relabel, a loaded file, a Telegram audio). Counted like
-    /// `recapsRunning`, only by the two `DimmyCore` file wrappers, so the
+    /// Transcriptions running with the dictation at rest (Regenerate
+    /// transcript, the speaker relabel, a loaded file, a Telegram audio, a
+    /// meeting stopped from the pill). Counted like `recapsRunning`, by the
+    /// two `DimmyCore` file wrappers and the pill's meeting stop, so the
     /// menu bar icon is not at rest while one runs.
     @Published var transcribesRunning: Int = 0
 
@@ -1385,6 +1469,10 @@ final class AppState: ObservableObject {
     /// both Anthropic AND OpenAI when the matching CLI is signed in.
     @Published var codexReady: Bool = false
 
+    /// Same shape for the Kimi membership via the local `kimi` CLI.
+    /// Gates the Kimi branch of the LLM and Recap Authentication pickers.
+    @Published var kimiReady: Bool = false
+
     /// Re-probe Claude Code install + credential state. Cheap (a file
     /// stat + a Keychain query); safe to call from view onAppear /
     /// auth picker change. Updates `claudeCodeReady`.
@@ -1421,6 +1509,21 @@ final class AppState: ObservableObject {
             let ready = (DimmyCore.shared.codexStatus == .ready)
             DispatchQueue.main.async {
                 self.codexReady = ready
+            }
+        }
+    }
+
+    /// Re-probe Kimi Code install + sign-in state. Same dispatch pattern
+    /// as `refreshCodexStatus`.
+    func refreshKimiStatus() {
+        guard DimmyCore.shared.isInitialized else {
+            kimiReady = false
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let ready = (DimmyCore.shared.kimiStatus == .ready)
+            DispatchQueue.main.async {
+                self.kimiReady = ready
             }
         }
     }
@@ -1740,35 +1843,28 @@ final class AppState: ObservableObject {
         return languageMap.contains(where: { $0.code == code }) ? code : ""
     }
 
-    /// `Dimmy --setup onboarding done` (an AI assistant set Dimmy up from
-    /// the terminal) writes the same `.onboarding_done` marker Windows reads.
-    /// The Mac app never writes it itself (its own flag lives in
-    /// UserDefaults), so on a Mac the marker means "configured by an
-    /// assistant". It is kept, so `onboarding status` stays true after the
-    /// app starts; the "Reset onboarding" actions remove it.
-    private static var setupOnboardingMarker: URL? {
-        DimmyCore.shared.configDirURL?.appendingPathComponent(".onboarding_done")
-    }
-
+    /// Onboarding is done but the wizard never ran here: an AI assistant set
+    /// Dimmy up from the terminal (`Dimmy --setup onboarding done`), so only
+    /// the permission grants are missing.
     static var configuredByAssistant: Bool {
-        guard let marker = setupOnboardingMarker else { return false }
-        return FileManager.default.fileExists(atPath: marker.path)
+        dimmy_onboarding_done() == 1 && !UserDefaults.standard.bool(forKey: wizardRanKey)
     }
 
-    /// Run the full onboarding again: clears both the app's flag and the
-    /// assistant's marker, or the marker would mark it complete next launch.
+    /// Run the full onboarding again (clears the marker and the wizard flag).
     func resetOnboarding() {
-        if let marker = AppState.setupOnboardingMarker {
-            try? FileManager.default.removeItem(at: marker)
-        }
         isOnboardingComplete = false
     }
 
     // MARK: - Init
 
     private init() {
-        self.isOnboardingComplete = UserDefaults.standard.bool(forKey: "isOnboardingComplete")
-            || AppState.configuredByAssistant
+        // Builds before 2026-11-09 kept the flag only in UserDefaults: such a
+        // Mac gets its marker now, once.
+        let wizardRan = UserDefaults.standard.bool(forKey: Self.wizardRanKey)
+        if wizardRan && dimmy_onboarding_done() != 1 {
+            _ = dimmy_onboarding_set_done(1)
+        }
+        self.isOnboardingComplete = wizardRan || dimmy_onboarding_done() == 1
         self.showInDock = UserDefaults.standard.bool(forKey: "showInDock")
         // Default true: a fresh user sees the menu-bar icon, so they can
         // always find the app even if Dock is hidden.
@@ -1952,7 +2048,7 @@ final class AppState: ObservableObject {
         // dedicated recap key field). Mirrors Win _llmKeyByProvider +
         // HasRecapKey lookups.
         let llmVendors = ["groq", "openai", "anthropic", "gemini",
-                          "openrouter", "fireworks", "together", "custom"]
+                          "openrouter", "fireworks", "together", "kimi", "custom"]
         var llmMap: [String: Bool] = [:]
         var recapMap: [String: Bool] = [:]
         for v in llmVendors {
@@ -2114,6 +2210,7 @@ final class AppState: ObservableObject {
             // preset used to be that discovery affordance).
             if vendor == "anthropic" && claudeCodeReady { return true }
             if vendor == "openai" && codexReady { return true }
+            if vendor == "kimi" && kimiReady { return true }
             return hasAnyKeyForProvider(vendor)
         }
     }
@@ -2148,6 +2245,10 @@ final class AppState: ObservableObject {
                     || llmKeyByVendor["openai"] == true
                     || hasOpenaiKey
                     || codexReady
+            case .kimi:
+                return recapKeyByVendor["kimi"] == true
+                    || llmKeyByVendor["kimi"] == true
+                    || kimiReady
             }
         }
     }
@@ -2159,6 +2260,7 @@ final class AppState: ObservableObject {
     var hasAnyLlmCapableKey: Bool {
         if claudeCodeReady { return true }
         if codexReady { return true }
+        if kimiReady { return true }
         if llmKeyByVendor.values.contains(true) { return true }
         if recapKeyByVendor.values.contains(true) { return true }
         return hasOpenaiKey || hasGeminiKey || hasGroqKey
@@ -2283,6 +2385,9 @@ final class AppState: ObservableObject {
                                                 autoRecord: callDetectAutoRecord)
             guard MeetingWindowController.shared.viewModel.start(consent: auto ? .announceOnly : .modal) else {
                 dimmyHostLog("[CallDetect] record_now for \(app ?? "<unknown app>") not started (window refused or consent declined)")
+                // The nudge was answered: tell the core it is "not this
+                // call", so it neither re-offers it at once nor stays armed.
+                _ = DimmyCore.shared.callSignalResponse(appId: app, response: "record_aborted")
                 break
             }
             _ = DimmyCore.shared.callSignalResponse(appId: app, response: response)

@@ -36,6 +36,9 @@ pub const BUILD_ID: &str = env!("DIMMY_BUILD_ID");
 /// `CARGO_PKG_VERSION` alone gave every rc of 0.6.73 the same release and
 /// made an abort impossible to attribute to a build — see
 /// `build.rs::resolve_build_id`.
+///
+/// `scripts/ci/sentry.sh` computes the same name in CI to attach symbols
+/// and commits; change both together (`scripts/ci/test_sentry.sh`).
 fn sentry_release(version: &str, build_id: &str) -> String {
     let build_id = build_id.trim();
     if build_id.is_empty() || build_id == "local" {
@@ -281,6 +284,180 @@ pub fn capture_error(category: &str, provider: &str, message: &str) {
 #[cfg(not(feature = "telemetry-sentry"))]
 pub fn capture_error(_category: &str, _provider: &str, _message: &str) {}
 
+/// Send one `telemetry::report` failure. `fingerprint` is
+/// `[subsystem, kind, engine?]`, already slugged, and is both the grouping
+/// key and the title. `detail` goes in the `detail` extra, which
+/// `scrub_event` runs through the prose and secret filters.
+#[cfg(feature = "telemetry-sentry")]
+pub fn capture_failure(subsystem: &str, fingerprint: &[String], warning: bool, detail: &str) {
+    if !is_enabled() || !has_compiled_dsn() {
+        return;
+    }
+    assert!(fingerprint.len() >= 2, "subsystem and kind are required");
+    let title = fingerprint.join("/");
+    let detail = scrub_message(detail);
+    let fp: Vec<&str> = fingerprint.iter().map(String::as_str).collect();
+    sentry::with_scope(
+        |scope| {
+            scope.set_fingerprint(Some(&fp));
+            scope.set_tag("subsystem", subsystem);
+            scope.set_tag("error_category", &fingerprint[1]);
+            if let Some(engine) = fingerprint.get(2) {
+                scope.set_tag("provider", engine);
+            }
+            if !detail.is_empty() {
+                scope.set_extra("detail", detail.clone().into());
+            }
+        },
+        || {
+            let level = if warning {
+                sentry::Level::Warning
+            } else {
+                sentry::Level::Error
+            };
+            sentry::capture_message(&title, level);
+        },
+    );
+}
+
+#[cfg(not(feature = "telemetry-sentry"))]
+pub fn capture_failure(_subsystem: &str, _fingerprint: &[String], _warning: bool, _detail: &str) {}
+
+/// One stack frame a host UI sends: `function \t file \t line`, innermost
+/// first. Only the file NAME is kept, so a dev build's `C:\Users\…` source
+/// path never leaves the machine.
+#[cfg(feature = "telemetry-sentry")]
+fn host_frames(frames: &str) -> Vec<sentry::protocol::Frame> {
+    const MAX_FRAMES: usize = 64;
+    let mut out: Vec<sentry::protocol::Frame> = frames
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .take(MAX_FRAMES)
+        .map(|line| {
+            let mut parts = line.split('\t');
+            let function = parts.next().unwrap_or("").trim();
+            let file = parts.next().unwrap_or("").trim();
+            let lineno = parts.next().and_then(|n| n.trim().parse::<u64>().ok());
+            let function =
+                crate::telemetry::sanitize::scrub_user_paths(crate::truncate_utf8(function, 200));
+            let filename = file
+                .rsplit(['/', '\\'])
+                .next()
+                .filter(|f| !f.is_empty())
+                .map(str::to_string);
+            sentry::protocol::Frame {
+                in_app: Some(function.contains("Dimmy")),
+                function: Some(function),
+                filename,
+                lineno,
+                ..Default::default()
+            }
+        })
+        .collect();
+    // Sentry wants the outermost frame first.
+    out.reverse();
+    out
+}
+
+/// An exception the Windows or macOS host caught at its top level (or
+/// swallowed somewhere it matters). No exception MESSAGE: .NET and AppKit
+/// messages carry file paths, device names and user text. The type, where
+/// it was caught and the stack are what a fix needs.
+///
+/// Returns 1 sent, -2 no consent, -3 no DSN.
+#[cfg(feature = "telemetry-sentry")]
+pub fn capture_host_exception(
+    host: &str,
+    source: &str,
+    exception_type: &str,
+    frames: &str,
+    fatal: bool,
+) -> i32 {
+    if !has_compiled_dsn() {
+        return -3;
+    }
+    if !is_enabled() {
+        return -2;
+    }
+    let source = crate::telemetry::report::slug(source);
+    if !crate::telemetry::report::allowed(&format!("host/{host}/{source}/{exception_type}")) {
+        return 1;
+    }
+    let ty: String = exception_type
+        .trim()
+        .chars()
+        .take(120)
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '+' | '`' | '-' | ':') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let ty = if ty.is_empty() {
+        "UnknownException".to_string()
+    } else {
+        ty
+    };
+    let frames = host_frames(frames);
+    let stacktrace = if frames.is_empty() {
+        None
+    } else {
+        Some(sentry::protocol::Stacktrace {
+            frames,
+            ..Default::default()
+        })
+    };
+    let event = sentry::protocol::Event {
+        level: if fatal {
+            sentry::Level::Fatal
+        } else {
+            sentry::Level::Error
+        },
+        exception: vec![sentry::protocol::Exception {
+            ty,
+            value: Some(source.clone()),
+            stacktrace,
+            mechanism: Some(sentry::protocol::Mechanism {
+                ty: source.clone(),
+                handled: Some(!fatal),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }]
+        .into(),
+        ..Default::default()
+    };
+    let host = crate::telemetry::report::slug(host);
+    sentry::with_scope(
+        |scope| {
+            scope.set_tag("subsystem", "host");
+            scope.set_tag("host", &host);
+            scope.set_tag("error_category", &source);
+        },
+        || {
+            sentry::capture_event(event);
+        },
+    );
+    if fatal {
+        // The host is about to die; the async transport would never send.
+        let _ = flush_pending();
+    }
+    1
+}
+
+#[cfg(not(feature = "telemetry-sentry"))]
+pub fn capture_host_exception(
+    _host: &str,
+    _source: &str,
+    _exception_type: &str,
+    _frames: &str,
+    _fatal: bool,
+) -> i32 {
+    -3
+}
+
 /// Capture user-submitted feedback (from Settings → Send feedback or
 /// the post-crash dialog).
 ///
@@ -331,7 +508,7 @@ pub fn capture_feedback(kind: &str, message: &str, email: Option<&str>) -> i32 {
         dsn.public_key(),
         env!("CARGO_PKG_VERSION"),
     );
-    spawn_envelope_send(url, auth, envelope);
+    spawn_envelope_send(url, auth, envelope.into_bytes(), "feedback", |_| {});
     1
 }
 
@@ -423,14 +600,22 @@ fn feedback_runtime() -> Option<&'static tokio::runtime::Runtime> {
     .as_ref()
 }
 
+/// POSTs one envelope off the caller's thread. `on_status` gets the HTTP
+/// status, or `None` when the request never got an answer.
 #[cfg(feature = "telemetry-sentry")]
-fn spawn_envelope_send(url: String, auth: String, body: String) {
+fn spawn_envelope_send(
+    url: String,
+    auth: String,
+    body: Vec<u8>,
+    what: &'static str,
+    on_status: impl FnOnce(Option<u16>) + Send + 'static,
+) {
     let Some(rt) = feedback_runtime() else {
         return;
     };
     rt.spawn(async move {
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
             .user_agent(concat!("Dimmy/", env!("CARGO_PKG_VERSION")))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
@@ -442,18 +627,175 @@ fn spawn_envelope_send(url: String, auth: String, body: String) {
             .send()
             .await
         {
-            Ok(r) => crate::log(&format!(
-                "[sentry-feedback] sent, status={}",
-                r.status().as_u16()
-            )),
-            Err(e) => crate::log(&format!("[sentry-feedback] send failed: {}", e)),
+            Ok(r) => {
+                let status = r.status().as_u16();
+                crate::log(&format!("[sentry-{what}] sent, status={status}"));
+                on_status(Some(status));
+            }
+            Err(e) => {
+                crate::log(&format!("[sentry-{what}] send failed: {e}"));
+                on_status(None);
+            }
         }
     });
 }
 
+/// The release this build reports as. A crash dump records it at write time,
+/// because the launch that sends the dump may be a newer build.
+pub fn current_release() -> String {
+    sentry_release(env!("CARGO_PKG_VERSION"), BUILD_ID)
+}
+
+pub fn current_environment() -> &'static str {
+    detect_environment()
+}
+
+/// Sends a native crash from an earlier launch. The CALLER decides whether
+/// it may: crash consent is on, or the user just pressed "Send" for this one
+/// report. `minidump` is `None` for an abort that left only its marker.
+///
+/// The dump file is deleted once Sentry answered with anything but a
+/// "try again later" (429 / 5xx); a network failure keeps it for the next
+/// launch, within the 7-day limit of `crash_dump::collect`.
+#[cfg(feature = "telemetry-sentry")]
+pub fn send_native_crash(
+    release: &str,
+    environment: &str,
+    abort_detail: Option<&str>,
+    minidump: Option<&std::path::Path>,
+) {
+    if !has_compiled_dsn() {
+        return;
+    }
+    let Ok(dsn) = SENTRY_DSN.parse::<sentry::types::Dsn>() else {
+        return;
+    };
+    let bytes = match minidump {
+        Some(path) => match std::fs::read(path) {
+            Ok(b) if (b.len() as u64) <= crate::telemetry::crash_dump::MAX_BYTES => Some(b),
+            _ => {
+                let _ = std::fs::remove_file(path);
+                return;
+            }
+        },
+        None => None,
+    };
+    let event_id = crate::telemetry::identity::new_uuid_v4().replace('-', "");
+    let envelope = build_crash_envelope(
+        &event_id,
+        chrono::Utc::now(),
+        release,
+        environment,
+        abort_detail,
+        bytes.as_deref(),
+    );
+    let auth = format!(
+        "Sentry sentry_version=7, sentry_key={}, sentry_client=dimmy/{}",
+        dsn.public_key(),
+        env!("CARGO_PKG_VERSION"),
+    );
+    let path = minidump.map(|p| p.to_path_buf());
+    spawn_envelope_send(
+        dsn.envelope_api_url().to_string(),
+        auth,
+        envelope,
+        "native-crash",
+        move |status| {
+            if let (Some(path), Some(status)) = (path, status) {
+                if status != 429 && status < 500 {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+        },
+    );
+}
+
+#[cfg(not(feature = "telemetry-sentry"))]
+pub fn send_native_crash(
+    _release: &str,
+    _environment: &str,
+    _abort_detail: Option<&str>,
+    _minidump: Option<&std::path::Path>,
+) {
+}
+
+/// An event item, plus the minidump as an `event.minidump` attachment when
+/// there is one: Sentry then walks the stacks and symbolicates them with the
+/// PDBs CI uploaded. The event carries the anonymous id and categorical tags
+/// only, like every other crash report.
+#[cfg(feature = "telemetry-sentry")]
+fn build_crash_envelope(
+    event_id: &str,
+    now: chrono::DateTime<chrono::Utc>,
+    release: &str,
+    environment: &str,
+    abort_detail: Option<&str>,
+    minidump: Option<&[u8]>,
+) -> Vec<u8> {
+    assert_eq!(event_id.len(), 32, "Sentry event ids are 32 hex chars");
+    let kind = if minidump.is_some() {
+        "minidump"
+    } else {
+        "abort"
+    };
+    let mut event = serde_json::json!({
+        "event_id": event_id,
+        "timestamp": now.timestamp(),
+        "platform": "native",
+        "level": "fatal",
+        "release": release,
+        "environment": environment,
+        "tags": {
+            "subsystem": "native",
+            "error_category": kind,
+            "os": crate::telemetry::events::os_name(),
+            "arch": crate::telemetry::events::arch_name(),
+        },
+        "user": { "id": crate::telemetry::anonymous_id() },
+    });
+    if let Some(detail) = abort_detail {
+        event["extra"] = serde_json::json!({ "detail": crate::telemetry::report::slug(detail) });
+    }
+    if minidump.is_none() {
+        event["message"] = serde_json::json!({ "formatted": "native/abort" });
+        event["fingerprint"] = serde_json::json!(["native", "abort"]);
+    }
+    let payload = event.to_string();
+    let mut out = Vec::new();
+    out.extend_from_slice(
+        serde_json::json!({ "event_id": event_id, "sent_at": now.to_rfc3339() })
+            .to_string()
+            .as_bytes(),
+    );
+    out.push(b'\n');
+    out.extend_from_slice(
+        serde_json::json!({ "type": "event", "length": payload.len() })
+            .to_string()
+            .as_bytes(),
+    );
+    out.push(b'\n');
+    out.extend_from_slice(payload.as_bytes());
+    out.push(b'\n');
+    if let Some(dump) = minidump {
+        out.extend_from_slice(
+            serde_json::json!({
+                "type": "attachment",
+                "length": dump.len(),
+                "filename": "crash.dmp",
+                "attachment_type": "event.minidump",
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        out.push(b'\n');
+        out.extend_from_slice(dump);
+        out.push(b'\n');
+    }
+    out
+}
+
 /// Compose the Sentry environment tag from cargo profile and CI
 /// indicators. Lets us segregate "actual user" from "internal CI".
-#[cfg(feature = "telemetry-sentry")]
 fn detect_environment() -> &'static str {
     if std::env::var_os("CI").is_some() {
         "ci"
@@ -501,7 +843,7 @@ fn redact_prose(s: &str) -> String {
 fn keep_or_redact(s: &str) -> String {
     // Empty / one-token → safe; usually a category enum.
     let trimmed = s.trim();
-    if trimmed.len() <= 24 {
+    if trimmed.len() <= 24 || is_identifier_text(trimmed) {
         return trimmed.to_string();
     }
     // Whitelist patterns that are common in our error messages but
@@ -542,6 +884,17 @@ fn keep_or_redact(s: &str) -> String {
     } else {
         "<redacted: prose content>".to_string()
     }
+}
+
+/// A `telemetry::report` title such as `local_engine/model_load/parakeet`.
+/// No whitespace and only identifier characters: it cannot be a sentence,
+/// so the prose filter has nothing to protect.
+#[cfg(feature = "telemetry-sentry")]
+fn is_identifier_text(s: &str) -> bool {
+    s.len() <= 160
+        && s.chars().all(|c| {
+            c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '/' | '.' | '-')
+        })
 }
 
 /// Keep a panic payload instead of redacting it as prose.
@@ -604,9 +957,22 @@ fn scrub_event(
     // anti-leak policy. Extras can carry arbitrary key/value strings
     // and the panic integration may attach `payload` containing
     // whatever was in scope. Allowlist: provider, mode, category.
-    event
-        .extra
-        .retain(|k, _v| matches!(k.as_str(), "provider" | "mode" | "error_category"));
+    event.extra.retain(|k, _v| {
+        matches!(
+            k.as_str(),
+            "provider" | "mode" | "error_category" | "detail"
+        )
+    });
+    // `detail` is the one free-text extra (from `telemetry::report`): the
+    // same secret + prose filter as the message.
+    if let Some(v) = event.extra.get_mut("detail") {
+        let s = v.as_str().unwrap_or("").to_string();
+        *v = if looks_like_secret(&s) {
+            "<redacted: looked like a secret>".into()
+        } else {
+            redact_prose(&s).into()
+        };
+    }
 
     // Walk message payloads — defense in depth: looks_like_secret
     // catches API keys, redact_prose catches free-form user content.
@@ -673,6 +1039,59 @@ fn scrub_breadcrumb(mut b: sentry::Breadcrumb) -> Option<sentry::Breadcrumb> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "telemetry-sentry")]
+    #[test]
+    fn a_crash_envelope_carries_the_dump_as_a_minidump_attachment() {
+        let dump: &[u8] = b"MDMP\x93\xa7\0\0binary\nbytes";
+        let now = chrono::Utc::now();
+        let env = build_crash_envelope(
+            &"a".repeat(32),
+            now,
+            "dimmy@0.7.1",
+            "development",
+            None,
+            Some(dump),
+        );
+        let text = String::from_utf8_lossy(&env);
+        let mut lines = text.splitn(5, '\n');
+        let _header = lines.next().unwrap();
+        let item: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+        assert_eq!(item["type"], "event");
+        let event: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+        assert_eq!(event["release"], "dimmy@0.7.1", "the release that crashed");
+        assert_eq!(event["environment"], "development");
+        assert_eq!(event["level"], "fatal");
+        assert!(
+            event.get("message").is_none(),
+            "Sentry titles it from the dump"
+        );
+        let attachment: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+        assert_eq!(attachment["attachment_type"], "event.minidump");
+        assert_eq!(attachment["length"], dump.len());
+        assert!(env.ends_with(&[dump, b"\n"].concat()));
+    }
+
+    #[cfg(feature = "telemetry-sentry")]
+    #[test]
+    fn an_abort_without_a_dump_is_one_event_item() {
+        let env = build_crash_envelope(
+            &"b".repeat(32),
+            chrono::Utc::now(),
+            "dimmy@0.7.1",
+            "production",
+            Some("native abort, 120 MB free"),
+            None,
+        );
+        let text = String::from_utf8(env).unwrap();
+        assert_eq!(text.lines().count(), 3);
+        let event: serde_json::Value = serde_json::from_str(text.lines().nth(2).unwrap()).unwrap();
+        assert_eq!(event["fingerprint"], serde_json::json!(["native", "abort"]));
+        assert_eq!(
+            event["extra"]["detail"],
+            crate::telemetry::report::slug("native abort, 120 MB free")
+        );
+    }
 
     #[test]
     fn has_compiled_dsn_reports_truthy_for_real_dsn() {
@@ -773,6 +1192,70 @@ mod tests {
         assert_eq!(
             scrubbed_exception_value("panic", "token sk-proj-abc123def456ghi789"),
             "<redacted: looked like a secret>"
+        );
+    }
+
+    #[cfg(feature = "telemetry-sentry")]
+    #[test]
+    fn a_report_title_survives_and_its_detail_is_scrubbed() {
+        let mut event = sentry::protocol::Event {
+            message: Some("local_engine/model_load/parakeet".to_string()),
+            ..Default::default()
+        };
+        event.extra.insert(
+            "detail".into(),
+            "the user said the quarterly numbers looked wrong to him".into(),
+        );
+        event
+            .extra
+            .insert("device".into(), "Microfono (Realtek)".into());
+        let out = scrub_event(event).expect("kept");
+        assert_eq!(
+            out.message.as_deref(),
+            Some("local_engine/model_load/parakeet")
+        );
+        assert_eq!(
+            out.extra.get("detail").and_then(|v| v.as_str()),
+            Some("<redacted: prose content>")
+        );
+        assert!(
+            !out.extra.contains_key("device"),
+            "unknown extras are dropped"
+        );
+    }
+
+    #[cfg(feature = "telemetry-sentry")]
+    #[test]
+    fn identifier_text_is_not_mistaken_for_prose_and_prose_is_not_identifier_text() {
+        assert!(is_identifier_text("meeting/chunk_stt_failed/whisper"));
+        assert!(!is_identifier_text("the meeting failed"));
+        assert!(!is_identifier_text(r"C:\Users\mario"));
+    }
+
+    #[cfg(feature = "telemetry-sentry")]
+    #[test]
+    fn host_frames_keep_the_file_name_only_and_put_the_caller_first() {
+        let frames = host_frames(
+            "Dimmy.Windows.Services.UpdateService.Check\tC:\\Users\\konra\\code\\UpdateService.cs\t88\n\
+             System.Threading.Tasks.Task.Run\t\t\n",
+        );
+        assert_eq!(frames.len(), 2);
+        assert_eq!(
+            frames[1].function.as_deref(),
+            Some("Dimmy.Windows.Services.UpdateService.Check")
+        );
+        assert_eq!(frames[1].filename.as_deref(), Some("UpdateService.cs"));
+        assert_eq!(frames[1].lineno, Some(88));
+        assert_eq!(frames[1].in_app, Some(true));
+        assert_eq!(frames[0].in_app, Some(false));
+        assert_eq!(frames[0].filename, None);
+    }
+
+    #[test]
+    fn host_exception_without_dsn_reports_not_configured() {
+        assert_eq!(
+            capture_host_exception("windows", "unobserved_task", "System.Exception", "", false),
+            -3
         );
     }
 

@@ -19,6 +19,7 @@ public sealed partial class SettingsWindow : Window
     public SettingsViewModel ViewModel { get; } = new();
     private string _currentTag = "home";
     private bool _loaded; // suppress SelectionChanged during init
+    private bool _configLoadFailed;
 
     // File-load → meeting bridge. Captured at successful file-load
     // completion so the "Run recap as meeting" button can mint a
@@ -372,13 +373,17 @@ public sealed partial class SettingsWindow : Window
         RefreshMeetingFolderDisplay();
         RefreshRecapExportFolderDisplay();
 
-        _loaded = true;
+        // A failed load leaves _loaded false: every save path checks it, so the
+        // defaults in the ViewModel never reach the core as the user's config.
+        _loaded = !_configLoadFailed;
+        ConfigLoadErrorBar.IsOpen = _configLoadFailed;
         // Now that selections are established + _loaded is true, run one auth
         // refresh so the provider/model pickers get filtered to the connected
         // providers (RebuildCombo no-ops while loading).
         RefreshAuthIntegrationStatus();
         RefreshCodexIntegrationStatus();
         RefreshGeminiIntegrationStatus();
+        RefreshKimiIntegrationStatus();
     }
 
     /// File extensions accepted by `dimmy_transcribe_file`. WAV is the
@@ -1506,25 +1511,19 @@ public sealed partial class SettingsWindow : Window
 
     private void LoadConfig()
     {
-        // Read from config.json file first — it has all fields including UI-only ones.
-        // Cartella DEVE matchare quella che il Rust core usa: prod →
-        // `dimmy/`, staging-flavor → `dimmy-staging/`. Hardcoding
-        // "dimmy" qui faceva sì che un binario con
-        // DIMMY_BUILD_FLAVOR=staging leggesse dalla cartella prod, poi
-        // sovrascrivesse la cartella staging con UI state vuoto via
-        // dimmy_set_config_json — silently distruggendo `app_rules`,
-        // `user_dict`, ecc. salvati dal Rust. Burned 2026-05-12.
-        string? fileJson = null;
-        try
-        {
-            var path = System.IO.Path.Combine(Services.BuildInfo.ConfigDirPath, "config.json");
-            if (System.IO.File.Exists(path))
-                fileJson = System.IO.File.ReadAllText(path);
-        }
-        catch { }
+        // The core's snapshot holds every persisted field plus the
+        // runtime-only ones (has_*_key, devices). Never read config.json
+        // here: the file can lag the core's state, and a save built from a
+        // stale read overwrites the newer values.
+        string? ffiJson = null;
+        try { ffiJson = DimmyNative.ConfigJson(); }
+        catch (Exception ex) { App.Log($"LoadConfig: FFI error: {ex.Message}", "Settings"); }
 
-        if (!string.IsNullOrEmpty(fileJson))
-            ViewModel.LoadFromJson(fileJson);
+        if (string.IsNullOrEmpty(ffiJson) || !ViewModel.LoadFromJson(ffiJson))
+        {
+            _configLoadFailed = true;
+            App.Log("LoadConfig: the core config could not be read — Settings stays read-only so defaults are never saved over it", "Settings");
+        }
 
         // Win-only UI prefs live outside config.json (CLAUDE.md
         // single-writer rule). Pull them in so the toggles in the Pill
@@ -1547,7 +1546,6 @@ public sealed partial class SettingsWindow : Window
         // config + waiting for Rust to round-trip.
         try
         {
-            var ffiJson = DimmyNative.ReadBuffer(DimmyNative.dimmy_get_config_json, 16384);
             if (!string.IsNullOrEmpty(ffiJson))
             {
                 using var doc = System.Text.Json.JsonDocument.Parse(ffiJson);
@@ -1612,8 +1610,7 @@ public sealed partial class SettingsWindow : Window
         {
             Width = 16,
             Height = 16,
-            Source = new Microsoft.UI.Xaml.Media.Imaging.SvgImageSource(
-                new Uri($"ms-appx:///Assets/Providers/{icon}.svg")),
+            Source = Helpers.ProviderIcon.Source(icon),
         });
         sp.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center });
         return sp;
@@ -1805,6 +1802,9 @@ public sealed partial class SettingsWindow : Window
         // GeminiSubscriptionUsable.
         var geminiReady = GeminiSubscriptionUsable();
         var isGemini = IsGeminiUrl(llmUrl);
+        // Kimi parallel: Kimi Code URL + subscription routes to the `kimi` CLI.
+        var kimiReady = KimiSubscriptionUsable();
+        var isKimi = IsKimiUrl(llmUrl);
 
         // Coerce LLM subscription off when the provider is not Anthropic —
         // subscription is Claude Code CLI only (Anthropic-only). Without this
@@ -1816,6 +1816,7 @@ public sealed partial class SettingsWindow : Window
         // from a fresh Anthropic+subscription baseline. Mirror of the recap
         // auth-method coercion below.
         if (!isAnthropic && !(isOpenAI && codexReady) && !(isGemini && geminiReady)
+            && !(isKimi && kimiReady)
             && string.Equals(ViewModel.LlmAuthMethod, "subscription", StringComparison.Ordinal))
         {
             ViewModel.LlmAuthMethod = "api_key";
@@ -1913,10 +1914,12 @@ public sealed partial class SettingsWindow : Window
         // integration is connected. Otherwise hide entirely.
         var llmSubShown = (isAnthropic && integrationReady)
             || (isOpenAI && codexReady)
-            || (isGemini && geminiReady);
+            || (isGemini && geminiReady)
+            || (isKimi && kimiReady);
         LlmUseSubscriptionCard.Visibility = llmSubShown ? Visibility.Visible : Visibility.Collapsed;
         LlmUseSubscriptionCard.Label =
             (isGemini && geminiReady) ? "Use Google account (Gemini CLI)"
+            : (isKimi && kimiReady) ? "Use Kimi subscription"
             : (isOpenAI && codexReady) ? "Use ChatGPT subscription"
             : "Use Anthropic subscription";
         LlmUseSubscriptionToggle.IsOn = llmUseSub;
@@ -1999,11 +2002,14 @@ public sealed partial class SettingsWindow : Window
             recapVendorForSubGate, "anthropic", StringComparison.OrdinalIgnoreCase);
         var recapModelIsOpenAI = string.Equals(
             recapVendorForSubGate, "openai", StringComparison.OrdinalIgnoreCase);
+        var recapModelIsKimi = string.Equals(
+            recapVendorForSubGate, "kimi", StringComparison.OrdinalIgnoreCase);
         // Subscription routes recap through the matching CLI: Anthropic
         // model → claude (needs claude signed in), OpenAI model → codex
         // (needs codex signed in).
         var canShowRecapSub = (integrationReady && recapModelIsAnthropic)
-            || (codexReady && recapModelIsOpenAI);
+            || (codexReady && recapModelIsOpenAI)
+            || (kimiReady && recapModelIsKimi);
         if (!canShowRecapSub && recapForceSub)
         {
             App.Log(
@@ -2022,7 +2028,9 @@ public sealed partial class SettingsWindow : Window
             ? Visibility.Visible : Visibility.Collapsed;
         RecapUseSubscriptionCard.Label = recapModelIsOpenAI
             ? "Use ChatGPT subscription for recap"
-            : "Use Anthropic subscription for recap";
+            : recapModelIsKimi
+                ? "Use Kimi subscription for recap"
+                : "Use Anthropic subscription for recap";
         RecapUseSubscriptionToggle.IsOn = recapForceSub;
 
         // The recap model picker shows ALL curated entries (any
@@ -2047,8 +2055,8 @@ public sealed partial class SettingsWindow : Window
         // the user actually has a key for (keys live in Providers & keys now).
         // Custom is always offered (inline URL+key); Anthropic stays offered
         // when the Claude CLI subscription is connected (keyless path).
-        FilterCloudProviderPickers(integrationReady, codexReady);
-        FilterRecapModelPicker(integrationReady, codexReady);
+        FilterCloudProviderPickers(integrationReady, codexReady, kimiReady);
+        FilterRecapModelPicker(integrationReady, codexReady, kimiReady);
 
         // The recap picker IS filtered now (FilterRecapModelPicker above) to
         // the vendors the user connected — Auto/Custom/local always stay,
@@ -2072,6 +2080,7 @@ public sealed partial class SettingsWindow : Window
             return "anthropic";
         if (lower.Contains("openai.com")) return "openai";
         if (lower.Contains("googleapis.com")) return "gemini";
+        if (IsKimiUrl(lower)) return "kimi";
         // Unknown vendors (custom URLs, Groq, OpenRouter, etc.) get
         // "anthropic" as a default for the picker — but the user can
         // always pick Auto or type a Custom model id, so this is a
@@ -2165,7 +2174,7 @@ public sealed partial class SettingsWindow : Window
     /// whose ONLY connection is the subscription can never even select the
     /// vendor, so the "Use ... subscription" toggle stays unreachable); the
     /// selected item is never removed.</summary>
-    private void FilterCloudProviderPickers(bool integrationReady, bool codexReady)
+    private void FilterCloudProviderPickers(bool integrationReady, bool codexReady, bool kimiReady)
     {
         RebuildCombo(ProviderComboBox, item =>
         {
@@ -2177,7 +2186,8 @@ public sealed partial class SettingsWindow : Window
             var v = ((item.Tag as string) ?? "").Split('-')[0].ToLowerInvariant();
             return v == "custom" || HasAnyKeyForVendor(v)
                    || (v == "anthropic" && integrationReady)
-                   || (v == "openai" && codexReady);
+                   || (v == "openai" && codexReady)
+                   || (v == "kimi" && kimiReady);
         });
     }
 
@@ -2186,7 +2196,7 @@ public sealed partial class SettingsWindow : Window
     /// RecapVendorFromModel. Auto, Custom, and local models are always kept;
     /// Anthropic models stay under the Claude subscription and OpenAI models
     /// under the Codex subscription (keyless CLI paths).</summary>
-    private void FilterRecapModelPicker(bool integrationReady, bool codexReady)
+    private void FilterRecapModelPicker(bool integrationReady, bool codexReady, bool kimiReady)
     {
         RebuildCombo(RecapModelComboBox, item =>
         {
@@ -2197,7 +2207,8 @@ public sealed partial class SettingsWindow : Window
             var v = RecapVendorFromModel(tag, "");
             return HasAnyKeyForVendor(v)
                    || (v == "anthropic" && integrationReady)
-                   || (v == "openai" && codexReady);
+                   || (v == "openai" && codexReady)
+                   || (v == "kimi" && kimiReady);
         });
     }
 
@@ -2266,6 +2277,7 @@ public sealed partial class SettingsWindow : Window
         if (url.Contains("fireworks.ai", StringComparison.OrdinalIgnoreCase)) return "fireworks";
         if (url.Contains("together.xyz", StringComparison.OrdinalIgnoreCase)
             || url.Contains("together.ai", StringComparison.OrdinalIgnoreCase)) return "together";
+        if (IsKimiUrl(url)) return "kimi";
         return "custom";
     }
 
@@ -2283,6 +2295,7 @@ public sealed partial class SettingsWindow : Window
             var u when u.Contains("fireworks.ai", StringComparison.OrdinalIgnoreCase) => "fireworks",
             var u when u.Contains("together.xyz", StringComparison.OrdinalIgnoreCase) => "together",
             var u when u.Contains("together.ai", StringComparison.OrdinalIgnoreCase) => "together",
+            var u when IsKimiUrl(u) => "kimi",
             _ => "other",
         };
         return Family(sttUrl) == Family(llmUrl)
@@ -2722,7 +2735,7 @@ public sealed partial class SettingsWindow : Window
     {
         try
         {
-            var ffiJson = DimmyNative.ReadBuffer(DimmyNative.dimmy_get_config_json, 16384);
+            var ffiJson = DimmyNative.ConfigJson();
             if (string.IsNullOrEmpty(ffiJson)) return;
             using var doc = System.Text.Json.JsonDocument.Parse(ffiJson);
             _sttKeyByProvider.Clear();
@@ -2750,6 +2763,7 @@ public sealed partial class SettingsWindow : Window
             ("has_deepgram_key", "deepgram"),
             ("has_fireworks_key", "fireworks"),
             ("has_together_key", "together"),
+            ("has_kimi_key", "kimi"),
             ("has_custom_key", "custom"),
         })
         {
@@ -2763,6 +2777,7 @@ public sealed partial class SettingsWindow : Window
             ("has_openrouter_llm_key", "openrouter"),
             ("has_fireworks_llm_key", "fireworks"),
             ("has_together_llm_key", "together"),
+            ("has_kimi_llm_key", "kimi"),
             ("has_custom_llm_key", "custom"),
         })
         {
@@ -3974,14 +3989,16 @@ public sealed partial class SettingsWindow : Window
             {
                 ShowInfoBar(LicenseTrialInfoBar, InfoBarSeverity.Informational,
                     "Activating via magic link…");
+                // Armed before the link opens: the URL-scheme dispatch hands the
+                // code to this process over the named pipe and the redeem fires
+                // LicenseChanged when it finishes, possibly before Start returns.
+                var activation = WaitForActivationAsync(TimeSpan.FromSeconds(8));
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(link)
                 {
                     UseShellExecute = true,
                 });
 
-                // Poll status — the URL-scheme dispatch hands the code to the
-                // running Dimmy via named pipe; redeem completes asynchronously.
-                if (await WaitForActivationAsync(TimeSpan.FromSeconds(8)))
+                if (await activation)
                 {
                     RefreshLicenseStatus();
                     ShowInfoBar(LicenseTrialInfoBar, InfoBarSeverity.Success, "Activated. Welcome to Dimmy.");
@@ -4054,19 +4071,27 @@ public sealed partial class SettingsWindow : Window
         });
     }
 
-    /// Poll dimmy_license_status until kind transitions into TrialActive/Active,
-    /// or timeout. Used right after triggering a dimmy:// magic link to surface
-    /// the activation result inline instead of forcing the user to click Refresh.
+    /// True once a LicenseChanged lands with the license TrialActive/Active,
+    /// false on timeout. Every redeem path fires LicenseChanged when it ends,
+    /// so the status is read on that event instead of on a timer.
     private static async Task<bool> WaitForActivationAsync(TimeSpan budget)
     {
-        var start = DateTime.UtcNow;
-        while (DateTime.UtcNow - start < budget)
+        var done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnChanged()
         {
-            await Task.Delay(400);
-            var s = LicenseService.GetStatus();
-            if (s.Kind == "TrialActive" || s.Kind == "Active") return true;
+            var kind = LicenseService.GetStatus().Kind;
+            if (kind == "TrialActive" || kind == "Active") done.TrySetResult(true);
         }
-        return false;
+        LicenseService.LicenseChanged += OnChanged;
+        try
+        {
+            var winner = await Task.WhenAny(done.Task, Task.Delay(budget));
+            return winner == done.Task;
+        }
+        finally
+        {
+            LicenseService.LicenseChanged -= OnChanged;
+        }
     }
 
     private async void License_Activate_Click(object sender, RoutedEventArgs e)
@@ -4793,6 +4818,7 @@ public sealed partial class SettingsWindow : Window
 
     private void Save_Click(object sender, RoutedEventArgs e)
     {
+        if (!_loaded) { _autoSaveDone = true; this.Close(); return; }
         // Pull password values from PasswordBoxes into ViewModel before serializing
         if (!string.IsNullOrEmpty(CloudApiKeyBox.Password))
             ViewModel.ApiKey = CloudApiKeyBox.Password;
@@ -4831,7 +4857,7 @@ public sealed partial class SettingsWindow : Window
     /// edits. Same code path Save_Click uses, minus the Close() call.
     private void AutoSaveOnClose()
     {
-        if (_autoSaveDone) return;
+        if (_autoSaveDone || !_loaded) return;
         try
         {
             if (!string.IsNullOrEmpty(CloudApiKeyBox?.Password))
@@ -5037,6 +5063,10 @@ public sealed partial class SettingsWindow : Window
             || m.StartsWith("o3-", StringComparison.Ordinal)
             || m.StartsWith("o4-", StringComparison.Ordinal)) return "openai";
         if (m.StartsWith("gemini-", StringComparison.Ordinal)) return "gemini";
+        // Kimi ids (k3, kimi-for-coding…) carry no vendor prefix: ask the
+        // catalog, as the Rust dispatcher does.
+        if (Services.ModelCatalog.RecapEntries().Any(e => e.ProviderId == "kimi"
+                && string.Equals(e.Id, model, StringComparison.OrdinalIgnoreCase))) return "kimi";
         return RecapVendorFromUrl(llmUrl);
     }
 
@@ -5080,8 +5110,7 @@ public sealed partial class SettingsWindow : Window
         {
             try
             {
-                var json = Interop.DimmyNative.ReadBuffer(
-                    Interop.DimmyNative.dimmy_get_config_json, 16384);
+                var json = Interop.DimmyNative.ConfigJson();
                 if (!string.IsNullOrEmpty(json))
                 {
                     using var doc = System.Text.Json.JsonDocument.Parse(json);
@@ -5981,6 +6010,7 @@ public sealed partial class SettingsWindow : Window
 
     private void RemoveExcludedApp_Click(object sender, RoutedEventArgs e)
     {
+        if (!_loaded) return;
         if (sender is not FrameworkElement fe) return;
         if (fe.Tag is not string appId || string.IsNullOrEmpty(appId)) return;
         ViewModel.CallDetectExcludedApps.Remove(appId);
@@ -6182,7 +6212,7 @@ public sealed partial class SettingsWindow : Window
         {
             ViewModel.HasNotionToken = true;
         }
-        if (dlg.Completed && !string.IsNullOrEmpty(dlg.PickedTargetId))
+        if (_loaded && dlg.Completed && !string.IsNullOrEmpty(dlg.PickedTargetId))
         {
             ViewModel.NotionTargetId = dlg.PickedTargetId;
             ViewModel.NotionTargetKind = dlg.PickedTargetKind;
@@ -6260,7 +6290,7 @@ public sealed partial class SettingsWindow : Window
             // destination; pass includeNotion: true so the empty
             // strings reach Rust and wipe the state.
             var json = ViewModel.ToJson(includeNotion: true);
-            int rcCfg = DimmyNative.dimmy_set_config_json(json);
+            int rcCfg = _loaded ? DimmyNative.dimmy_set_config_json(json) : -1;
             App.Log($"Notion disconnected rcToken={rcToken} rcCfg={rcCfg}", "Notion");
             App.Instance?.ApplySettings(ViewModel);
             NotionShowMessage("Disconnected. Token and destination removed from this device.", isError: false);

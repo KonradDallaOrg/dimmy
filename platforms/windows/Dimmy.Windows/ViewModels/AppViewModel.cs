@@ -42,8 +42,10 @@ public partial class AppViewModel : ObservableObject
     /// Set when PTT release initiates stop before Rust's callback arrives.</summary>
     public bool SuppressRecordingStarted { get; set; }
 
-    /// <summary>Wall-clock UTC when the current recording started (set on the
-    /// recording_started event). Used to scale the transcription timeout with
+    /// <summary>Wall-clock UTC when the current recording started: set when
+    /// the core's dictation phase turns recording, cleared at idle, so a
+    /// skipped late `recording_started` can never leave the previous
+    /// dictation's start behind. Used to scale the transcription timeout with
     /// the recording length — a multi-minute local dictation legitimately takes
     /// far longer than a flat 30s to transcribe.</summary>
     public DateTime? RecordingStartedUtc { get; set; }
@@ -113,26 +115,27 @@ public partial class AppViewModel : ObservableObject
     /// collection. Called from App.xaml.cs after a "never" response
     /// (the Rust core just persisted to config.json — re-read so the
     /// Settings UI list updates immediately).
-    public void RefreshCallDetectExclusions()
+    /// Returns false when the core's list could not be read, so callers
+    /// do not copy a stale list onward.
+    public bool RefreshCallDetectExclusions()
     {
         try
         {
-            var buf = new byte[8192];
-            int n = Interop.DimmyNative.dimmy_get_config_json(buf, buf.Length);
-            if (n <= 0) return;
-            var json = System.Text.Encoding.UTF8.GetString(buf, 0, n);
+            var json = Interop.DimmyNative.ConfigJson();
+            if (string.IsNullOrEmpty(json)) return false;
             using var doc = System.Text.Json.JsonDocument.Parse(json);
             if (!doc.RootElement.TryGetProperty("call_detect_excluded_apps", out var arr)
                 || arr.ValueKind != System.Text.Json.JsonValueKind.Array)
-                return;
+                return false;
             CallDetectExcludedApps.Clear();
             foreach (var item in arr.EnumerateArray())
             {
                 var s = item.GetString();
                 if (!string.IsNullOrEmpty(s)) CallDetectExcludedApps.Add(s);
             }
+            return true;
         }
-        catch { /* defensive — settings list will catch up on next reload */ }
+        catch { return false; }
     }
 
     [ObservableProperty] private int _chunkCurrent;
@@ -247,6 +250,13 @@ public partial class AppViewModel : ObservableObject
     /// start while a meeting re-transcribes.</summary>
     [ObservableProperty] private int _transcribesRunning;
 
+    /// <summary>Whether the pill should say a background transcription is
+    /// running (a meeting that saves, a loaded file, Telegram). Only while
+    /// otherwise idle, and the recap label wins. Mac parity:
+    /// PillView.showsBackgroundTranscribe.</summary>
+    public static bool ShowsBackgroundTranscribe(AppState state, int recapsRunning, int transcribesRunning)
+        => state == AppState.Idle && recapsRunning == 0 && transcribesRunning > 0;
+
     /// <summary>The state the taskbar and the tray show: the app's own,
     /// or, while idle, the background work. A recap wins over a
     /// transcription.</summary>
@@ -256,6 +266,41 @@ public partial class AppViewModel : ObservableObject
         if (recapsRunning > 0) return AppState.Processing;
         return transcribesRunning > 0 ? AppState.Transcribing : AppState.Idle;
     }
+
+    /// <summary>The core's dictation phase, from the `dictation_phase`
+    /// event: "idle" | "recording" | "finishing". The truth the pill comes
+    /// back to; never written by the host.</summary>
+    [ObservableProperty] private string _coreDictationPhase = "idle";
+
+    /// <summary>Whether the host's dictation pipeline (stop, paste,
+    /// delivery) is still running. Injected by App so this view-model stays
+    /// free of FFI and testable.</summary>
+    public Func<bool>? DictationBusy { get; set; }
+
+    /// <summary>Where the pill goes when an overlay (the checkmark, an
+    /// error) or a background job lets go of it. Pure, one place: the
+    /// overlay timers, Telegram and the meeting stop used to each write
+    /// Idle, and a timer armed by an earlier dictation set Idle in the
+    /// middle of the next one.</summary>
+    public static AppState RestState(bool coreRecording, bool meetingActive, bool dictationBusy, AppState current)
+    {
+        if (coreRecording || meetingActive) return AppState.Recording;
+        if (dictationBusy)
+            return current is AppState.Transcribing or AppState.Processing ? current : AppState.Transcribing;
+        return AppState.Idle;
+    }
+
+    public void ReturnToRest() =>
+        SetState(RestState(CoreDictationPhase == "recording", MeetingActive, DictationBusy?.Invoke() ?? false, CurrentState));
+
+    /// <summary>An error that must not take the pill away from a recording
+    /// the core is still making: raised instead of the Error state so the
+    /// host can show it as a toast.</summary>
+    public event Action<string>? ErrorWhileRecording;
+
+    /// <summary>Live typing stopped mid-dictation (the realtime socket
+    /// failed); the dictation goes on and is transcribed at stop.</summary>
+    public event Action? StreamFailed;
 
     /// <summary>True when the app is doing something (recording, transcribing, processing) and should not start a new recording.</summary>
     public bool IsBusy => CurrentState is AppState.Recording or AppState.Transcribing or AppState.Processing;
@@ -276,6 +321,14 @@ public partial class AppViewModel : ObservableObject
     public void SetError(string message)
     {
         ErrorMessage = message.Length > 200 ? message[..200] : message;
+        // The red dot means "recording": while the core records, an error
+        // (the meeting hotkey pressed mid-dictation, a core error during a
+        // meeting) is said beside it, not instead of it.
+        if (CurrentState == AppState.Recording && (CoreDictationPhase == "recording" || MeetingActive))
+        {
+            ErrorWhileRecording?.Invoke(ErrorMessage);
+            return;
+        }
         SetState(AppState.Error);
     }
 
@@ -403,6 +456,15 @@ public partial class AppViewModel : ObservableObject
     /// run on separate threads precisely so this stays a transcript
     /// problem. Arg: the engine that fell behind (whisper|parakeet|cloud).</summary>
     public event Action<string>? MeetingTranscriptionBehind;
+
+    /// <summary>Raised when a meeting's transcriber stops producing text
+    /// (engine refused at start, or windows failing in a row). Args: engine,
+    /// reason code from core/src/transcriber_health.rs. Once per transition.</summary>
+    public event Action<string, string>? MeetingTranscriptionUnavailable;
+
+    /// <summary>Raised when the transcriber produces text again after
+    /// MeetingTranscriptionUnavailable. Arg: engine.</summary>
+    public event Action<string>? MeetingTranscriptionRecovered;
 
     /// <summary>Raised once per launch when Nemotron cannot load on the GPU.</summary>
     public event Action? NemotronCpuFallback;
@@ -560,6 +622,11 @@ public partial class AppViewModel : ObservableObject
                         var chunk = payload.TryGetProperty("delta", out var ld)
                             ? (ld.GetString() ?? "")
                             : "";
+                        // Only recaps feed the meeting's live recap card: a
+                        // command-mode answer used to land there too.
+                        var purpose = payload.TryGetProperty("purpose", out var pu)
+                            ? (pu.GetString() ?? "recap") : "recap";
+                        if (purpose != "recap") break;
                         if (phase == "start")
                         {
                             LlmStreamText = ""; LlmThinkingText = "";
@@ -652,12 +719,21 @@ public partial class AppViewModel : ObservableObject
                     }
                     else
                     {
-                        RecordingStartedUtc = DateTime.UtcNow;
                         SetState(AppState.Recording);
                     }
                     break;
                 case "recording_cancelled":
                     SetState(AppState.Idle);
+                    break;
+                case "stt_stream_failed":
+                    Log?.Invoke("live typing stopped: the realtime connection failed", "Dictation");
+                    StreamFailed?.Invoke();
+                    break;
+                case "dictation_phase":
+                    CoreDictationPhase = payload.TryGetProperty("phase", out var dp)
+                        ? (dp.GetString() ?? "idle") : "idle";
+                    if (CoreDictationPhase == "recording") RecordingStartedUtc = DateTime.UtcNow;
+                    else if (CoreDictationPhase == "idle") RecordingStartedUtc = null;
                     break;
                 case "status":
                     var stateStr = payload.GetProperty("state").GetString();
@@ -832,6 +908,24 @@ public partial class AppViewModel : ObservableObject
                             ? (enEl.GetString() ?? "") : "";
                         Log?.Invoke($"transcription behind (engine={engine}) — audio recording unaffected", "Meeting");
                         MeetingTranscriptionBehind?.Invoke(engine);
+                    }
+                    break;
+                case "meeting_transcription_unavailable":
+                    {
+                        var engine = payload.TryGetProperty("engine", out var enEl)
+                            ? (enEl.GetString() ?? "") : "";
+                        var reason = payload.TryGetProperty("reason", out var rEl)
+                            ? (rEl.GetString() ?? "") : "";
+                        Log?.Invoke($"transcription unavailable (engine={engine}, reason={reason}); audio recording unaffected", "Meeting");
+                        MeetingTranscriptionUnavailable?.Invoke(engine, reason);
+                    }
+                    break;
+                case "meeting_transcription_recovered":
+                    {
+                        var engine = payload.TryGetProperty("engine", out var enEl)
+                            ? (enEl.GetString() ?? "") : "";
+                        Log?.Invoke($"transcription recovered (engine={engine})", "Meeting");
+                        MeetingTranscriptionRecovered?.Invoke(engine);
                     }
                     break;
                 case "nemotron_gpu_limited":

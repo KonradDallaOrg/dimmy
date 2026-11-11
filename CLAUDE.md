@@ -211,6 +211,7 @@ A fresh session must know these exist too — all in the shared core, so each is
 | **Command mode** — transform the SELECTED text in place (not paste-only); CASE-A instruction vs CASE-B replacement | `llm.rs::{build_command_transform_prompt,build_command_generate_prompt}` | `dimmy_command_transform` | Win: `Services/SelectionCaptureService.cs` + `UiaSelectionReader.cs` (UIA-first). Mac: AX selection read. Auth = same dispatch as recap (api_key / subscription) |
 | **Claude Code subscription** LLM (Anthropic Pro/Team/Max via local `claude` CLI) | `claude_code.rs` | `dimmy_claude_code_status`/`_spawn_login`/`_ping`/`_recheck`/`_diagnostics`/`_binary_path`/`_node_status` | Synthetic `claude-code://` URL routes `process_text`+`process_raw_prompt` via `claude --print`. Dimmy never reads `~/.claude/credentials.json`. See [`docs/dev/claude-code-backend.md`](docs/dev/claude-code-backend.md) |
 | **Codex subscription** LLM (OpenAI/ChatGPT via local `codex` CLI) | `codex.rs` | `dimmy_codex_status`/`_spawn_login`/`_ping`/`_recheck`/`_diagnostics`/`_binary_path` | Sibling of `claude_code.rs`; `codex exec -` with prompt on stdin. **On one tested ChatGPT account a sub served only its default model (`gpt-5.5`); other ids → HTTP 400 (tier-dependent, not generalized).** See [`docs/dev/codex-backend.md`](docs/dev/codex-backend.md) |
+| **Kimi Code subscription** LLM (Kimi membership via local `kimi` CLI, or a membership API key) | `kimi_cli.rs` + `Provider::Kimi` | `dimmy_kimi_status`/`_spawn_login`/`_ping`/`_recheck`/`_diagnostics`/`_binary_path`/`_install_command`/`_git_bash_present`/`_models_json`, `dimmy_kimi_mcp_status`/`_install`/`_uninstall` (`kimi_mcp.rs`: `dimmy-mcp` in `~/.kimi-code/mcp.json` for Kimi Code, and a **Kimi Work personal plugin** — the Integrations card is Kimi Work) | Driven over **ACP** (`kimi acp`, prompt on stdin), not `kimi -p` (argv-only prompt). Tier's own model list; permission requests cancelled; session deleted after each call. **Windows needs Git for Windows** — the wizard installs it. Terms: personal interactive use only — never call it from a bulk loop. See [`docs/dev/kimi-backend.md`](docs/dev/kimi-backend.md) |
 | **Claude Desktop MCP bridge** | `claude_desktop.rs` + `mcp-server/` (`dimmy-mcp` binary) | `dimmy_claude_desktop_status`/`_install`/`_uninstall` | Patches `claude_desktop_config.json`; the MCP server exposes 6 tools (incl. `dimmy_search` over meetings) |
 | **Call / meeting auto-detect** + stop-suggestion | `call_detector.rs` (pure state machine) | `dimmy_call_signal`/`_signal_sys`/`_signal_session_ended`/`_signal_response`/`_set_tracked_origin`/`_meeting_started_external`/`_detector_state` | Host polls audio-session state → signals; core decides nudge/suppress. Win: `CallDetectionService.cs` + `CallNudgeWindow`. Mac: `CallDetectionManager` |
 | **Recording consent** gate (GDPR / all-party) | `consent.rs` | `dimmy_consent_text`, `dimmy_consent_log_event` | Localized modal + announcement (6 langs) + append-only `consent.jsonl` audit. Host decides WHEN to show it |
@@ -236,6 +237,8 @@ A fresh session must know these exist too — all in the shared core, so each is
 | Add an app-rule trigger | `core/src/app_rules.rs::resolve` + UI capture (Win: `Helpers/AppContextCapture.cs`, Mac: `NSWorkspace`) |
 | Fix audio bug | Reproduce in `preprocess.rs` test FIRST, read `docs/dev/audio-pipeline.md`, then fix |
 | Add a meeting feature | `core/src/meeting.rs` + UI window + LLM raw handoff. Lifecycle is decoupled from UI: closing the window doesn't stop the recording — `MEETING` static lives in `ffi.rs`. **Two threads: `worker_loop` writes audio and may never block; `stt_thread_loop` owns transcription + `transcripts.txt` + host events. Read THE AUDIO RULE below before adding anything to the capture loop.** |
+| Touch who records (dictation vs meeting) | `core/src/capture.rs` is the one owner of the shared capture buffers (`Owner` enum + `apply()`); never add another flag for it. The meeting worker only does `capture::meeting_owns(id)` (atomic). |
+| Touch meeting transcription failures | `core/src/transcriber_health.rs` (pure) fed by `stt_thread_loop`; a failure is a `Reason`, never an empty string. `meta.json` `transcript.status` says failed / silent / unknown. |
 | Touch meeting pause/resume | `meeting.rs::MeetingSession::{pause,resume,is_paused}` + FFI rc contract (1 / 0 / -1). Worker excludes paused window from `audio.wav` and adds `[paused]` line in `transcripts.txt` |
 | Touch the AEC / Mix-mode echo path | `core/src/aec.rs` — 10 ms frames @ 48 kHz, ref ring zero-padding when loopback empty. Reference signal comes from cpal loopback, capture from mic |
 | Touch the file-load pipeline | `dimmy_transcribe_file` in `ffi.rs` — rc table is contractual, don't renumber. Uses `preprocess::process_buffer_for_file_load` (highpass-only). Do NOT call full `RawAudio::preprocess` — AGC NaN destroys long files |
@@ -334,6 +337,8 @@ vice versa). Memorise:
 
 > **BEFORE pushing any signed Windows tag (`v*-staging.N`; later `v*-rcN` / `v*`): (1) the self-hosted runner must be ONLINE (`./run.cmd` → "Listening for Jobs"), and (2) SimplySign Desktop must be OPEN + LOGGED IN (session ~3h).** If not, the `sign-windows` job fails — but `build-windows` already uploaded UNSIGNED assets, so the release still works; just log into SimplySign and re-run the `sign-windows` job. Manual fallback: `scripts/dev/firma-release.ps1 -Tag <tag>` signs the downloaded installer post-hoc. Full setup in memory `reference_windows_code_signing_certum`.
 
+Both signing runners (C: `PC-KONRAD`, D: `PC-KDALLA`) need the pre-job guard installed, or a PR on this public repo can run code on them: [`docs/dev/signing-runner-hardening.md`](docs/dev/signing-runner-hardening.md).
+
 Practical consequences:
 
 - **A `v*-rcN` tag triggers `release.yml`, NOT staging.** Cutting `v0.6.46-rc1` builds against PROD endpoints. Velopack channel `prerelease` users see it; if anyone clicks "Buy plan" Stripe Live bills them. Recommended trial-only testing on rcN — `Start trial` and `/api/activate` magic-link redemption are free in both modes.
@@ -389,8 +394,10 @@ If you're about to bump and `gh release list` shows a higher version than what y
 
 **Don't poll the Rust core to mirror state in the UI.** Use the event
 callback channel (`dimmy_set_event_callback` ⇒ Win
-`AppViewModel.HandleEvent`, Mac `DimmyCore.handleEvent`,
-Linux `DimmyCore::on_event`). When you need the host UI to react to a
+`AppViewModel.HandleEvent`, Mac `DimmyCore.handleEvent`).
+The Linux host registers no event callback yet (its pill sender is
+dropped in `platforms/linux/src/main.rs`); Linux is frozen until the
+Linux decision, so don't assume a Linux mirror exists. When you need the host UI to react to a
 state change in the Rust core (meeting active, recording started,
 chunk progress, …), have the Rust side `emit_event(...)` exactly once
 per transition; subscribers update local state from the envelope.
@@ -419,8 +426,8 @@ core emit?").
 
 1. Add a Rust emit: small helper like `emit_meeting_state_event(active, paused)` that wraps the call to `emit_event("name", "{...}")`.
 2. Call it in every state-transition branch of the Rust handler. One emit per transition, exactly.
-3. Add a `case "name":` in the host `HandleEvent` / `handleEvent` /
-   `on_event` switch; map payload fields to observable view-model
+3. Add a `case "name":` in the host `HandleEvent` / `handleEvent`
+   switch; map payload fields to observable view-model
    properties.
 4. Replace the polling tick body with the same logic, hooked off
    `PropertyChanged` (Win) / `@Published` (Mac, Combine) / signal

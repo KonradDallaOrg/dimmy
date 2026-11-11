@@ -228,6 +228,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             signal(sig, crashHandleSignal)
         }
         crashAppendLine("crash handlers installed (NSException + SIG{SEGV,ABRT,BUS,ILL,FPE})")
+        HangWatchdog.start()
     }
 
     // MARK: - Live captions
@@ -269,7 +270,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                         self.captionWindowController?.reset()
                         self.captionWindowController?.show()
                     }
-                case .idle:
+                case .idle, .error:
                     // Stop / cancel paths converge here. If the user
                     // cancelled (no final emitted) the schedule-hide
                     // never fires — hide eagerly.
@@ -365,11 +366,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 if self.appState.isOnboardingComplete {
                     let askTerms = !TermsPrompt.isAccepted(in: cfg)
                     let askConsent = TelemetryConsentPrompt.needsAnswer(in: cfg)
-                    if askTerms || askConsent {
-                        DispatchQueue.main.async {
-                            MainActor.assumeIsolated {
-                                if askTerms { TermsPrompt.present() }
-                                if askConsent { TelemetryConsentPrompt.present() }
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated {
+                            if askTerms { TermsPrompt.present() }
+                            // One question at a time: an unasked crash
+                            // report waits in the core for a later launch.
+                            if askConsent {
+                                TelemetryConsentPrompt.present()
+                            } else {
+                                CrashReportPrompt.presentIfPending()
                             }
                         }
                     }
@@ -436,6 +441,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 // phase=no_credentials) on a build without the feature.
                 TelegramService.shared.start(appState: self.appState)
 
+                // Meetings a crash left behind: the audio is on disk and
+                // nothing ever said so. The core marks them once; say it once.
+                let interrupted = DimmyCore.shared.meetingRecoverInterrupted().count
+                if interrupted > 0 {
+                    DictToastWindow.show(
+                        kind: .workflowHint,
+                        title: interrupted == 1 ? "A meeting was interrupted" : "\(interrupted) meetings were interrupted",
+                        body: "Dimmy closed while recording. The audio up to that moment is saved: open Meetings and use Regenerate transcript.")
+                }
+
                 // Preload Parakeet during onboarding so by the time the
                 // user reaches the model-download step the bundle is
                 // already on disk (or downloading). Mirrors the Win
@@ -479,7 +494,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         didStartParakeetPreload = true
         hkLog("[AppDelegate] Parakeet onboarding preload starting (~466 MB)")
         appState.localSttBackend = "parakeet"
-        appState.parakeetDownloadProgress = 0.0
+        appState.bundleDownloadProgress["parakeet"] = 0
         appState.isDownloadingParakeet = true
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let ok = DimmyCore.shared.downloadParakeetBundle()
@@ -1024,6 +1039,34 @@ private func crashHandleNSException(_ exc: NSException) {
     let reason = exc.reason ?? ""
     let symbols = exc.callStackSymbols.joined(separator: "\n  ")
     crashAppendLine("NSException name=\(name) reason=\"\(reason)\"\n  \(symbols)")
+    // The process is still alive here, so the core can send it now. The
+    // reason stays in dimmy.log only.
+    _ = dimmy_telemetry_capture_host_exception(
+        "macos", "nsexception", name, hostFrames(exc.callStackSymbols), 1)
+}
+
+/// `callStackSymbols` lines (`3  Dimmy  0x0000000100abc123 symbol + 42`) as
+/// the core's `function\tfile\tline` frames: `module`symbol`, no file.
+private func hostFrames(_ symbols: [String]) -> String {
+    symbols.map { line -> String in
+        let parts = line.split(separator: " ", omittingEmptySubsequences: true)
+        guard parts.count >= 4 else { return String(line) + "\t\t" }
+        let module = parts[1]
+        var symbol = parts[3...].joined(separator: " ")
+        if let plus = symbol.range(of: " + ", options: .backwards) {
+            symbol = String(symbol[..<plus.lowerBound])
+        }
+        return "\(module)`\(symbol)\t\t"
+    }.joined(separator: "\n")
+}
+
+/// A fatal signal cannot call into the core safely. Leave the marker the
+/// core's abort report reads at the next launch (core/src/telemetry/
+/// abort_report.rs): the signal name, nothing else.
+private func writeAbortMarker(_ name: String) {
+    guard let dir = DimmyCore.shared.configDirURL else { return }
+    let path = dir.appendingPathComponent("last_abort.txt").path
+    FileManager.default.createFile(atPath: path, contents: "\(name) macos host".data(using: .utf8))
 }
 
 private func crashHandleSignal(_ sig: Int32) {
@@ -1038,10 +1081,59 @@ private func crashHandleSignal(_ sig: Int32) {
     }
     let backtrace = Thread.callStackSymbols.joined(separator: "\n  ")
     crashAppendLine("\(name)\n  \(backtrace)")
+    writeAbortMarker(name)
     // Re-raise via default handler so the exit code is correct + Apple
     // CrashReporter still files an .ips at the system level.
     signal(sig, SIG_DFL)
     raise(sig)
+}
+
+/// Reports the main thread when it stops answering for 5 s, once per hang.
+/// Mirror of the Windows `CrashReporter.StartHangWatchdog`. A sleep stalls
+/// this thread too, and is not a hang.
+final class HangWatchdog: @unchecked Sendable {
+    private static let shared = HangWatchdog()
+    private let lock = NSLock()
+    private var lastPong = DispatchTime.now().uptimeNanoseconds
+    private var started = false
+
+    private func pong() {
+        lock.lock(); lastPong = DispatchTime.now().uptimeNanoseconds; lock.unlock()
+    }
+
+    private func silentNanos(at now: UInt64) -> UInt64 {
+        lock.lock(); defer { lock.unlock() }
+        return now - min(lastPong, now)
+    }
+
+    static func start() {
+        #if !DEBUG
+        let dog = shared
+        dog.lock.lock()
+        let first = !dog.started
+        dog.started = true
+        dog.lock.unlock()
+        guard first else { return }
+        let thread = Thread {
+            var reported = false
+            while true {
+                Thread.sleep(forTimeInterval: 1)
+                DispatchQueue.main.async { dog.pong() }
+                // Uptime stops while the Mac sleeps, so a sleep is never a hang.
+                let silent = dog.silentNanos(at: DispatchTime.now().uptimeNanoseconds)
+                if silent < 5_000_000_000 {
+                    reported = false
+                } else if !reported {
+                    reported = true
+                    _ = dimmy_telemetry_capture_host_exception("macos", "ui_hang", "AppHang", nil, 0)
+                }
+            }
+        }
+        thread.name = "dimmy-ui-watchdog"
+        thread.qualityOfService = .utility
+        thread.start()
+        #endif
+    }
 }
 
 #if DEBUG

@@ -287,6 +287,9 @@ fn compute_gpu_backend_status() -> GpuBackendStatus {
             crate::gpu_diag::disable_vulkan_loader(
                 "known-bad marker: prior GPU crash, driver fingerprint unchanged",
             );
+            // Every launch after the crash ran 10-30x slower with no word to
+            // the user: only the recovery run itself announced it.
+            announce_cpu_fallback(true);
             return GpuBackendStatus::Unavailable;
         }
         crate::log(&format!(
@@ -1145,6 +1148,16 @@ mod whisper_cache {
             }
             let state = state_result.map_err(|e| {
                 crate::log(&format!("[LocalSTT] create_state returned error: {}", e));
+                crate::telemetry::report(
+                    crate::telemetry::Subsystem::LocalEngine,
+                    "create_state_failed",
+                    if using_gpu {
+                        "whisper_gpu"
+                    } else {
+                        "whisper_cpu"
+                    },
+                    &e.to_string(),
+                );
                 crate::error::TranscribeError::LocalModel(format!("failed to create state: {}", e))
             })?;
             *guard = Some(CachedModel {

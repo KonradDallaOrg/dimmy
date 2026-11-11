@@ -21,6 +21,7 @@
     <Compile Include="..\Dimmy.Windows\Services\HotkeyRecorderEvents.cs" Link="Services\HotkeyRecorderEvents.cs" />
     <Compile Include="..\Dimmy.Windows\Services\HotkeyEvents.cs" Link="Services\HotkeyEvents.cs" />
     <Compile Include="..\Dimmy.Windows\Services\HotkeyEdgePolicy.cs" Link="Services\HotkeyEdgePolicy.cs" />
+    <Compile Include="..\Dimmy.Windows\Helpers\CrashFrames.cs" Link="Helpers\CrashFrames.cs" />
     <Compile Include="..\Dimmy.Windows\Helpers\PillDockMath.cs" Link="Helpers\PillDockMath.cs" />
     <Compile Include="..\Dimmy.Windows\Helpers\PillHitRegion.cs" Link="Helpers\PillHitRegion.cs" />
     <Compile Include="..\Dimmy.Windows\Helpers\LegalDocument.cs" Link="Helpers\LegalDocument.cs" />
@@ -28,6 +29,8 @@
     <Compile Include="..\Dimmy.Windows\Services\CallMediaSockets.cs" Link="Services\CallMediaSockets.cs" />
     <Compile Include="..\Dimmy.Windows\Services\ToastDuration.cs" Link="Services\ToastDuration.cs" />
     <Compile Include="..\Dimmy.Windows\Services\UpdateGate.cs" Link="Services\UpdateGate.cs" />
+    <Compile Include="..\Dimmy.Windows\Services\CrashReportChoice.cs" Link="Services\CrashReportChoice.cs" />
+    <Compile Include="..\Dimmy.Windows\Services\CommandPipeServer.cs" Link="Services\CommandPipeServer.cs" />
     <Compile Include="..\Dimmy.Windows\Services\VersionDisplay.cs" Link="Services\VersionDisplay.cs" />
     <Compile Include="..\Dimmy.Windows\Helpers\HardwareInfo.cs" Link="Helpers\HardwareInfo.cs" />
     <Compile Include="..\Dimmy.Windows\Helpers\InputDeviceChoice.cs" Link="Helpers\InputDeviceChoice.cs" />
@@ -35,6 +38,8 @@
     <Compile Include="..\Dimmy.Windows\Helpers\MeetingAudio.cs" Link="Helpers\MeetingAudio.cs" />
     <Compile Include="..\Dimmy.Windows\Helpers\LiveWaveformLayout.cs" Link="Helpers\LiveWaveformLayout.cs" />
     <Compile Include="..\Dimmy.Windows\Helpers\TranscriptSeek.cs" Link="Helpers\TranscriptSeek.cs" />
+    <Compile Include="..\Dimmy.Windows\Helpers\TranscriptHealthText.cs" Link="Helpers\TranscriptHealthText.cs" />
+    <Compile Include="..\Dimmy.Windows\Helpers\MeetingDoneNotes.cs" Link="Helpers\MeetingDoneNotes.cs" />
     <Compile Include="..\Dimmy.Windows\ViewModels\AppViewModel.cs" Link="ViewModels\AppViewModel.cs" />
     <Compile Include="..\Dimmy.Windows\ViewModels\SettingsViewModel.cs" Link="ViewModels\SettingsViewModel.cs" />
     <Compile Include="..\Dimmy.Windows\ViewModels\OnboardingViewModel.cs" Link="ViewModels\OnboardingViewModel.cs" />

@@ -1116,7 +1116,6 @@ impl Recognizer {
             handle,
             _req: req,
             pushed_secs: 0.0,
-            finished: false,
         })
     }
 }
@@ -1254,7 +1253,6 @@ pub struct Stream {
     handle: *mut StreamHandle,
     _req: Request,
     pushed_secs: f64,
-    finished: bool,
 }
 
 // SAFETY: a stream is driven by one thread at a time (asr.h: "single-threaded
@@ -1271,7 +1269,6 @@ impl Stream {
     /// the stream, continuously, which resampling each 100 ms piece on our
     /// side would not be. The rate must not change within a stream.
     pub fn push_at(&mut self, pcm: &[f32], rate: u32) -> Result<(), TranscribeError> {
-        assert!(!self.finished, "push after finish");
         assert!(
             (8_000..=96_000).contains(&rate),
             "nemotron: rate {rate} out of 8-96 kHz"
@@ -1316,15 +1313,13 @@ impl Stream {
         }
     }
 
-    /// No more audio: flush the tail and return what it produced.
-    pub fn finish(&mut self) -> Result<Vec<Update>, TranscribeError> {
-        if !self.finished {
-            let api = &self.recognizer.api;
-            // SAFETY: live stream handle.
-            let rc = unsafe { (api.stream_finish)(self.handle) };
-            api.check("finish", rc)?;
-            self.finished = true;
-        }
+    /// No more audio: flush the tail and return what it produced. Takes the
+    /// stream, so nothing can push into it afterwards (RUST-10).
+    pub fn finish(mut self) -> Result<Vec<Update>, TranscribeError> {
+        let api = &self.recognizer.api;
+        // SAFETY: live stream handle.
+        let rc = unsafe { (api.stream_finish)(self.handle) };
+        api.check("finish", rc)?;
         self.poll()
     }
 
@@ -1527,7 +1522,11 @@ impl Streamer {
     pub fn stop(mut self) -> String {
         self.cancel.store(true, std::sync::atomic::Ordering::SeqCst);
         if let Some(h) = self.handle.take() {
-            let _ = h.join();
+            crate::stream_bounds::join_worker(
+                h,
+                crate::stream_bounds::LOCAL_STOP_JOIN_TIMEOUT,
+                "Nemotron",
+            );
         }
         self.final_text
             .lock()
@@ -1958,23 +1957,39 @@ impl MeetingTrack {
         if !self.speakers {
             return Ok(Vec::new());
         }
-        let tail = self.stream.finish()?;
-        let lines = self.lines(tail);
-        let r = app_recognizer(false)?;
-        self.stream = r.stream(&self.language, &self.keywords, false)?;
+        self.switch_without_speakers(|language, keywords| {
+            app_recognizer(false)?.stream(language, keywords, false)
+        })
+    }
+
+    fn switch_without_speakers(
+        &mut self,
+        open: impl FnOnce(&str, &[String]) -> Result<Stream, TranscribeError>,
+    ) -> Result<Vec<Line>, TranscribeError> {
+        // The new stream first: when it is refused, the track keeps the one
+        // it has, speakers and all.
+        let fresh = open(&self.language, &self.keywords)?;
+        let tail = std::mem::replace(&mut self.stream, fresh).finish();
+        let lines = tail.map(|t| self.lines(t));
         self.clock = vec![(0.0, self.pushed_until as f64 / self.rate as f64)];
         self.stream_secs = 0.0;
         self.last_partial.clear();
         self.speakers = false;
         self.dropped = true;
-        Ok(lines)
+        lines
     }
 
     /// Flush the tail. Returns its lines and what the track heard: who
     /// spoke when, and whether those labels cover the whole track.
     pub fn finish(mut self) -> Result<(Vec<Line>, Spoken), TranscribeError> {
         let tail = self.stream.finish()?;
-        let lines = self.lines(tail);
+        let lines = lines_on_track(
+            &self.clock,
+            self.speakers,
+            &mut self.spoken,
+            &mut self.voiced,
+            tail,
+        );
         let covered = self.speakers && !self.dropped;
         Ok((
             lines,
@@ -1987,39 +2002,57 @@ impl MeetingTrack {
     }
 
     fn lines(&mut self, updates: Vec<Update>) -> Vec<Line> {
-        let mut out = Vec::new();
-        for u in updates.into_iter().filter(|u| u.is_final) {
-            let words: Vec<Word> = u
-                .words
-                .into_iter()
-                .map(|w| Word {
-                    start: clock_to_track(&self.clock, w.start),
-                    end: clock_to_track(&self.clock, w.end),
-                    speaker: if self.speakers { w.speaker } else { 0 },
-                    text: w.text,
-                })
-                .collect();
-            if self.speakers {
-                self.spoken.extend(
-                    words
-                        .iter()
-                        .filter(|w| w.speaker > 0)
-                        .map(|w| (w.speaker, w.start, w.end)),
-                );
-            } else {
-                self.voiced.extend(words.iter().map(|w| (w.start, w.end)));
-            }
-            // Word times are already on the track's clock; a result without
-            // words is placed where the current stream began.
-            let offset = if words.is_empty() {
-                clock_to_track(&self.clock, 0.0)
-            } else {
-                0.0
-            };
-            out.extend(turns(&words, &u.text, offset));
-        }
-        out
+        lines_on_track(
+            &self.clock,
+            self.speakers,
+            &mut self.spoken,
+            &mut self.voiced,
+            updates,
+        )
     }
+}
+
+/// A track's closed utterances as lines on the track's clock, recording who
+/// spoke when in `spoken` (with speakers) or `voiced` (without).
+fn lines_on_track(
+    clock: &[(f64, f64)],
+    speakers: bool,
+    spoken: &mut Vec<(u8, f64, f64)>,
+    voiced: &mut Vec<(f64, f64)>,
+    updates: Vec<Update>,
+) -> Vec<Line> {
+    let mut out = Vec::new();
+    for u in updates.into_iter().filter(|u| u.is_final) {
+        let words: Vec<Word> = u
+            .words
+            .into_iter()
+            .map(|w| Word {
+                start: clock_to_track(clock, w.start),
+                end: clock_to_track(clock, w.end),
+                speaker: if speakers { w.speaker } else { 0 },
+                text: w.text,
+            })
+            .collect();
+        if speakers {
+            spoken.extend(
+                words
+                    .iter()
+                    .filter(|w| w.speaker > 0)
+                    .map(|w| (w.speaker, w.start, w.end)),
+            );
+        } else {
+            voiced.extend(words.iter().map(|w| (w.start, w.end)));
+        }
+        // Word times are already on the track's clock; a result without
+        // words is placed where the current stream began.
+        let offset = if words.is_empty() {
+            clock_to_track(clock, 0.0)
+        } else {
+            0.0
+        };
+        out.extend(turns(&words, &u.text, offset));
+    }
+    out
 }
 
 // ---- Turning results into text the app can use --------------------------
@@ -2703,5 +2736,184 @@ mod tests {
             60
         );
         assert_eq!(offset_of!(RecognitionOptions, max_speaker_count), 64);
+    }
+
+    // ---- A stand-in engine: streams that take audio and never answer ----
+
+    mod fake {
+        use super::super::*;
+
+        unsafe extern "C" fn options_default() -> RecognitionOptions {
+            unreachable!("fake engine: options_default")
+        }
+        unsafe extern "C" fn create(
+            _: *const RecognizerConfig,
+            _: *mut *mut RecognizerHandle,
+        ) -> Status {
+            unreachable!("fake engine: create")
+        }
+        unsafe extern "C" fn recognize_f32(
+            _: *mut RecognizerHandle,
+            _: *const RecognitionOptions,
+            _: *const f32,
+            _: usize,
+            _: i32,
+            _: *mut *mut ResultHandle,
+        ) -> Status {
+            unreachable!("fake engine: recognize")
+        }
+        unsafe extern "C" fn streaming_recognize(
+            _: *mut RecognizerHandle,
+            _: *const RecognitionOptions,
+            _: *mut *mut StreamHandle,
+        ) -> Status {
+            unreachable!("fake engine: streaming_recognize")
+        }
+        unsafe extern "C" fn stream_push_f32(
+            _: *mut StreamHandle,
+            _: *const f32,
+            _: usize,
+            _: i32,
+        ) -> Status {
+            STATUS_OK
+        }
+        unsafe extern "C" fn stream_op(_: *mut StreamHandle) -> Status {
+            STATUS_OK
+        }
+        unsafe extern "C" fn stream_next(
+            _: *mut StreamHandle,
+            out: *mut *mut ResultHandle,
+        ) -> Status {
+            *out = std::ptr::null_mut();
+            STATUS_OK
+        }
+        unsafe extern "C" fn stream_close(_: *mut StreamHandle) {}
+        unsafe extern "C" fn destroy(_: *mut RecognizerHandle) {}
+        unsafe extern "C" fn result_is_final(_: *const ResultHandle) -> bool {
+            unreachable!("fake engine: no results")
+        }
+        unsafe extern "C" fn result_text(_: *const ResultHandle, _: usize) -> *const c_char {
+            unreachable!("fake engine: no results")
+        }
+        unsafe extern "C" fn result_word_count(_: *const ResultHandle, _: usize) -> usize {
+            unreachable!("fake engine: no results")
+        }
+        unsafe extern "C" fn result_word_text(
+            _: *const ResultHandle,
+            _: usize,
+            _: usize,
+        ) -> *const c_char {
+            unreachable!("fake engine: no results")
+        }
+        unsafe extern "C" fn result_word_i32(_: *const ResultHandle, _: usize, _: usize) -> i32 {
+            unreachable!("fake engine: no results")
+        }
+        unsafe extern "C" fn result_destroy(_: *mut ResultHandle) {}
+        unsafe extern "C" fn no_string() -> *const c_char {
+            std::ptr::null()
+        }
+
+        fn this_process() -> libloading::Library {
+            #[cfg(windows)]
+            {
+                libloading::os::windows::Library::this()
+                    .expect("the running process")
+                    .into()
+            }
+            #[cfg(not(windows))]
+            {
+                libloading::os::unix::Library::this().into()
+            }
+        }
+
+        pub fn recognizer() -> Arc<Recognizer> {
+            let api = Api {
+                options_default,
+                create,
+                recognize_f32,
+                streaming_recognize,
+                stream_push_f32,
+                stream_force_endpoint: stream_op,
+                stream_finish: stream_op,
+                stream_next,
+                stream_close,
+                destroy,
+                result_is_final,
+                result_transcript: result_text,
+                result_word_count,
+                result_word_text,
+                result_word_start: result_word_i32,
+                result_word_end: result_word_i32,
+                result_word_speaker: result_word_i32,
+                result_destroy,
+                last_error: no_string,
+                version: no_string,
+                _library: this_process(),
+            };
+            Arc::new(Recognizer {
+                api: Arc::new(api),
+                handle: std::ptr::NonNull::dangling().as_ptr(),
+                spec: EngineSpec {
+                    library: PathBuf::new(),
+                    model: PathBuf::new(),
+                    gpu: None,
+                    diarizer: Some(PathBuf::new()),
+                },
+            })
+        }
+
+        pub fn stream(speakers: bool) -> Stream {
+            Stream {
+                recognizer: recognizer(),
+                handle: std::ptr::NonNull::dangling().as_ptr(),
+                _req: Request::new("", &[], speakers).expect("request"),
+                pushed_secs: 0.0,
+            }
+        }
+
+        pub fn track_with_speakers() -> MeetingTrack {
+            MeetingTrack {
+                stream: stream(true),
+                rate: SAMPLE_RATE as u32,
+                pushed_until: 0,
+                speakers: true,
+                language: String::new(),
+                keywords: Vec::new(),
+                clock: vec![(0.0, 0.0)],
+                stream_secs: 0.0,
+                last_partial: String::new(),
+                spoken: Vec::new(),
+                voiced: Vec::new(),
+                dropped: false,
+            }
+        }
+    }
+
+    /// RUST-10: the speakers were dropped under memory pressure, the
+    /// recognizer without them was refused, and the next window pushed into
+    /// the stream that had already been finished.
+    #[test]
+    fn a_refused_switch_leaves_the_track_taking_audio() {
+        let mut t = fake::track_with_speakers();
+        let r = t.switch_without_speakers(|_, _| {
+            Err(TranscribeError::LocalModel("refused: low memory".into()))
+        });
+        assert!(r.is_err());
+        assert!(t.has_speakers(), "a refused switch changes nothing");
+        t.feed(&[0.0; SAMPLE_RATE / 2], 0)
+            .expect("the track still takes audio");
+    }
+
+    #[test]
+    fn a_switch_moves_the_track_to_the_new_stream() {
+        let mut t = fake::track_with_speakers();
+        t.feed(&[0.0; SAMPLE_RATE], 0).expect("feed");
+        t.switch_without_speakers(|_, _| Ok(fake::stream(false)))
+            .expect("switch");
+        assert!(!t.has_speakers());
+        t.feed(&[0.0; SAMPLE_RATE], SAMPLE_RATE)
+            .expect("the new stream takes audio");
+        let (_, spoken) = t.finish().expect("finish");
+        assert!(!spoken.covered, "labels cover only part of the meeting");
     }
 }

@@ -32,7 +32,7 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       # llama.cpp now vendors a web UI whose paths blow past Windows' 260-char
       # limit when cargo checks the submodule out under CARGO_HOME:
@@ -50,16 +50,18 @@ jobs:
           "CARGO_NET_GIT_FETCH_WITH_CLI=true" | Add-Content -Encoding utf8 $env:GITHUB_ENV
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
 
       - name: Rust build cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: core
           shared-key: integration-suites-win-llamacpp061
 
       - name: Cache test fixtures (jfk.wav + ggml-tiny.en-q8_0.bin)
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: core/target/test-fixtures
           key: ffi-fixtures-v1-windows-2025
@@ -100,7 +102,7 @@ jobs:
 
       - name: Upload debug artifacts on failure
         if: failure()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: integration-suites-debug
           path: core/target/release/deps/*.pdb
@@ -118,7 +120,7 @@ jobs:
         os: [ubuntu-22.04, macos-latest, windows-2025]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       # Same long-path problem the other two Windows jobs already guard
       # against. This job is PR-only, so it had never run since the
       # llama.cpp bump and never got the fix: on staging it is skipped, and
@@ -131,10 +133,12 @@ jobs:
           "CARGO_NET_GIT_FETCH_WITH_CLI=true" | Add-Content -Encoding utf8 $env:GITHUB_ENV
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
 
       - name: Rust build cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: core
           # Bumped to v3 (2026-04-29) to evict a stale Swatinem cache that
@@ -146,7 +150,7 @@ jobs:
           shared-key: e2e-v3-${{ matrix.os }}-llamacpp061
 
       - name: Cache test fixtures (jfk.wav + ggml-tiny.en-q8_0.bin)
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: core/target/test-fixtures
           key: ffi-fixtures-v1-${{ matrix.os }}
@@ -183,7 +187,7 @@ jobs:
 
       - name: Upload test debug artifacts on failure
         if: failure()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: ffi-e2e-debug-${{ matrix.os }}
           path: |
@@ -199,7 +203,7 @@ jobs:
     # skipped `needs` would skip this job on staging pushes too).
     needs: integration-suites
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       # llama.cpp now vendors a web UI whose paths blow past Windows' 260-char
       # limit when cargo checks the submodule out under CARGO_HOME:
@@ -217,16 +221,18 @@ jobs:
           "CARGO_NET_GIT_FETCH_WITH_CLI=true" | Add-Content -Encoding utf8 $env:GITHUB_ENV
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: core
           shared-key: ui-smoke-win-llamacpp061
 
       - name: Set up .NET 8
-        uses: actions/setup-dotnet@v5
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
         with:
           dotnet-version: "8.0.x"
 
@@ -250,7 +256,7 @@ jobs:
 
       - name: Upload UI test artifacts on failure
         if: failure()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: ui-smoke-debug
           path: |
@@ -276,7 +282,7 @@ jobs:
         os: [ubuntu-22.04, macos-latest, windows-2025]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       # The last of the four jobs to need this: same PR-only matrix, same
       # llama.cpp submodule, same 260-character wall. Audited the whole file
       # after fixing ffi-integration and finding this one still red.
@@ -288,10 +294,12 @@ jobs:
           "CARGO_NET_GIT_FETCH_WITH_CLI=true" | Add-Content -Encoding utf8 $env:GITHUB_ENV
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: core
           shared-key: ffi-smoke-${{ matrix.os }}-llamacpp061

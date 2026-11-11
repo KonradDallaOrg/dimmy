@@ -47,15 +47,16 @@ jobs:
     name: Rust Lint & Test
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
+          toolchain: stable
           components: rustfmt, clippy
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: core
 
@@ -84,7 +85,7 @@ jobs:
       release_id: ${{ steps.create.outputs.id }}
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
 
@@ -189,13 +190,27 @@ jobs:
 
       - name: Create GitHub Release
         id: create
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           tag_name: staging-latest
+          # The tag must sit on this commit, not on main: GitHub orders releases
+          # by the tagged commit's date, and Velopack reads only the first page.
+          target_commitish: ${{ github.sha }}
           name: "Dimmy ${{ steps.version.outputs.version }} (Native Staging)"
           body_path: changelog.md
           draft: true
           prerelease: true
+
+      # Sentry release + commit association. Never blocks the release:
+      # continue-on-error, and sentry.sh exits 0 on any failure or with no
+      # token. The name it computes is the one the binary reports
+      # (scripts/ci/test_sentry.sh pins it to sentry_release()).
+      - name: Sentry release + commits
+        continue-on-error: true
+        shell: bash
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: bash scripts/ci/sentry.sh release
 
   # ── macOS Native Build (parallel with Windows + rust-check) ─────────
   build-macos:
@@ -203,11 +218,12 @@ jobs:
     needs: create-release
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
+          toolchain: stable
           targets: aarch64-apple-darwin
 
       - name: Install CMake
@@ -230,13 +246,13 @@ jobs:
         run: scripts/download-onnxruntime.sh
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: core
           shared-key: macos-staging-llamacpp061
 
       - name: Cache FluidAudio Swift build
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           # `swift build` runs as part of fluidaudio-rs's build.rs and
           # rebuilds 500+ Swift files (~5 min cold) for FluidAudio +
@@ -355,6 +371,15 @@ jobs:
             build \
             CODE_SIGN_IDENTITY="-"
 
+      # Debug symbols for Sentry: the app dSYM, which dsymutil fills from the
+      # Rust static lib's line tables too. The dSYM is uploaded, never shipped.
+      - name: Upload debug symbols to Sentry
+        continue-on-error: true
+        shell: bash
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: bash scripts/ci/sentry.sh upload platforms/macos/build/derived/Build/Products/Release/*.dSYM
+
       - name: Bundle llama.cpp dylibs
         run: |
           APP_PATH="platforms/macos/build/derived/Build/Products/Release/Dimmy.app"
@@ -442,7 +467,7 @@ jobs:
             "build/dmg-contents"
 
       - name: Upload DMG to release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           tag_name: staging-latest
           files: platforms/macos/build/Dimmy-native-macos-arm64.dmg
@@ -461,7 +486,7 @@ jobs:
     needs: [create-release]
     runs-on: windows-2025-vs2026
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       # llama.cpp now vendors a web UI whose paths blow past Windows' 260-char
       # limit when cargo checks the submodule out under CARGO_HOME:
@@ -479,12 +504,13 @@ jobs:
           "CARGO_NET_GIT_FETCH_WITH_CLI=true" | Add-Content -Encoding utf8 $env:GITHUB_ENV
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
+          toolchain: stable
           targets: x86_64-pc-windows-msvc
 
       - name: Install CMake & Ninja
-        uses: lukka/get-cmake@latest
+        uses: lukka/get-cmake@f86dd60acae0d132056913e248bdabf0e0580b7a # v4.4.5
 
       - name: Install VS 2026 BuildTools side-by-side (MSVC 14.50+)
         shell: pwsh
@@ -633,12 +659,12 @@ jobs:
           if (-not $sdkDir) {
             throw "VulkanSDK not found after $maxTries chocolatey attempts (community.chocolatey.org may be degraded — re-run workflow when repo recovers)"
           }
-          echo "VULKAN_SDK=$($sdkDir.FullName)" >> $env:GITHUB_ENV
+          Add-Content -Path $env:GITHUB_ENV -Value "VULKAN_SDK=$($sdkDir.FullName)" -Encoding utf8
           echo "$($sdkDir.FullName)\Bin" >> $env:GITHUB_PATH
           Write-Host "Vulkan SDK: $($sdkDir.FullName)"
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: core
           shared-key: windows-staging-llamacpp061
@@ -748,8 +774,19 @@ jobs:
           }
           exit 0
 
+      # Debug symbols for Sentry: the PDB carries the line tables, the DLL the
+      # unwind info. The PDB is uploaded, never shipped ("Prepare distribution"
+      # deletes *.pdb). A reused DLL has no PDB here; its symbols went up with
+      # the build that stored it, and sentry.sh uploads what exists.
+      - name: Upload debug symbols to Sentry
+        continue-on-error: true
+        shell: bash
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: bash scripts/ci/sentry.sh upload D:/t/release/dimmy_lib.dll D:/t/release/dimmy_lib.pdb
+
       - name: Setup .NET
-        uses: actions/setup-dotnet@v5
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
         with:
           dotnet-version: '8.0.x'
 
@@ -760,7 +797,7 @@ jobs:
       # already built. Save right after restore instead, continue-on-error.
       - name: Restore NuGet cache
         id: nuget-cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ~/.nuget/packages
           key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
@@ -773,7 +810,7 @@ jobs:
       - name: Save NuGet cache
         if: steps.nuget-cache.outputs.cache-hit != 'true'
         continue-on-error: true
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ~/.nuget/packages
           key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
@@ -809,7 +846,7 @@ jobs:
             throw "Microsoft.Build.Packaging.Pri.Tasks.dll not found in VS install. UWP workload missing?"
           }
           Write-Host "AppxMSBuildToolsPath = $found"
-          echo "AppxMSBuildToolsPath=$found" >> $env:GITHUB_ENV
+          Add-Content -Path $env:GITHUB_ENV -Value "AppxMSBuildToolsPath=$found" -Encoding utf8
 
       - name: Publish Windows app (self-contained)
         working-directory: platforms/windows/Dimmy.Windows
@@ -925,7 +962,7 @@ jobs:
           Get-ChildItem platforms/windows/velopack-output | ForEach-Object { Write-Host "$($_.Name) ($([math]::Round($_.Length/1MB, 1)) MB)" }
 
       - name: Upload to release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           tag_name: staging-latest
           # The Velopack manifest (releases.staging.json) + nupkg ARE
@@ -949,15 +986,16 @@ jobs:
     needs: [create-release]
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
+          toolchain: stable
           components: clippy
 
       - name: Cache cargo
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -1035,13 +1073,13 @@ jobs:
           mv Dimmy*.AppImage Dimmy-native-linux-x86_64.AppImage
 
       - name: Upload AppImage to release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           tag_name: staging-latest
           files: Dimmy-native-linux-x86_64.AppImage
 
       - name: Upload raw binary (artifact)
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: dimmy-linux
           path: platforms/linux/target/release/dimmy-linux
@@ -1072,7 +1110,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Publish release
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         with:
           script: |
             await github.rest.repos.updateRelease({

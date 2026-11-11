@@ -107,10 +107,9 @@ public sealed partial class SettingsWindow
     {
         try
         {
-            var buf = new byte[1 << 16];
-            int n = DimmyNative.dimmy_get_config_json(buf, buf.Length);
-            if (n <= 0) return ("", "", false);
-            using var doc = JsonDocument.Parse(Encoding.UTF8.GetString(buf, 0, n));
+            var cfgJson = DimmyNative.ConfigJson();
+            if (string.IsNullOrEmpty(cfgJson)) return ("", "", false);
+            using var doc = JsonDocument.Parse(cfgJson);
             var root = doc.RootElement;
             string Get(string k) =>
                 root.TryGetProperty(k, out var v) ? v.GetString() ?? "" : "";

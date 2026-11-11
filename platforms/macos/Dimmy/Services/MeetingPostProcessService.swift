@@ -42,7 +42,7 @@ enum MeetingPostProcessService {
                 // user knows where to fix it.
                 switch e {
                 case .notConfigured:
-                    return "No recap LLM is configured. Open Settings → LLM and add a key (Anthropic, OpenAI, or Google), OR switch to Local mode + download a Gemma model. If you use a Claude/Codex subscription, open Settings → Integrations and sign in again."
+                    return "No recap LLM is configured. Open Settings → LLM and add a key (Anthropic, OpenAI, or Google), OR switch to Local mode + download a Gemma model. If you use a Claude/Codex/Kimi subscription, open Settings → Integrations and sign in again."
                 case .httpError:
                     return "LLM request failed — check your network and API key, then click Regenerate. Details in Console.app under \"dimmy\"."
                 case .emptyPrompt, .invalidArgs:
@@ -60,7 +60,7 @@ enum MeetingPostProcessService {
                     // -6: 401/403 — the recap-side key is missing or
                     // unauthorized for the override URL, OR a Claude/Codex
                     // subscription sign-in that expired / was revoked.
-                    return "Recap sign-in is missing or expired. Open Settings → Recap (API key), or if you use a Claude/Codex subscription open Settings → Integrations and sign in again."
+                    return "Recap sign-in is missing or expired. Open Settings → Recap (API key), or if you use a Claude/Codex/Kimi subscription open Settings → Integrations and sign in again."
                 case .rateLimited:
                     // -7: 429 — too many requests this minute.
                     return "Recap rate limited (429). Try again in a minute, or pick a faster model in Settings → Recap."
@@ -119,6 +119,9 @@ enum MeetingPostProcessService {
                          meetingType: String = "") -> Swift.Result<Result, Failure> {
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .failure(.emptyTranscript) }
+        // meta.json says a recap is running, then saved or failed: the Done
+        // view could not tell "failed" from "never ran".
+        DimmyCore.shared.meetingRecapPending(dir: dir)
 
         // The pill says "Recap..." while this runs, whichever path started it.
         // DispatchQueue.main rather than two `Task { @MainActor }`: the queue
@@ -171,6 +174,7 @@ enum MeetingPostProcessService {
                 "success": false,
                 "error_category": err.category,
             ])
+            DimmyCore.shared.meetingRecapFailed(dir: dir, reason: "\(err)")
             return .failure(.llm(err))
         case .success(let raw):
             DimmyCore.shared.trackEvent("meeting.recap_completed", [
@@ -195,7 +199,13 @@ enum MeetingPostProcessService {
             // Best-effort: failure is logged but does not block the
             // recap pipeline. The user can always retry manually from
             // the Done view's "Send to Notion" button.
-            if notionAutoSend,
+            // Not when this meeting already has a page: a regenerated recap
+            // used to make a second one.
+            let alreadySent = TranscriptHealthText.notionPageUrl(dir: dir) != nil
+            if notionAutoSend, alreadySent {
+                NSLog("[Dimmy] Notion auto-send skipped: this meeting already has a page")
+            }
+            if notionAutoSend, !alreadySent,
                DimmyCore.shared.notionHasToken {
                 var notionOk = false
                 if let json = DimmyCore.shared.notionSendRecap(meetingDir: dir),
@@ -813,32 +823,17 @@ enum MeetingPostProcessService {
         return ""
     }
 
-    /// `llm_mode` from the on-disk config, same direct-read pattern as
-    /// `currentLlmApiUrl()` so it works off the main actor.
+    /// `llm_mode` from the core's config snapshot (never config.json, which
+    /// can lag the core). Works off the main actor, like `pickRecapModel()`.
     fileprivate static func currentLlmMode() -> String {
-        guard let cfgURL = DimmyCore.shared.configDirURL?
-            .appendingPathComponent("config.json"),
-              let data = try? Data(contentsOf: cfgURL),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let mode = json["llm_mode"] as? String
-        else { return "" }
-        return mode
+        DimmyCore.shared.getConfig()?["llm_mode"] as? String ?? ""
     }
 
-    /// Read `llm_api_url` from the on-disk config so the telemetry
-    /// provider bucket reflects whatever's currently selected. Same
-    /// "read config.json directly" pattern as `pickRecapModel()` so
-    /// we can call this from non-MainActor contexts without a hop.
-    /// Empty string on any failure — the bucket helper degrades to
-    /// "unset" which the Rust dispatcher allow-lists.
+    /// `llm_api_url` from the core's config snapshot, so the telemetry
+    /// provider bucket reflects whatever's currently selected. Empty string
+    /// on any failure — the bucket helper degrades to "unset" which the
+    /// Rust dispatcher allow-lists.
     fileprivate static func currentLlmApiUrl() -> String {
-        guard let cfgURL = DimmyCore.shared.configDirURL?
-            .appendingPathComponent("config.json")
-        else { return "" }
-        guard let data = try? Data(contentsOf: cfgURL),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let url = json["llm_api_url"] as? String
-        else { return "" }
-        return url
+        DimmyCore.shared.getConfig()?["llm_api_url"] as? String ?? ""
     }
 }

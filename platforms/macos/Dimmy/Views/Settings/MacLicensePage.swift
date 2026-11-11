@@ -22,6 +22,10 @@ struct MacLicensePage: View {
     @State private var trialStatus: String? = nil
     @State private var trialIsError: Bool = false
     @State private var trialBusy: Bool = false
+    /// Fallback code while a dev-server dimmy:// link is being redeemed;
+    /// nil when no activation is pending. Cleared by the dimmyLicenseChanged
+    /// that reports the license active, or by the timeout.
+    @State private var pendingMagicCode: String? = nil
 
     @State private var pasteCode: String = ""
     @State private var pasteLabel: String = ""
@@ -60,6 +64,11 @@ struct MacLicensePage: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .dimmyLicenseChanged)) { _ in
             refreshStatus()
+            if pendingMagicCode != nil && status.kind.isLicensed {
+                pendingMagicCode = nil
+                trialIsError = false
+                trialStatus = "Activated. Welcome to Dimmy."
+            }
             Task { await refreshDevices() }
             Task { await refreshSalesOpen() }
         }
@@ -173,18 +182,18 @@ struct MacLicensePage: View {
 
     private var tierBadgeText: String {
         switch status.kind {
-        case "Unrestricted":  return "DEV"
-        case "TrialActive", "TrialExpired": return "TRIAL"
-        case "Active":
+        case .unrestricted:  return "DEV"
+        case .trialActive, .trialExpired: return "TRIAL"
+        case .active:
             switch status.tier {
             case "monthly":  return "PRO • MONTHLY"
             case "annual":   return "PRO • ANNUAL"
             case "lifetime": return "PRO • SUPPORTER"
             default:         return "PRO"
             }
-        case "Expired":   return "EXPIRED"
-        case "Suspended": return "SUSPENDED"
-        case "Invalid":   return "INVALID"
+        case .expired:   return "EXPIRED"
+        case .suspended: return "SUSPENDED"
+        case .invalid:   return "INVALID"
         default:          return "INACTIVE"
         }
     }
@@ -197,22 +206,22 @@ struct MacLicensePage: View {
         // it's just a state. Red was reading as "something is broken" , 
         // exactly the wrong vibe for a user who simply hasn't activated.
         switch status.kind {
-        case "TrialActive":   return Color(red: 1.00, green: 0.62, blue: 0.04)   // orange
-        case "Active":        return Color(red: 0.20, green: 0.74, blue: 0.40)   // green
-        case "Unrestricted":  return Color(red: 0.55, green: 0.40, blue: 0.95)   // purple (dev)
+        case .trialActive:   return Color(red: 1.00, green: 0.62, blue: 0.04)   // orange
+        case .active:        return Color(red: 0.20, green: 0.74, blue: 0.40)   // green
+        case .unrestricted:  return Color(red: 0.55, green: 0.40, blue: 0.95)   // purple (dev)
         default:              return Color.secondary                             // gray (everything else)
         }
     }
 
     private var statusTrailing: (value: String, label: String)? {
         switch status.kind {
-        case "TrialActive":
+        case .trialActive:
             let d = status.daysRemaining ?? 0
             return ("\(d)", d == 1 ? "day left" : "days left")
-        case "Active":
+        case .active:
             let d = status.daysRemaining ?? 0
             return ("\(d)", d == 1 ? "day left" : "days left")
-        case "Suspended":
+        case .suspended:
             let d = status.daysOffline ?? 0
             return ("\(d)", d == 1 ? "day offline" : "days offline")
         default:
@@ -222,35 +231,34 @@ struct MacLicensePage: View {
 
     private var statusHeadline: String {
         switch status.kind {
-        case "Unrestricted":  return "Source build, licensing disabled"
-        case "NotFound":      return "No license on this device"
-        case "TrialActive":   return "Trial active"
-        case "TrialExpired":  return "Trial ended"
-        case "Active":
+        case .unrestricted:  return "Source build, licensing disabled"
+        case .notFound:      return "No license on this device"
+        case .trialActive:   return "Trial active"
+        case .trialExpired:  return "Trial ended"
+        case .active:
             switch status.tier {
             case "monthly":  return "Pro license, Monthly"
             case "annual":   return "Pro license, Annual"
             case "lifetime": return "Pro license, Supporter (3 years)"
             default:         return "Pro license"
             }
-        case "Expired":   return "License expired"
-        case "Suspended": return "License suspended"
-        case "Invalid":   return "License file invalid"
-        default:          return status.kind
+        case .expired:   return "License expired"
+        case .suspended: return "License suspended"
+        case .invalid:   return "License file invalid"
         }
     }
 
     private var statusDetail: String {
         switch status.kind {
-        case "Unrestricted":
+        case .unrestricted:
             return "This binary was built without a licensing public key. All features are unlocked."
-        case "NotFound":
+        case .notFound:
             return "Activate Dimmy with your email, or paste an activation code from email."
-        case "TrialActive":
+        case .trialActive:
             return "Your free 14-day trial is running. Cloud STT/LLM and auto-update are enabled."
-        case "TrialExpired":
+        case .trialExpired:
             return "Your trial has ended. Cloud features are paused. Purchase a license to continue."
-        case "Active":
+        case .active:
             if let ca = status.cancelsAt {
                 let fmt = DateFormatter()
                 fmt.dateStyle = .medium
@@ -259,14 +267,12 @@ struct MacLicensePage: View {
                 return "Subscription scheduled to cancel on \(fmt.string(from: date)). You keep cloud features until then."
             }
             return "Thanks for supporting Dimmy. All cloud features are enabled."
-        case "Expired":
+        case .expired:
             return "Renew to re-enable cloud features."
-        case "Suspended":
+        case .suspended:
             return "Reconnect this device online to refresh your license."
-        case "Invalid":
+        case .invalid:
             return status.error ?? "Re-activate this device."
-        default:
-            return status.error ?? ""
         }
     }
 
@@ -347,9 +353,9 @@ struct MacLicensePage: View {
     /// Trial / NotFound / TrialExpired / Expired / Suspended → all three.
     private var buyVisible: Bool {
         switch status.kind {
-        case "NotFound", "TrialActive", "TrialExpired", "Expired", "Suspended":
+        case .notFound, .trialActive, .trialExpired, .expired, .suspended:
             return true
-        case "Active":
+        case .active:
             switch status.tier?.lowercased() {
             case "monthly", "annual": return true
             default: return false // lifetime + unknown
@@ -365,7 +371,7 @@ struct MacLicensePage: View {
         // on Active{annual} as 'Switch to Monthly' for in-app downgrade
         // (matches Win behaviour); also visible on all non-Active states
         // (NotFound, Trial, Expired, Suspended) as a fresh purchase.
-        if status.kind == "Active" {
+        if status.kind == .active {
             let t = status.tier?.lowercased()
             return !(t == "monthly" || t == "lifetime")
         }
@@ -374,33 +380,33 @@ struct MacLicensePage: View {
 
     private var showAnnualButton: Bool {
         // Hidden only when already on Annual.
-        !(status.kind == "Active" && (status.tier?.lowercased() == "annual"))
+        !(status.kind == .active && (status.tier?.lowercased() == "annual"))
     }
 
     private var showLifetimeButton: Bool {
         // Hidden only when already on Lifetime (which buyVisible already
         // catches by hiding the whole group, but defensive).
-        !(status.kind == "Active" && (status.tier?.lowercased() == "lifetime"))
+        !(status.kind == .active && (status.tier?.lowercased() == "lifetime"))
     }
 
     private var showPortalHint: Bool {
         // Visible only on Active monthly/annual where downgrade/cancel
         // path lives in the Stripe Customer Portal.
-        salesOpen && status.kind == "Active"
+        salesOpen && status.kind == .active
             && (status.tier?.lowercased() == "monthly"
                 || status.tier?.lowercased() == "annual")
     }
 
     private var monthlyLabel: String {
-        status.kind == "Active" && status.tier?.lowercased() == "annual"
+        status.kind == .active && status.tier?.lowercased() == "annual"
             ? "Switch to Monthly" : "Monthly"
     }
     private var annualLabel: String {
-        status.kind == "Active" && status.tier?.lowercased() == "monthly"
+        status.kind == .active && status.tier?.lowercased() == "monthly"
             ? "Switch to Annual" : "Annual"
     }
     private var lifetimeLabel: String {
-        status.kind == "Active"
+        status.kind == .active
             && (status.tier?.lowercased() == "monthly" || status.tier?.lowercased() == "annual")
             ? "Become a supporter" : "Supporter"
     }
@@ -408,12 +414,12 @@ struct MacLicensePage: View {
     private var buyHeadline: String {
         if !salesOpen { return "Not on sale yet" }
         switch status.kind {
-        case "NotFound":     return "Buy a license"
-        case "TrialActive":  return "Upgrade to Pro"
-        case "TrialExpired": return "Trial ended, buy to continue"
-        case "Expired":      return "Renew your license"
-        case "Suspended":    return "Resume your license"
-        case "Active":
+        case .notFound:     return "Buy a license"
+        case .trialActive:  return "Upgrade to Pro"
+        case .trialExpired: return "Trial ended, buy to continue"
+        case .expired:      return "Renew your license"
+        case .suspended:    return "Resume your license"
+        case .active:
             switch status.tier?.lowercased() {
             case "monthly": return "Upgrade your plan"
             case "annual":  return "Change your plan"
@@ -428,13 +434,13 @@ struct MacLicensePage: View {
             return "Dimmy is not on sale yet. Tell us which plan you'd pick, and we'll write to you when it opens."
         }
         switch status.kind {
-        case "TrialActive":
+        case .trialActive:
             return "Skip the trial and unlock cloud features without interruption."
-        case "TrialExpired", "Expired":
+        case .trialExpired, .expired:
             return "Cloud features are paused. Pick a plan to re-activate."
-        case "Suspended":
+        case .suspended:
             return "Pick a plan to restore cloud features."
-        case "Active":
+        case .active:
             switch status.tier?.lowercased() {
             case "monthly":
                 return "Switch to Annual for the best value, or Supporter to pay once for 3 years."
@@ -463,7 +469,7 @@ struct MacLicensePage: View {
         // Sending users through Checkout for a tier-switch was billing them
         // again while leaving the old sub running, see PR description.
         let currentTier = status.tier?.lowercased()
-        let isPlanChange = status.kind == "Active"
+        let isPlanChange = status.kind == .active
             && (currentTier == "monthly" || currentTier == "annual")
             && (tier == "monthly" || tier == "annual")
 
@@ -812,7 +818,7 @@ struct MacLicensePage: View {
     /// can't be cancelled, the portal lets the user view the invoice
     /// and update payment method for future purchases.
     private var isManageableTier: Bool {
-        guard status.kind == "Active" else { return false }
+        guard status.kind == .active else { return false }
         switch status.tier {
         case "monthly", "annual", "lifetime": return true
         default: return false
@@ -880,21 +886,16 @@ struct MacLicensePage: View {
         }
         if link.hasPrefix("dimmy://") {
             trialStatus = "Activating via magic link..."
+            // The URL-scheme dispatch redeems in AppDelegate, which posts
+            // dimmyLicenseChanged when it ends; onReceive reports success.
+            pendingMagicCode = r.code ?? extractCode(link) ?? ""
             if let url = URL(string: link) { NSWorkspace.shared.open(url) }
-            // Poll status briefly, URL scheme dispatch redeems async.
-            for _ in 0..<20 {
-                try? await Task.sleep(nanoseconds: 400_000_000)
-                let s = DimmyCore.shared.licenseStatus()
-                if s.kind == "TrialActive" || s.kind == "Active" {
-                    refreshStatus()
-                    await refreshDevices()
-                    trialIsError = false
-                    trialStatus = "Activated. Welcome to Dimmy."
-                    return
-                }
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            if let fallback = pendingMagicCode {
+                pendingMagicCode = nil
+                trialIsError = true
+                trialStatus = "Auto-activation didn't complete. Use the fallback below: \(fallback)"
             }
-            trialIsError = true
-            trialStatus = "Auto-activation didn't complete. Use the fallback below: \(r.code ?? extractCode(link) ?? "")"
         } else {
             trialIsError = false
             trialStatus = "Magic link sent to \(email). Click it from this device to activate."
@@ -915,7 +916,7 @@ struct MacLicensePage: View {
         // treat it as success, the device is licensed regardless of which
         // call won the race.
         let postStatus = DimmyCore.shared.licenseStatus()
-        let alreadyActive = postStatus.kind == "TrialActive" || postStatus.kind == "Active"
+        let alreadyActive = postStatus.kind.isLicensed
         await MainActor.run {
             if r.ok || alreadyActive {
                 pasteIsError = false

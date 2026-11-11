@@ -27,7 +27,13 @@ public sealed partial class MeetingWindow : Window
 {
     private enum MeetingState { Idle, Recording, Processing, Done }
 
-    private DispatcherQueueTimer? _pollTimer;
+    private DispatcherQueueTimer? _clockTimer;
+    /// <summary>Processing because another surface stopped the meeting:
+    /// the recap runs on the service path, so closing loses nothing.</summary>
+    private bool _externalWrapUp;
+    /// <summary>BeginStartAsync is running: the core's meeting_state for
+    /// our own start must not read as an outside start.</summary>
+    private bool _startInFlight;
     private DispatcherQueueTimer? _toastTimer;
     private DispatcherQueueTimer? _announceTimer;
     private DateTime _startedAt;
@@ -37,13 +43,6 @@ public sealed partial class MeetingWindow : Window
     private readonly System.Text.StringBuilder _liveTranscriptBuilder = new();
     private readonly Dictionary<string, string> _livePartials = new();
     private MeetingState _state = MeetingState.Idle;
-    /// Bumped by every successful start. The stop pipeline of an earlier
-    /// meeting (speaker pass + recap, minutes with a local model) checks it
-    /// before touching the window: people go from one call straight into the
-    /// next, and that pipeline finishing used to flip the window to Done over
-    /// the recording in progress, Stop button and all. Mac mirror:
-    /// MeetingViewModel.meetingGeneration.
-    private int _meetingGeneration;
     // Decoupled from _state so the user can browse past meetings
     // (state == Done) while a recording is still active. RecordingBar
     // visibility, close-blocking and the Back-to-Live affordance all
@@ -192,7 +191,7 @@ public sealed partial class MeetingWindow : Window
                     // When the user reopens MeetingWindow, the ctor's
                     // dimmy_meeting_is_active() probe re-attaches the
                     // UI to the in-flight session (existing logic).
-                    if (_state == MeetingState.Processing)
+                    if (_state == MeetingState.Processing && !_externalWrapUp)
                     {
                         // The narrow case where we're mid stop-flow
                         // (LLM recap in progress) — let it finish so we
@@ -241,7 +240,7 @@ public sealed partial class MeetingWindow : Window
 
         Closed += (_, __) =>
         {
-            StopPolling();
+            StopClock();
             StopAmplitudePoll();
             if (App.Instance?.AppViewModel is { } vmClose)
             {
@@ -284,28 +283,7 @@ public sealed partial class MeetingWindow : Window
         {
             if (DimmyNative.dimmy_meeting_is_active() == 1)
             {
-                // NOT DateTime.UtcNow: this window is re-attaching to a meeting
-                // that started earlier, and starting the clock now made it read
-                // 00:00:11 beside a transcript line stamped 00:01:31. The
-                // meeting directory is created when the meeting starts, and
-                // meta.json only lands at stop, so its creation time is the one
-                // start instant available while recording.
-                _startedAt = MeetingStartedAtUtc() ?? DateTime.UtcNow;
-                _liveTranscriptBuilder.Clear();
-                _ampHistory.Clear();
-                _ampHistorySystem.Clear();
-                _recordingActive = true;
-                AppContextName.Text = "Microphone";
-                SetState(MeetingState.Recording);
-                // Everything transcribed before this window opened is already
-                // on disk: the core writes transcripts.txt line by line and
-                // flushes each one. Clearing the pane and showing a
-                // placeholder threw that away, so closing and reopening a
-                // meeting looked like it had lost the conversation — and at a
-                // 30 s window the next chunk can be half a minute away.
-                BackfillLiveTranscript();
-                StartPolling();
-                StartAmplitudePoll();
+                AttachToLiveMeeting();
                 App.Log("ctor: re-attached to active meeting", "Meeting");
             }
 
@@ -318,10 +296,62 @@ public sealed partial class MeetingWindow : Window
         catch (Exception ex) { App.Log($"resync exc: {ex.Message}", "Meeting"); }
     }
 
+    /// <summary>Show the meeting the core is recording now. From the ctor
+    /// (window opened mid-meeting) and from an outside start (shortcut,
+    /// menu, call detect) while this window sat on Idle, which used to
+    /// leave it there with Start refused.</summary>
+    private void AttachToLiveMeeting()
+    {
+        // NOT DateTime.UtcNow: this window is re-attaching to a meeting
+        // that started earlier, and starting the clock now made it read
+        // 00:00:11 beside a transcript line stamped 00:01:31. The
+        // meeting directory is created when the meeting starts, and
+        // meta.json only lands at stop, so its creation time is the one
+        // start instant available while recording.
+        _startedAt = MeetingStartedAtUtc() ?? DateTime.UtcNow;
+        _liveTranscriptBuilder.Clear();
+        _ampHistory.Clear();
+        _ampHistorySystem.Clear();
+        _recordingActive = true;
+        AppContextName.Text = "Microphone";
+        StopBtn.IsEnabled = true;
+        HistoryList.SelectedItem = null;
+        SetState(MeetingState.Recording);
+        UpdatePauseButtonUi(App.Instance?.AppViewModel?.MeetingPaused ?? false);
+        // Everything transcribed before this window opened is already
+        // on disk: the core writes transcripts.txt line by line and
+        // flushes each one. Clearing the pane and showing a
+        // placeholder threw that away, so closing and reopening a
+        // meeting looked like it had lost the conversation — and at a
+        // 30 s window the next chunk can be half a minute away.
+        BackfillLiveTranscript();
+        StartClock();
+        StartAmplitudePoll();
+    }
+
+    /// <summary>The outside stop pipeline ended (see
+    /// App.NotifyMeetingStopEnded). Still on "Wrapping up" means nothing
+    /// routed us to Done: go to the meeting if there is one, else idle.</summary>
+    public void LeaveWrapUp(string? dir)
+    {
+        if (_state != MeetingState.Processing || !_externalWrapUp) return;
+        App.Log($"stop pipeline ended with the window on Wrapping up (dir={(string.IsNullOrEmpty(dir) ? "none" : "yes")})", "Meeting");
+        if (!string.IsNullOrEmpty(dir))
+        {
+            RefreshAndSelectDir(dir);
+            return;
+        }
+        EndLiveRecap();
+        SetState(MeetingState.Idle);
+        StartBtn.IsEnabled = true;
+        LoadHistory();
+    }
+
     // ── State machine ──────────────────────────────────────────────
 
     private void SetState(MeetingState s)
     {
+        if (s != MeetingState.Processing) _externalWrapUp = false;
         _state = s;
         IdlePanel.Visibility = s == MeetingState.Idle ? Visibility.Visible : Visibility.Collapsed;
         RecordingPanel.Visibility = s == MeetingState.Recording ? Visibility.Visible : Visibility.Collapsed;
@@ -395,6 +425,13 @@ public sealed partial class MeetingWindow : Window
 
     private async Task<bool> BeginStartAsync(bool fromCallDetect, bool autoConsent = false)
     {
+        _startInFlight = true;
+        try { return await BeginStartCoreAsync(fromCallDetect, autoConsent); }
+        finally { _startInFlight = false; }
+    }
+
+    private async Task<bool> BeginStartCoreAsync(bool fromCallDetect, bool autoConsent)
+    {
         StartBtn.IsEnabled = false;
         try
         {
@@ -430,6 +467,14 @@ public sealed partial class MeetingWindow : Window
                     GenerateRecapCheck.IsChecked == true;
             var buf = new byte[256];
             int rc = DimmyNative.dimmy_meeting_start(buf, buf.Length);
+            if (rc == -4)
+            {
+                // The core refuses a meeting under a running dictation:
+                // ending that dictation used to stop the meeting's capture.
+                App.Log("meeting start refused: a dictation is recording", "Meeting");
+                ShowToast("A dictation is recording. Finish it, then start the meeting.");
+                return false;
+            }
             if (rc <= 0)
             {
                 App.Log($"meeting start failed rc={rc}", "Meeting");
@@ -448,7 +493,7 @@ public sealed partial class MeetingWindow : Window
                     AppContextName.Text = "Microphone";
                     SetState(MeetingState.Recording);
                     ShowLivePlaceholder("🎙️ Re-attached to ongoing recording…");
-                    StartPolling();
+                    StartClock();
                     StartAmplitudePoll();
                     ShowToast("Re-attached to an ongoing recording.");
                     return true;
@@ -458,7 +503,6 @@ public sealed partial class MeetingWindow : Window
                 return false;
             }
             var id = System.Text.Encoding.UTF8.GetString(buf, 0, rc);
-            _meetingGeneration++;
             _startedAt = DateTime.UtcNow;
             _liveTranscriptBuilder.Clear();
             _ampHistory.Clear();
@@ -498,7 +542,7 @@ public sealed partial class MeetingWindow : Window
             _recordingActive = true;
             SetState(MeetingState.Recording);
             ShowLivePlaceholder("🎙️ Listening… first transcript appears in ~15 s.");
-            StartPolling();
+            StartClock();
             StartAmplitudePoll();
             if (autoConsent) ArmAutoAnnounce(lang);
             // Background, never awaited: the lookup shells out to the
@@ -524,10 +568,9 @@ public sealed partial class MeetingWindow : Window
     {
         try
         {
-            var buf = new byte[1 << 14];
-            int n = Interop.DimmyNative.dimmy_get_config_json(buf, buf.Length);
-            if (n <= 0) return true;
-            using var doc = JsonDocument.Parse(System.Text.Encoding.UTF8.GetString(buf, 0, n));
+            var cfgJson = Interop.DimmyNative.ConfigJson();
+            if (string.IsNullOrEmpty(cfgJson)) return true;
+            using var doc = JsonDocument.Parse(cfgJson);
             return !doc.RootElement.TryGetProperty("meeting_generate_recap", out var el)
                    || el.ValueKind != System.Text.Json.JsonValueKind.False;
         }
@@ -541,128 +584,15 @@ public sealed partial class MeetingWindow : Window
         // been pressed — the log jumped straight from the suggestion to the
         // meeting ending 44 s later, with no way to tell the two apart.
         App.Log("Stop button pressed", "Meeting");
-        var generation = _meetingGeneration;
-        // Pinned now: the next meeting's start writes its own choice here.
-        bool wantRecapAtStop = App.Instance?.AppViewModel?.MeetingGenerateRecap ?? true;
-        StopBtn.IsEnabled = false;
-        StopPolling();
-        StopAmplitudePoll();
-        // Recording is being torn down — flip the flag NOW so close
-        // is unblocked even if the Rust stop call hangs.
-        _recordingActive = false;
-        SetState(MeetingState.Processing);
-        ResetProcSteps();
-        SetProcStep(1, true);
-        try
-        {
-            var buf = new byte[1 << 22];
-            int rc = await Task.Run(() => DimmyNative.dimmy_meeting_stop(buf, buf.Length));
-            if (rc <= 0)
-            {
-                App.Log($"meeting stop failed rc={rc}", "Meeting");
-                SetState(MeetingState.Idle);
-                StartBtn.IsEnabled = true;
-                return;
-            }
-            var json = System.Text.Encoding.UTF8.GetString(buf, 0, rc);
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-            var dir = root.GetProperty("dir").GetString() ?? "";
-            var transcript = root.GetProperty("transcript").GetString() ?? "";
-            var dur = root.GetProperty("duration_secs").GetDouble();
-            var chunks = root.GetProperty("chunk_count").GetInt32();
-            _activeMeetingDir = dir;
-            _viewingMeetingDir = dir;
-            RefreshRecapWithClaudeButton();
-
-            // Surface a finalize failure (disk-full → incomplete audio on
-            // disk). The core has always serialized `error`; the host never
-            // read it — the user learned about the damage only when the
-            // recap failed. Audit 2026-07-02: no silent failures.
-            string? stopError = root.TryGetProperty("error", out var errEl)
-                && errEl.ValueKind == JsonValueKind.String
-                ? errEl.GetString()
-                : null;
-            if (!string.IsNullOrWhiteSpace(stopError))
-            {
-                App.Log($"meeting stop reported error: {stopError}", "Meeting");
-                Services.DictNotificationService.ShowMeetingAudioIncomplete(stopError!);
-            }
-
-            // Prefer the LLM-chosen title from meta.json (the recap's
-            // first H1 H1 gets parsed + stored there by save_post_process).
-            // Falls back to the meeting id directory name.
-            DoneTitle.Text = ResolveDoneTitle(dir);
-            DoneMeta.Text = $"{FormatDuration(dur)} · {chunks} chunks · {DateTime.Now:yyyy-MM-dd HH:mm}"
-                + (string.IsNullOrWhiteSpace(stopError) ? "" : " · ⚠ audio incomplete");
-            RefreshDoneCalendarRow(dir);
-            // Labelled while recording, or too long to redo by itself: the
-            // core decides, and "Regenerate transcript" still runs the pass.
-            bool labeled = !(root.TryGetProperty("speaker_pass", out var slEl)
-                && slEl.ValueKind == JsonValueKind.True);
-            if (!labeled && Services.DiarizationService.Enabled())
-            {
-                ProcStep2Text.Text = "Identifying speakers…";
-                transcript = await Services.DiarizationService.RelabelIfEnabledAsync(dir, transcript, labeled);
-                ProcStep2Text.Text = ProcStep2Default;
-                HideProcProgress();
-            }
-            if (generation != _meetingGeneration)
-            {
-                // A newer meeting is recording in this window. Its
-                // predecessor's recap still runs, out of sight, and lands in
-                // the sidebar.
-                App.Log("previous meeting wrapped up while the next one records — recap in the background", "Meeting");
-                if (wantRecapAtStop && !string.IsNullOrWhiteSpace(transcript))
-                {
-                    var recap = await Services.MeetingPostProcessService.RunRecapAsync(dir, transcript);
-                    if (!recap.Success)
-                        App.Log($"recap of the previous meeting failed: {recap.Error}", "Meeting");
-                }
-                LoadHistory();
-                return;
-            }
-            LoadDoneSpeakers(dir);
-            _doneTurnAnchors = Helpers.TranscriptRenderer.Render(RawTranscriptText,
-                string.IsNullOrEmpty(transcript)
-                    ? "(no transcript: VAD may have removed all audio)"
-                    : HumanizeTranscript(transcript),
-                SpeakerColorMap());
-            await LoadDoneAudioAsync(dir);
-            await LoadNotesAsync(dir);
-
-            if (wantRecapAtStop && !string.IsNullOrWhiteSpace(transcript))
-            {
-                SetProcStep(2, false);
-                await GeneratePostProcessAsync(dir, transcript);
-                SetProcStep(2, true);
-                SetProcStep(3, true);
-            }
-            else
-            {
-                SetProcStep(2, true);
-                SetProcStep(3, true);
-            }
-
-            // The recap itself can take minutes; a newer meeting may have
-            // started while it ran.
-            if (generation != _meetingGeneration)
-            {
-                LoadHistory();
-                return;
-            }
-            SetState(MeetingState.Done);
-            LoadHistory(); // freshly-finished meeting appears at top of sidebar
-        }
-        catch (Exception ex)
-        {
-            App.Log($"meeting stop exc: {ex}", "Meeting");
-            SetState(MeetingState.Idle);
-        }
-        finally
-        {
-            StartBtn.IsEnabled = true;
-        }
+        var vm = App.Instance?.AppViewModel;
+        if (vm == null) return;
+        // Wrapping up now, before the core is even called: close is
+        // unblocked even if the stop hangs. From here this window waits for
+        // the shared pipeline like it does for a stop from the pill
+        // (RefreshAndSelectDir on the result, LeaveWrapUp on a failure).
+        EnterWrapUp();
+        try { await Services.MeetingStopService.StopAsync(vm); }
+        finally { StartBtn.IsEnabled = true; }
     }
 
     private void Pause_Click(object sender, RoutedEventArgs e)
@@ -929,6 +859,8 @@ public sealed partial class MeetingWindow : Window
         NextStepsCard.Visibility = Visibility.Collapsed;
         FollowupsCard.Visibility = Visibility.Collapsed;
         DoneWaveCard.Visibility = Visibility.Collapsed;
+        // Shown again only by the meeting whose recap failed.
+        OpenRecapSettingsButton.Visibility = Visibility.Collapsed;
         _lastDoneSections = new();
         ContextText.Blocks.Clear();
         TldrText.Blocks.Clear();
@@ -959,22 +891,22 @@ public sealed partial class MeetingWindow : Window
     // CLAUDE.md explicitly forbids — replaced by the event-driven
     // path so the window now uses zero CPU between chunks.
 
-    private void StartPolling()
+    private void StartClock()
     {
         var dq = DispatcherQueue.GetForCurrentThread();
-        _pollTimer = dq.CreateTimer();
-        _pollTimer.Interval = TimeSpan.FromSeconds(1);
-        _pollTimer.IsRepeating = true;
-        _pollTimer.Tick += OnRecTimerTick;
-        _pollTimer.Start();
+        _clockTimer = dq.CreateTimer();
+        _clockTimer.Interval = TimeSpan.FromSeconds(1);
+        _clockTimer.IsRepeating = true;
+        _clockTimer.Tick += OnRecTimerTick;
+        _clockTimer.Start();
     }
 
-    private void StopPolling()
+    private void StopClock()
     {
-        if (_pollTimer == null) return;
-        _pollTimer.Stop();
-        _pollTimer.Tick -= OnRecTimerTick;
-        _pollTimer = null;
+        if (_clockTimer == null) return;
+        _clockTimer.Stop();
+        _clockTimer.Tick -= OnRecTimerTick;
+        _clockTimer = null;
     }
 
     private void OnRecTimerTick(DispatcherQueueTimer sender, object args)
@@ -1150,38 +1082,71 @@ public sealed partial class MeetingWindow : Window
     private void OnAppVmPropertyChanged(
         object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
-        if (e.PropertyName != nameof(ViewModels.AppViewModel.MeetingActive)) return;
         var vm = App.Instance?.AppViewModel;
         if (vm == null) return;
-        if (vm.MeetingActive) return;        // start transition — handled elsewhere
+        // The label follows the core, not this window's own button: a pause
+        // from the pill, or a meeting stopped while paused, left it stale.
+        if (e.PropertyName == nameof(ViewModels.AppViewModel.MeetingPaused))
+        {
+            var paused = vm.MeetingPaused;
+            DispatcherQueue?.TryEnqueue(() => UpdatePauseButtonUi(paused));
+            return;
+        }
+        if (e.PropertyName != nameof(ViewModels.AppViewModel.MeetingActive)) return;
+        if (vm.MeetingActive)
+        {
+            // Our own start drives the window itself; an outside one did
+            // nothing here and the window stayed Idle.
+            if (_startInFlight || _recordingActive) return;
+            DispatcherQueue?.TryEnqueue(() =>
+            {
+                try
+                {
+                    // Idle, or showing a past meeting (the window opens on the
+                    // latest one): both go to the live recording. Not while a
+                    // stop is wrapping up.
+                    if (_state is not (MeetingState.Idle or MeetingState.Done) || _startInFlight || _recordingActive) return;
+                    App.Log($"meeting_state=true from an outside start — attaching the window (was {_state})", "Meeting");
+                    AttachToLiveMeeting();
+                }
+                catch (Exception ex) { App.Log($"outside-start attach exc: {ex.Message}", "Meeting"); }
+            });
+            return;
+        }
         if (!_recordingActive) return;        // already wrapped up locally
         DispatcherQueue?.TryEnqueue(() =>
         {
             try
             {
+                if (!_recordingActive) return;
                 App.Log("meeting_state=false from external stop — flipping MeetingWindow to Processing", "Meeting");
-                StopPolling();
-                StopAmplitudePoll();
-                _recordingActive = false;
-                StopBtn.IsEnabled = false;
-                SetState(MeetingState.Processing);
-                ResetProcSteps();
-                SetProcStep(1, true);
-                // The recap is running on the SERVICE path (pill stop), which
-                // has no UI of its own — but the stream events come from the
-                // core either way, so the live pane can still show them.
-                // Without this the window sat on "Wrapping up..." for the
-                // whole recap while the model was visibly writing on the
-                // other path (reported 2026-09-04). EndLiveRecap runs from
-                // ApplyDoneSections / ShowDoneFallback as usual.
-                BeginLiveRecap();
-                // ProcStep 2 (recap) is in flight on the pill side;
-                // NotifyMeetingRecapSaved will land us on Done with
-                // the final artefacts once the LLM returns.
-                SetProcStep(2, false);
+                EnterWrapUp();
             }
             catch (Exception ex) { App.Log($"on-meeting-active-false exc: {ex.Message}", "Meeting"); }
         });
+    }
+
+    /// <summary>"Wrapping up": the recording is over and the shared stop
+    /// pipeline (MeetingStopService) is running, started from this window or
+    /// from anywhere else. RefreshAndSelectDir takes the window to Done with
+    /// the result, LeaveWrapUp to the meeting or the list when it failed.</summary>
+    private void EnterWrapUp()
+    {
+        StopClock();
+        StopAmplitudePoll();
+        _recordingActive = false;
+        StopBtn.IsEnabled = false;
+        SetState(MeetingState.Processing);
+        _externalWrapUp = true;
+        ResetProcSteps();
+        SetProcStep(1, true);
+        // The recap streams from the core whichever surface stopped the
+        // meeting, so the live pane shows it. Without this the window sat on
+        // "Wrapping up..." for the whole recap while the model was visibly
+        // writing (reported 2026-09-04). EndLiveRecap runs from
+        // RefreshAndSelectDir / LeaveWrapUp.
+        BeginLiveRecap();
+        SetProcStep(2, false);
     }
 
     // How long a freshly started auto-recording must survive before we tell
@@ -2437,6 +2402,7 @@ public sealed partial class MeetingWindow : Window
         // one the user happened to trigger.
         var vm = (Microsoft.UI.Xaml.Application.Current as App)?.AppViewModel;
         if (vm != null) vm.RecapsRunning++;
+        DimmyNative.MeetingRecapPending(dir);
         try
         {
             var modelOverride = PickRecapModel();
@@ -2475,6 +2441,8 @@ public sealed partial class MeetingWindow : Window
                 var actionable = rc == -5 || rc == -6 || rc == -7;
                 TrackRecapCompleted(modelOverride, recapTimer.ElapsedMilliseconds, false,
                     Helpers.MeetingRecapHelpers.RecapRcToCategory(rc));
+                DimmyNative.MeetingRecapFailed(dir, msg);
+                Helpers.MeetingDoneNotes.Shared.RecapFailed(dir, actionable);
                 ShowDoneFallback(transcript, msg, actionable);
                 return;
             }
@@ -2486,6 +2454,7 @@ public sealed partial class MeetingWindow : Window
 
             var recapMarkdown = Helpers.MeetingRecapHelpers.BuildMarkdownFromSections(sections);
             var actionsPlain = sections.GetValueOrDefault("ACTIONS", "");
+            Helpers.MeetingDoneNotes.Shared.RecapSaved(dir);
             DimmyNative.dimmy_meeting_save_post_process(dir, recapMarkdown, actionsPlain, null,
                 string.IsNullOrWhiteSpace(modelOverride) ? null : modelOverride);
 
@@ -2496,6 +2465,8 @@ public sealed partial class MeetingWindow : Window
         catch (Exception ex)
         {
             App.Log($"post-process exc: {ex}", "Meeting");
+            DimmyNative.MeetingRecapFailed(dir, ex.Message);
+            Helpers.MeetingDoneNotes.Shared.RecapFailed(dir, fixableInSettings: false);
             ShowDoneFallback(transcript, $"Post-process failed: {ex.Message}");
         }
         finally
@@ -2900,10 +2871,9 @@ public sealed partial class MeetingWindow : Window
         // would see all-false and Auto would never pick a premium model.
         try
         {
-            var buf = new byte[1 << 14];
-            int n = Interop.DimmyNative.dimmy_get_config_json(buf, buf.Length);
-            if (n <= 0) return "";
-            using var doc = JsonDocument.Parse(System.Text.Encoding.UTF8.GetString(buf, 0, n));
+            var cfgJson = Interop.DimmyNative.ConfigJson();
+            if (string.IsNullOrEmpty(cfgJson)) return "";
+            using var doc = JsonDocument.Parse(cfgJson);
             var root = doc.RootElement;
 
             // 1. Explicit override (migrate stale ids).
@@ -3261,12 +3231,13 @@ public sealed partial class MeetingWindow : Window
             StopDoneMediaPlayback();
             _viewingMeetingDir = row.Dir;
             RefreshRecapWithClaudeButton();
+            RefreshOpenInKimiButton();
             // Prefer meta.json title (set by save_post_process / MCP
             // save_recap from the first H1 of the recap). Falls back
             // to the sidebar row's pre-computed title which itself
             // already falls back to the meeting id.
             DoneTitle.Text = ResolveDoneTitle(row.Dir, fallback: row.Title);
-            DoneMeta.Text = row.Subtitle;
+            DoneMeta.Text = Helpers.MeetingDoneNotes.Shared.MetaLine(row.Subtitle, row.Dir);
             RefreshDoneCalendarRow(row.Dir);
             ClearDoneCards();
 
@@ -3298,15 +3269,27 @@ public sealed partial class MeetingWindow : Window
                     TldrCard.Visibility = Visibility.Visible;
                 }
             }
+            else if (Helpers.TranscriptHealthText.ReadRecap(row.Dir) is ("failed", var recapReason))
+            {
+                // A failed recap is recorded in meta.json whichever surface ran
+                // it; only the window's own stop used to say so, and only then.
+                Helpers.MarkdownRenderer.Render(TldrText, Helpers.TranscriptHealthText.RecapFailed(recapReason));
+                TldrCard.Visibility = Visibility.Visible;
+                // The window's own stop offered this; the shared stop lost it.
+                OpenRecapSettingsButton.Visibility = Helpers.MeetingDoneNotes.Shared.OffersRecapSettings(row.Dir)
+                    ? Visibility.Visible : Visibility.Collapsed;
+            }
             var txt = Path.Combine(row.Dir, "transcripts.txt");
             LoadDoneSpeakers(row.Dir);
-            if (File.Exists(txt))
-            {
-                _doneTurnAnchors = Helpers.TranscriptRenderer.Render(
-                    RawTranscriptText,
-                    HumanizeTranscript(ReadWhileWritten(txt)),
-                    SpeakerColorMap());
-            }
+            var rawTranscript = File.Exists(txt) ? ReadWhileWritten(txt) : "";
+            // No speech, or the transcriber failed: say which, whichever
+            // surface stopped the meeting (only this window's own stop did).
+            _doneTurnAnchors = Helpers.TranscriptRenderer.Render(
+                RawTranscriptText,
+                string.IsNullOrWhiteSpace(rawTranscript)
+                    ? Helpers.TranscriptHealthText.EmptyTranscriptFor(row.Dir)
+                    : HumanizeTranscript(rawTranscript),
+                SpeakerColorMap());
             await LoadDoneAudioAsync(row.Dir);
             await LoadNotesAsync(row.Dir);
             SetState(MeetingState.Done);
@@ -3514,20 +3497,17 @@ public sealed partial class MeetingWindow : Window
 
     /// Patch (or create) meta.json with a `title` field. Preserves
     /// every other key. Best-effort — title is metadata polish.
+    /// <summary>The core writes meta.json (one atomic writer); this window
+    /// used to rewrite it itself, non-atomically.</summary>
     private static void WriteMetaTitle(string metaPath, string title)
     {
         try
         {
-            var dict = File.Exists(metaPath)
-                ? (System.Text.Json.Nodes.JsonObject?)System.Text.Json.Nodes.JsonNode.Parse(
-                    File.ReadAllText(metaPath))
-                : null;
-            dict ??= new System.Text.Json.Nodes.JsonObject();
-            dict["title"] = title;
-            File.WriteAllText(metaPath, dict.ToJsonString(
-                new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+            var dir = Path.GetDirectoryName(metaPath);
+            if (!string.IsNullOrEmpty(dir))
+                DimmyNative.dimmy_meeting_set_title(dir, title);
         }
-        catch { }
+        catch (Exception ex) { App.Log($"set title exc: {ex.Message}", "Meeting"); }
     }
 
     private static string ResolveDoneTitle(string? dir, string? fallback = null)

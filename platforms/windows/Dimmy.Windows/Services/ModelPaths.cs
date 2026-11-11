@@ -15,10 +15,10 @@ public static class ModelPaths
     public const string SmallModelFilename = "ggml-small-q5_1.bin";
     public const long SmallModelSizeBytes = 181L * 1024 * 1024;
 
-    public static string ModelsDirectory => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "dimmy",
-        "models");
+    /// Same folder as the core's `local_stt::model_directory` (the config
+    /// namespace, not a hard-coded "dimmy": a staging install prefetched into
+    /// and checked the production folder).
+    public static string ModelsDirectory => Path.Combine(BuildInfo.ConfigDirPath, "models");
 
     public static string GetModelFilePath(string filename) =>
         Path.Combine(ModelsDirectory, filename);

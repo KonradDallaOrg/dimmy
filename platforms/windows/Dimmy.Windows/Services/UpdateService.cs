@@ -298,6 +298,8 @@ public sealed class UpdateService
         catch (Exception ex)
         {
             App.Log($"CheckAndDownload exc: {ex.GetType().Name}: {ex.Message}", "Update");
+            if (ex is not System.Net.Http.HttpRequestException)
+                Helpers.CrashReporter.Report(ex, "update_check");
             return new UpdateCheckResult(UpdateCheckOutcome.Failed, "", ex.Message);
         }
     }
@@ -344,6 +346,7 @@ public sealed class UpdateService
         catch (Exception ex)
         {
             App.Log($"ApplyAndRestart exc: {ex.GetType().Name}: {ex.Message}", "Update");
+            Helpers.CrashReporter.Report(ex, "update_apply_restart");
         }
     }
 
@@ -415,6 +418,7 @@ public sealed class UpdateService
         catch (Exception ex)
         {
             App.Log($"ApplyOnExit exc: {ex.GetType().Name}: {ex.Message}", "Update");
+            Helpers.CrashReporter.Report(ex, "update_apply_on_exit");
         }
     }
 

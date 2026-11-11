@@ -56,7 +56,7 @@ public static class ProviderCatalog
     /// here (STT-only); Custom/Local are configured elsewhere.</summary>
     private static readonly HashSet<string> LlmKeyVendors = new(StringComparer.OrdinalIgnoreCase)
     {
-        "groq", "openai", "anthropic", "gemini", "openrouter", "fireworks", "together",
+        "groq", "openai", "anthropic", "gemini", "openrouter", "fireworks", "together", "kimi",
     };
 
     /// <summary>Vendors whose STT key the FFI accepts — those with a cloud speech
@@ -259,6 +259,11 @@ public static class ProviderCatalog
             true, true,
             "Create a key in the Together dashboard.",
             Cat("together")),
+
+        new ProviderInfo("kimi", "Kimi Code", "Ki", "#027AFF", "https://www.kimi.ai/code/console",
+            false, true,
+            "Kimi Code membership (Plus and up): create an API key in the Kimi Code console. Or sign in with the Kimi Code CLI under Integrations.",
+            Cat("kimi")),
 
         new ProviderInfo("custom", "Custom (OpenAI-compatible)", "Cu", "#9AA0AC", "",
             true, true,

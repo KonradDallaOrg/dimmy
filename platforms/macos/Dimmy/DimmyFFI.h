@@ -280,6 +280,18 @@ int32_t dimmy_telemetry_set_enabled(int32_t enabled);
 int32_t dimmy_telemetry_is_crash_enabled(void);
 int32_t dimmy_telemetry_set_crash_enabled(int32_t enabled);
 
+/// 1 exactly once per native crash from the previous launch that waits for
+/// the user's answer (crash reports off): show the dialog now. 0 = nothing.
+int32_t dimmy_crash_report_prompt(void);
+
+/// The answer: send 1 = send that one report, 0 = delete it.
+/// Returns 1 sent, 0 deleted, -1 nothing pending.
+int32_t dimmy_crash_report_resolve(int32_t send);
+
+/// Localized dialog words. kind: title | body | send | dont_send | always.
+int32_t dimmy_crash_report_text(const char * _Nonnull kind, const char * _Nonnull lang,
+                                char * _Nonnull out_buf, int32_t buf_len);
+
 /// Anonymous distinct_id used by PostHog. Returns bytes written, or -1.
 int32_t dimmy_telemetry_anonymous_id(char * _Nonnull out_buf, int32_t buf_len);
 
@@ -288,6 +300,17 @@ int32_t dimmy_telemetry_reset_anonymous_id(void);
 
 /// Full telemetry status as JSON. Returns bytes written, or -1.
 int32_t dimmy_telemetry_status(char * _Nonnull out_buf, int32_t buf_len);
+
+/// Send a host exception to Sentry (crash-report consent only). NEVER pass
+/// the exception reason: it can carry paths and user text. `frames` is one
+/// `function\tfile\tline` per line, innermost first, and may be NULL.
+/// `fatal` = 1 blocks up to 2 s so the event leaves before the process dies.
+/// Returns 1 sent, -1 bad input, -2 no consent, -3 no DSN.
+int32_t dimmy_telemetry_capture_host_exception(const char * _Nonnull host,
+                                               const char * _Nonnull source,
+                                               const char * _Nonnull exception_type,
+                                               const char * _Nullable frames,
+                                               int32_t fatal);
 
 // ── Autostart ──────────────────────────────────────────────────────
 
@@ -569,6 +592,36 @@ int32_t dimmy_meeting_save_post_process(const char * _Nonnull dir_ptr,
 /// JSON array of orphaned meeting directories (`.recording` marker still
 /// present from a crashed session). UI can offer "recover meeting?".
 int32_t dimmy_meeting_list_orphans(char * _Nonnull out_buf, int32_t buf_len);
+
+/// Mark the meetings a crash left behind as interrupted, once; JSON array of
+/// {id, dir, transcript_size_bytes}. Called at launch.
+int32_t dimmy_meeting_recover_interrupted(char * _Nonnull out_buf, int32_t buf_len);
+
+/// Set a meeting's title through the core's atomic meta.json writer.
+/// 0 = ok, -1 = bad argument.
+int32_t dimmy_meeting_set_title(const char * _Nonnull dir_ptr, const char * _Nonnull title_ptr);
+
+/// A meeting from an already-transcribed audio file: the core makes the
+/// folder, transcript, audio copy and meta.json. Writes the folder path;
+/// returns its length, -1 bad argument, -2 not written.
+int32_t dimmy_meeting_import(const char * _Nullable source_ptr,
+                             const char * _Nonnull transcript_ptr,
+                             double duration_secs,
+                             char * _Nonnull out_buf, int32_t buf_len);
+
+/// Record a recap running (status 0) or failed (1, with a reason) in
+/// meta.json. 0 = ok, -1 = bad argument.
+int32_t dimmy_meeting_set_recap_status(const char * _Nonnull dir_ptr, int32_t status,
+                                       const char * _Nullable reason_ptr);
+
+/// 1 when the consent audit log holds an event of this kind, 0 not, -1 bad arg.
+int32_t dimmy_consent_has(const char * _Nonnull kind_ptr);
+
+/// The core's onboarding marker: 1 done, 0 not.
+int32_t dimmy_onboarding_done(void);
+
+/// Mark onboarding done (1) or not (0). 0 = ok, -1 = failed.
+int32_t dimmy_onboarding_set_done(int32_t done);
 
 /// 1 = a meeting is currently active, 0 otherwise. Used to gate the
 /// dictation hotkey while a meeting is recording (cpal collision).
@@ -879,6 +932,31 @@ int32_t dimmy_codex_binary_path(char * _Nonnull out_buf, int32_t buf_len);
 int32_t dimmy_codex_spawn_login(void);
 int32_t dimmy_codex_ping(void);
 int32_t dimmy_codex_recheck(void);
+
+/// Kimi Code CLI (Kimi membership), driven over ACP. Same 0/1/2 status
+/// contract as Codex. See core/src/kimi_cli.rs.
+int32_t dimmy_kimi_status(void);
+int32_t dimmy_kimi_diagnostics(char * _Nonnull out_buf, int32_t buf_len);
+int32_t dimmy_kimi_binary_path(char * _Nonnull out_buf, int32_t buf_len);
+/// The vendor's one-line install command for this OS. Bytes written, -1 on error.
+int32_t dimmy_kimi_install_command(char * _Nonnull out_buf, int32_t buf_len);
+/// 1 when the CLI's shell is available (always 1 on macOS).
+int32_t dimmy_kimi_git_bash_present(void);
+int32_t dimmy_kimi_spawn_login(void);
+/// Elapsed ms on success (> 0). -1 not installed, -2 not signed in, -3 spawn,
+/// -4 timeout, -5 protocol, -6 reported (usage limit), -7 refused, -8 empty.
+int32_t dimmy_kimi_ping(void);
+/// The plan's models as JSON [{"id","name"}]. Blocks up to 30 s.
+/// -1 bad args, -2 buffer too small, -3 not installed / signed in, -4 CLI failed.
+int32_t dimmy_kimi_models_json(char * _Nonnull out_buf, int32_t buf_len);
+int32_t dimmy_kimi_recheck(void);
+/// Kimi Code MCP bridge: registers dimmy-mcp in ~/.kimi-code/mcp.json.
+/// Status JSON {kimi_found, registered, binary_exists, config_path}.
+int32_t dimmy_kimi_mcp_status(char * _Nonnull out_buf, int32_t buf_len);
+/// 0 done; -1 no home, -2 binary missing, -3 mcp.json invalid (untouched), -4 write failed.
+int32_t dimmy_kimi_mcp_install(const char * _Nonnull binary_path);
+/// 1 removed, 0 nothing to remove, negative on error.
+int32_t dimmy_kimi_mcp_uninstall(void);
 
 /// Claude Desktop MCP bridge — JSON snapshot:
 ///   {installed, install_path?, extension_path?, config_patched,

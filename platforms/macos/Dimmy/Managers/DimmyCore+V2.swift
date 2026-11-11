@@ -69,6 +69,8 @@ extension DimmyCore {
             default: return .failure(.unknown(Int(rc)))
             }
         }
+        // dimmy_transcribe_file saves the result to history.
+        DispatchQueue.main.async { AppState.shared.historyTick += 1 }
         if rc == 0 { return .success("") }
         return .success(String(cString: buffer))
     }
@@ -157,7 +159,13 @@ extension DimmyCore {
     /// Start a meeting recording. Returns the session id (UUID), or nil
     /// on failure (already active, audio start failure, etc.).
     func meetingStart() -> String? {
-        guard isInitialized else { return nil }
+        meetingStartResult().id
+    }
+
+    /// `meetingStart` with the core's rc: -4 = a dictation is recording
+    /// (the core refuses to start a meeting under it).
+    func meetingStartResult() -> (id: String?, rc: Int32) {
+        guard isInitialized else { return (nil, -1) }
         let bufLen: Int32 = 256
         let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
         defer { buffer.deallocate() }
@@ -165,9 +173,9 @@ extension DimmyCore {
         let rc = dimmy_meeting_start(buffer, bufLen)
         guard rc > 0 else {
             print("[DimmyCore] meeting_start failed rc=\(rc)")
-            return nil
+            return (nil, rc)
         }
-        return String(cString: buffer)
+        return (String(cString: buffer), rc)
     }
 
     /// Stop the active meeting. Returns the parsed JSON dictionary, or
@@ -274,6 +282,70 @@ extension DimmyCore {
         return arr
     }
 
+    /// Meetings a crash left behind, marked interrupted by the core (once).
+    func meetingRecoverInterrupted() -> [[String: Any]] {
+        guard isInitialized else { return [] }
+        let bufLen: Int32 = 64 * 1024
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
+        defer { buffer.deallocate() }
+        buffer[0] = 0
+        let rc = dimmy_meeting_recover_interrupted(buffer, bufLen)
+        guard rc > 0 else { return [] }
+        guard let data = String(cString: buffer).data(using: .utf8),
+              let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+        else { return [] }
+        return arr
+    }
+
+    /// The core writes meta.json; hosts set a title through it.
+    @discardableResult
+    func meetingSetTitle(dir: String, title: String) -> Bool {
+        guard isInitialized else { return false }
+        return dir.withCString { d in title.withCString { t in dimmy_meeting_set_title(d, t) } } == 0
+    }
+
+    /// A meeting from an already-transcribed audio file, made by the core
+    /// (folder, transcript, audio copy, meta.json). The folder, or nil.
+    func meetingImport(source: String, transcript: String, durationSecs: Double) -> String? {
+        let bufLen: Int32 = 4096
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
+        defer { buffer.deallocate() }
+        buffer[0] = 0
+        let rc = transcript.withCString { t in
+            source.isEmpty
+                ? dimmy_meeting_import(nil, t, durationSecs, buffer, bufLen)
+                : source.withCString { s in dimmy_meeting_import(s, t, durationSecs, buffer, bufLen) }
+        }
+        guard rc > 0 else { return nil }
+        return String(cString: buffer)
+    }
+
+    /// Record in meta.json that a meeting's recap is running.
+    func meetingRecapPending(dir: String) {
+        guard !dir.isEmpty else { return }
+        _ = dir.withCString { d in dimmy_meeting_set_recap_status(d, 0, nil) }
+    }
+
+    /// Record in meta.json that a meeting's recap failed, and why.
+    func meetingRecapFailed(dir: String, reason: String) {
+        guard !dir.isEmpty else { return }
+        _ = dir.withCString { d in reason.withCString { r in dimmy_meeting_set_recap_status(d, 1, r) } }
+    }
+
+    /// Whether the consent audit log holds an event of this kind.
+    func consentHas(kind: String) -> Bool {
+        kind.withCString { dimmy_consent_has($0) } == 1
+    }
+
+    /// The core's onboarding marker. Plain file I/O: no init needed.
+    var onboardingDone: Bool { dimmy_onboarding_done() == 1 }
+
+    func setOnboardingDone(_ done: Bool) {
+        if dimmy_onboarding_set_done(done ? 1 : 0) != 0 {
+            dimmyHostLog("[Onboarding] marker not written")
+        }
+    }
+
     // MARK: - Model catalog
 
     /// The embedded model catalog JSON (single source of truth for cloud
@@ -375,6 +447,27 @@ extension DimmyCore {
         guard let ptr, len > 0 else { return nil }
         return Data(bytes: ptr, count: Int(len))
     }
+
+    /// Words of the "Dimmy closed unexpectedly" dialog, from the core.
+    func crashReportText(kind: String, lang: String) -> String? {
+        let cap = 1024
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: cap)
+        defer { buffer.deallocate() }
+        buffer[0] = 0
+        let written = kind.withCString { k in
+            lang.withCString { l in
+                dimmy_crash_report_text(k, l, buffer, Int32(cap))
+            }
+        }
+        guard written > 0 else { return nil }
+        return String(cString: buffer)
+    }
+
+    /// True once per crash: show the dialog now.
+    func takeCrashReportPrompt() -> Bool { dimmy_crash_report_prompt() == 1 }
+
+    @discardableResult
+    func resolveCrashReport(send: Bool) -> Int32 { dimmy_crash_report_resolve(send ? 1 : 0) }
 
     func consentText(kind: String, lang: String) -> String? {
         let cap = 4096

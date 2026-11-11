@@ -166,8 +166,7 @@ struct OnboardingContainerView: View {
     /// who already has a license or a running trial: asking them for an
     /// email again would be asking for nothing.
     private func continueToUpdates() {
-        let kind = DimmyCore.shared.licenseStatus().kind
-        if kind == "Active" || kind == "TrialActive" {
+        if DimmyCore.shared.licenseStatus().kind.isLicensed {
             finish()
             return
         }

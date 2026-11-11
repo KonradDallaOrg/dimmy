@@ -183,4 +183,6 @@ Hitting any "no" above = high probability you're reintroducing a shipped bug. Th
 
 ## Adjacent doc
 
+The self-hosted signing runner (`dimmy-sign`) has its own guard, a pre-job hook that refuses every job except a `v*` tag push of `release.yml` / `staging-tester.yml`: [`signing-runner-hardening.md`](signing-runner-hardening.md).
+
 For the transcription-gap issue (test-install.yml only verifies 15 s startup — does NOT exercise `dimmy_stop_recording` with synthetic audio, which is why v0.6.10's FFI ABI mismatch shipped): tracked as a follow-up in [`../RELEASING.md`](../RELEASING.md). When you have bandwidth, extend `test-install.yml` to feed a silent WAV through the FFI before declaring green.

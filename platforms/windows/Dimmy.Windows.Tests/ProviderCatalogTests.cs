@@ -47,6 +47,7 @@ public class ProviderCatalogTests
     [InlineData("deepgram", true, false)]   // STT only
     [InlineData("anthropic", false, true)]  // LLM/Recap only
     [InlineData("openrouter", false, true)] // LLM/Recap only
+    [InlineData("kimi", false, true)]       // Kimi Code: LLM/Recap only, no speech API
     [InlineData("together", true, true)]    // Together offers STT (parakeet/whisper) + LLM in the Win picker
     [InlineData("custom", true, true)]
     public void Capability_truth_matches_core(string id, bool stt, bool llm)
@@ -155,6 +156,7 @@ public class ProviderCatalogTests
     [InlineData("openrouter", true)]
     [InlineData("fireworks", true)]
     [InlineData("together", true)]
+    [InlineData("kimi", true)]
     [InlineData("deepgram", true)]  // STT-only, now keyable via the "stt" scope
     [InlineData("custom", false)]   // needs a base URL — keyed on Voice/Output
     [InlineData("local", false)]    // on-device — no key at all
@@ -175,6 +177,7 @@ public class ProviderCatalogTests
     [InlineData("together", "stt,llm,recap")]
     [InlineData("anthropic", "llm,recap")]   // LLM-only
     [InlineData("openrouter", "llm,recap")]  // LLM-only
+    [InlineData("kimi", "llm,recap")]        // LLM-only
     [InlineData("deepgram", "stt")]          // STT-only
     [InlineData("custom", "")]
     [InlineData("local", "")]

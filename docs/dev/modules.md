@@ -247,7 +247,44 @@ Full reference: [`audio-pipeline.md`](audio-pipeline.md). Headline:
   `actions.json`. Anthropic Opus 4.7+ / Sonnet 5+ use
   `thinking.type=adaptive` (no `budget_tokens`).
 - FFI: `dimmy_meeting_start`, `_stop`, `_save_post_process`,
-  `_list_orphans`, `_is_active`, `_pause`, `_resume`, `_is_paused`.
+  `_list_orphans`, `_is_active`, `_pause`, `_resume`, `_is_paused`,
+  `_set_title`, `_recover_interrupted`. `_start` returns -4 while a
+  dictation holds the capture.
+- **`meta.json` (schema 2)** has one writer, `meeting::update_meta`
+  (read, change, `write_atomic`). Core-owned fields: `schema`, `stage`
+  (`recording` → `stopped` → `recapped`, or `interrupted` after a crash),
+  `transcript` {status `ok|silent|failed|empty|unknown`, engine, reason,
+  windows_text/silent/failed}, `recap` {status, at}. Hosts rename through
+  `dimmy_meeting_set_title`. A folder without `schema` is from an older
+  build: derive its stage from its files and treat its transcript as
+  unknown, never as silence.
+
+## `capture.rs` — who owns the shared capture buffers
+
+- `Owner { Idle, Dictation{id}, Meeting{id}, MeetingDraining{id} }`, one
+  `apply()` (transition table test), one lock. The meeting worker reads its
+  claim through `meeting_owns(id)`, a single atomic load: THE AUDIO RULE
+  holds.
+- A dictation is refused (-7) while a meeting records or drains; a meeting
+  is refused (-4) under a dictation; a new meeting may claim from
+  `MeetingDraining`. The meeting worker calls `meeting_released` right
+  after its audio is final, before the transcriber join, and that release
+  frees the buffers under the lock, so a later dictation is never wiped.
+- `dimmy_start_recording` / `_stop_recording` emit `dictation_phase`
+  {phase: `recording|finishing|idle`, id}: the hosts' pill rests on it.
+
+## `transcriber_health.rs` — is a meeting's transcriber producing text
+
+- `Health { Live, Unavailable(Reason) }`, owned by `stt_thread_loop`
+  (never the capture worker). An engine that cannot start (Nemotron
+  refused for memory) or two failed windows in a row → one
+  `meeting_transcription_unavailable` {dir, engine, reason, elapsed_secs};
+  text afterwards → one `meeting_transcription_recovered`.
+- Reason codes (`not_enough_memory`, `model_missing`, `no_api_key`, `auth`,
+  `network`, `rate_limit`, `engine_error`) are what hosts turn into
+  sentences (Win `Helpers/TranscriptHealthText.cs`, Mac
+  `TranscriptHealthText` in DimmyCore.swift). The user's engine choice
+  stands: no automatic fallback to another engine.
 
 ## `aec.rs` — acoustic echo cancellation (Mix mode)
 

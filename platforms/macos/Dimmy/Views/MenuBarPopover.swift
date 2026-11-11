@@ -72,6 +72,7 @@ struct MenuBarPopover: View {
         case .transcribing: return "Transcribing..."
         case .processing: return "Processing..."
         case .completing: return "Done!"
+        case .error(let message): return message
         }
     }
 

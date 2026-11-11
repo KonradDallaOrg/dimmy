@@ -317,6 +317,19 @@ pub enum Event {
         /// meeting the transcriber first fell behind. Bucketed, never raw.
         elapsed_bucket: &'static str,
     },
+    /// Fired ONCE per transition, when a meeting's transcriber stops
+    /// producing text: the engine could not start (Nemotron refused for
+    /// memory) or two windows in a row failed. Before this a failed meeting
+    /// looked exactly like a silent one and reached no dashboard
+    /// (2026-11-09). Categorical only.
+    MeetingTranscriptionUnavailable {
+        /// `whisper` | `parakeet` | `whistle` | `nemotron` | `cloud`.
+        engine: &'static str,
+        /// `transcriber_health::Reason::code`: `not_enough_memory` |
+        /// `model_missing` | `no_api_key` | `auth` | `network` |
+        /// `rate_limit` | `engine_error`.
+        reason: &'static str,
+    },
     /// CANARY: fired when the core MEASURES a loopback delivery rate (raw
     /// samples / wall-clock) that diverges from the rate the host CLAIMED.
     /// The macOS system-audio tap can claim its anchor device's 48 kHz while
@@ -558,6 +571,32 @@ pub enum Event {
         error_category: &'static str,
     },
 
+    // ── Kimi Code CLI (Kimi membership) — mirror of the Codex events.
+    //    Same categorical-only discipline. ──
+    /// Status probe result from the Kimi Settings card.
+    KimiCliStatusProbed {
+        /// "ready" | "not_logged_in" | "not_installed"
+        status: &'static str,
+    },
+    /// User clicked "Sign in with Kimi". Fires when `kimi login` is spawned.
+    KimiCliLoginSpawned,
+    /// Kimi login polling loop concluded.
+    KimiCliLoginCompleted {
+        /// "success" | "timeout" | "spawn_failed"
+        outcome: &'static str,
+    },
+    /// One LLM call via `kimi acp` returned.
+    KimiCliInvocation {
+        /// "rewrite" | "recap" | "test"
+        kind: &'static str,
+        /// `lt_500` | `500_2000` | `2000_10000` | `10000_60000` | `ge_60000`
+        processing_ms_bucket: &'static str,
+        success: bool,
+        /// "ok" | "not_installed" | "not_logged_in" | "spawn" | "timeout" |
+        /// "protocol" | "reported" | "refused" | "empty".
+        error_category: &'static str,
+    },
+
     /// One LLM call via `codex exec` returned.
     CodexInvocation {
         /// "rewrite" | "recap" — the LLM dispatch site.
@@ -625,6 +664,7 @@ impl Event {
             Event::MeetingStopTimeout => "meeting.stop_timeout",
             Event::MeetingCaptureRatio { .. } => "meeting.capture_ratio",
             Event::MeetingTranscriptionBehind { .. } => "meeting.transcription_behind",
+            Event::MeetingTranscriptionUnavailable { .. } => "meeting.transcription_unavailable",
             Event::LoopbackRateMismatch { .. } => "audio.loopback_rate_mismatch",
             Event::MeetingRecapCompleted { .. } => "meeting.recap_completed",
             Event::MeetingImportedFromFile => "meeting.imported_from_file",
@@ -657,6 +697,10 @@ impl Event {
             Event::CodexLoginSpawned => "codex.login_spawned",
             Event::CodexLoginCompleted { .. } => "codex.login_completed",
             Event::CodexInvocation { .. } => "codex.invocation",
+            Event::KimiCliStatusProbed { .. } => "kimi_cli.status_probed",
+            Event::KimiCliLoginSpawned => "kimi_cli.login_spawned",
+            Event::KimiCliLoginCompleted { .. } => "kimi_cli.login_completed",
+            Event::KimiCliInvocation { .. } => "kimi_cli.invocation",
             Event::GeminiCliStatusProbed { .. } => "gemini_cli.status_probed",
             Event::GeminiCliLoginSpawned => "gemini_cli.login_spawned",
             Event::GeminiCliLoginCompleted { .. } => "gemini_cli.login_completed",
@@ -705,6 +749,38 @@ pub fn arch_name() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The Kimi events carry categories only, and a failed call reaches
+    /// Sentry like the other three CLI backends.
+    #[test]
+    fn kimi_cli_events_are_categorical_and_failures_are_mirrored() {
+        let e = Event::KimiCliInvocation {
+            kind: "recap",
+            processing_ms_bucket: "2000_10000",
+            success: false,
+            error_category: "reported",
+        };
+        assert_eq!(e.name(), "kimi_cli.invocation");
+        let p = e.properties();
+        assert_eq!(p["kind"], "recap");
+        assert_eq!(p["error_category"], "reported");
+        assert_eq!(p.as_object().map(|m| m.len()), Some(4), "{p}");
+        let (_, category, backend) =
+            crate::telemetry::report::failure_of(&e).expect("a failed call is mirrored");
+        assert_eq!((category.as_str(), backend), ("reported", "kimi_cli"));
+
+        let ok = Event::KimiCliInvocation {
+            kind: "rewrite",
+            processing_ms_bucket: "lt_500",
+            success: true,
+            error_category: "ok",
+        };
+        assert!(crate::telemetry::report::failure_of(&ok).is_none());
+        assert_eq!(
+            Event::KimiCliLoginCompleted { outcome: "success" }.name(),
+            "kimi_cli.login_completed"
+        );
+    }
 
     #[test]
     fn event_name_is_stable_and_lowercase() {

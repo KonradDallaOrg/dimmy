@@ -492,10 +492,9 @@ public static class DimmyNative
     ///   { "process_name": "slack.exe", "bundle_id": "", "wm_class": "" }
     /// Pass any subset of keys; missing ones default to empty string.
     /// Returns 0 on success, non-zero on parse error.
-    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl,
-        CharSet = CharSet.Ansi, BestFitMapping = false, ThrowOnUnmappableChar = true)]
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_set_app_context(
-        [MarshalAs(UnmanagedType.LPStr)] string json);
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string json);
 
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern void dimmy_clear_app_context();
@@ -582,6 +581,59 @@ public static class DimmyNative
 
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_meeting_list_orphans(byte[] outBuf, int bufLen);
+
+    /// Mark the meetings a crash left behind as interrupted, once; JSON
+    /// array of {id, dir, transcript_size_bytes}.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_meeting_recover_interrupted(byte[] outBuf, int bufLen);
+
+    /// Set a meeting's title through the core's atomic meta.json writer.
+    /// 0 = ok, -1 = bad argument.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_meeting_set_title(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string dir,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string title);
+
+    /// A meeting from an already-transcribed audio file: the core makes the
+    /// folder, transcript, audio copy and meta.json. Writes the folder path;
+    /// returns its length, -1 bad argument, -2 not written.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_meeting_import(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? source,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string transcript,
+        double durationSecs,
+        byte[] outBuf, int bufLen);
+
+    /// Record a recap running (status 0) or failed (1, with a reason) in
+    /// meta.json. 0 = ok, -1 = bad argument.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_meeting_set_recap_status(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string dir,
+        int status,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? reason);
+
+    public static void MeetingRecapPending(string dir)
+    {
+        if (!string.IsNullOrEmpty(dir)) dimmy_meeting_set_recap_status(dir, 0, null);
+    }
+
+    public static void MeetingRecapFailed(string dir, string? reason)
+    {
+        if (!string.IsNullOrEmpty(dir)) dimmy_meeting_set_recap_status(dir, 1, reason);
+    }
+
+    /// 1 when the consent audit log holds an event of this kind.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_consent_has(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string kind);
+
+    /// The core's onboarding marker: 1 done, 0 not.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_onboarding_done();
+
+    /// Mark onboarding done (1) or not (0). 0 = ok, -1 = failed.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_onboarding_set_done(int done);
 
     /// 1 = meeting currently recording; 0 = no active meeting. Used
     /// to gate the dictation hotkey so a parallel recording can't
@@ -895,6 +947,30 @@ public static class DimmyNative
         return System.Text.Encoding.UTF8.GetString(buf, 0, len);
     }
 
+    /// <summary>The core's config snapshot. Read every <c>dimmy_get_config_json</c>
+    /// through this: the core truncates silently at the buffer size, and the
+    /// snapshot (prompts, dictionary, app rules, device list) outgrows any
+    /// fixed buffer — a truncated snapshot fails to parse and the caller falls
+    /// back to defaults.</summary>
+    public static string? ConfigJson() => ReadGrowing(dimmy_get_config_json);
+
+    /// <summary>For getters that truncate silently and reject a null probe:
+    /// a result that fills the buffer may be cut, so retry with a larger one.
+    /// The core never cuts a UTF-8 character, so a cut result can stop up to
+    /// 3 bytes short of bufLen - 1. Returns null past 16 MB rather than hand
+    /// back a cut string.</summary>
+    internal static string? ReadGrowing(Func<byte[], int, int> ffiCall)
+    {
+        for (int size = 1 << 16; size <= 1 << 24; size <<= 2)
+        {
+            var buf = new byte[size];
+            int len = ffiCall(buf, size);
+            if (len < 0) return null;
+            if (len < size - 4) return System.Text.Encoding.UTF8.GetString(buf, 0, len);
+        }
+        return null;
+    }
+
     /// <summary>Marshal the event callback JSON pointer to a C# string.</summary>
     public static string? MarshalEventJson(IntPtr jsonPtr)
     {
@@ -996,11 +1072,42 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_telemetry_is_crash_enabled();
 
+    /// 1 exactly once per crash from the previous launch that waits for the
+    /// user's answer (crash reports off). See Views/CrashReportWindow.cs.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_crash_report_prompt();
+
+    /// send 1 = send that one report, 0 = delete it. 1 sent, 0 deleted, -1 none.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_crash_report_resolve(int send);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_crash_report_text(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string kind,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string lang,
+        byte[] outBuf, int bufLen);
+
+    /// kind = "title" | "body" | "send" | "dont_send" | "always".
+    public static string? CrashReportText(string kind, string lang) =>
+        ReadBuffer((buf, len) => dimmy_crash_report_text(kind, lang, buf, len), 1024);
+
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_telemetry_capture_feedback(
         [MarshalAs(UnmanagedType.LPUTF8Str)] string? kind,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string message,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string? email);
+
+    /// Send a host exception to Sentry (crash-report consent only). Never
+    /// pass the exception message. `frames` is `function\tfile\tline`
+    /// per line, innermost first; may be null. Returns 1 sent, -1 bad
+    /// input, -2 no consent, -3 no DSN. See Helpers/CrashReporter.cs.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_telemetry_capture_host_exception(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string host,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string source,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string exceptionType,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? frames,
+        int fatal);
 
     /// Track a typed event by name with a JSON property object.
     /// `name` is the stable event name ("meeting.recap_completed",
@@ -1235,6 +1342,168 @@ public static class DimmyNative
         catch { return ClaudeCodeStatus.NotInstalled; }
     }
 
+    // ── Kimi Code CLI (Kimi membership) ───────────────────────────
+    //
+    // Use the user's Kimi membership via the official `kimi` CLI, driven
+    // over ACP. Same status codes as the Codex surface. See
+    // `core/src/kimi_cli.rs`.
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_kimi_status();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_kimi_binary_path(byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_kimi_install_command(byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_kimi_git_bash_present();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_kimi_spawn_login();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_kimi_ping();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_kimi_models_json(byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_kimi_recheck();
+
+    public static ClaudeCodeStatus GetKimiStatus()
+    {
+        try { return (ClaudeCodeStatus)dimmy_kimi_status(); }
+        catch { return ClaudeCodeStatus.NotInstalled; }
+    }
+
+    public static string? GetKimiBinaryPath() =>
+        ReadBuffer(dimmy_kimi_binary_path, 4096);
+
+    /// <summary>The vendor's one-line install command (PowerShell on Windows).</summary>
+    public static string GetKimiInstallCommand() =>
+        ReadBuffer(dimmy_kimi_install_command, 1024) ?? string.Empty;
+
+    /// <summary>The Kimi CLI runs its tools through Git Bash on Windows.
+    /// False = install Git for Windows first.</summary>
+    public static bool KimiGitBashPresent()
+    {
+        try { return dimmy_kimi_git_bash_present() == 1; }
+        catch { return false; }
+    }
+
+    public static bool SpawnKimiLogin()
+    {
+        try { return dimmy_kimi_spawn_login() == 0; }
+        catch { return false; }
+    }
+
+    /// <summary>Ping round-trip through `kimi acp`. -5 protocol error maps to
+    /// InvalidUtf8 ("unexpected output"), -6 reported (usage limit) and -7
+    /// refused to Reported, -8 to EmptyResponse.</summary>
+    public static (ClaudeCodePingResult result, int elapsedMs) PingKimi()
+    {
+        int rc;
+        try { rc = dimmy_kimi_ping(); }
+        catch { return (ClaudeCodePingResult.UnknownError, 0); }
+        return rc switch
+        {
+            > 0 => (ClaudeCodePingResult.Ok, rc),
+            -1 => (ClaudeCodePingResult.NotInstalled, 0),
+            -2 => (ClaudeCodePingResult.NotLoggedIn, 0),
+            -3 => (ClaudeCodePingResult.SpawnFailed, 0),
+            -4 => (ClaudeCodePingResult.Timeout, 0),
+            -5 => (ClaudeCodePingResult.InvalidUtf8, 0),
+            -6 or -7 => (ClaudeCodePingResult.Reported, 0),
+            -8 => (ClaudeCodePingResult.EmptyResponse, 0),
+            _ => (ClaudeCodePingResult.UnknownError, 0),
+        };
+    }
+
+    /// <summary>The models this account's plan serves, as (id, name). Empty
+    /// when the CLI is missing, signed out or failed. Blocks up to 30 s:
+    /// call it off the UI thread.</summary>
+    public static System.Collections.Generic.List<(string Id, string Name)> GetKimiModels()
+    {
+        var list = new System.Collections.Generic.List<(string, string)>();
+        try
+        {
+            var json = ReadBuffer(dimmy_kimi_models_json, 16384);
+            if (string.IsNullOrEmpty(json)) return list;
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            foreach (var m in doc.RootElement.EnumerateArray())
+            {
+                var id = m.GetProperty("id").GetString() ?? "";
+                var name = m.GetProperty("name").GetString() ?? id;
+                if (id.Length > 0) list.Add((id, name));
+            }
+        }
+        catch { }
+        return list;
+    }
+
+    public static ClaudeCodeStatus RecheckKimi()
+    {
+        try { return (ClaudeCodeStatus)dimmy_kimi_recheck(); }
+        catch { return ClaudeCodeStatus.NotInstalled; }
+    }
+
+    // Kimi Code MCP bridge: registers dimmy-mcp in ~/.kimi-code/mcp.json.
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_kimi_mcp_status(byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_kimi_mcp_install(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string binaryPath);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_kimi_mcp_uninstall();
+
+    /// <summary>Kimi Code (CLI / Code Desktop) via mcp.json, plus the Kimi app
+    /// (Kimi Work): app installed, set up (WorkFound), Dimmy's personal plugin
+    /// registered / installed, and the last time each client started dimmy-mcp.</summary>
+    public sealed record KimiMcpStatus(
+        bool KimiFound, bool Registered, string? ConfigPath, string? DesktopPath, long? HeartbeatAgeSecs,
+        string? WorkAppPath = null, bool WorkFound = false, bool WorkRegistered = false,
+        bool WorkInstalled = false, long? WorkHeartbeatAgeSecs = null);
+
+    public static KimiMcpStatus GetKimiMcpStatus()
+    {
+        try
+        {
+            var json = ReadBuffer(dimmy_kimi_mcp_status, 8192);
+            if (string.IsNullOrEmpty(json)) return new(false, false, null, null, null);
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var r = doc.RootElement;
+            static string? Str(System.Text.Json.JsonElement e, string k) =>
+                e.TryGetProperty(k, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String ? v.GetString() : null;
+            static long? Num(System.Text.Json.JsonElement e, string k) =>
+                e.TryGetProperty(k, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.Number ? v.GetInt64() : null;
+            static bool Flag(System.Text.Json.JsonElement e, string k) =>
+                e.TryGetProperty(k, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.True;
+            return new(Flag(r, "kimi_found"), Flag(r, "registered"), Str(r, "config_path"), Str(r, "desktop_path"),
+                       Num(r, "heartbeat_age_secs"), Str(r, "work_app_path"), Flag(r, "work_found"),
+                       Flag(r, "work_registered"), Flag(r, "work_installed"), Num(r, "work_heartbeat_age_secs"));
+        }
+        catch { return new(false, false, null, null, null); }
+    }
+
+    /// <summary>0 done; -1 no home dir, -2 binary missing, -3 mcp.json not
+    /// valid JSON (left untouched), -4 write failed.</summary>
+    public static int InstallKimiMcp(string binaryPath)
+    {
+        try { return dimmy_kimi_mcp_install(binaryPath); }
+        catch { return -4; }
+    }
+
+    public static int UninstallKimiMcp()
+    {
+        try { return dimmy_kimi_mcp_uninstall(); }
+        catch { return -4; }
+    }
+
     // ── Gemini CLI (Google account) ────────────────────
     //
     // Use the user's Google account (free tier, AI Pro, AI Ultra) via the
@@ -1327,11 +1596,15 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_claude_desktop_status(byte[] outBuf, int bufLen);
 
-    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
-    public static extern int dimmy_claude_desktop_install(string binaryPath, string versionPtr);
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_claude_desktop_install(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string binaryPath,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string versionPtr);
 
-    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
-    public static extern int dimmy_claude_desktop_refresh(string binaryPath, string versionPtr);
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_claude_desktop_refresh(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string binaryPath,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string versionPtr);
 
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_claude_desktop_uninstall();

@@ -210,6 +210,7 @@ fn llm_url_values() -> Vec<String> {
     }
     push_unique(&mut v, crate::claude_code::PROVIDER_URL);
     push_unique(&mut v, crate::codex::PROVIDER_URL);
+    push_unique(&mut v, crate::kimi_cli::PROVIDER_URL);
     v
 }
 
@@ -947,8 +948,9 @@ fn cross_field(m: &Map<String, Value>) -> Vec<FieldError> {
         }
     }
     if let (Some(url), Some(model)) = (str_of(m, "llm_api_url"), str_of(m, "llm_api_model")) {
-        let synthetic =
-            crate::claude_code::is_claude_code_url(url) || crate::codex::is_codex_url(url);
+        let synthetic = crate::claude_code::is_claude_code_url(url)
+            || crate::codex::is_codex_url(url)
+            || crate::kimi_cli::is_kimi_cli_url(url);
         let vendor = Provider::from_url(url).as_str();
         if !synthetic && !providers_of_model("llm", model).iter().any(|o| o == vendor) {
             errs.push(FieldError::new(
@@ -966,7 +968,7 @@ fn cross_field(m: &Map<String, Value>) -> Vec<FieldError> {
                     "recap_model_override",
                     "conflict",
                     format!(
-                        "a subscription can only run Claude or OpenAI models, not '{model}'; Dimmy would quietly use an API key instead"
+                        "a subscription can only run Claude, OpenAI or Kimi models, not '{model}'; Dimmy would quietly use an API key instead"
                     ),
                     None,
                 ));
@@ -991,7 +993,7 @@ fn models_of(provider: &str, task: &str) -> Vec<String> {
 fn subscription_capable(model: &str) -> bool {
     matches!(
         Provider::from_model_id(model).or_else(|| Provider::from_catalog_model_id(model)),
-        Some(Provider::Anthropic) | Some(Provider::OpenAI)
+        Some(Provider::Anthropic) | Some(Provider::OpenAI) | Some(Provider::Kimi)
     )
 }
 
@@ -1061,7 +1063,7 @@ pub struct ProfileAnswers {
     pub stt_provider: Option<String>,
     /// local only: whisper | parakeet | qwen | whistle
     pub stt_backend: Option<String>,
-    /// claude-sub | codex-sub | api | local | off
+    /// claude-sub | codex-sub | kimi-sub | api | local | off
     pub recap: String,
     pub recap_model: Option<String>,
 }
@@ -1069,6 +1071,9 @@ pub struct ProfileAnswers {
 pub const CLAUDE_SUB_DEFAULT_MODEL_TIER: &str = "top";
 /// The one model a ChatGPT plan is known to serve through `codex exec`.
 pub const CODEX_SUB_DEFAULT_MODEL: &str = "gpt-5.5";
+/// Kimi's top membership model. A tier without it gets the CLI default
+/// (`kimi_cli::pick_model` drops an id the account does not offer).
+pub const KIMI_SUB_DEFAULT_MODEL: &str = "k3";
 
 fn answer_err(flag: &str, message: String, allowed: Option<Value>) -> FieldError {
     FieldError::new(flag, "not_allowed", message, allowed)
@@ -1215,6 +1220,22 @@ pub fn profile_patch(a: &ProfileAnswers) -> Result<Value, Vec<FieldError>> {
                 ));
             }
         }
+        "kimi-sub" => {
+            let m = a
+                .recap_model
+                .clone()
+                .unwrap_or_else(|| KIMI_SUB_DEFAULT_MODEL.into());
+            if Provider::from_catalog_model_id(&m) == Some(Provider::Kimi) {
+                p.insert("recap_auth_method".into(), json!("subscription"));
+                p.insert("recap_model_override".into(), json!(m));
+            } else {
+                errs.push(answer_err(
+                    "--recap-model",
+                    format!("a Kimi membership runs Kimi Code models only, not '{m}'"),
+                    Some(json!(models_of("kimi", "recap"))),
+                ));
+            }
+        }
         "api" => {
             p.insert("recap_auth_method".into(), json!("api_key"));
             p.insert(
@@ -1247,7 +1268,14 @@ pub fn profile_patch(a: &ProfileAnswers) -> Result<Value, Vec<FieldError>> {
         other => errs.push(answer_err(
             "--recap",
             format!("'{other}' is not a valid --recap"),
-            Some(json!(["claude-sub", "codex-sub", "api", "local", "off"])),
+            Some(json!([
+                "claude-sub",
+                "codex-sub",
+                "kimi-sub",
+                "api",
+                "local",
+                "off"
+            ])),
         )),
     }
     if a.recap != "off" {
@@ -2361,7 +2389,7 @@ mod tests {
     fn every_profile_combination_validates() {
         for usage in ["meeting", "dictation", "both"] {
             for stt in ["local", "cloud"] {
-                for recap in ["claude-sub", "codex-sub", "api", "local", "off"] {
+                for recap in ["claude-sub", "codex-sub", "kimi-sub", "api", "local", "off"] {
                     let a = answers(usage, stt, recap);
                     if stt == "local" && default_local_backend().is_none() {
                         assert!(profile_patch(&a).is_err());
@@ -2490,6 +2518,23 @@ mod tests {
         let mut f = facts();
         f.local_backend = None;
         assert_eq!(recommended_profile(&f).stt, "cloud");
+    }
+
+    #[test]
+    fn kimi_sub_takes_kimi_models_only() {
+        let p = profile_patch(&answers("meeting", "cloud", "kimi-sub")).expect("default");
+        assert_eq!(p["recap_auth_method"], "subscription");
+        assert_eq!(p["recap_model_override"], KIMI_SUB_DEFAULT_MODEL);
+
+        let mut a = answers("meeting", "cloud", "kimi-sub");
+        a.recap_model = Some("kimi-for-coding".into());
+        assert_eq!(
+            profile_patch(&a).expect("kimi model")["recap_model_override"],
+            "kimi-for-coding"
+        );
+        a.recap_model = Some("gpt-5.5".into());
+        let errs = profile_patch(&a).expect_err("not a Kimi model");
+        assert_eq!(errs[0].key, "--recap-model");
     }
 
     #[test]

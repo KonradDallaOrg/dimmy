@@ -37,18 +37,20 @@ use serial_test::serial;
 use dimmy_lib::ffi::{
     dimmy_call_end_verdict, dimmy_call_live_media, dimmy_call_meeting_started_external,
     dimmy_call_signal_session_ended, dimmy_claude_code_ping, dimmy_claude_code_status,
-    dimmy_clear_app_context, dimmy_command_transform, dimmy_get_active_mic_sample_rate,
-    dimmy_get_config_json, dimmy_get_loopback_amplitude, dimmy_hardware_json, dimmy_history_save,
-    dimmy_history_update_audio, dimmy_history_update_enhanced,
-    dimmy_history_update_word_timestamps, dimmy_hotkey_combos_conflict, dimmy_hotkey_set_command,
-    dimmy_init, dimmy_license_register_interest, dimmy_license_sales_open,
-    dimmy_license_set_server_url, dimmy_license_text, dimmy_llm_call_raw, dimmy_meeting_is_active,
-    dimmy_meeting_save_post_process, dimmy_model_catalog_json, dimmy_model_delete,
-    dimmy_model_download_cancel, dimmy_model_download_enqueue, dimmy_model_download_snapshot_json,
+    dimmy_clear_app_context, dimmy_command_transform, dimmy_consent_has,
+    dimmy_get_active_mic_sample_rate, dimmy_get_config_json, dimmy_get_loopback_amplitude,
+    dimmy_hardware_json, dimmy_history_save, dimmy_history_update_audio,
+    dimmy_history_update_enhanced, dimmy_history_update_word_timestamps,
+    dimmy_hotkey_combos_conflict, dimmy_hotkey_set_command, dimmy_init,
+    dimmy_license_register_interest, dimmy_license_sales_open, dimmy_license_set_server_url,
+    dimmy_license_text, dimmy_llm_call_raw, dimmy_meeting_import, dimmy_meeting_is_active,
+    dimmy_meeting_save_post_process, dimmy_meeting_set_recap_status, dimmy_model_catalog_json,
+    dimmy_model_delete, dimmy_model_download_cancel, dimmy_model_download_enqueue,
+    dimmy_model_download_snapshot_json, dimmy_onboarding_done, dimmy_onboarding_set_done,
     dimmy_push_loopback_audio, dimmy_set_app_context, dimmy_set_config_json,
-    dimmy_set_loopback_sample_rate, dimmy_terms_version, dimmy_third_party_notices,
-    dimmy_transcribe_file, dimmy_user_dict_add, dimmy_user_dict_list_json, dimmy_user_dict_remove,
-    dimmy_whistle_size_mb, dimmy_whistle_status,
+    dimmy_set_loopback_sample_rate, dimmy_telemetry_capture_host_exception, dimmy_terms_version,
+    dimmy_third_party_notices, dimmy_transcribe_file, dimmy_user_dict_add,
+    dimmy_user_dict_list_json, dimmy_user_dict_remove, dimmy_whistle_size_mb, dimmy_whistle_status,
 };
 
 // ── Fixture wiring (lifted from ffi_e2e to stay self-contained) ──────
@@ -125,6 +127,50 @@ fn set_config(json: &str) {
 }
 
 // ── Tests: app context ─────────────────────────────────────────────────
+
+#[test]
+#[serial]
+fn host_exception_round_trip_never_crashes_and_reports_no_dsn() {
+    let host = CString::new("windows").unwrap();
+    let source = CString::new("unobserved_task").unwrap();
+    let ty = CString::new("System.InvalidOperationException").unwrap();
+    let frames = CString::new(
+        "Dimmy.Windows.App.OnLaunched	App.xaml.cs	42
+",
+    )
+    .unwrap();
+    // Test builds embed no DSN, so the honest answer is "not configured".
+    let rc = unsafe {
+        dimmy_telemetry_capture_host_exception(
+            host.as_ptr(),
+            source.as_ptr(),
+            ty.as_ptr(),
+            frames.as_ptr(),
+            0,
+        )
+    };
+    assert_eq!(rc, -3);
+    let rc = unsafe {
+        dimmy_telemetry_capture_host_exception(
+            host.as_ptr(),
+            source.as_ptr(),
+            ty.as_ptr(),
+            std::ptr::null(),
+            1,
+        )
+    };
+    assert_eq!(rc, -3);
+    let rc = unsafe {
+        dimmy_telemetry_capture_host_exception(
+            std::ptr::null(),
+            source.as_ptr(),
+            ty.as_ptr(),
+            std::ptr::null(),
+            0,
+        )
+    };
+    assert_eq!(rc, -1);
+}
 
 #[test]
 #[serial]
@@ -707,6 +753,45 @@ fn config_round_trip_preserves_claude_code_url() {
         on_disk["llm_api_url"], "claude-code://default",
         "on-disk URL must be preserved verbatim — UI re-reads this on next launch"
     );
+}
+
+/// Both ways to reach a Kimi membership survive the config round-trip:
+/// the synthetic `kimi-cli://default` URL, and the Kimi Code HTTPS URL
+/// with `llm_auth_method = "subscription"` (which routes to the CLI).
+#[test]
+#[serial]
+fn config_round_trip_preserves_both_kimi_routes() {
+    ensure_init();
+    let path = dimmy_lib::config_dir_path()
+        .expect("isolated config dir resolvable")
+        .join("config.json");
+    for (url, auth) in [
+        ("kimi-cli://default", "api_key"),
+        (
+            "https://api.kimi.ai/coding/v1/chat/completions",
+            "subscription",
+        ),
+    ] {
+        set_config(
+            &serde_json::json!({
+                "llm_enabled": true,
+                "llm_api_url": url,
+                "llm_api_model": "k3",
+                "llm_auth_method": auth,
+            })
+            .to_string(),
+        );
+        let v = get_config_value();
+        assert_eq!(v["llm_api_url"], url, "in-memory URL rewritten");
+        assert_eq!(v["llm_api_model"], "k3");
+        assert_eq!(v["llm_auth_method"], auth);
+        assert!(v["has_kimi_key"].is_boolean(), "has_kimi_key missing");
+
+        let raw = std::fs::read_to_string(&path).expect("read config.json");
+        let on_disk: serde_json::Value = serde_json::from_str(&raw).expect("valid JSON on disk");
+        assert_eq!(on_disk["llm_api_url"], url, "on-disk URL rewritten");
+        assert_eq!(on_disk["llm_auth_method"], auth);
+    }
 }
 
 // ── recap vendor derivation + per-vendor keystore ───────────────
@@ -1825,4 +1910,75 @@ fn license_sales_open_and_register_interest_round_trip() {
     });
     assert_eq!(j["ok"], false);
     drop(rt);
+}
+
+// ── meta.json through the core (import, recap status) + consent/onboarding ──
+
+#[test]
+#[serial]
+fn an_imported_meeting_and_its_recap_status_land_in_meta() {
+    let src_dir = std::env::temp_dir().join(format!("dimmy-import-src-{}", std::process::id()));
+    std::fs::create_dir_all(&src_dir).unwrap();
+    let src = src_dir.join("call.mp3");
+    std::fs::write(&src, b"fake").unwrap();
+    let src_c = CString::new(src.to_string_lossy().to_string()).unwrap();
+    let text = CString::new("hello there").unwrap();
+    let mut buf = vec![0u8; 4096];
+    let n = unsafe {
+        dimmy_meeting_import(
+            src_c.as_ptr(),
+            text.as_ptr(),
+            3.0,
+            buf.as_mut_ptr() as *mut c_char,
+            buf.len() as c_int,
+        )
+    };
+    assert!(n > 0, "import rc {n}");
+    let dir = PathBuf::from(std::str::from_utf8(&buf[..n as usize]).unwrap());
+    assert!(dir.join("audio.mp3").is_file());
+    let dir_c = CString::new(dir.to_string_lossy().to_string()).unwrap();
+    let why = CString::new("HTTP 429").unwrap();
+    assert_eq!(
+        unsafe { dimmy_meeting_set_recap_status(dir_c.as_ptr(), 1, why.as_ptr()) },
+        0
+    );
+    assert_eq!(
+        unsafe { dimmy_meeting_set_recap_status(dir_c.as_ptr(), 7, why.as_ptr()) },
+        -1
+    );
+    let meta: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("meta.json")).unwrap()).unwrap();
+    assert_eq!(meta["origin"], "file-load");
+    assert_eq!(meta["recap"]["status"], "failed");
+    assert_eq!(meta["recap"]["reason"], "HTTP 429");
+    // An empty transcript is refused, nothing is created.
+    let empty = CString::new("  ").unwrap();
+    let rc = unsafe {
+        dimmy_meeting_import(
+            std::ptr::null(),
+            empty.as_ptr(),
+            0.0,
+            buf.as_mut_ptr() as *mut c_char,
+            buf.len() as c_int,
+        )
+    };
+    assert_eq!(rc, -1);
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&src_dir);
+}
+
+#[test]
+#[serial]
+fn onboarding_marker_round_trips_and_consent_answers() {
+    let was = dimmy_onboarding_done();
+    assert_eq!(dimmy_onboarding_set_done(0), 0);
+    assert_eq!(dimmy_onboarding_done(), 0);
+    assert_eq!(dimmy_onboarding_set_done(1), 0);
+    assert_eq!(dimmy_onboarding_done(), 1);
+    assert_eq!(dimmy_onboarding_set_done(2), -1);
+    assert_eq!(dimmy_onboarding_set_done(was), 0);
+
+    let none = CString::new("never_logged_kind").unwrap();
+    assert_eq!(unsafe { dimmy_consent_has(none.as_ptr()) }, 0);
+    assert_eq!(unsafe { dimmy_consent_has(std::ptr::null()) }, -1);
 }

@@ -26,7 +26,8 @@ namespace Dimmy.Windows.Views;
 ///     (groq/openai/anthropic/openrouter) stay visible in both themes.
 ///   • Backend UNCHANGED: keys go through dimmy_save_llm_provider_key into the
 ///     existing AES-256 keystore (scopes stt/llm/recap per the provider's
-///     capabilities). "Connected" state is mirrored in UiPreferences.
+///     capabilities). "Connected" is read from the live keystore through
+///     FFI (IsProviderConnected); nothing mirrors it in UiPreferences.
 /// </summary>
 public sealed partial class SettingsWindow
 {
@@ -625,7 +626,7 @@ public sealed partial class SettingsWindow
             Height = 22,
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
-            Source = new SvgImageSource(SafeUri($"ms-appx:///Assets/Providers/{p.Id}.svg")),
+            Source = Helpers.ProviderIcon.Source(p.Id),
         };
         return new Border
         {

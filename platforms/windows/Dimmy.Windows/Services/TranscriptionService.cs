@@ -249,9 +249,9 @@ public static class TranscriptionService
     {
         try
         {
-            var cfgPath = System.IO.Path.Combine(BuildInfo.ConfigDirPath, "config.json");
-            if (!System.IO.File.Exists(cfgPath)) return 60;
-            using var doc = System.Text.Json.JsonDocument.Parse(System.IO.File.ReadAllText(cfgPath));
+            var json = DimmyNative.ConfigJson();
+            if (string.IsNullOrEmpty(json)) return 60;
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
             return doc.RootElement.TryGetProperty("auto_recap_threshold_secs", out var el)
                 ? el.GetInt32()
                 : 60;

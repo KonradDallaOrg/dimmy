@@ -351,6 +351,41 @@ struct MacPrivacyPage: View {
     }
 }
 
+/// After a native crash, for users with crash reports off: asks once whether
+/// to send that one report. State and wording live in the core
+/// (`telemetry/crash_prompt.rs`), so Windows asks the same question.
+enum CrashReportPrompt {
+    @MainActor
+    static func presentIfPending() {
+        guard DimmyCore.shared.takeCrashReportPrompt() else { return }
+        let lang = Locale.current.language.languageCode?.identifier ?? "en"
+        func t(_ kind: String, _ fallback: String) -> String {
+            DimmyCore.shared.crashReportText(kind: kind, lang: lang) ?? fallback
+        }
+        let alert = NSAlert()
+        alert.messageText = t("title", "Dimmy closed unexpectedly")
+        alert.informativeText = t("body", "Dimmy closed unexpectedly last time. Send the crash report so we can fix it?")
+        alert.addButton(withTitle: t("send", "Send"))
+        alert.addButton(withTitle: t("dont_send", "Don't send"))
+        alert.showsSuppressionButton = true
+        alert.suppressionButton?.title = t("always", "Always send crash reports")
+        alert.suppressionButton?.state = .off
+
+        alert.window.styleMask.insert(.closable)
+        let closed = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification, object: alert.window, queue: .main
+        ) { _ in MainActor.assumeIsolated { NSApp.stopModal(withCode: .cancel) } }
+        defer { NotificationCenter.default.removeObserver(closed) }
+
+        let response = alert.runModal()
+        if alert.suppressionButton?.state == .on, response != .cancel {
+            DimmyCore.shared.crashReportingEnabled = true
+        }
+        // Closing the alert without a button is "Don't send".
+        DimmyCore.shared.resolveCrashReport(send: response == .alertFirstButtonReturn)
+    }
+}
+
 /// Asked whenever `analytics_consent` has no saved answer: once after
 /// onboarding, then once per launch. Closing the window records nothing,
 /// so both pipelines stay off and the question comes back next launch.

@@ -88,6 +88,12 @@ fn run(
                 "[AEC] pipeline build failed: {} — AEC disabled",
                 e
             ));
+            crate::telemetry::report(
+                crate::telemetry::Subsystem::Aec,
+                "build_failed",
+                "",
+                &e.to_string(),
+            );
             // Without AEC we still need to keep the buffer fed in Mix
             // mode. Fall back to passthrough: drain mic frames and
             // forward them unchanged.

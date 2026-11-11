@@ -479,8 +479,8 @@ struct ModelDownloadStepView: View {
     }
 
     private var currentProgress: Double {
-        // Whistle reports through the same bundle progress value.
-        if isParakeet || isWhistle { return appState.parakeetDownloadProgress }
+        if isParakeet { return appState.bundleDownloadProgress["parakeet"] ?? 0 }
+        if isWhistle { return appState.bundleDownloadProgress["whistle"] ?? 0 }
         return isQwen ? appState.qwenDownloadProgress : appState.modelDownloadProgress
     }
 
@@ -555,7 +555,7 @@ struct ModelDownloadStepView: View {
         downloadState = .downloading
         if isWhistle {
             appState.localSttBackend = "whistle"
-            appState.parakeetDownloadProgress = 0.0
+            appState.bundleDownloadProgress["whistle"] = 0
             isDownloadingWhistle = true
             DispatchQueue.global(qos: .userInitiated).async {
                 let success = DimmyCore.shared.downloadWhistle()
@@ -580,7 +580,7 @@ struct ModelDownloadStepView: View {
             }
         } else if isParakeet {
             appState.localSttBackend = "parakeet"
-            appState.parakeetDownloadProgress = 0.0
+            appState.bundleDownloadProgress["parakeet"] = 0
             appState.isDownloadingParakeet = true
             DispatchQueue.global(qos: .userInitiated).async {
                 let success = DimmyCore.shared.downloadParakeetBundle()

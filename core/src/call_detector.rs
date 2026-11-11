@@ -40,6 +40,9 @@ pub enum NudgeResponse {
     KeepRecording,
     /// Stop-nudge: auto-dismissed without action.
     StopTimeout,
+    /// Start-nudge: "Record" was accepted but no meeting started (consent
+    /// declined, or the start failed). Undoes `RecordNow` for this call.
+    RecordAborted,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -749,6 +752,29 @@ impl CallDetectorState {
                 self.sys_inactive_since = None;
                 self.stop_suggestion_until = Some(now + self.timeout_cooldown_secs as i64);
             }
+            NudgeResponse::RecordAborted => {
+                // Without this the detector stayed sure a recording of ours
+                // was running after a declined consent: every later call was
+                // Suppressed(RecordingAccepted) until a meeting was started
+                // and stopped by hand. Declining is "not THIS call": held
+                // like a hand-pressed Stop, released the moment the
+                // microphone is really free. A first version used the
+                // 30-minute "Not now" cooldown, and the user's next calls
+                // went unoffered (2026-11-09 17:12, two Teams calls).
+                let _ = now;
+                let key = self.recorded_app.take().unwrap_or(key);
+                self.recording_active_from_us = false;
+                self.has_tracked_origin = false;
+                self.stop_is_automatic = false;
+                self.barred = Some(key);
+                self.mic_free_since = None;
+                self.detection_emitted = false;
+                self.mic_active_since = None;
+                assert!(
+                    !self.recording_active_from_us,
+                    "an aborted record leaves nothing armed"
+                );
+            }
         }
     }
 
@@ -1042,6 +1068,33 @@ mod tests {
         assert_eq!(
             out,
             CallSignalOutcome::Suppressed(SuppressionReason::Excluded("zoom".into()))
+        );
+    }
+
+    /// 2026-11-09 report: accept "Record", decline the consent prompt, and
+    /// auto-detect went quiet for every later call.
+    #[test]
+    fn a_declined_record_rearms_detection_for_the_next_call() {
+        let mut s = fresh();
+        s.signal(true, Some("teams".into()), false, 1000);
+        s.signal(true, Some("teams".into()), false, 1005); // Detected
+        s.record_response(Some("teams".into()), NudgeResponse::RecordNow, 1006);
+        s.record_response(Some("teams".into()), NudgeResponse::RecordAborted, 1010);
+        // The same call is not offered again: declining was "not this call".
+        let out = s.signal(true, Some("teams".into()), false, 1020);
+        assert!(
+            matches!(out, CallSignalOutcome::Suppressed(_)),
+            "same call right after the decline, got {out:?}"
+        );
+        // The call ends (the OS says the microphone is free) and the user
+        // dials again a few seconds later: offered, no 30-minute cooldown.
+        s.signal(false, None, false, 1030);
+        s.note_mic_confirmed_free();
+        s.signal(true, Some("teams".into()), false, 1032);
+        let out = s.signal(true, Some("teams".into()), false, 1040);
+        assert!(
+            matches!(out, CallSignalOutcome::Detected { .. }),
+            "the next call must be offered, got {out:?}"
         );
     }
 

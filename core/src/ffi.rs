@@ -370,7 +370,10 @@ fn write_to_buf(s: &str, buf: *mut c_char, buf_len: c_int) -> c_int {
     }
     let bytes = s.as_bytes();
     let max = (buf_len - 1) as usize; // leave room for null terminator
-    let copy_len = bytes.len().min(max);
+    let mut copy_len = bytes.len().min(max);
+    while !s.is_char_boundary(copy_len) {
+        copy_len -= 1;
+    }
 
     // Negative space: copy_len must fit within buffer (excluding null terminator)
     assert!(
@@ -403,6 +406,21 @@ fn resolve_live_final(streaming: Option<String>, chunked: Option<String>) -> Opt
     streaming
         .filter(|c| !c.trim().is_empty())
         .or_else(|| chunked.filter(|c| !c.trim().is_empty()))
+}
+
+/// `resolve_live_final`, unless the realtime socket failed mid-dictation:
+/// its text ends where the socket died, so it is dropped and the stop
+/// transcribes the whole buffer (None here means batch).
+fn live_final_to_keep(
+    streaming: Option<String>,
+    chunked: Option<String>,
+    stream_failed: bool,
+) -> Option<String> {
+    if stream_failed {
+        chunked.filter(|c| !c.trim().is_empty())
+    } else {
+        resolve_live_final(streaming, chunked)
+    }
 }
 
 /// Write 16 kHz mono int16 WAV. Used by the history-audio retention
@@ -528,6 +546,8 @@ fn dimmy_init_inner() -> c_int {
     // own panic integration nests cleanly.
     crate::telemetry::init();
     write_init_trace("P4: telemetry init returned");
+    #[cfg(debug_assertions)]
+    crate::telemetry::crash_dump::crash_on_request();
 
     // Load config
     let file_cfg = load_config_file();
@@ -1022,7 +1042,13 @@ pub extern "C" fn dimmy_set_event_callback(cb: extern "C" fn(*const c_char)) {
 /// the active meeting recording).
 /// True from the moment a stop releases `recording` until it has taken the
 /// audio buffer: the window in which a new recording would destroy it.
+/// Not a `capture::Owner` state: it also covers a stop that runs with no
+/// dictation claim (it still reads and clears the buffer), which the owner
+/// cannot see, so moving it there would not be equivalent.
 static STOP_DRAINING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The dictation (DICTATION_GEN) whose realtime socket failed; 0 for none.
+static STREAM_FAILED_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 fn stop_drain_settled(flag: &std::sync::atomic::AtomicBool, timeout: std::time::Duration) -> bool {
     let started = std::time::Instant::now();
@@ -1080,6 +1106,19 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
             return -1;
         }
     }
+
+    // The one owner of the capture (crate::capture). Also refuses the short
+    // window in which a stopped meeting is still writing out its audio.
+    let dictation_id = match crate::capture::claim_dictation() {
+        Ok(id) => id,
+        Err(crate::capture::Busy::Dictation) => return -2,
+        Err(busy) => {
+            log(&format!(
+                "[StartRec] suppressed — capture held by {busy:?} (rc=-7)"
+            ));
+            return -7;
+        }
+    };
 
     *recording = true;
 
@@ -1528,7 +1567,38 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
     prewarm_claude_for_dictation(st);
 
     emit_event("recording_started", "{}");
+    emit_dictation_phase("recording", dictation_id);
     0
+}
+
+/// Live typing stopped in the middle of a dictation (the realtime socket
+/// failed). The dictation itself goes on: its audio is still captured and
+/// the batch path transcribes it at stop. Before this the host never
+/// learned, and the text simply stopped appearing.
+pub(crate) fn emit_stream_failed(engine: &str) {
+    let gen = DICTATION_GEN.load(std::sync::atomic::Ordering::SeqCst);
+    // The stop then ignores the live text, which ends where the socket
+    // failed, and transcribes the whole recording instead.
+    STREAM_FAILED_GEN.store(gen, std::sync::atomic::Ordering::SeqCst);
+    emit_event(
+        "stt_stream_failed",
+        &serde_json::json!({
+            "engine": engine,
+            "dictation": gen,
+        })
+        .to_string(),
+    );
+}
+
+/// One `dictation_phase` event per transition of the core's dictation:
+/// `recording` (capture claimed), `finishing` (stop running: audio taken,
+/// transcription and cleanup under way), `idle` (stop returned). Hosts
+/// derive the pill from it instead of guessing with timers.
+fn emit_dictation_phase(phase: &str, id: u64) {
+    emit_event(
+        "dictation_phase",
+        &serde_json::json!({ "phase": phase, "id": id }).to_string(),
+    );
 }
 
 /// Start the `claude` CLI now when this dictation will end in a subscription
@@ -1593,8 +1663,36 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
         }
     }
     let _stop_guard = StopGuard;
+    // (STOP_IN_PROGRESS spans the whole stop, transcription included: longer
+    // than the capture claim, which ends when the audio is out of the buffer.)
+
+    // The session machine follows the core's own stop, not only the host's
+    // Stop input: a stop the host called directly still puts it in
+    // Finishing. A no-op when the host already did (Finishing stays).
+    crate::dictation_session::input(crate::dictation_session::Input::Stop);
 
     let st = state();
+
+    // Which dictation this stop ends (0: none held the capture). The guard
+    // releases the capture on every exit; the normal path releases it as
+    // soon as the audio is out of the buffer, not after transcription.
+    let dictation_id = match crate::capture::owner() {
+        crate::capture::Owner::Dictation { id } => id,
+        _ => 0,
+    };
+    struct CaptureGuard(u64);
+    impl Drop for CaptureGuard {
+        fn drop(&mut self) {
+            crate::capture::release_dictation();
+            if self.0 > 0 {
+                emit_dictation_phase("idle", self.0);
+            }
+        }
+    }
+    let _capture_guard = CaptureGuard(dictation_id);
+    if dictation_id > 0 {
+        emit_dictation_phase("finishing", dictation_id);
+    }
 
     // Consume the recording-start instant up front so it is cleared on EVERY
     // exit path (the early returns below for empty/muted buffer must not leave
@@ -1637,6 +1735,12 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
         );
         if waited >= max_wait_ms {
             log("[StopRec] WARNING: timed out waiting for audio samples");
+            crate::telemetry::report(
+                crate::telemetry::Subsystem::Audio,
+                "stop_samples_timeout",
+                "",
+                "",
+            );
         }
     }
 
@@ -1712,6 +1816,7 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
         Err(_) => return -1,
     };
     drop(drain_guard);
+    crate::capture::release_dictation();
 
     // Diagnostic: log buffer stats
     let buf_len_samples = buffer.len();
@@ -1953,7 +2058,19 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
     // segment was injected live, so a zero-segment failure still gets pasted
     // from this batch transcript. Work-loss guard, 2026-06-13.
     let had_live = streaming_final.is_some() || chunked_final.is_some();
-    let live_final = resolve_live_final(streaming_final, chunked_final);
+    // A realtime socket that failed mid-dictation stopped the live text at
+    // that point: everything said after it was captured but would never
+    // have been transcribed. The whole buffer goes to batch STT instead.
+    let stream_failed = STREAM_FAILED_GEN.load(std::sync::atomic::Ordering::SeqCst)
+        == DICTATION_GEN.load(std::sync::atomic::Ordering::SeqCst)
+        && streaming_final.is_some()
+        // Batch needs a key of the selected provider: without one the
+        // partial live text is still better than nothing.
+        && !(stt_mode == "cloud" && api_key.is_none());
+    if stream_failed {
+        log("[StopRec] live stream failed mid-dictation — batch STT on the full recording");
+    }
+    let live_final = live_final_to_keep(streaming_final, chunked_final, stream_failed);
     if had_live && live_final.is_none() {
         log("[StopRec] live streaming/chunked transcript was empty — falling back to batch STT on buffered audio (work-loss guard)");
     }
@@ -2002,25 +2119,29 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
         let provider = Provider::from_url(&api_url);
         let max_bytes = provider.max_file_bytes();
 
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            crate::transcribe::transcribe_chunked(
-                &api_url,
-                &api_model,
-                &cloud_key,
-                processed,
-                &language,
-                &prompt,
-                max_bytes,
-                Some(&|current, total| {
-                    emit_event(
-                        "chunk_progress",
-                        &format!(r#"{{"current":{},"total":{}}}"#, current, total),
-                    );
-                }),
-            )
-            .await
-        })
+        match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt.block_on(async {
+                crate::transcribe::transcribe_chunked(
+                    &api_url,
+                    &api_model,
+                    &cloud_key,
+                    processed,
+                    &language,
+                    &prompt,
+                    max_bytes,
+                    Some(&|current, total| {
+                        emit_event(
+                            "chunk_progress",
+                            &format!(r#"{{"current":{},"total":{}}}"#, current, total),
+                        );
+                    }),
+                )
+                .await
+            }),
+            Err(e) => Err(crate::error::TranscribeError::Network(format!(
+                "could not start the async runtime: {e}"
+            ))),
+        }
     };
 
     // Save debug metadata + transcript
@@ -2249,6 +2370,12 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
                                                 "[History] WAV save failed for row #{}: {}",
                                                 id, e
                                             ));
+                                            crate::telemetry::report(
+                                                crate::telemetry::Subsystem::History,
+                                                "wav_save_failed",
+                                                "",
+                                                "",
+                                            );
                                         }
                                     }
                                 }
@@ -2334,7 +2461,12 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
                 provider: provider_static,
                 error_category: category,
             });
-            crate::telemetry::capture_error(category, provider_static, &err_msg);
+            crate::telemetry::report(
+                crate::telemetry::Subsystem::Stt,
+                category,
+                provider_static,
+                &err_msg,
+            );
 
             write_to_buf("", out_buf, buf_len)
         }
@@ -2417,10 +2549,31 @@ fn llm_http_status(err: &crate::error::LlmError) -> Option<u16> {
     }
 }
 
+/// The Sentry kind of an LLM failure. A subscription CLI that exits
+/// non-zero comes back as `LlmError::Api` with the EXIT CODE in `status`,
+/// so it read as "HTTP 1" / `client_error` in Sentry: three issues nobody
+/// could act on (RUST-N/S/T). No HTTP status is below 100.
+fn llm_report_kind(err: &crate::error::LlmError, category: &'static str) -> &'static str {
+    match err {
+        crate::error::LlmError::Api { status, .. } if *status < 100 => "cli_exit",
+        _ => category,
+    }
+}
+
 /// Cancel recording without transcribing.
 #[no_mangle]
 pub extern "C" fn dimmy_cancel_recording() {
     let st = state();
+
+    // Esc during a meeting used to send AudioCommand::Stop and clear the
+    // buffer under the meeting's worker: cancel is a dictation's only.
+    if crate::capture::meeting_holds() {
+        log("[Cancel] a meeting holds the capture — nothing to cancel");
+        return;
+    }
+    // The session machine follows the core's cancel too (a no-op when the
+    // host already said Cancel or Discard).
+    crate::dictation_session::input(crate::dictation_session::Input::Cancel);
 
     // Compute audio_secs BEFORE clearing, for the telemetry event.
     let sample_rate = st.audio_sample_rate.lock().map(|s| *s).unwrap_or(16_000);
@@ -2447,7 +2600,12 @@ pub extern "C" fn dimmy_cancel_recording() {
     // kept transcribing the mic into every later dictation.
     DICTATION_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     retire_streamer();
+    let cancelled = crate::capture::owner();
+    crate::capture::release_dictation();
     emit_event("recording_cancelled", "{}");
+    if let crate::capture::Owner::Dictation { id } = cancelled {
+        emit_dictation_phase("idle", id);
+    }
 
     crate::telemetry::track(crate::telemetry::Event::TranscriptionCancelled { audio_secs });
 }
@@ -2568,6 +2726,17 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         "has_together_llm_key": st.key_store.has_key(KeyringScope::Llm(Provider::Together), use_kr),
         "has_custom_llm_key": st.key_store.has_key(KeyringScope::Llm(Provider::Custom), use_kr),
     });
+
+    // Kimi Code key flags, outside json! for the same recursion limit.
+    json["has_kimi_key"] = has_any_scope_key(&st.key_store, Provider::Kimi, use_kr).into();
+    json["has_kimi_llm_key"] = st
+        .key_store
+        .has_key(KeyringScope::Llm(Provider::Kimi), use_kr)
+        .into();
+    json["has_kimi_recap_key"] = st
+        .key_store
+        .has_key(KeyringScope::Recap(Provider::Kimi), use_kr)
+        .into();
 
     // app_rules added outside the json! macro — including it inline pushes
     // the macro past its expansion-recursion limit (the json! macro is
@@ -2743,6 +2912,18 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         .unwrap_or_default()
         .into();
 
+    // Every persisted field, by construction: the hosts read the config only
+    // through this getter. The keys built above win where both exist.
+    let Ok(cfg) = crate::snapshot_config(st) else {
+        return -1;
+    };
+    let obj = json.as_object_mut().expect("config json is an object");
+    if let serde_json::Value::Object(persisted) = crate::config_to_json(&cfg) {
+        for (key, value) in persisted {
+            obj.entry(key).or_insert(value);
+        }
+    }
+
     let s = serde_json::to_string(&json).unwrap_or_else(|_| "{}".to_string());
     write_to_buf(&s, out_buf, buf_len)
 }
@@ -2826,7 +3007,11 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
         }
     }
     if let Some(s) = v["shortcut"].as_str() {
-        if let Ok(mut sh) = st.shortcut.lock() {
+        if crate::usable_shortcut(s) != s {
+            crate::log(&format!(
+                "[Config] shortcut {s:?} cannot be bound, keeping the current one"
+            ));
+        } else if let Ok(mut sh) = st.shortcut.lock() {
             *sh = s.to_string();
         }
     }
@@ -3251,19 +3436,20 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
         }
     }
     // UI appearance fields (round-tripped for native frontends)
-    if let Some(s) = v["border_style"].as_str() {
+    let ui_defaults = crate::AppConfig::default();
+    if v.get("border_style").is_some() {
         if let Ok(mut bs) = st.border_style.lock() {
-            *bs = s.to_string();
+            *bs = crate::non_empty_or(&v["border_style"], &ui_defaults.border_style);
         }
     }
-    if let Some(s) = v["waveform_style"].as_str() {
+    if v.get("waveform_style").is_some() {
         if let Ok(mut ws) = st.waveform_style.lock() {
-            *ws = s.to_string();
+            *ws = crate::non_empty_or(&v["waveform_style"], &ui_defaults.waveform_style);
         }
     }
-    if let Some(s) = v["overlay_position"].as_str() {
+    if v.get("overlay_position").is_some() {
         if let Ok(mut op) = st.overlay_position.lock() {
-            *op = s.to_string();
+            *op = crate::non_empty_or(&v["overlay_position"], &ui_defaults.overlay_position);
         }
     }
     if let Some(b) = v["keep_in_clipboard"].as_bool() {
@@ -4343,7 +4529,12 @@ pub unsafe extern "C" fn dimmy_process_with_llm(
                 provider: llm_provider_static,
                 error_category: category,
             });
-            crate::telemetry::capture_error(category, llm_provider_static, &err_msg);
+            crate::telemetry::report(
+                crate::telemetry::Subsystem::Llm,
+                llm_report_kind(&e, category),
+                llm_provider_static,
+                &err_msg,
+            );
             // `source` is what promotes this from a pill flash to a toast
             // the user can actually read. See `error_event_payload`.
             emit_event(
@@ -4390,6 +4581,8 @@ pub unsafe extern "C" fn dimmy_command_transform(
     if selection_ptr.is_null() || spoken_ptr.is_null() || out_buf.is_null() || buf_len <= 0 {
         return -1;
     }
+    // Streamed text from here is command output, never a recap.
+    let _purpose = crate::llm::StreamPurpose::Command.mark();
     // Selection is OPTIONAL. With a selection → transform/replace it. Without
     // one → the spoken words are a generation instruction whose result gets
     // inserted at the cursor. Empty/whitespace selection collapses to None.
@@ -4436,6 +4629,12 @@ pub unsafe extern "C" fn dimmy_command_transform(
             Ok(text) => write_to_buf(text.trim(), out_buf, buf_len),
             Err(e) => {
                 log(&format!("[CmdMode] local transform failed: {}", e));
+                crate::telemetry::report(
+                    crate::telemetry::Subsystem::Command,
+                    "local_failed",
+                    "local",
+                    &e.to_string(),
+                );
                 -2
             }
         };
@@ -4501,6 +4700,12 @@ pub unsafe extern "C" fn dimmy_command_transform(
         Ok(rt) => rt,
         Err(e) => {
             log(&format!("[CmdMode] runtime create failed: {}", e));
+            crate::telemetry::report(
+                crate::telemetry::Subsystem::Command,
+                "runtime_build_failed",
+                "",
+                "",
+            );
             return -5;
         }
     };
@@ -4517,6 +4722,15 @@ pub unsafe extern "C" fn dimmy_command_transform(
         Err(e) => {
             let err_msg = format!("{}", e);
             log(&format!("[CmdMode] cloud transform failed: {}", err_msg));
+            crate::telemetry::report(
+                crate::telemetry::Subsystem::Command,
+                llm_report_kind(
+                    &e,
+                    crate::telemetry::sanitize::error_category(&err_msg, llm_http_status(&e)),
+                ),
+                crate::telemetry::sanitize::provider_from_url(&api_url),
+                &err_msg,
+            );
             emit_event(
                 "error",
                 &format!(
@@ -4587,7 +4801,8 @@ pub extern "C" fn dimmy_get_version(out_buf: *mut c_char, buf_len: c_int) -> c_i
 /// worker that streams the recorded WAV to disk and transcribes
 /// chunks every 15 s. Returns 0 on success and writes the meeting id
 /// to `out_buf`. Returns -1 if a session is already active, -2 on
-/// audio-capture start failure, -3 on filesystem error.
+/// audio-capture start failure, -3 on filesystem error, -4 while a
+/// dictation is recording (finish it first).
 ///
 /// # Safety
 /// `out_buf` must be a valid writable buffer of `buf_len` bytes.
@@ -4633,12 +4848,26 @@ pub unsafe extern "C" fn dimmy_meeting_start(out_buf: *mut c_char, buf_len: c_in
     if let Ok(mut sr) = st.audio_sample_rate.lock() {
         *sr = device_sr;
     }
-    // Claim the shared audio state: any meeting still stopping in the
-    // background must not tear it down under us from here on.
+    // Claim the capture (crate::capture) before touching the buffers: a
+    // previous worker still finishing must not act on what we are about to
+    // put in them, and a running dictation must not lose its audio to us
+    // (it used to: ending that dictation then killed the meeting's capture).
+    let claim = match crate::capture::claim_meeting() {
+        Ok(c) => c,
+        Err(crate::capture::Busy::Dictation) => {
+            log("[Meeting] start refused — a dictation is recording (rc=-4)");
+            return -4;
+        }
+        Err(busy) => {
+            log(&format!(
+                "[Meeting] start refused — capture held by {busy:?}"
+            ));
+            return -1;
+        }
+    };
+    // Any meeting still stopping in the background must not tear the shared
+    // audio state down under us from here on.
     MEETING_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    // And the capture buffers themselves: a previous worker still finishing
-    // must not act on what we are about to put in them.
-    crate::meeting::claim_capture_buffers();
     // Clear any stale buffers from a previous recording so the meeting
     // worker starts at offset 0 on both primary and secondary streams.
     if let Ok(mut b) = st.audio_buffer.lock() {
@@ -4737,7 +4966,8 @@ pub unsafe extern "C" fn dimmy_meeting_start(out_buf: *mut c_char, buf_len: c_in
         "[Meeting] mic_sr={} system_sr={} source={:?}",
         device_sr, system_sr, mt_source
     ));
-    let session = match crate::meeting::MeetingSession::start(
+    let session = match crate::meeting::MeetingSession::start_claimed(
+        claim,
         st.audio_buffer.clone(),
         st.audio_buffer_secondary.clone(),
         device_sr,
@@ -4747,7 +4977,14 @@ pub unsafe extern "C" fn dimmy_meeting_start(out_buf: *mut c_char, buf_len: c_in
     ) {
         Ok(s) => s,
         Err(e) => {
+            crate::capture::meeting_released(claim, &[]);
             log(&format!("[Meeting] start failed: {}", e));
+            crate::telemetry::report(
+                crate::telemetry::Subsystem::Meeting,
+                "start_failed",
+                "",
+                &e.to_string(),
+            );
             // Best-effort: stop the audio we just started so the next
             // Start doesn't error on "already running".
             let _ = st
@@ -4790,6 +5027,8 @@ pub unsafe extern "C" fn dimmy_meeting_stop(out_buf: *mut c_char, buf_len: c_int
             None => return -1,
         }
     };
+    let claim = session.claim();
+    crate::capture::meeting_stopping(claim);
     // Notify subscribers BEFORE the (potentially seconds-long) drain
     // happens — the pill should leave the meeting-active visual the
     // instant the user clicked Stop, not after the worker finishes
@@ -4830,14 +5069,14 @@ pub unsafe extern "C" fn dimmy_meeting_stop(out_buf: *mut c_char, buf_len: c_int
 
     let result = session.stop();
     crate::coreml_encoder::run_deferred();
-    // Release the whole-meeting capture buffers NOW: nothing reads them
-    // after the worker join (AudioCommand::Stop tears down streams but
-    // never clears, and the next Start clears-then-fills). Leaving them
-    // kept ~0.6-1.3 GB resident after every long meeting AND left a
-    // stale giant buffer for anything that inspects buffer length.
-    if still_ours() {
-        clear_capture_buffers(st);
-    } else {
+    // The worker hands the buffers back (and frees them) as soon as its
+    // audio is on disk. This only covers a worker that never got there
+    // (panicked or abandoned): released here, still only if nothing else
+    // claimed the capture meanwhile. The old unconditional clear at this
+    // point wiped a dictation started during "Wrapping up" (2026-11-09).
+    if crate::capture::meeting_released(claim, &[&st.audio_buffer, &st.audio_buffer_secondary]) {
+        log("[Meeting] capture released at stop (the worker did not get to it)");
+    } else if !still_ours() {
         log("[Meeting] stop finished after the NEXT meeting started — leaving the shared audio state to it");
     }
     let backend = state()
@@ -4861,19 +5100,6 @@ pub unsafe extern "C" fn dimmy_meeting_stop(out_buf: *mut c_char, buf_len: c_int
     })
     .to_string();
     write_to_buf(&json, out_buf, buf_len)
-}
-
-/// Drop the shared capture buffers' contents and reclaim their heap
-/// allocations. Called from `dimmy_meeting_stop` after the worker join;
-/// safe because the audio streams were already sent Stop and the meeting
-/// worker (sole consumer of the cursors) has exited.
-fn clear_capture_buffers(st: &AppState) {
-    for buf in [&st.audio_buffer, &st.audio_buffer_secondary] {
-        if let Ok(mut b) = buf.lock() {
-            b.clear();
-            b.shrink_to_fit();
-        }
-    }
 }
 
 /// Persist the post-process LLM artefacts (recap, actions JSON,
@@ -4939,6 +5165,190 @@ pub unsafe extern "C" fn dimmy_meeting_save_post_process(
             -1
         }
     }
+}
+
+/// Mark the meetings a crash left behind (`.recording` marker, not the live
+/// meeting) as `interrupted`, once, and return them as a JSON array of
+/// {id, dir, transcript_size_bytes}. Hosts call it at launch and tell the
+/// user the audio is saved and can be transcribed again. Returns the byte
+/// length of the JSON, or -1 on a bad buffer.
+///
+/// # Safety
+/// `out_buf` must be a valid writable buffer of `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_meeting_recover_interrupted(
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let live = MEETING
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|s| s.dir().to_path_buf()));
+    let recovered = crate::meeting::recover_interrupted(live.as_deref());
+    let json = serde_json::to_string(&recovered).unwrap_or_else(|_| "[]".to_string());
+    write_to_buf(&json, out_buf, buf_len)
+}
+
+/// Make a meeting from an audio file that was already transcribed (a loaded
+/// file, a Telegram voice note): the folder, `transcripts.txt`, the audio
+/// copy and `meta.json`, in the shape a live meeting has. `source_ptr` may be
+/// null or empty (no audio to copy). `duration_secs` is the host's probe of
+/// the file. Writes the new meeting folder's path to `out_buf` and returns its
+/// byte length; -1 bad argument, -2 the folder could not be written.
+///
+/// # Safety
+/// `source_ptr` must be null or a valid NUL-terminated UTF-8 string;
+/// `transcript_ptr` a valid one; `out_buf` writable for `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_meeting_import(
+    source_ptr: *const c_char,
+    transcript_ptr: *const c_char,
+    duration_secs: f64,
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if transcript_ptr.is_null() || out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let Ok(transcript) = CStr::from_ptr(transcript_ptr).to_str() else {
+        return -1;
+    };
+    if transcript.trim().is_empty() || !duration_secs.is_finite() || duration_secs < 0.0 {
+        return -1;
+    }
+    let source = if source_ptr.is_null() {
+        ""
+    } else {
+        CStr::from_ptr(source_ptr).to_str().unwrap_or("")
+    };
+    let source = (!source.is_empty()).then(|| std::path::Path::new(source));
+    let Some(root) = crate::meetings_dir() else {
+        return -2;
+    };
+    if let Err(e) = std::fs::create_dir_all(&root) {
+        log(&format!("[Meeting] import: meetings dir: {e}"));
+        return -2;
+    }
+    match crate::meeting::import_from_file(&root, source, transcript, duration_secs) {
+        Ok(dir) => write_to_buf(&dir.to_string_lossy(), out_buf, buf_len),
+        Err(e) => {
+            log(&format!("[Meeting] import failed: {e}"));
+            -2
+        }
+    }
+}
+
+/// Record that a meeting's recap is running (`status` 0) or failed
+/// (`status` 1, `reason_ptr` says why, cut to 200 chars). `saved` is written
+/// with the recap by `dimmy_meeting_save_post_process`. Returns 0, or -1 on a
+/// bad argument.
+///
+/// # Safety
+/// `dir_ptr` must be a valid NUL-terminated UTF-8 string; `reason_ptr` null
+/// or one.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_meeting_set_recap_status(
+    dir_ptr: *const c_char,
+    status: c_int,
+    reason_ptr: *const c_char,
+) -> c_int {
+    if dir_ptr.is_null() {
+        return -1;
+    }
+    let Ok(dir) = CStr::from_ptr(dir_ptr).to_str() else {
+        return -1;
+    };
+    let dir = std::path::Path::new(dir);
+    if dir.as_os_str().is_empty() || !dir.is_dir() {
+        return -1;
+    }
+    let outcome = match status {
+        0 => crate::meeting::RecapOutcome::Pending,
+        1 => crate::meeting::RecapOutcome::Failed,
+        _ => return -1,
+    };
+    let reason = if reason_ptr.is_null() {
+        ""
+    } else {
+        CStr::from_ptr(reason_ptr).to_str().unwrap_or("")
+    };
+    crate::meeting::record_recap(dir, outcome, reason);
+    0
+}
+
+/// Whether the consent audit log (`consent.jsonl`) holds an event of this
+/// kind: 1 yes, 0 no, -1 bad argument. The hosts kept their own copy of
+/// "auto-record was confirmed" (a marker file on Windows, UserDefaults on
+/// macOS) next to the audit line that already said so.
+///
+/// # Safety
+/// `kind_ptr` must be a valid NUL-terminated UTF-8 string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_consent_has(kind_ptr: *const c_char) -> c_int {
+    if kind_ptr.is_null() {
+        return -1;
+    }
+    match CStr::from_ptr(kind_ptr).to_str() {
+        Ok(kind) if !kind.is_empty() => crate::consent::has_event(kind) as c_int,
+        _ => -1,
+    }
+}
+
+/// 1 when onboarding was completed on this install, 0 when not. Only the
+/// marker counts (an existing config.json does not: the core writes one
+/// before onboarding ends).
+#[no_mangle]
+pub extern "C" fn dimmy_onboarding_done() -> c_int {
+    crate::onboarding_marker_exists() as c_int
+}
+
+/// Mark onboarding done (`done` 1) or not done (0, "run onboarding again").
+/// Returns 0, or -1 when the marker could not be written or removed.
+#[no_mangle]
+pub extern "C" fn dimmy_onboarding_set_done(done: c_int) -> c_int {
+    let r = match done {
+        1 => crate::mark_onboarding_done(),
+        0 => crate::clear_onboarding_done(),
+        _ => return -1,
+    };
+    match r {
+        Ok(()) => 0,
+        Err(e) => {
+            log(&format!("[Onboarding] marker: {e}"));
+            -1
+        }
+    }
+}
+
+/// Set a meeting's title in its meta.json, through the core's one atomic
+/// writer. Hosts used to rewrite meta.json themselves. Returns 0, or -1 on
+/// a bad argument.
+///
+/// # Safety
+/// `dir_ptr` and `title_ptr` must be valid null-terminated UTF-8 strings.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_meeting_set_title(
+    dir_ptr: *const c_char,
+    title_ptr: *const c_char,
+) -> c_int {
+    if dir_ptr.is_null() || title_ptr.is_null() {
+        return -1;
+    }
+    let (Ok(dir), Ok(title)) = (
+        CStr::from_ptr(dir_ptr).to_str(),
+        CStr::from_ptr(title_ptr).to_str(),
+    ) else {
+        return -1;
+    };
+    let dir = std::path::Path::new(dir);
+    if dir.as_os_str().is_empty() || !dir.is_dir() {
+        return -1;
+    }
+    crate::meeting::update_meeting_meta_title(dir, title.trim());
+    0
 }
 
 /// Return JSON array of meeting sessions left with a `.recording`
@@ -5544,6 +5954,242 @@ pub extern "C" fn dimmy_codex_recheck() -> c_int {
     crate::codex::status().as_code()
 }
 
+// ── Kimi Code CLI (Kimi membership) bridge ─────────────────────────
+// Same integer contracts as the Codex block above so the hosts reuse the
+// status-card logic. Transport is `kimi acp`; see kimi_cli.rs.
+
+/// Probe local Kimi CLI state. 0 = ready, 1 = installed-not-signed-in,
+/// 2 = not installed. Spawns nothing.
+#[no_mangle]
+pub extern "C" fn dimmy_kimi_status() -> c_int {
+    let s = crate::kimi_cli::status();
+    crate::telemetry::track(crate::telemetry::Event::KimiCliStatusProbed {
+        status: crate::kimi_cli::status_label(&s),
+    });
+    s.as_code()
+}
+
+/// Path search trace + credential / Git Bash presence, as JSON.
+/// Bytes written, -1 on null buf, -2 on too-small buf.
+///
+/// # Safety
+/// `out_buf` must be a valid writable buffer of `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_kimi_diagnostics(out_buf: *mut c_char, buf_len: c_int) -> c_int {
+    if out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let json = crate::kimi_cli::diagnostics_json();
+    if json.len() + 1 > buf_len as usize {
+        return -2;
+    }
+    write_to_buf(&json, out_buf, buf_len)
+}
+
+/// Resolved `kimi` path into `out_buf`. Length on success, 0 if not
+/// installed, -1 on invalid args / too-small buffer.
+///
+/// # Safety
+/// `out_buf` must be a valid writable buffer of `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_kimi_binary_path(out_buf: *mut c_char, buf_len: c_int) -> c_int {
+    if out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    match crate::kimi_cli::detect_binary() {
+        Some(p) => {
+            let s = p.to_string_lossy().to_string();
+            if s.len() + 1 > buf_len as usize {
+                return -1;
+            }
+            write_to_buf(&s, out_buf, buf_len)
+        }
+        None => 0,
+    }
+}
+
+/// The vendor install command for this OS (PowerShell on Windows, a
+/// shell line elsewhere), for the setup wizard. Bytes written, -1 on bad
+/// args / too-small buffer.
+///
+/// # Safety
+/// `out_buf` must be a valid writable buffer of `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_kimi_install_command(out_buf: *mut c_char, buf_len: c_int) -> c_int {
+    if out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let cmd = crate::kimi_cli::install_command();
+    if cmd.len() + 1 > buf_len as usize {
+        return -1;
+    }
+    write_to_buf(cmd, out_buf, buf_len)
+}
+
+/// 1 when the Kimi CLI's shell is available (Git Bash on Windows; always
+/// 1 elsewhere), 0 when the wizard must install Git for Windows first.
+#[no_mangle]
+pub extern "C" fn dimmy_kimi_git_bash_present() -> c_int {
+    crate::kimi_cli::git_bash_present() as c_int
+}
+
+/// Spawn `kimi login` (device-code sign-in) in a visible terminal.
+/// 0 = spawned, -1 = not installed, -2 = spawn failure.
+#[no_mangle]
+pub extern "C" fn dimmy_kimi_spawn_login() -> c_int {
+    match crate::kimi_cli::spawn_login() {
+        Ok(()) => 0,
+        Err(crate::kimi_cli::KimiError::NotInstalled) => -1,
+        Err(_) => -2,
+    }
+}
+
+/// "Test connection" through `kimi acp` with a fixed prompt (no user
+/// content). Elapsed ms on success (> 0). Negative = category:
+///   -1 not installed, -2 not signed in, -3 spawn, -4 timeout,
+///   -5 protocol, -6 reported (usage limit, …), -7 refused, -8 empty.
+#[no_mangle]
+pub extern "C" fn dimmy_kimi_ping() -> c_int {
+    use crate::kimi_cli::{error_category, KimiError};
+    let started = std::time::Instant::now();
+    let result = crate::kimi_cli::run_blocking(
+        "reply with the single word: pong",
+        "",
+        std::time::Duration::from_secs(60),
+        true,
+    );
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    let (success, category) = match &result {
+        Ok(_) => (true, "ok"),
+        Err(e) => (false, error_category(e)),
+    };
+    crate::telemetry::track(crate::telemetry::Event::KimiCliInvocation {
+        kind: "test",
+        processing_ms_bucket: crate::telemetry::sanitize::bucket_processing_ms(elapsed_ms),
+        success,
+        error_category: category,
+    });
+    match result {
+        Ok(_) => (elapsed_ms.min(i32::MAX as u64) as c_int).max(1),
+        Err(KimiError::NotInstalled) => -1,
+        Err(KimiError::NotLoggedIn) => -2,
+        Err(KimiError::Spawn(_)) => -3,
+        Err(KimiError::Timeout) => -4,
+        Err(KimiError::Protocol(_)) => -5,
+        Err(KimiError::Reported { .. }) => -6,
+        Err(KimiError::Refused) => -7,
+        Err(KimiError::Empty) => -8,
+    }
+}
+
+/// The models this account's plan serves, as JSON
+/// `[{"id": "kimi-code/k3", "name": "K3"}, …]`, read from a throwaway
+/// session. Bytes written; -1 bad args, -2 buffer too small, -3 not
+/// installed / not signed in, -4 the CLI failed. Blocks up to 30 s: call
+/// it off the UI thread.
+///
+/// # Safety
+/// `out_buf` must be a valid writable buffer of `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_kimi_models_json(out_buf: *mut c_char, buf_len: c_int) -> c_int {
+    use crate::kimi_cli::KimiError;
+    if out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let models = match crate::kimi_cli::list_models(std::time::Duration::from_secs(30)) {
+        Ok(m) => m,
+        Err(KimiError::NotInstalled | KimiError::NotLoggedIn) => return -3,
+        Err(_) => return -4,
+    };
+    let json = serde_json::Value::Array(
+        models
+            .into_iter()
+            .map(|(id, name)| serde_json::json!({ "id": id, "name": name }))
+            .collect(),
+    )
+    .to_string();
+    if json.len() + 1 > buf_len as usize {
+        return -2;
+    }
+    write_to_buf(&json, out_buf, buf_len)
+}
+
+/// Drop the cached binary lookup and return a fresh `dimmy_kimi_status()`.
+#[no_mangle]
+pub extern "C" fn dimmy_kimi_recheck() -> c_int {
+    crate::kimi_cli::clear_cache();
+    crate::kimi_cli::status().as_code()
+}
+
+// ── Kimi Code MCP bridge (Kimi CLI + Kimi Code Desktop) ───────────
+// Registers `dimmy-mcp` in `~/.kimi-code/mcp.json`. See kimi_mcp.rs.
+
+/// `{"kimi_found","registered","binary_exists","config_path"}` as JSON.
+/// Bytes written, -1 on null buf, -2 on too-small buf.
+///
+/// # Safety
+/// `out_buf` must be a valid writable buffer of `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_kimi_mcp_status(out_buf: *mut c_char, buf_len: c_int) -> c_int {
+    if out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let json = crate::kimi_mcp::status_json(crate::config_dir_name());
+    if json.len() + 1 > buf_len as usize {
+        return -2;
+    }
+    write_to_buf(&json, out_buf, buf_len)
+}
+
+/// Register `binary_path` (the host's `dimmy-mcp`) with Kimi Code.
+/// 0 = done, -1 bad args / no home dir, -2 binary missing,
+/// -3 `mcp.json` is not valid JSON (left untouched), -4 write failed.
+///
+/// # Safety
+/// `binary_path` must be a valid null-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_kimi_mcp_install(binary_path: *const c_char) -> c_int {
+    use crate::kimi_mcp::McpError;
+    if binary_path.is_null() {
+        return -1;
+    }
+    let path = match unsafe { CStr::from_ptr(binary_path) }.to_str() {
+        Ok(s) if !s.is_empty() => s,
+        _ => return -1,
+    };
+    // Compile-time namespace, as for Claude Desktop: see dimmy_claude_desktop_install.
+    let (rc, kind) =
+        match crate::kimi_mcp::install(std::path::Path::new(path), crate::config_dir_name()) {
+            Ok(()) => return 0,
+            Err(McpError::NoHome) => (-1, "no_home"),
+            Err(McpError::BinaryMissing) => (-2, "binary_missing"),
+            Err(McpError::Unreadable) => (-3, "config_unreadable"),
+            Err(McpError::WriteFailed) => (-4, "write_failed"),
+        };
+    crate::telemetry::report(
+        crate::telemetry::Subsystem::Integration,
+        kind,
+        "kimi_mcp",
+        "",
+    );
+    rc
+}
+
+/// Remove our entry from `~/.kimi-code/mcp.json`. 1 removed, 0 nothing to
+/// remove, -1 no home dir, -3 file not valid JSON, -4 write failed.
+#[no_mangle]
+pub extern "C" fn dimmy_kimi_mcp_uninstall() -> c_int {
+    use crate::kimi_mcp::McpError;
+    match crate::kimi_mcp::uninstall(crate::config_dir_name()) {
+        Ok(true) => 1,
+        Ok(false) => 0,
+        Err(McpError::NoHome) => -1,
+        Err(McpError::BinaryMissing) => -2,
+        Err(McpError::Unreadable) => -3,
+        Err(McpError::WriteFailed) => -4,
+    }
+}
+
 // ── Gemini CLI (Google account) bridge ───────────────────
 // Direct mirror of the Codex FFI above, same integer contracts, so the
 // hosts reuse the status-card logic for all three CLI backends.
@@ -5858,18 +6504,25 @@ pub unsafe extern "C" fn dimmy_claude_desktop_install(
     // looked in `dimmy/meetings`, found nothing, and recaps written by Claude
     // (incl. the meeting title) landed in a phantom dir the app never reads.
     let namespace = crate::config_dir_name();
-    match crate::claude_desktop::install_extension(
+    let (rc, kind) = match crate::claude_desktop::install_extension(
         std::path::Path::new(path_str),
         version_str,
         namespace,
     ) {
-        Ok(_) => 0,
-        Err(crate::claude_desktop::InstallError::NoExtensionsRoot) => -1,
-        Err(crate::claude_desktop::InstallError::BinaryMissing) => -2,
-        Err(crate::claude_desktop::InstallError::CopyFailed(_)) => -3,
-        Err(crate::claude_desktop::InstallError::WriteFailed(_)) => -4,
-        Err(crate::claude_desktop::InstallError::ParseFailed(_)) => -5,
-    }
+        Ok(_) => return 0,
+        Err(crate::claude_desktop::InstallError::NoExtensionsRoot) => (-1, "no_extensions_root"),
+        Err(crate::claude_desktop::InstallError::BinaryMissing) => (-2, "binary_missing"),
+        Err(crate::claude_desktop::InstallError::CopyFailed(_)) => (-3, "copy_failed"),
+        Err(crate::claude_desktop::InstallError::WriteFailed(_)) => (-4, "write_failed"),
+        Err(crate::claude_desktop::InstallError::ParseFailed(_)) => (-5, "parse_failed"),
+    };
+    crate::telemetry::report(
+        crate::telemetry::Subsystem::Integration,
+        kind,
+        "claude_desktop",
+        "",
+    );
+    rc
 }
 
 /// Update the installed Claude Desktop extension when it is older than
@@ -6178,6 +6831,12 @@ pub unsafe extern "C" fn dimmy_confluence_send_recap(
         }
         Err(e) => {
             log(&format!("[Confluence] recap send failed: {}", e));
+            crate::telemetry::report(
+                crate::telemetry::Subsystem::Integration,
+                crate::telemetry::sanitize::error_category(&e.to_string(), None),
+                "confluence",
+                &e.to_string(),
+            );
             serde_json::json!({ "ok": false, "error": e.to_string() })
         }
     };
@@ -6325,6 +6984,12 @@ pub unsafe extern "C" fn dimmy_save_llm_provider_key(
                 provider.as_str(),
                 e
             ));
+            crate::telemetry::report(
+                crate::telemetry::Subsystem::Keystore,
+                "save_failed",
+                provider.as_str(),
+                &e.to_string(),
+            );
             -2
         }
     }
@@ -6547,6 +7212,7 @@ pub unsafe extern "C" fn dimmy_notion_send_recap(
                 dir.display(),
                 page.url
             ));
+            crate::meeting::record_notion_page(&dir, &page.id, &page.url);
             serde_json::json!({
                 "ok": true,
                 "page_id": page.id,
@@ -6556,6 +7222,12 @@ pub unsafe extern "C" fn dimmy_notion_send_recap(
         }
         Err(e) => {
             log(&format!("[Notion] send failed: {}", e));
+            crate::telemetry::report(
+                crate::telemetry::Subsystem::Integration,
+                crate::telemetry::sanitize::error_category(&e.to_string(), None),
+                "notion",
+                &e.to_string(),
+            );
             serde_json::json!({
                 "ok": false,
                 "error": format!("{}", e),
@@ -6646,6 +7318,7 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
         Ok(s) if !s.is_empty() => s.to_string(),
         _ => return -1,
     };
+    let _purpose = crate::llm::StreamPurpose::Recap.mark();
     let model_override = if model_override_ptr.is_null() {
         String::new()
     } else {
@@ -6764,6 +7437,12 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
                     "[LlmRaw] local failed: {}",
                     crate::truncate_utf8(&msg, 200)
                 ));
+                crate::telemetry::report(
+                    crate::telemetry::Subsystem::Recap,
+                    "local_failed",
+                    "local",
+                    &msg,
+                );
                 local_failure_rc(&msg)
             }
         };
@@ -6919,9 +7598,11 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
             .map(|v| v.is_anthropic())
             .unwrap_or(false);
         // OpenAI + subscription routes through the Codex CLI (ChatGPT
-        // plan), so a non-Claude OpenAI model is fine — don't fall back.
+        // plan), Kimi + subscription through the Kimi CLI, so a non-Claude
+        // model from either vendor is fine — don't fall back.
         let url_is_openai = Provider::from_url(&effective_url).is_openai();
-        if !model_is_claude && !url_is_openai {
+        let url_is_kimi = Provider::from_url(&effective_url).is_kimi();
+        if !model_is_claude && !url_is_openai && !url_is_kimi {
             log(&format!(
                 "[LlmRaw] subscription requested but model '{}' is neither Claude- nor \
                  OpenAI-family — falling back to api_key path (subscription routes only to \
@@ -6933,7 +7614,8 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
     }
     let is_subscription = auth_method == "subscription"
         || crate::claude_code::is_claude_code_url(&effective_url)
-        || crate::codex::is_codex_url(&effective_url);
+        || crate::codex::is_codex_url(&effective_url)
+        || crate::kimi_cli::is_kimi_cli_url(&effective_url);
     if !is_subscription && (effective_url.is_empty() || effective_key.is_empty()) {
         log(&format!(
             "[LlmRaw] missing recap URL or key (effective_url={}, key_present={})",
@@ -7014,7 +7696,12 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
                 crate::telemetry::sanitize::provider_from_url(&effective_url);
             let category =
                 crate::telemetry::sanitize::error_category(&display_short, llm_http_status(&e));
-            crate::telemetry::capture_error(category, provider_static, &display_short);
+            crate::telemetry::report(
+                crate::telemetry::Subsystem::Recap,
+                llm_report_kind(&e, category),
+                provider_static,
+                &display_short,
+            );
             emit_event(
                 "error",
                 &error_event_payload("recap", &display_short, provider_static, category),
@@ -7637,7 +8324,9 @@ pub unsafe extern "C" fn dimmy_download_model(filename_ptr: *const c_char) -> c_
     }
 
     let fname_clone = filename.clone();
-    let rt = tokio::runtime::Runtime::new().unwrap();
+    let Ok(rt) = tokio::runtime::Runtime::new() else {
+        return -1;
+    };
     let result = rt.block_on(crate::local_stt::download_model(
         &filename,
         move |downloaded, total| {
@@ -7886,7 +8575,9 @@ pub unsafe extern "C" fn dimmy_download_llm_model(filename_ptr: *const c_char) -
     }
 
     let fname_clone = filename.clone();
-    let rt = tokio::runtime::Runtime::new().unwrap();
+    let Ok(rt) = tokio::runtime::Runtime::new() else {
+        return -1;
+    };
     let result = rt.block_on(crate::local_llm::download_model(
         &filename,
         move |downloaded, total| {
@@ -8306,6 +8997,12 @@ pub extern "C" fn dimmy_nemotron_full_download() -> c_int {
         Ok(()) => 0,
         Err(e) => {
             log(&format!("[Nemotron] F32 download failed: {e}"));
+            crate::telemetry::report(
+                crate::telemetry::Subsystem::Download,
+                "failed",
+                "nemotron_f32",
+                &e.to_string(),
+            );
             -1
         }
     }
@@ -8542,6 +9239,15 @@ pub unsafe extern "C" fn dimmy_history_save(
             CStr::from_ptr(language_ptr).to_str().unwrap_or("en")
         }
     };
+    // HistoryStore::save asserts these; a host bug must cost an rc, not the app.
+    if text.trim().is_empty() || !duration.is_finite() || duration < 0.0 {
+        return -1;
+    }
+    let language = if language.trim().is_empty() {
+        "en"
+    } else {
+        language
+    };
 
     let st = state();
     if let Ok(guard) = st.history_store.lock() {
@@ -8748,8 +9454,14 @@ pub unsafe extern "C" fn dimmy_hotkey_set(combo_ptr: *const c_char) {
         return;
     }
     if let Ok(combo) = CStr::from_ptr(combo_ptr).to_str() {
-        crate::hotkey::set_shortcut(combo);
-        crate::log(&format!("[Hotkey] set_shortcut(\"{}\")", combo));
+        if crate::hotkey::set_shortcut(combo) {
+            crate::log(&format!("[Hotkey] set_shortcut(\"{}\")", combo));
+        } else {
+            crate::log(&format!(
+                "[Hotkey] set_shortcut(\"{}\") cannot be bound, using the default",
+                combo
+            ));
+        }
     }
 }
 
@@ -9500,7 +10212,7 @@ pub fn decode_via_symphonia(path: &str) -> Result<(Vec<f32>, u32), String> {
         .map(|c| c.count())
         .unwrap_or(1)
         .max(1);
-    let mut decoder = symphonia::default::get_codecs()
+    let mut decoder = crate::file_stream::codecs()
         .make(&track.codec_params, &DecoderOptions::default())
         .map_err(|e| format!("decoder: {e}"))?;
     let mut interleaved: Vec<f32> = Vec::new();
@@ -9690,7 +10402,7 @@ fn compute_peaks_streaming(path: &str, buckets: usize) -> Result<(Vec<f32>, f64)
         .map(|c| c.count())
         .unwrap_or(1)
         .max(1);
-    let mut decoder = symphonia::default::get_codecs()
+    let mut decoder = crate::file_stream::codecs()
         .make(&track.codec_params, &DecoderOptions::default())
         .map_err(|e| format!("decoder: {e}"))?;
 
@@ -9829,6 +10541,12 @@ pub unsafe extern "C" fn dimmy_decode_audio_to_wav(
         Ok(s) => s,
         Err(e) => {
             log(&format!("[DecodeToWav] decode failed: {}", e));
+            crate::telemetry::report(
+                crate::telemetry::Subsystem::FileLoad,
+                "decode_failed",
+                "",
+                &e.to_string(),
+            );
             return -2;
         }
     };
@@ -10021,6 +10739,12 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
         Ok(s) => s,
         Err(e) => {
             log(&format!("[FileLoad] open failed: {}", e));
+            crate::telemetry::report(
+                crate::telemetry::Subsystem::FileLoad,
+                "open_failed",
+                "",
+                &e.to_string(),
+            );
             return -2;
         }
     };
@@ -10139,6 +10863,12 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
             });
         if let Some(e) = failed {
             log(&format!("[FileLoad] cloud transcribe failed: {}", e));
+            crate::telemetry::report(
+                crate::telemetry::Subsystem::FileLoad,
+                crate::telemetry::sanitize::error_category(&e.to_string(), None),
+                "cloud",
+                &e.to_string(),
+            );
             return -8;
         }
         if decoded == 0 {
@@ -10266,6 +10996,12 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
                     "[FileLoad] chunk {} at {:.0}s failed: {}",
                     idx, chunk_offset_secs, e
                 ));
+                crate::telemetry::report(
+                    crate::telemetry::Subsystem::FileLoad,
+                    "chunk_failed",
+                    "local",
+                    &e.to_string(),
+                );
             }
         }
         emit_progress(end_secs, s, idx);
@@ -10540,6 +11276,12 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
             Ok(s) => s,
             Err(e) => {
                 log(&format!("[Retranscribe] decode {} failed: {}", band, e));
+                crate::telemetry::report(
+                    crate::telemetry::Subsystem::Meeting,
+                    "retranscribe_decode_failed",
+                    "",
+                    &e.to_string(),
+                );
                 continue;
             }
         };
@@ -10757,6 +11499,12 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
                 }
                 Err(e) => {
                     log(&format!("[Retranscribe] diarize {} failed: {}", band, e));
+                    crate::telemetry::report(
+                        crate::telemetry::Subsystem::Meeting,
+                        "diarize_failed",
+                        "",
+                        &e.to_string(),
+                    );
                     false
                 }
             }
@@ -10778,6 +11526,12 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
     lines.extend(diar_lines);
     if let Err(e) = crate::diarize::save_speakers(dir_path, &speakers) {
         log(&format!("[Retranscribe] write speakers.json failed: {}", e));
+        crate::telemetry::report(
+            crate::telemetry::Subsystem::Meeting,
+            "speakers_write_failed",
+            "",
+            &e.to_string(),
+        );
     }
 
     // Interleave the two bands by time (stable so mic precedes system on ties).
@@ -10795,16 +11549,24 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
         log("[Retranscribe] produced empty transcript");
         return -5;
     }
-    if let Err(e) = std::fs::write(dir_path.join("transcripts.txt"), out.as_bytes()) {
+    if let Err(e) = crate::write_atomic(&dir_path.join("transcripts.txt"), out.as_bytes()) {
         log(&format!(
             "[Retranscribe] write transcripts.txt failed: {}",
             e
         ));
+        crate::telemetry::report(
+            crate::telemetry::Subsystem::Meeting,
+            "transcript_write_failed",
+            "",
+            &e.to_string(),
+        );
         return -3;
     }
+    let engine = if is_local { backend.as_str() } else { "cloud" };
+    crate::meeting::record_retranscribed(dir_path, lines.len(), engine);
     log(&format!(
         "[Retranscribe] {} dir='{}' -> {} lines, {} bytes",
-        if is_local { &backend } else { "cloud" },
+        engine,
         dir,
         lines.len(),
         out.len()
@@ -11049,6 +11811,54 @@ pub extern "C" fn dimmy_telemetry_set_crash_enabled(enabled: c_int) -> c_int {
     0
 }
 
+/// A native crash from the previous launch is waiting for the user's answer
+/// (crash reports are off or not answered yet). Returns 1 exactly once per
+/// crash: the host shows its "Dimmy closed unexpectedly" dialog now, then
+/// calls `dimmy_crash_report_resolve`. 0 = nothing to ask.
+#[no_mangle]
+pub extern "C" fn dimmy_crash_report_prompt() -> c_int {
+    if crate::telemetry::crash_prompt::take_prompt() {
+        1
+    } else {
+        0
+    }
+}
+
+/// The user's answer to that dialog. `send` 1 = send this one report even
+/// though crash reports are off; 0 = delete it. Returns 1 sent, 0 deleted,
+/// -1 nothing was pending. "Always send" is the host's existing
+/// `dimmy_telemetry_set_crash_enabled(1)`, called before this.
+#[no_mangle]
+pub extern "C" fn dimmy_crash_report_resolve(send: c_int) -> c_int {
+    crate::telemetry::crash_prompt::resolve(send != 0)
+}
+
+/// The dialog's words, localized. `kind`: `title` | `body` | `send` |
+/// `dont_send` | `always`. Returns bytes written, or -1 for an unknown kind.
+///
+/// # Safety
+/// `kind_ptr` and `lang_ptr` must be null or valid NUL-terminated strings;
+/// `out_buf` must be writable for `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_crash_report_text(
+    kind_ptr: *const c_char,
+    lang_ptr: *const c_char,
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if kind_ptr.is_null() || lang_ptr.is_null() {
+        return -1;
+    }
+    let Ok(kind) = CStr::from_ptr(kind_ptr).to_str() else {
+        return -1;
+    };
+    let lang = CStr::from_ptr(lang_ptr).to_str().unwrap_or("en");
+    match crate::telemetry::crash_prompt::text(kind, lang) {
+        Some(text) => write_to_buf(text, out_buf, buf_len),
+        None => -1,
+    }
+}
+
 /// Read the runtime crash-reporting enabled flag. 0 = off, 1 = on.
 #[no_mangle]
 pub extern "C" fn dimmy_telemetry_is_crash_enabled() -> c_int {
@@ -11109,6 +11919,56 @@ pub unsafe extern "C" fn dimmy_telemetry_capture_feedback(
         }
     };
     crate::telemetry::capture_feedback(kind, message, email) as c_int
+}
+
+/// Send an exception the host UI caught to Sentry (crash-report consent
+/// only). Unhandled exceptions, unobserved tasks, swallowed exceptions in
+/// paths that matter, and UI-thread hangs.
+///
+/// `host_ptr`: `windows` | `macos` | `linux`.
+/// `source_ptr`: where it was caught, a slug (`appdomain_unhandled`,
+///   `unobserved_task`, `ui_hang`, `update_check`, …).
+/// `type_ptr`: the exception type name (`System.NullReferenceException`).
+/// `frames_ptr`: may be null. One frame per line, innermost first,
+///   `function \t file \t line`. Only the file name is kept.
+/// `fatal`: 1 when the process is about to die; the call then blocks up
+///   to 2 s so the event is sent.
+///
+/// NEVER pass the exception message: it carries paths and user text.
+///
+/// Returns 1 sent · -1 invalid input · -2 no consent · -3 no DSN.
+///
+/// # Safety
+/// All non-null pointers must be valid null-terminated UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_telemetry_capture_host_exception(
+    host_ptr: *const c_char,
+    source_ptr: *const c_char,
+    type_ptr: *const c_char,
+    frames_ptr: *const c_char,
+    fatal: c_int,
+) -> c_int {
+    if host_ptr.is_null() || source_ptr.is_null() || type_ptr.is_null() {
+        return -1;
+    }
+    let (Ok(host), Ok(source), Ok(ty)) = (
+        CStr::from_ptr(host_ptr).to_str(),
+        CStr::from_ptr(source_ptr).to_str(),
+        CStr::from_ptr(type_ptr).to_str(),
+    ) else {
+        return -1;
+    };
+    let frames = if frames_ptr.is_null() {
+        ""
+    } else {
+        CStr::from_ptr(frames_ptr).to_str().unwrap_or("")
+    };
+    // Reached from crash handlers: a panic here would turn one crash into
+    // an abort that loses the report.
+    std::panic::catch_unwind(|| {
+        crate::telemetry::capture_host_exception(host, source, ty, frames, fatal == 1)
+    })
+    .unwrap_or(-1) as c_int
 }
 
 // ── Typed telemetry dispatcher (host-driven events) ──────────────
@@ -11334,6 +12194,9 @@ pub unsafe extern "C" fn dimmy_telemetry_track_typed(
         "gemini_cli.login_completed" => Some(crate::telemetry::Event::GeminiCliLoginCompleted {
             outcome: prop_static("outcome", &["success", "timeout", "spawn_failed"]),
         }),
+        "kimi_cli.login_completed" => Some(crate::telemetry::Event::KimiCliLoginCompleted {
+            outcome: prop_static("outcome", &["success", "timeout", "spawn_failed"]),
+        }),
         // onboarding.* — wizard funnel emitted from the host wizard
         // window (Win OnboardingWindow, Mac OnboardingContainerView).
         // Step names are categorical so dashboards can build funnels
@@ -11419,6 +12282,12 @@ pub extern "C" fn dimmy_autostart_set_enabled(enabled: c_int) -> c_int {
         }
         Err(e) => {
             log(&format!("[autostart] set failed: {}", e));
+            crate::telemetry::report(
+                crate::telemetry::Subsystem::Config,
+                "autostart_failed",
+                "",
+                &e.to_string(),
+            );
             -1
         }
     }
@@ -11778,18 +12647,26 @@ pub unsafe extern "C" fn dimmy_license_redeem(
 /// writes back the rotated one. Writes JSON `{ok, error?}` to buf.
 #[no_mangle]
 pub extern "C" fn dimmy_license_refresh(buf: *mut c_char, buf_len: c_int) -> c_int {
+    let json = refresh_license_at(&licensing_server_url());
+    write_to_buf(&json.to_string(), buf, buf_len)
+}
+
+/// On a definitive rejection (see `RefreshError::is_revocation`) the stored
+/// token is deleted, so the license falls back to `NotFound` (free) now
+/// instead of after `max_offline` days. The result carries `revoked: true`.
+fn refresh_license_at(server: &str) -> serde_json::Value {
+    let err = |msg: String| serde_json::json!({"ok": false, "error": msg});
     let token = match license::load_license_file() {
         Ok(Some(t)) => t,
-        Ok(None) => return write_license_err(buf, buf_len, "no license file"),
-        Err(e) => return write_license_err(buf, buf_len, &format!("load: {}", e)),
+        Ok(None) => return err("no license file".into()),
+        Err(e) => return err(format!("load: {}", e)),
     };
-    let server = licensing_server_url();
     let rt = match tokio::runtime::Runtime::new() {
         Ok(r) => r,
-        Err(e) => return write_license_err(buf, buf_len, &format!("runtime: {}", e)),
+        Err(e) => return err(format!("runtime: {}", e)),
     };
-    let result = rt.block_on(license::refresh_token(&server, &token));
-    let json = match result {
+    let result = rt.block_on(license::refresh_token(server, &token));
+    match result {
         Ok(r) => match license::save_license_file(&r.token) {
             Ok(()) => {
                 let now = std::time::SystemTime::now()
@@ -11810,13 +12687,21 @@ pub extern "C" fn dimmy_license_refresh(buf: *mut c_char, buf_len: c_int) -> c_i
             }
         },
         Err(e) => {
-            track(Event::LicenseRefreshFailed {
-                error_category: license_error_category(&e),
-            });
-            serde_json::json!({"ok": false, "error": format!("{}", e)})
+            let error_category = match &e {
+                license::RefreshError::Http(h) => license_error_category(h),
+                license::RefreshError::Rejected { status, .. } if *status >= 500 => "server_5xx",
+                license::RefreshError::Rejected { .. } => "server_4xx",
+            };
+            track(Event::LicenseRefreshFailed { error_category });
+            if !e.is_revocation() {
+                return err(format!("{}", e));
+            }
+            if let Err(io) = license::forget_license() {
+                return err(format!("revoked, but removing the token failed: {}", io));
+            }
+            serde_json::json!({"ok": false, "revoked": true, "error": format!("{}", e)})
         }
-    };
-    write_to_buf(&json.to_string(), buf, buf_len)
+    }
 }
 
 /// `POST /api/checkout/create { tier, token? }` via FFI. Token is read
@@ -12270,6 +13155,8 @@ pub unsafe extern "C" fn dimmy_inject_pcm_for_test(
 /// saved config without a separate apply step on init / set_config_json.
 /// Bumped by every meeting start. `dimmy_meeting_stop` hands the shared
 /// audio state back only if it is still the meeting that owns it.
+/// Not the capture claim: that drops to 0 when the meeting worker lets go
+/// (or dies), and the stop must still send the stream its Stop then.
 static MEETING_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Whether a stopping meeting may still tear down the SHARED audio state
@@ -12662,6 +13549,7 @@ pub unsafe extern "C" fn dimmy_call_signal_response(
         "stop_and_recap" => NudgeResponse::StopAndRecap,
         "keep_recording" => NudgeResponse::KeepRecording,
         "stop_timeout" => NudgeResponse::StopTimeout,
+        "record_aborted" => NudgeResponse::RecordAborted,
         _ => return -2,
     };
     let app: Option<String> = if app_id.is_null() {
@@ -12878,8 +13766,8 @@ pub unsafe extern "C" fn dimmy_telegram_pending(out_buf: *mut c_char, buf_len: c
 /// in. The Mac file-load bridge keeps the source's own extension, so
 /// `audio.m4a` has to be found here as well as in the host; Symphonia decodes
 /// all of them.
-fn resolve_meeting_track(dir: &std::path::Path, base: &str) -> Option<String> {
-    ["ogg", "wav", "m4a", "mp3", "aac", "flac", "mp4"]
+pub(crate) fn resolve_meeting_track(dir: &std::path::Path, base: &str) -> Option<String> {
+    crate::meeting::TRACK_EXTENSIONS
         .iter()
         .map(|ext| dir.join(format!("{base}.{ext}")))
         .find(|p| p.exists())
@@ -13536,6 +14424,20 @@ pub(crate) mod tests {
     /// call. 413 gets its own category so the hint can name both causes
     /// without anyone reading the response body.
     #[test]
+    fn a_cli_exit_code_is_not_reported_as_an_http_status() {
+        let exit = crate::error::LlmError::Api {
+            status: 1,
+            body: String::new(),
+        };
+        assert_eq!(llm_report_kind(&exit, "client_error"), "cli_exit");
+        let http = crate::error::LlmError::Api {
+            status: 400,
+            body: String::new(),
+        };
+        assert_eq!(llm_report_kind(&http, "client_error"), "client_error");
+    }
+
+    #[test]
     fn llm_http_status_reaches_the_category() {
         let too_large = crate::error::LlmError::Api {
             status: 413,
@@ -14097,6 +14999,18 @@ pub(crate) mod tests {
         assert_eq!(buf_len, 0, "buffer must be cleared after cancel");
     }
 
+    #[test]
+    #[serial]
+    fn the_session_follows_the_cores_own_cancel() {
+        ensure_test_state();
+        dimmy_dictation_input(6, 0, 0);
+        assert_eq!(dimmy_dictation_input(1, 0, 0), 1, "toggle press starts");
+        assert_eq!(dimmy_dictation_phase(), 1);
+        // The host never says Cancel: the core's cancel is enough.
+        dimmy_cancel_recording();
+        assert_eq!(dimmy_dictation_phase(), 0);
+    }
+
     // ── dimmy_cycle_llm_style tests ─────────────────────────────────
 
     #[test]
@@ -14189,6 +15103,181 @@ pub(crate) mod tests {
         assert_eq!(result, -1);
     }
 
+    fn read_config_json() -> serde_json::Value {
+        let mut buf = vec![0u8; 1 << 16];
+        let len = dimmy_get_config_json(buf.as_mut_ptr() as *mut c_char, buf.len() as c_int);
+        assert!(
+            len > 0 && (len as usize) < buf.len() - 4,
+            "config json must fit"
+        );
+        serde_json::from_slice(&buf[..len as usize]).expect("config json must parse")
+    }
+
+    /// The hosts read the config only through the getter, so it must carry
+    /// every field `save_config_file` persists, with the same value.
+    #[test]
+    #[serial]
+    fn config_getter_has_every_persisted_field() {
+        ensure_test_state();
+        let persisted = crate::config_to_json(&crate::snapshot_config(state()).unwrap());
+        let got = read_config_json();
+        for (key, value) in persisted.as_object().unwrap() {
+            assert_eq!(
+                got.get(key),
+                Some(value),
+                "getter must return persisted key {key}"
+            );
+        }
+    }
+
+    /// Key names and JSON types the hosts already depend on.
+    const GETTER_KEY_TYPES: &[(&str, &str)] = &[
+        ("analytics_consent", "null"),
+        ("api_model", "string"),
+        ("api_url", "string"),
+        ("app_rules", "array"),
+        ("audio_debug_enabled", "bool"),
+        ("audio_source", "string"),
+        ("auto_recap_threshold_secs", "number"),
+        ("border_style", "string"),
+        ("calendar_context_enabled", "bool"),
+        ("call_detect_auto_record", "bool"),
+        ("call_detect_cooldown_secs", "number"),
+        ("call_detect_enabled", "bool"),
+        ("call_detect_excluded_apps", "array"),
+        ("call_detect_min_active_secs", "number"),
+        ("call_detect_timeout_cooldown_secs", "number"),
+        ("chunk_streaming_enabled", "bool"),
+        ("confluence_auto_send", "bool"),
+        ("confluence_email", "string"),
+        ("confluence_parent_id", "string"),
+        ("confluence_site", "string"),
+        ("confluence_space_id", "string"),
+        ("confluence_space_key", "string"),
+        ("confluence_space_name", "string"),
+        ("crash_reports_consent", "null"),
+        ("devices", "array"),
+        ("diarization_enabled", "bool"),
+        ("filler_removal_enabled", "bool"),
+        ("gemini_cli_enabled", "bool"),
+        ("ggml_debug_logging", "bool"),
+        ("has_anthropic_llm_key", "bool"),
+        ("has_anthropic_recap_key", "bool"),
+        ("has_custom_key", "bool"),
+        ("has_custom_llm_key", "bool"),
+        ("has_custom_recap_key", "bool"),
+        ("has_deepgram_key", "bool"),
+        ("has_fireworks_key", "bool"),
+        ("has_fireworks_llm_key", "bool"),
+        ("has_fireworks_recap_key", "bool"),
+        ("has_gemini_key", "bool"),
+        ("has_gemini_llm_key", "bool"),
+        ("has_gemini_recap_key", "bool"),
+        ("has_groq_key", "bool"),
+        ("has_groq_llm_key", "bool"),
+        ("has_groq_recap_key", "bool"),
+        ("has_key", "bool"),
+        ("has_llm_anthropic_key", "bool"),
+        ("has_llm_custom_key", "bool"),
+        ("has_llm_gemini_key", "bool"),
+        ("has_llm_groq_key", "bool"),
+        ("has_llm_key", "bool"),
+        ("has_llm_openai_key", "bool"),
+        ("has_llm_openrouter_key", "bool"),
+        ("has_notion_token", "bool"),
+        ("has_openai_key", "bool"),
+        ("has_openai_llm_key", "bool"),
+        ("has_openai_recap_key", "bool"),
+        ("has_openrouter_key", "bool"),
+        ("has_openrouter_llm_key", "bool"),
+        ("has_openrouter_recap_key", "bool"),
+        ("has_together_key", "bool"),
+        ("has_together_llm_key", "bool"),
+        ("has_together_recap_key", "bool"),
+        ("history_audio_keep_days", "number"),
+        ("history_audio_max_mb", "number"),
+        ("input_gain", "number"),
+        ("keep_in_clipboard", "bool"),
+        ("language", "string"),
+        ("live_captions_enabled", "bool"),
+        ("llm_api_model", "string"),
+        ("llm_api_url", "string"),
+        ("llm_auth_method", "string"),
+        ("llm_custom_prompt", "string"),
+        ("llm_enabled", "bool"),
+        ("llm_log_enabled", "bool"),
+        ("llm_mode", "string"),
+        ("llm_style", "string"),
+        ("llm_tone", "string"),
+        ("llm_translate_to", "string"),
+        ("llm_use_same_key", "bool"),
+        ("local_llm_model", "string"),
+        ("local_model", "string"),
+        ("local_stt_backend", "string"),
+        ("meeting_generate_recap", "bool"),
+        ("meeting_storage_path", "string"),
+        ("nemotron_model", "string"),
+        ("notion_auto_send", "bool"),
+        ("notion_target_id", "string"),
+        ("notion_target_kind", "string"),
+        ("notion_target_title", "string"),
+        ("overlay_position", "string"),
+        ("preprocessing_enabled", "bool"),
+        ("prompt", "string"),
+        ("qwen_asr_model", "string"),
+        ("recap_auth_method", "string"),
+        ("recap_model_override", "string"),
+        ("recap_use_same_key", "bool"),
+        ("save_audio_in_history", "bool"),
+        ("selected_device", "null"),
+        ("shortcut", "string"),
+        ("shortcut_mode", "string"),
+        ("stats_total_speaking_secs", "number"),
+        ("stats_total_words", "number"),
+        ("streaming_dictation", "bool"),
+        ("stt_mode", "string"),
+        ("telegram_auto_process", "bool"),
+        ("telegram_enabled", "bool"),
+        ("terms_accepted_version", "string"),
+        ("use_keyring", "bool"),
+        ("user_dict", "array"),
+        ("waveform_style", "string"),
+    ];
+
+    #[test]
+    #[serial]
+    fn config_getter_keeps_its_key_names_and_types() {
+        ensure_test_state();
+        let got = read_config_json();
+        for (key, kind) in GETTER_KEY_TYPES {
+            let actual = match got.get(*key) {
+                None => "missing",
+                Some(serde_json::Value::Null) => "null",
+                Some(serde_json::Value::Bool(_)) => "bool",
+                Some(serde_json::Value::Number(_)) => "number",
+                Some(serde_json::Value::String(_)) => "string",
+                Some(serde_json::Value::Array(_)) => "array",
+                Some(serde_json::Value::Object(_)) => "object",
+            };
+            assert_eq!(actual, *kind, "key {key}");
+        }
+    }
+
+    #[test]
+    fn write_to_buf_never_cuts_a_utf8_character() {
+        // 'è' is two bytes, so a 3-byte buffer (2 + NUL) holds only "a".
+        let mut buf = [0x7fu8; 3];
+        let n = write_to_buf("a\u{e8}", buf.as_mut_ptr() as *mut c_char, 3);
+        assert_eq!(n, 1);
+        assert_eq!(&buf[..2], b"a\0");
+        let mut whole = [0u8; 4];
+        assert_eq!(
+            write_to_buf("a\u{e8}", whole.as_mut_ptr() as *mut c_char, 4),
+            3
+        );
+        assert_eq!(std::str::from_utf8(&whole[..3]).unwrap(), "a\u{e8}");
+    }
+
     // ── dimmy_set_config_json tests ─────────────────────────────────
 
     #[test]
@@ -14213,6 +15302,66 @@ pub(crate) mod tests {
         let clear = CString::new(r#"{"selected_device":""}"#).unwrap();
         assert_eq!(unsafe { dimmy_set_config_json(clear.as_ptr()) }, 0);
         assert_eq!(*state().selected_device.lock().unwrap(), None);
+    }
+
+    #[test]
+    #[serial]
+    fn set_config_json_keeps_the_shortcut_when_the_new_one_cannot_be_bound() {
+        ensure_test_state();
+        let good = CString::new(r#"{"shortcut":"ctrl+shift+x"}"#).unwrap();
+        assert_eq!(unsafe { dimmy_set_config_json(good.as_ptr()) }, 0);
+        for bad in [r#"{"shortcut":"F9"}"#, r#"{"shortcut":""}"#] {
+            let bad = CString::new(bad).unwrap();
+            assert_eq!(unsafe { dimmy_set_config_json(bad.as_ptr()) }, 0);
+            assert_eq!(state().shortcut.lock().unwrap().as_str(), "ctrl+shift+x");
+        }
+    }
+
+    // Sentry RUST-1A: the host passed "F9" and the panic aborted the process.
+    #[test]
+    #[serial]
+    fn hotkey_set_with_a_lone_key_does_not_abort() {
+        let f9 = CString::new("F9").unwrap();
+        unsafe { dimmy_hotkey_set(f9.as_ptr()) };
+        let restore = CString::new("win+alt").unwrap();
+        unsafe { dimmy_hotkey_set(restore.as_ptr()) };
+    }
+
+    #[test]
+    #[serial]
+    fn history_save_rejects_bad_input_with_an_rc_instead_of_a_panic() {
+        ensure_test_state();
+        let en = CString::new("en").unwrap();
+        for (text, duration) in [
+            ("", 1.0),
+            ("   ", 1.0),
+            ("hello", f64::NAN),
+            ("hello", f64::INFINITY),
+            ("hello", -1.0),
+        ] {
+            let t = CString::new(text).unwrap();
+            let rc = unsafe { dimmy_history_save(t.as_ptr(), en.as_ptr(), duration) };
+            assert_eq!(rc, -1, "{text:?} {duration}");
+        }
+        let t = CString::new("hello").unwrap();
+        let blank = CString::new("").unwrap();
+        assert!(unsafe { dimmy_history_save(t.as_ptr(), blank.as_ptr(), 1.0) } > 0);
+    }
+
+    #[test]
+    #[serial]
+    fn set_config_json_turns_blank_ui_styles_into_defaults() {
+        ensure_test_state();
+        let json =
+            CString::new(r#"{"border_style":"","waveform_style":" ","overlay_position":""}"#)
+                .unwrap();
+        assert_eq!(unsafe { dimmy_set_config_json(json.as_ptr()) }, 0);
+        assert_eq!(state().border_style.lock().unwrap().as_str(), "Rainbow");
+        assert_eq!(state().waveform_style.lock().unwrap().as_str(), "Bars");
+        assert_eq!(
+            state().overlay_position.lock().unwrap().as_str(),
+            "Bottom Right"
+        );
     }
 
     #[test]
@@ -14553,14 +15702,14 @@ pub(crate) mod tests {
         }
     }
 
-    fn reset_event_capture() {
+    pub(crate) fn reset_event_capture() {
         if let Ok(mut v) = captured_events_slot().lock() {
             v.clear();
         }
         dimmy_set_event_callback(capture_event_to_slot);
     }
 
-    fn drain_event_capture() -> Vec<String> {
+    pub(crate) fn drain_event_capture() -> Vec<String> {
         let out = captured_events_slot()
             .lock()
             .map(|v| v.clone())
@@ -14735,16 +15884,20 @@ pub(crate) mod tests {
     /// they held 0.6-1.3 GB after every long meeting.
     #[test]
     #[serial]
-    fn clear_capture_buffers_releases_meeting_audio() {
+    fn a_released_meeting_frees_the_capture_buffers() {
         ensure_test_state();
         let st = state();
+        let claim = crate::capture::claim_meeting().expect("capture idle in tests");
         if let Ok(mut b) = st.audio_buffer.lock() {
             b.extend_from_slice(&[0.1f32; 1000]);
         }
         if let Ok(mut b) = st.audio_buffer_secondary.lock() {
             b.extend_from_slice(&[0.2f32; 1000]);
         }
-        clear_capture_buffers(st);
+        assert!(crate::capture::meeting_released(
+            claim,
+            &[&st.audio_buffer, &st.audio_buffer_secondary]
+        ));
         assert_eq!(st.audio_buffer.lock().unwrap().len(), 0);
         assert_eq!(st.audio_buffer_secondary.lock().unwrap().len(), 0);
         assert_eq!(
@@ -14752,6 +15905,136 @@ pub(crate) mod tests {
             0,
             "heap must be reclaimed, not just truncated"
         );
+    }
+
+    /// 2026-11-09 report: a dictation started while a meeting was wrapping
+    /// up was wiped by the meeting's final buffer clear.
+    #[test]
+    #[serial]
+    fn a_dictation_after_the_meeting_audio_is_saved_keeps_its_audio() {
+        ensure_test_state();
+        let st = state();
+        let claim = crate::capture::claim_meeting().expect("capture idle in tests");
+        crate::capture::meeting_stopping(claim);
+        // Still writing out its tail: a dictation must wait.
+        assert_eq!(
+            crate::capture::claim_dictation(),
+            Err(crate::capture::Busy::MeetingDraining)
+        );
+        // The worker's audio is on disk: it hands the capture back.
+        assert!(crate::capture::meeting_released(claim, &[&st.audio_buffer]));
+        let dictation = crate::capture::claim_dictation().expect("free after the release");
+        if let Ok(mut b) = st.audio_buffer.lock() {
+            b.extend_from_slice(&[0.3f32; 480]);
+        }
+        // The stop's backstop runs after the transcriber join: it must not
+        // touch a capture someone else now holds.
+        assert!(!crate::capture::meeting_released(
+            claim,
+            &[&st.audio_buffer]
+        ));
+        assert_eq!(
+            st.audio_buffer.lock().unwrap().len(),
+            480,
+            "dictation audio kept"
+        );
+        assert_eq!(
+            crate::capture::owner(),
+            crate::capture::Owner::Dictation { id: dictation }
+        );
+        crate::capture::release_dictation();
+        st.audio_buffer.lock().unwrap().clear();
+    }
+
+    /// 2026-11-09 sweep: a realtime socket that failed mid-dictation left
+    /// the partial live text as the final transcript, and everything said
+    /// after it was lost although its audio was recorded.
+    #[test]
+    fn a_failed_stream_hands_the_dictation_to_batch() {
+        let partial = Some("the first half".to_string());
+        assert_eq!(
+            live_final_to_keep(partial.clone(), None, false).as_deref(),
+            Some("the first half")
+        );
+        assert_eq!(live_final_to_keep(partial, None, true), None, "batch STT");
+    }
+
+    /// A crash leaves the `.recording` marker: the meeting is reported once,
+    /// marked interrupted, and keeps its other fields; a title set through
+    /// the core goes through the same atomic writer.
+    #[test]
+    #[serial]
+    fn an_interrupted_meeting_is_reported_once_and_can_be_renamed() {
+        ensure_test_state();
+        let base = crate::meetings_dir().expect("meetings dir in tests");
+        let dir = base.join(format!("interrupted-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("meta.json"), r#"{"started_at": 7.5}"#).unwrap();
+        std::fs::write(dir.join(".recording"), "1").unwrap();
+        let dir_s = dir.to_string_lossy().to_string();
+
+        let recover = || -> Vec<serde_json::Value> {
+            let mut out = vec![0 as c_char; 64 * 1024];
+            let n =
+                unsafe { dimmy_meeting_recover_interrupted(out.as_mut_ptr(), out.len() as c_int) };
+            assert!(n > 0);
+            let s = unsafe { CStr::from_ptr(out.as_ptr()) }
+                .to_str()
+                .unwrap()
+                .to_string();
+            serde_json::from_str(&s).unwrap()
+        };
+        let first = recover();
+        assert!(
+            first.iter().any(|m| m["dir"] == dir_s.as_str()),
+            "{first:?}"
+        );
+        assert!(!dir.join(".recording").exists(), "the marker is consumed");
+        let second = recover();
+        assert!(
+            !second.iter().any(|m| m["dir"] == dir_s.as_str()),
+            "reported once"
+        );
+
+        let meta = || -> serde_json::Value {
+            serde_json::from_str(&std::fs::read_to_string(dir.join("meta.json")).unwrap()).unwrap()
+        };
+        let m = meta();
+        assert_eq!(m["stage"], "interrupted");
+        assert_eq!(m["transcript"]["status"], "unknown");
+        assert_eq!(m["started_at"], 7.5);
+
+        let d = CString::new(dir_s.clone()).unwrap();
+        let t = CString::new("  Renamed  ").unwrap();
+        assert_eq!(
+            unsafe { dimmy_meeting_set_title(d.as_ptr(), t.as_ptr()) },
+            0
+        );
+        let m = meta();
+        assert_eq!(m["title"], "Renamed");
+        assert_eq!(m["schema"], crate::meeting::META_SCHEMA);
+        assert_eq!(m["started_at"], 7.5);
+        let bad = CString::new("").unwrap();
+        assert_eq!(
+            unsafe { dimmy_meeting_set_title(bad.as_ptr(), t.as_ptr()) },
+            -1
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A meeting no longer starts under a running dictation: ending that
+    /// dictation sent AudioCommand::Stop and the meeting recorded nothing.
+    #[test]
+    #[serial]
+    fn a_meeting_cannot_start_under_a_running_dictation() {
+        ensure_test_state();
+        let _dictation = crate::capture::claim_dictation().expect("capture idle in tests");
+        let mut out = vec![0 as c_char; 256];
+        let rc = unsafe { dimmy_meeting_start(out.as_mut_ptr(), out.len() as c_int) };
+        assert_eq!(rc, -4, "refused with the dictation code");
+        assert!(MEETING.lock().unwrap().is_none());
+        crate::capture::release_dictation();
+        assert_eq!(crate::capture::owner(), crate::capture::Owner::Idle);
     }
 
     #[test]
@@ -15474,6 +16757,12 @@ pub unsafe extern "C" fn dimmy_calendar_candidates(
         }
         Err(e) => {
             log(&format!("[Calendar] fetch failed: {}", e));
+            crate::telemetry::report(
+                crate::telemetry::Subsystem::Integration,
+                crate::telemetry::sanitize::error_category(&e.to_string(), None),
+                "calendar",
+                &e.to_string(),
+            );
             serde_json::json!({ "ok": false, "error": format!("{}", e) }).to_string()
         }
     };
@@ -15674,5 +16963,116 @@ mod stop_drain_tests {
     fn a_stop_that_never_finishes_refuses_the_press_instead_of_losing_its_audio() {
         let flag = AtomicBool::new(true);
         assert!(!stop_drain_settled(&flag, Duration::from_millis(20)));
+    }
+}
+
+#[cfg(test)]
+mod license_refresh_tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    static LICENSE_FILE: Mutex<()> = Mutex::new(());
+
+    fn serve_once(status_line: &'static str, body: &'static str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().expect("accept");
+            let mut req = Vec::new();
+            let mut chunk = [0u8; 4096];
+            while let Ok(n) = s.read(&mut chunk) {
+                if n == 0 {
+                    break;
+                }
+                req.extend_from_slice(&chunk[..n]);
+                let text = String::from_utf8_lossy(&req);
+                if let Some(h) = text.find("\r\n\r\n") {
+                    let len = text[..h]
+                        .lines()
+                        .find_map(|l| {
+                            l.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                        })
+                        .unwrap_or(0);
+                    if req.len() >= h + 4 + len {
+                        break;
+                    }
+                }
+            }
+            let resp = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_line,
+                body.len(),
+                body
+            );
+            let _ = s.write_all(resp.as_bytes());
+        });
+        format!("http://{}", addr)
+    }
+
+    fn with_token<F: FnOnce()>(f: F) {
+        let _g = LICENSE_FILE.lock().unwrap_or_else(|p| p.into_inner());
+        license::save_license_file("h.p.s").expect("save");
+        f();
+        let _ = license::forget_license();
+    }
+
+    #[test]
+    fn a_definitive_rejection_removes_the_token_and_leaves_the_free_state() {
+        for (status, body) in [
+            ("403 Forbidden", r#"{"error":"license_revoked"}"#),
+            ("403 Forbidden", r#"{"error":"license_withdrawn"}"#),
+            ("403 Forbidden", r#"{"error":"license_deleted"}"#),
+            ("404 Not Found", r#"{"error":"license_not_found"}"#),
+            ("403 Forbidden", r#"{"error":"device_deactivated"}"#),
+            ("404 Not Found", r#"{"error":"device_not_found"}"#),
+        ] {
+            with_token(|| {
+                let out = refresh_license_at(&serve_once(status, body));
+                assert_eq!(out["revoked"], true, "{status} {body}: {out}");
+                assert!(
+                    matches!(license::load_license_file(), Ok(None)),
+                    "{body}: token still on disk"
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn a_server_error_or_a_dead_network_keeps_the_token() {
+        with_token(|| {
+            for (status, body) in [
+                (
+                    "503 Service Unavailable",
+                    r#"{"error":"license_not_found"}"#,
+                ),
+                ("409 Conflict", r#"{"error":"license_expired"}"#),
+                ("401 Unauthorized", r#"{"error":"token_expired"}"#),
+                ("429 Too Many Requests", r#"{"error":"rate_limited"}"#),
+            ] {
+                let out = refresh_license_at(&serve_once(status, body));
+                assert_eq!(out["ok"], false);
+                assert!(out.get("revoked").is_none(), "{status}: {out}");
+            }
+            assert_eq!(
+                license::load_license_file().ok().flatten().as_deref(),
+                Some("h.p.s")
+            );
+        });
+        with_token(|| {
+            let port = TcpListener::bind("127.0.0.1:0")
+                .expect("bind")
+                .local_addr()
+                .expect("addr")
+                .port();
+            let out = refresh_license_at(&format!("http://127.0.0.1:{}", port));
+            assert_eq!(out["ok"], false);
+            assert_eq!(
+                license::load_license_file().ok().flatten().as_deref(),
+                Some("h.p.s")
+            );
+        });
     }
 }

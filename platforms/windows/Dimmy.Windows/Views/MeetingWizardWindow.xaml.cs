@@ -190,7 +190,7 @@ public sealed partial class MeetingWizardWindow : Window
     {
         try
         {
-            var json = DimmyNative.ReadBuffer(DimmyNative.dimmy_get_config_json, 65536);
+            var json = DimmyNative.ConfigJson();
             if (string.IsNullOrEmpty(json)) return ("No configuration found.", "");
             using var doc = System.Text.Json.JsonDocument.Parse(json);
             var root = doc.RootElement;

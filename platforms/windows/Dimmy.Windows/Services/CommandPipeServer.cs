@@ -31,12 +31,14 @@ public sealed class CommandPipeServer : IDisposable
     public const string PipeName = "DimmyCommand";
 
     private readonly Action<string> _onCommand;
+    private readonly Action<Exception>? _onHandlerError;
     private readonly CancellationTokenSource _cts = new();
     private Task? _loopTask;
 
-    public CommandPipeServer(Action<string> onCommand)
+    public CommandPipeServer(Action<string> onCommand, Action<Exception>? onHandlerError = null)
     {
         _onCommand = onCommand;
+        _onHandlerError = onHandlerError;
     }
 
     public void Start()
@@ -79,6 +81,7 @@ public sealed class CommandPipeServer : IDisposable
                 catch (Exception ex)
                 {
                     System.Diagnostics.Debug.WriteLine($"[CommandPipe] handler threw: {ex.Message}");
+                    _onHandlerError?.Invoke(ex);
                 }
             }
             catch (OperationCanceledException) { break; }
@@ -98,14 +101,22 @@ public sealed class CommandPipeServer : IDisposable
     /// Used by the transient `--command X` invocation. Returns true
     /// if the command was delivered.</summary>
     public static bool TrySendCommand(string command, int timeoutMs = 1500)
+        => TrySendCommand(command, timeoutMs, PipeName);
+
+    internal static bool TrySendCommand(string command, int timeoutMs, string pipeName)
     {
         try
         {
             using var client = new NamedPipeClientStream(
-                ".", PipeName, PipeDirection.Out, PipeOptions.None);
+                ".", pipeName, PipeDirection.Out, PipeOptions.None);
             client.Connect(timeoutMs);
             using var writer = new StreamWriter(client) { AutoFlush = true };
             writer.WriteLine(command);
+            // A new pipe instance accepts a client before the server reaches
+            // WaitForConnection. Closing in that gap makes it throw "the pipe
+            // is being closed" and the command is lost, so stay connected
+            // until the server has read the line.
+            client.WaitForPipeDrain();
             return true;
         }
         catch (Exception ex)

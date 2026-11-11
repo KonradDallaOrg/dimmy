@@ -43,7 +43,7 @@ jobs:
       release_id: ${{ steps.create.outputs.id }}
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
 
@@ -114,7 +114,7 @@ jobs:
 
       - name: Create GitHub Release
         id: create
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           tag_name: ${{ github.ref_name }}
           name: "Dimmy ${{ steps.version.outputs.version }} (staging)"
@@ -122,17 +122,29 @@ jobs:
           draft: false
           prerelease: true
 
+      # Sentry release + commit association. Never blocks the release:
+      # continue-on-error, and sentry.sh exits 0 on any failure or with no
+      # token. The name it computes is the one the binary reports
+      # (scripts/ci/test_sentry.sh pins it to sentry_release()).
+      - name: Sentry release + commits
+        continue-on-error: true
+        shell: bash
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: bash scripts/ci/sentry.sh release
+
   # ── macOS staging build ────────────────────────────────────────────
   build-macos:
     name: Build macOS Native (staging)
     needs: create-release
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
+          toolchain: stable
           targets: aarch64-apple-darwin
 
       - name: Install CMake
@@ -149,13 +161,13 @@ jobs:
         run: scripts/download-onnxruntime.sh
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: core
           shared-key: macos-staging-llamacpp061
 
       - name: Cache FluidAudio Swift build
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: |
             ~/Library/Developer/Xcode/DerivedData/FluidAudio*
@@ -312,6 +324,15 @@ jobs:
               build \
               CODE_SIGN_IDENTITY="-"
           fi
+
+      # Debug symbols for Sentry: the app dSYM, which dsymutil fills from the
+      # Rust static lib's line tables too. The dSYM is uploaded, never shipped.
+      - name: Upload debug symbols to Sentry
+        continue-on-error: true
+        shell: bash
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: bash scripts/ci/sentry.sh upload platforms/macos/build/derived/Build/Products/Release/*.dSYM
 
       - name: Bundle llama.cpp dylibs
         run: |
@@ -509,7 +530,7 @@ jobs:
           xcrun stapler validate "$DMG"
 
       - name: Upload DMG
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           tag_name: ${{ github.ref_name }}
           files: platforms/macos/build/Dimmy-Staging-macos-arm64.dmg
@@ -520,7 +541,7 @@ jobs:
     needs: create-release
     runs-on: windows-2025-vs2026
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       # llama.cpp now vendors a web UI whose paths blow past Windows' 260-char
       # limit when cargo checks the submodule out under CARGO_HOME:
@@ -538,12 +559,13 @@ jobs:
           "CARGO_NET_GIT_FETCH_WITH_CLI=true" | Add-Content -Encoding utf8 $env:GITHUB_ENV
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
+          toolchain: stable
           targets: x86_64-pc-windows-msvc
 
       - name: Install CMake & Ninja
-        uses: lukka/get-cmake@latest
+        uses: lukka/get-cmake@f86dd60acae0d132056913e248bdabf0e0580b7a # v4.4.5
 
       - name: Install VS 2026 BuildTools side-by-side (MSVC 14.50+)
         shell: pwsh
@@ -608,11 +630,11 @@ jobs:
             Start-Sleep -Seconds (30 * $attempt)
           }
           if (-not $sdkDir) { throw "VulkanSDK not found" }
-          echo "VULKAN_SDK=$($sdkDir.FullName)" >> $env:GITHUB_ENV
+          Add-Content -Path $env:GITHUB_ENV -Value "VULKAN_SDK=$($sdkDir.FullName)" -Encoding utf8
           echo "$($sdkDir.FullName)\Bin" >> $env:GITHUB_PATH
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: core
           shared-key: windows-staging-llamacpp061
@@ -768,6 +790,17 @@ jobs:
           FEAT: "local-stt-vulkan,local-stt-parakeet,local-llm-vulkan,local-dfn,denoise-gtcrn,license-client,telegram,local-stt-qwen"
         run: scripts/dev/dll-cache.sh store win-x64 "$FEAT" "D:/t/release/dimmy_lib.dll" || true
 
+      # Debug symbols for Sentry: the PDB carries the line tables, the DLL the
+      # unwind info. The PDB is uploaded, never shipped ("Prepare distribution"
+      # deletes *.pdb). A reused DLL has no PDB here; its symbols went up with
+      # the build that stored it, and sentry.sh uploads what exists.
+      - name: Upload debug symbols to Sentry
+        continue-on-error: true
+        shell: bash
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: bash scripts/ci/sentry.sh upload D:/t/release/dimmy_lib.dll D:/t/release/dimmy_lib.pdb
+
       - name: Fetch onnxruntime win-x64 DLL (Parakeet ort path)
         # ort 2.0.0-rc.10 binds to onnxruntime 1.22.0; the .csproj
         # CopyOrtDll target reads this path so the DLL ends up next to
@@ -782,7 +815,7 @@ jobs:
         run: scripts/download-onnxruntime.ps1
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v5
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
         with:
           dotnet-version: '8.0.x'
 
@@ -808,7 +841,7 @@ jobs:
           )
           $found = $candidates | Where-Object { Test-Path (Join-Path $_ "Microsoft.Build.Packaging.Pri.Tasks.dll") } | Select-Object -First 1
           if (-not $found) { throw "Microsoft.Build.Packaging.Pri.Tasks.dll not found" }
-          echo "AppxMSBuildToolsPath=$found" >> $env:GITHUB_ENV
+          Add-Content -Path $env:GITHUB_ENV -Value "AppxMSBuildToolsPath=$found" -Encoding utf8
 
       - name: Publish Windows app (self-contained)
         working-directory: platforms/windows/Dimmy.Windows
@@ -890,7 +923,7 @@ jobs:
       # The self-hosted `sign-windows` job below consumes this to Authenticode-
       # sign the Dimmy binaries with the Certum cloud cert and re-pack signed.
       - name: Upload unsigned publish dir (for self-hosted signing)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: win-publish
           path: platforms/windows/Dimmy.Windows/publish
@@ -916,7 +949,7 @@ jobs:
         run: Get-ChildItem platforms/windows/velopack-output/ | Format-Table Name, Length
 
       - name: Upload to release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           tag_name: ${{ github.ref_name }}
           fail_on_unmatched_files: true
@@ -940,12 +973,15 @@ jobs:
   sign-windows:
     name: Sign Windows (self-hosted Certum)
     needs: [create-release, build-windows]
+    # Mistake guard, not a security boundary: the runner-side hook in
+    # scripts/signing-runner/ is what refuses foreign jobs.
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: [self-hosted, dimmy-sign]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Download unsigned publish dir
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: win-publish
           path: platforms/windows/Dimmy.Windows/publish

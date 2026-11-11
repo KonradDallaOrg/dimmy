@@ -17,6 +17,10 @@ struct MacIntegrationsPage: View {
     @State private var showGeminiWizard: Bool = false
     @State private var showCodexWizard: Bool = false
     @State private var forceCodexWizardAtStep1: Bool = false
+    @State private var showKimiWizard: Bool = false
+    @State private var forceKimiWizardAtStep1: Bool = false
+    @State private var showKimiDesktopWizard: Bool = false
+    @State private var kimiDesktopStep: Int = 1
     @State private var showMcpWizard: Bool = false
     @State private var mcpStatus: DimmyCore.ClaudeDesktopStatus = .empty
     @State private var mcpRefreshTimer: Timer? = nil
@@ -73,6 +77,29 @@ struct MacIntegrationsPage: View {
                 onWizardRequested: { showGeminiWizard = true }
             )
             MacGroupFooter(text: "Runs the `gemini` CLI locally with the login it stored. Dimmy never reads your credentials.")
+
+            Spacer().frame(height: 24)
+            MacGroupLabel(text: "Kimi (Kimi Code)")
+            // The user's Kimi membership through the local `kimi` CLI,
+            // driven over ACP. Turn it on per output in Settings → Output.
+            MacKimiCliCard(
+                appState: appState,
+                onWizardRequested: {
+                    forceKimiWizardAtStep1 = true
+                    showKimiWizard = true
+                }
+            )
+            MacGroupFooter(text: "Uses your Kimi plan through the `kimi` CLI, no API key spent. The token stays with Kimi Code in ~/.kimi-code. Dimmy only checks that you're signed in.")
+
+            Spacer().frame(height: 12)
+            // Kimi Work (the Kimi app) reads Dimmy's meetings through a personal
+            // plugin; Connect also covers Kimi Code via ~/.kimi-code/mcp.json. The Kimi
+            // sibling of the Claude Desktop card. Wizard: install, connect, verify.
+            MacKimiDesktopCard(onWizardRequested: { step in
+                kimiDesktopStep = step
+                showKimiDesktopWizard = true
+            })
+            .id(showKimiDesktopWizard) // re-probe after the sheet closes
 
             Spacer().frame(height: 24)
             MacGroupLabel(text: "Calendar")
@@ -316,6 +343,25 @@ struct MacIntegrationsPage: View {
                     }
                     showGeminiWizard = false
                 }
+            )
+        }
+        .sheet(isPresented: $showKimiDesktopWizard) {
+            KimiDesktopConnectSheet(
+                onClose: { showKimiDesktopWizard = false },
+                initialStep: kimiDesktopStep
+            )
+        }
+        .sheet(isPresented: $showKimiWizard) {
+            KimiConnectSheet(
+                appState: appState,
+                onClose: {
+                    showKimiWizard = false
+                    forceKimiWizardAtStep1 = false
+                    _ = DimmyCore.shared.recheckKimi()
+                    appState.refreshKimiStatus()
+                },
+                onComplete: { _ in appState.refreshKimiStatus() },
+                forceStartAtStep1: forceKimiWizardAtStep1
             )
         }
         .sheet(isPresented: $showCodexWizard) {

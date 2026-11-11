@@ -210,6 +210,31 @@ public static class DictNotificationService
              $"Your recording is safe and continues normally. {hint} You can also regenerate the transcript from the audio after the meeting.");
     }
 
+    /// <summary>Dimmy closed while a meeting was recording. Its audio is on
+    /// disk up to that moment; the meeting is in the list.</summary>
+    public static void ShowInterruptedMeetings(int count) =>
+        Show(count == 1 ? "A meeting was interrupted" : $"{count} meetings were interrupted",
+             "Dimmy closed while recording. The audio up to that moment is saved: open Meetings and use Regenerate transcript.");
+
+    /// <summary>The realtime connection failed mid-dictation.</summary>
+    public static void ShowLiveTypingStopped() =>
+        Show("Live typing stopped",
+             "The connection dropped. Keep talking: the whole dictation is transcribed when you finish, and the full text is in History.");
+
+    /// <summary>An error raised while the core is still recording: the pill
+    /// keeps its red dot, so the message goes here instead.</summary>
+    public static void ShowErrorBesideRecording(string message) =>
+        Show("Still recording", message);
+
+    /// <summary>The meeting's transcriber produces no text, with the reason
+    /// the core gave. The recording continues either way.</summary>
+    public static void ShowTranscriptionUnavailable(string engine, string reason) =>
+        Show(Helpers.TranscriptHealthText.UnavailableTitle,
+             Helpers.TranscriptHealthText.UnavailableBody(engine, reason));
+
+    public static void ShowTranscriptionRecovered() =>
+        Show(Helpers.TranscriptHealthText.RecoveredTitle, Helpers.TranscriptHealthText.RecoveredBody);
+
     /// <summary>A power limit set outside Dimmy holds the GPU back.</summary>
     public static void ShowGpuLimited()
     {

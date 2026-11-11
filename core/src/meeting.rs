@@ -87,21 +87,11 @@ pub(crate) fn join_bounded<T: Send + 'static>(
 /// on a slow disk or a loaded machine can wake up after the next meeting has
 /// cleared the buffers and started filling them. Acting on its own cursors it
 /// would pad the new system track and drain audio the new meeting has not
-/// written yet. Every meeting claims the buffers before it touches them; a
-/// worker that has lost the claim leaves them alone.
-static CAPTURE_OWNER: AtomicU64 = AtomicU64::new(0);
-static CAPTURE_CLAIMS: AtomicU64 = AtomicU64::new(0);
-
-/// Take the shared capture buffers for a new meeting. Call BEFORE clearing
-/// them: from here on any earlier worker stops touching them.
-pub fn claim_capture_buffers() -> u64 {
-    let claim = CAPTURE_CLAIMS.fetch_add(1, Ordering::SeqCst) + 1;
-    CAPTURE_OWNER.store(claim, Ordering::SeqCst);
-    claim
-}
-
+/// written yet. Every meeting claims the buffers (`crate::capture`) before it
+/// touches them; a worker that has lost the claim leaves them alone.
+/// One atomic load: the capture loop never takes a lock.
 fn owns_capture_buffers(claim: u64) -> bool {
-    CAPTURE_OWNER.load(Ordering::SeqCst) == claim
+    crate::capture::meeting_owns(claim)
 }
 
 /// Snapshot of the user's STT preferences taken at meeting-start time.
@@ -304,6 +294,8 @@ pub struct MeetingSession {
     /// up in the audio file or in the transcript timeline.
     paused: Arc<AtomicBool>,
     handle: Option<JoinHandle<MeetingResult>>,
+    /// This meeting's claim on the capture buffers (`crate::capture`).
+    claim: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -331,6 +323,34 @@ impl MeetingSession {
         source: crate::audio::AudioSource,
         stt: SttSnapshot,
     ) -> Result<Self, String> {
+        let claim =
+            crate::capture::claim_meeting().map_err(|busy| format!("capture busy: {busy:?}"))?;
+        Self::start_claimed(
+            claim,
+            audio_buffer,
+            audio_buffer_secondary,
+            device_sample_rate,
+            system_sample_rate,
+            source,
+            stt,
+        )
+        .inspect_err(|_| {
+            crate::capture::meeting_released(claim, &[]);
+        })
+    }
+
+    /// `start` for a caller that already claimed the capture (the FFI claims
+    /// before it clears the buffers and starts the streams).
+    pub fn start_claimed(
+        claim: u64,
+        audio_buffer: Arc<Mutex<Vec<f32>>>,
+        audio_buffer_secondary: Arc<Mutex<Vec<f32>>>,
+        device_sample_rate: u32,
+        system_sample_rate: u32,
+        source: crate::audio::AudioSource,
+        stt: SttSnapshot,
+    ) -> Result<Self, String> {
+        assert!(claim > 0, "a meeting starts with a capture claim");
         assert!(
             device_sample_rate > 0,
             "device_sample_rate must be positive"
@@ -349,6 +369,8 @@ impl MeetingSession {
         std::fs::write(&marker, "1").map_err(|e| format!("marker write: {}", e))?;
 
         let meta_initial = serde_json::json!({
+            "schema": META_SCHEMA,
+            "stage": "recording",
             "id": id,
             "started_at": SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -397,7 +419,6 @@ impl MeetingSession {
         // be moved across the spawn boundary). The worker owns them end
         // to end.
 
-        let claim = claim_capture_buffers();
         let cancel = Arc::new(AtomicBool::new(false));
         let paused = Arc::new(AtomicBool::new(false));
         let cancel_w = cancel.clone();
@@ -432,6 +453,7 @@ impl MeetingSession {
             cancel,
             paused,
             handle: Some(handle),
+            claim,
         })
     }
 
@@ -546,6 +568,11 @@ impl MeetingSession {
             had_recap: false,
         });
         result
+    }
+
+    /// This meeting's claim on the capture buffers.
+    pub fn claim(&self) -> u64 {
+        self.claim
     }
 
     pub fn id(&self) -> &str {
@@ -891,6 +918,44 @@ struct SttThreadCtx {
     /// (queue full, or the final window capped): live speaker labels would
     /// have a hole, so the stop falls back to the full pass.
     windows_lost: Arc<AtomicBool>,
+    /// Set by the capture worker the first time the queue is full: seconds
+    /// into the meeting, plus one (0 = not behind). This thread tells the
+    /// host, because the capture loop may not call into it.
+    behind_at: Arc<AtomicU64>,
+}
+
+fn engine_label(stt: &SttSnapshot) -> &'static str {
+    if stt.mode == "cloud" {
+        "cloud"
+    } else if stt.local_backend == "parakeet" {
+        "parakeet"
+    } else if stt.local_backend == "whistle" {
+        "whistle"
+    } else if stt.local_backend == "nemotron" {
+        "nemotron"
+    } else {
+        "whisper"
+    }
+}
+
+/// The once-per-meeting "transcription is behind" notice, sent from the
+/// transcription thread after the capture worker raised `behind_at`.
+fn report_behind(ctx: &SttThreadCtx, reported: &mut bool) {
+    let at = ctx.behind_at.load(Ordering::SeqCst);
+    if *reported || at == 0 {
+        return;
+    }
+    *reported = true;
+    let secs = at - 1;
+    let engine = engine_label(&ctx.stt);
+    crate::telemetry::track(crate::telemetry::Event::MeetingTranscriptionBehind {
+        engine,
+        elapsed_bucket: bucket_elapsed_secs(secs as f64),
+    });
+    crate::ffi::emit_event(
+        "meeting_transcription_behind",
+        &serde_json::json!({ "engine": engine, "elapsed_secs": secs }).to_string(),
+    );
 }
 
 /// Nemotron's live meeting transcription: one stream per track for the
@@ -1003,12 +1068,17 @@ fn with_or_without_speakers<T>(speakers: bool, open: impl Fn(bool) -> Option<T>)
 }
 
 impl NemoTracks {
-    fn open(ctx: &SttThreadCtx) -> Self {
+    /// `Err` when neither track opened: no window will ever produce text.
+    fn open(ctx: &SttThreadCtx) -> Result<Self, crate::transcriber_health::Reason> {
         let keywords = crate::ffi::dictionary_keywords();
+        let last_error = std::cell::RefCell::new(None::<String>);
         let open = |rate: u32, speakers: bool| {
             with_or_without_speakers(speakers, |speakers| {
                 crate::nemotron::MeetingTrack::open(rate, &ctx.language, &keywords, speakers)
-                    .map_err(|e| crate::log(&format!("[Meeting] nemotron track unavailable: {e}")))
+                    .map_err(|e| {
+                        crate::log(&format!("[Meeting] nemotron track unavailable: {e}"));
+                        *last_error.borrow_mut() = Some(e.to_string());
+                    })
                     .ok()
             })
         };
@@ -1041,13 +1111,11 @@ impl NemoTracks {
             system.as_ref().is_some_and(|s| s.has_speakers()),
             mic.as_ref().is_some_and(|t| t.has_speakers())
         ));
-        // No track means no live text at all: say so while the meeting can
-        // still change engine, instead of an empty transcript at stop.
+        // No track means no live text at all. The caller tells the host
+        // the real reason (2026-11-09: this used to say "behind").
         if mic.is_none() && system.is_none() {
-            crate::ffi::emit_event(
-                "meeting_transcription_behind",
-                &serde_json::json!({ "engine": "nemotron", "elapsed_secs": 0 }).to_string(),
-            );
+            let message = last_error.borrow().clone().unwrap_or_default();
+            return Err(crate::transcriber_health::Reason::classify(&message));
         }
         let gpu = [&mic, &system].into_iter().flatten().any(|t| t.on_gpu());
         // Before the meeting has anything to lose: the limit reads low even
@@ -1063,7 +1131,7 @@ impl NemoTracks {
         if limit_low {
             emit_gpu_limited();
         }
-        Self {
+        Ok(Self {
             mic,
             system,
             mic_labels,
@@ -1073,20 +1141,23 @@ impl NemoTracks {
                 slowed_readings: 0,
                 told: limit_low,
             }),
-        }
+        })
     }
 
-    /// Feed one window of both tracks; returns the words written.
+    /// Feed one window of both tracks; returns the words written and, when
+    /// no track took the window, why.
     fn feed(
         &mut self,
         sink: &mut LineSink<'_>,
         mic: &[f32],
         system: &[f32],
         track_start: usize,
-    ) -> usize {
+    ) -> (usize, Option<crate::transcriber_health::Reason>) {
         let started = Instant::now();
         let mic_label = sink.mic_label;
         let mut words = 0;
+        let mut fed_any = false;
+        let mut failure = None;
         let mut fresh_secs = 0.0f64;
         for (track, label, window) in [
             (self.mic.as_mut(), mic_label, mic),
@@ -1095,6 +1166,7 @@ impl NemoTracks {
             let Some(t) = track else { continue };
             match t.feed(window, track_start) {
                 Ok(fed) => {
+                    fed_any = true;
                     fresh_secs = fresh_secs.max(fed.fresh_secs);
                     let labels = self.mic_labels.as_mut().filter(|_| label != "system");
                     words += sink.write(label, &fed.lines, labels);
@@ -1102,7 +1174,10 @@ impl NemoTracks {
                         sink.partial(label, &text);
                     }
                 }
-                Err(e) => crate::log(&format!("[Meeting] nemotron {label}: {e}")),
+                Err(e) => {
+                    crate::log(&format!("[Meeting] nemotron {label}: {e}"));
+                    failure = Some(crate::transcriber_health::Reason::classify(&e.to_string()));
+                }
             }
         }
         if fresh_secs > 0.0 {
@@ -1147,7 +1222,7 @@ impl NemoTracks {
                 break;
             }
         }
-        words
+        (words, failure.filter(|_| !fed_any))
     }
 
     /// Flush both tracks. Returns true when the live labels covered the
@@ -1340,6 +1415,8 @@ struct SttOutcome {
     /// read back.
     fallback: String,
     speakers_labeled: bool,
+    /// The `transcript` object of `meta.json` (TranscriberHealth::to_meta).
+    transcript: serde_json::Value,
 }
 
 /// Transcription thread: receives windows, runs STT, appends to
@@ -1352,15 +1429,39 @@ struct SttOutcome {
 /// has drained.
 /// Returns the per-speaker accumulators joined as a fallback transcript,
 /// used only when transcripts.txt cannot be read back at stop.
+/// A meeting window that failed to transcribe. Transcription thread only:
+/// never call this from `worker_loop`.
+fn report_chunk_error(engine: &'static str, message: &str) {
+    crate::telemetry::report(
+        crate::telemetry::Subsystem::Meeting,
+        crate::telemetry::sanitize::error_category(message, None),
+        engine,
+        message,
+    );
+}
+
 fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx) -> SttOutcome {
     use std::io::Write as _;
 
     let mut mic_accum = String::new();
     let mut system_accum = String::new();
 
-    let mut nemo = (ctx.stt.mode == "local" && ctx.stt.local_backend == "nemotron")
-        .then(|| NemoTracks::open(&ctx));
-    let mut live = if ctx.stt.speaker_labels && ctx.stt.mode == "local" && nemo.is_none() {
+    let engine = engine_label(&ctx.stt);
+    let mut health = crate::transcriber_health::TranscriberHealth::new();
+    let nemotron = ctx.stt.mode == "local" && ctx.stt.local_backend == "nemotron";
+    // The user's choice of engine stands: when Nemotron cannot start, the
+    // meeting is told why and nothing else runs in its place (2026-11-09).
+    let mut nemo = None;
+    if nemotron {
+        match NemoTracks::open(&ctx) {
+            Ok(n) => nemo = Some(n),
+            Err(reason) => {
+                let notice = health.refused(reason);
+                announce_health(&ctx, engine, notice, 0);
+            }
+        }
+    }
+    let mut live = if ctx.stt.speaker_labels && ctx.stt.mode == "local" && !nemotron {
         match crate::diarize::LiveSpeakers::start() {
             Ok(l) => Some(l),
             Err(e) => {
@@ -1384,11 +1485,13 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
     // Returns the text and, when live speaker labels are on and the engine
     // has them, the word timestamps (seconds from the window start). The
     // silence gate keeps or drops a window WHOLE, so the times stay aligned.
-    let transcribe = |slice: Vec<f32>,
-                      source_sr: u32|
-     -> (String, Option<Vec<crate::diarize::Word>>) {
+    use crate::transcriber_health::Reason;
+    type Transcribed = (String, Option<Vec<crate::diarize::Word>>, Option<Reason>);
+    let failed =
+        |message: &str| -> Transcribed { (String::new(), None, Some(Reason::classify(message))) };
+    let transcribe = |slice: Vec<f32>, source_sr: u32| -> Transcribed {
         if slice.is_empty() {
-            return (String::new(), None);
+            return (String::new(), None, None);
         }
         // Silence trim before the model sees the window. An idle
         // chunk collapses to empty here and never reaches whisper,
@@ -1399,7 +1502,7 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
             slice
         };
         if slice.is_empty() {
-            return (String::new(), None);
+            return (String::new(), None, None);
         }
         let pcm_16k = if source_sr == 16_000 {
             slice
@@ -1407,7 +1510,7 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
             crate::preprocess::downsample_to_16k(&slice, source_sr)
         };
         if pcm_16k.is_empty() {
-            return (String::new(), None);
+            return (String::new(), None, None);
         }
         if ctx.stt.mode == "cloud" {
             let wav = pcm16k_to_wav_bytes(&pcm_16k);
@@ -1439,16 +1542,17 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
                         .await
                     });
                     match result {
-                        Ok(t) => (t, None),
+                        Ok(t) => (t, None, None),
                         Err(e) => {
                             crate::log(&format!("[Meeting] cloud STT error: {}", e));
-                            (String::new(), None)
+                            report_chunk_error("cloud", &e.to_string());
+                            failed(&e.to_string())
                         }
                     }
                 }
                 _ => {
                     crate::log("[Meeting] cloud STT unavailable: missing key or runtime");
-                    (String::new(), None)
+                    failed("missing key or runtime")
                 }
             }
         } else if ctx.stt.local_backend == "parakeet" {
@@ -1460,18 +1564,20 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
             // Same decode either way: `transcribe` is this call's text.
             if want_words {
                 match crate::parakeet::transcribe_with_word_timestamps(&pcm_16k) {
-                    Ok((t, ts)) => (t, Some(crate::diarize::parakeet_words(&ts, 0.0))),
+                    Ok((t, ts)) => (t, Some(crate::diarize::parakeet_words(&ts, 0.0)), None),
                     Err(e) => {
                         crate::log(&format!("[Meeting] parakeet error: {}", e));
-                        (String::new(), None)
+                        report_chunk_error("parakeet", &e.to_string());
+                        failed(&e.to_string())
                     }
                 }
             } else {
                 match crate::parakeet::transcribe(&pcm_16k) {
-                    Ok(t) => (t, None),
+                    Ok(t) => (t, None, None),
                     Err(e) => {
                         crate::log(&format!("[Meeting] parakeet error: {}", e));
-                        (String::new(), None)
+                        report_chunk_error("parakeet", &e.to_string());
+                        failed(&e.to_string())
                     }
                 }
             }
@@ -1480,10 +1586,12 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
                 Ok((t, words)) => (
                     t,
                     want_words.then(|| crate::transcribe::whistle_words(words, 0.0)),
+                    None,
                 ),
                 Err(e) => {
                     crate::log(&format!("[Meeting] whistle error: {}", e));
-                    (String::new(), None)
+                    report_chunk_error("whistle", &e.to_string());
+                    failed(&e.to_string())
                 }
             }
         } else {
@@ -1497,10 +1605,11 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
                         &ctx.language,
                         &ctx.stt.prompt,
                     ) {
-                        Ok((t, words)) => (t, Some(words)),
+                        Ok((t, words)) => (t, Some(words), None),
                         Err(e) => {
                             crate::log(&format!("[Meeting] whisper error: {}", e));
-                            (String::new(), None)
+                            report_chunk_error("whisper", &e.to_string());
+                            failed(&e.to_string())
                         }
                     }
                 }
@@ -1511,22 +1620,25 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
                         &ctx.language,
                         &ctx.stt.prompt,
                     ) {
-                        Ok(t) => (t, None),
+                        Ok(t) => (t, None, None),
                         Err(e) => {
                             crate::log(&format!("[Meeting] whisper error: {}", e));
-                            (String::new(), None)
+                            report_chunk_error("whisper", &e.to_string());
+                            failed(&e.to_string())
                         }
                     }
                 }
                 None => {
                     crate::log("[Meeting] local STT skipped: no usable .bin model");
-                    (String::new(), None)
+                    failed("no usable model")
                 }
             }
         }
     };
 
+    let mut behind_reported = false;
     while let Ok(job) = rx.recv() {
+        report_behind(&ctx, &mut behind_reported);
         let (mic_slice, system_slice, elapsed_ms, track_start, stats_secs) = match job {
             SttJob::Paused { elapsed_ms, dur_ms } => {
                 let line = format!(
@@ -1547,14 +1659,26 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
             } => (mic, system, elapsed_ms, track_start, stats_secs),
         };
 
-        if let Some(n) = nemo.as_mut() {
+        if nemotron {
+            let Some(n) = nemo.as_mut() else {
+                // Refused at open and already told: the audio is on disk,
+                // "Regenerate transcript" redoes it once memory is free.
+                continue;
+            };
             let mut sink = LineSink {
                 file: &mut ctx.transcripts_file,
                 chunk_count: &ctx.chunk_count,
                 dir: &ctx.dir_str,
                 mic_label: ctx.mic_label,
             };
-            let words = n.feed(&mut sink, &mic_slice, &system_slice, track_start);
+            let (words, failure) = n.feed(&mut sink, &mic_slice, &system_slice, track_start);
+            let window = match failure {
+                _ if words > 0 => crate::transcriber_health::Window::Text,
+                Some(r) => crate::transcriber_health::Window::Failed(r),
+                None => crate::transcriber_health::Window::Silent,
+            };
+            let notice = health.observe(window);
+            announce_health(&ctx, engine, notice, elapsed_ms as u64 / 1000);
             if words > 0 || stats_secs > 0.0 {
                 let _ = crate::ffi::dimmy_update_stats(words as std::os::raw::c_int, stats_secs);
             }
@@ -1562,16 +1686,25 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
         }
 
         let mic_audio = live.as_ref().map(|_| mic_slice.clone());
-        let (mic_text, mic_words) = transcribe(mic_slice, ctx.device_sample_rate);
+        let (mic_text, mic_words, mic_failure) = transcribe(mic_slice, ctx.device_sample_rate);
         let system_audio = live
             .as_ref()
             .filter(|_| ctx.mix_active)
             .map(|_| system_slice.clone());
-        let (system_text, system_words) = if ctx.mix_active {
+        let (system_text, system_words, system_failure) = if ctx.mix_active {
             transcribe(system_slice, ctx.system_sample_rate)
         } else {
-            (String::new(), None)
+            (String::new(), None, None)
         };
+        let window = if !mic_text.trim().is_empty() || !system_text.trim().is_empty() {
+            crate::transcriber_health::Window::Text
+        } else if let Some(r) = mic_failure.or(system_failure) {
+            crate::transcriber_health::Window::Failed(r)
+        } else {
+            crate::transcriber_health::Window::Silent
+        };
+        let notice = health.observe(window);
+        announce_health(&ctx, engine, notice, elapsed_ms as u64 / 1000);
 
         // Append helper: dedup vs the per-speaker accumulator,
         // append the delta to the speaker's accumulator, emit a
@@ -1705,10 +1838,71 @@ fn stt_thread_loop(rx: std::sync::mpsc::Receiver<SttJob>, mut ctx: SttThreadCtx)
             system_accum
         ));
     }
+    if ctx.chunk_count.load(Ordering::Relaxed) > 0 {
+        health.finished_with_text();
+    }
+    crate::log(&format!(
+        "[Meeting] transcript {}: {} window(s) with text, {} silent, {} failed",
+        health.status().code(),
+        health.windows_text,
+        health.windows_silent,
+        health.windows_failed
+    ));
     SttOutcome {
         fallback,
         speakers_labeled,
+        transcript: health.to_meta(engine),
     }
+}
+
+/// Tell the host when the transcriber stops or starts producing text again.
+/// Transcription thread only (THE AUDIO RULE).
+fn announce_health(
+    ctx: &SttThreadCtx,
+    engine: &'static str,
+    notice: Option<crate::transcriber_health::Notice>,
+    elapsed_secs: u64,
+) {
+    use crate::transcriber_health::Notice;
+    match notice {
+        None => {}
+        Some(Notice::Unavailable(reason)) => {
+            crate::log(&format!(
+                "[Meeting] transcription unavailable ({engine}): {} at {elapsed_secs}s; the audio keeps recording",
+                reason.code()
+            ));
+            crate::telemetry::track(crate::telemetry::Event::MeetingTranscriptionUnavailable {
+                engine,
+                reason: reason.code(),
+            });
+            crate::ffi::emit_event(
+                "meeting_transcription_unavailable",
+                &transcription_unavailable_payload(&ctx.dir_str, engine, reason, elapsed_secs),
+            );
+        }
+        Some(Notice::Recovered) => {
+            crate::log(&format!("[Meeting] transcription recovered ({engine})"));
+            crate::ffi::emit_event(
+                "meeting_transcription_recovered",
+                &serde_json::json!({ "dir": ctx.dir_str, "engine": engine }).to_string(),
+            );
+        }
+    }
+}
+
+fn transcription_unavailable_payload(
+    dir: &str,
+    engine: &str,
+    reason: crate::transcriber_health::Reason,
+    elapsed_secs: u64,
+) -> String {
+    serde_json::json!({
+        "dir": dir,
+        "engine": engine,
+        "reason": reason.code(),
+        "elapsed_secs": elapsed_secs,
+    })
+    .to_string()
 }
 
 /// Overwrite transcripts.txt while this thread still holds it open for
@@ -1932,6 +2126,7 @@ fn worker_loop(
     // why that separation is not negotiable.
     let chunk_count_shared = Arc::new(std::sync::atomic::AtomicU32::new(0));
     let windows_lost = Arc::new(AtomicBool::new(false));
+    let behind_at = Arc::new(AtomicU64::new(0));
     let queue_depth = if stt.mode == "local" && stt.local_backend == "nemotron" {
         NEMOTRON_QUEUE_DEPTH
     } else {
@@ -1952,6 +2147,7 @@ fn worker_loop(
         transcripts_file,
         chunk_count: Arc::clone(&chunk_count_shared),
         windows_lost: Arc::clone(&windows_lost),
+        behind_at: Arc::clone(&behind_at),
     };
     let stt_handle = thread::Builder::new()
         .name("dimmy-meeting-stt".into())
@@ -2099,6 +2295,11 @@ fn worker_loop(
     // window when writing/transcribing and (b) emit a [paused N s]
     // marker to transcripts.txt on resume.
     let mut was_paused = false;
+    // A `[paused]` line the queue had no room for. It used to be dropped,
+    // and the recap then read the gap as continuous talk. Retried with
+    // `try_send` every pass, ahead of the next window, so it keeps its place
+    // in the timeline and this loop still never waits (THE AUDIO RULE).
+    let mut pending_pause: Option<SttJob> = None;
     let mut pause_started_at: Option<Instant> = None;
     // Sum of paused-window durations, so the stop-time capture-ratio
     // guard compares audio-on-disk against REAL ACTIVE recording time
@@ -2229,10 +2430,15 @@ fn worker_loop(
             // the timeline jump. Queued rather than written here so it
             // keeps its position relative to the surrounding chunks — and
             // so this thread never touches the transcripts file.
-            let _ = stt_tx.try_send(SttJob::Paused {
+            pending_pause = Some(SttJob::Paused {
                 elapsed_ms: started.elapsed().as_millis(),
                 dur_ms,
             });
+        }
+        if let Some(job) = pending_pause.take() {
+            if let Err(std::sync::mpsc::TrySendError::Full(job)) = stt_tx.try_send(job) {
+                pending_pause = Some(job);
+            }
         }
 
         // A mic that is muted, dead or rebuilding must not hold the system
@@ -2419,34 +2625,11 @@ fn worker_loop(
                     }
                     // Tell the user ONCE, while it is still happening and
                     // they can act on it. Finding out at stop time is too
-                    // late to change engine for this meeting.
+                    // late to change engine for this meeting. The
+                    // transcription thread sends it: a host callback or a
+                    // telemetry call could block this loop.
                     if stt_dropped_chunks == 1 {
-                        let engine: &'static str = if stt.mode == "cloud" {
-                            "cloud"
-                        } else if stt.local_backend == "parakeet" {
-                            "parakeet"
-                        } else if stt.local_backend == "whistle" {
-                            "whistle"
-                        } else if stt.local_backend == "nemotron" {
-                            "nemotron"
-                        } else {
-                            "whisper"
-                        };
-                        let secs = started.elapsed().as_secs_f64();
-                        crate::telemetry::track(
-                            crate::telemetry::Event::MeetingTranscriptionBehind {
-                                engine,
-                                elapsed_bucket: bucket_elapsed_secs(secs),
-                            },
-                        );
-                        crate::ffi::emit_event(
-                            "meeting_transcription_behind",
-                            &serde_json::json!({
-                                "engine": engine,
-                                "elapsed_secs": secs as u64,
-                            })
-                            .to_string(),
-                        );
+                        behind_at.store(started.elapsed().as_secs() + 1, Ordering::SeqCst);
                     }
                 }
                 Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
@@ -2533,12 +2716,40 @@ fn worker_loop(
         }
     }
 
+    // Sentry only from here on: the sinks are final, so a report that waits
+    // on a lock can no longer cost a sample (THE AUDIO RULE).
+    if finalize_error.is_some() {
+        crate::telemetry::report(
+            crate::telemetry::Subsystem::Meeting,
+            "finalize_failed",
+            "",
+            finalize_error.as_deref().unwrap_or(""),
+        );
+    }
+    if stt_handle.is_none() {
+        crate::telemetry::report(
+            crate::telemetry::Subsystem::Meeting,
+            "stt_thread_spawn_failed",
+            "",
+            "",
+        );
+    }
     if lost_claim {
+        crate::telemetry::report(
+            crate::telemetry::Subsystem::Meeting,
+            "capture_buffers_taken",
+            "",
+            "",
+        );
         crate::log(
             "[Meeting] a newer meeting took over the capture buffers before this one \
              finished — stopped touching them; this meeting's audio up to here is on disk",
         );
     }
+    // Done with the shared buffers: hand them back, and their memory with
+    // them, before the long wait on the transcriber. A dictation may start
+    // from here on without anything clearing its audio later (2026-11-09).
+    crate::capture::meeting_released(claim, &[&audio_buffer, &audio_buffer_secondary]);
     // The sinks are final, so a slow write here can no longer cost a sample.
     if pending_stats_secs > 0.0 {
         let _ = crate::ffi::dimmy_update_stats(0, pending_stats_secs);
@@ -2555,6 +2766,10 @@ fn worker_loop(
     // inside a model call is abandoned (it holds no lock the audio path
     // needs, and the process is about to be idle) — we keep the chunk
     // count it reached and move on.
+    // The sinks are final: one last try for a pause line still waiting.
+    if let Some(job) = pending_pause.take() {
+        let _ = stt_tx.try_send(job);
+    }
     drop(stt_tx);
     // Say what the wait IS. Stopping a meeting whose transcriber is behind
     // leaves the user on "Wrapping up..." for up to 90 s with nothing
@@ -2572,21 +2787,30 @@ fn worker_loop(
             &serde_json::json!({ "dropped_windows": stt_dropped_chunks }).to_string(),
         );
     }
-    let (stt_fallback, speakers_labeled) = match stt_handle {
+    // `unknown`, never `silent`, when the transcriber cannot report.
+    let unknown = || serde_json::json!({ "status": "unknown" });
+    let (stt_fallback, speakers_labeled, transcript_meta) = match stt_handle {
         Some(h) => match join_bounded(h, Duration::from_secs(90)) {
-            BoundedJoin::Done(o) => (o.fallback, o.speakers_labeled),
+            BoundedJoin::Done(o) => (o.fallback, o.speakers_labeled, o.transcript),
             BoundedJoin::Panicked => {
                 crate::log("[Meeting] transcription thread panicked — audio is unaffected");
-                (String::new(), false)
+                (String::new(), false, unknown())
             }
             BoundedJoin::TimedOut => {
-                crate::log(
-                    "[Meeting] transcription thread still busy at stop — abandoning it;                      the recording and everything transcribed so far are already on disk",
+                crate::telemetry::report(
+                    crate::telemetry::Subsystem::Meeting,
+                    "stt_join_timeout",
+                    "",
+                    "",
                 );
-                (String::new(), false)
+                crate::log(
+                    "[Meeting] transcription thread still busy at stop — abandoning it; \
+                     the recording and everything transcribed so far are already on disk",
+                );
+                (String::new(), false, unknown())
             }
         },
-        None => (String::new(), false),
+        None => (String::new(), false, unknown()),
     };
     if stt_dropped_chunks > 0 {
         crate::log(&format!(
@@ -2638,7 +2862,7 @@ fn worker_loop(
             }
         }
     }
-    finalize_meeting_meta(&dir, &id, duration_secs, chunk_count);
+    finalize_meeting_meta(&dir, &id, duration_secs, chunk_count, transcript_meta);
 
     // Build the final transcript: time-ordered labeled stream read
     // back from transcripts.txt (one line per chunk, format
@@ -2723,9 +2947,17 @@ pub fn save_post_process(
         // Title sync: best-effort, never fail the save. Parse the ORIGINAL:
         // the marker is placed so it cannot disturb this, but not depending
         // on that is free.
-        if let Some(title) = parse_recap_title(recap_md) {
-            update_meeting_meta_title(meeting_dir, &title);
-        }
+        let title = parse_recap_title(recap_md);
+        update_meta(meeting_dir, |obj| {
+            if let Some(title) = &title {
+                obj.insert("title".into(), serde_json::Value::String(title.clone()));
+            }
+            obj.insert("stage".into(), "recapped".into());
+            obj.insert(
+                "recap".into(),
+                serde_json::json!({ "status": "saved", "at": unix_now_secs() }),
+            );
+        });
     }
     if !actions_json.trim().is_empty() {
         std::fs::write(meeting_dir.join("actions.json"), actions_json)
@@ -2999,14 +3231,46 @@ pub fn meeting_has_title(meeting_dir: &std::path::Path) -> bool {
 }
 
 pub fn update_meeting_meta_title(meeting_dir: &std::path::Path, title: &str) {
+    update_meta(meeting_dir, |obj| {
+        obj.insert("title".into(), serde_json::Value::String(title.to_string()));
+    });
+}
+
+/// The `meta.json` layout this core writes. 2 = `schema`, `stage`,
+/// `transcript` and `recap` are present; a folder without `schema` was
+/// written by an older build and its stage is derived from its files.
+pub const META_SCHEMA: u32 = 2;
+
+fn unix_now_secs() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
+}
+
+/// The one way the core changes a meeting's `meta.json`: read, change,
+/// write atomically (a crash mid-write used to leave a truncated file and
+/// a meeting the lists could not date). Every field the change does not
+/// touch survives: the list orders by `started_at`, and a wholesale
+/// rewrite that dropped it made a renamed meeting jump to the top.
+pub fn update_meta(
+    meeting_dir: &std::path::Path,
+    change: impl FnOnce(&mut serde_json::Map<String, serde_json::Value>),
+) {
     let path = meeting_dir.join("meta.json");
     let mut obj: serde_json::Map<String, serde_json::Value> = std::fs::read_to_string(&path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
-    obj.insert("title".into(), serde_json::Value::String(title.to_string()));
-    if let Ok(serialized) = serde_json::to_string_pretty(&obj) {
-        let _ = std::fs::write(&path, serialized);
+    change(&mut obj);
+    obj.insert("schema".into(), serde_json::json!(META_SCHEMA));
+    match serde_json::to_string_pretty(&obj) {
+        Ok(serialized) => {
+            if let Err(e) = crate::write_atomic(&path, serialized.as_bytes()) {
+                crate::log(&format!("[Meeting] meta.json write failed: {e}"));
+            }
+        }
+        Err(e) => crate::log(&format!("[Meeting] meta.json serialize failed: {e}")),
     }
 }
 
@@ -3022,25 +3286,236 @@ fn finalize_meeting_meta(
     id: &str,
     duration_secs: f64,
     chunk_count: u32,
+    transcript: serde_json::Value,
 ) {
-    let path = meeting_dir.join("meta.json");
-    let mut obj: serde_json::Map<String, serde_json::Value> = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
+    update_meta(meeting_dir, |obj| {
+        obj.insert("id".into(), serde_json::Value::String(id.to_string()));
+        obj.insert("duration_secs".into(), serde_json::json!(duration_secs));
+        obj.insert("chunk_count".into(), serde_json::json!(chunk_count));
+        obj.insert("transcript".into(), transcript);
+        obj.insert("stage".into(), "stopped".into());
+        obj.insert("ended_at".into(), serde_json::json!(unix_now_secs()));
+    });
+}
+
+/// The containers a meeting track may be stored in, in the order a lookup
+/// tries them. A loaded file keeps its own container (an hour of m4a is a
+/// tenth of the WAV it would decode to); anything else is copied as `.wav`,
+/// which is what the hosts did.
+pub const TRACK_EXTENSIONS: [&str; 10] = [
+    "ogg", "wav", "m4a", "mp3", "aac", "flac", "mp4", "oga", "opus", "webm",
+];
+
+/// The audio of an imported meeting. A WAV is re-encoded with the meeting
+/// sink to `audio.ogg` (a tenth of the size, and what a live meeting
+/// writes); if that fails the WAV is kept as it is. Any other file is copied
+/// byte for byte under its own extension: m4a/mp3 are already compressed,
+/// and Opus (a Telegram voice note) cannot be decoded here to re-encode it.
+/// It used to be copied as `audio.wav`, so the player read Opus as a WAV.
+fn import_audio(src: &std::path::Path, dir: &std::path::Path) -> Result<PathBuf, String> {
+    let ext = src
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
         .unwrap_or_default();
-    obj.insert("id".into(), serde_json::Value::String(id.to_string()));
-    obj.insert("duration_secs".into(), serde_json::json!(duration_secs));
-    obj.insert("chunk_count".into(), serde_json::json!(chunk_count));
-    obj.insert(
-        "ended_at".into(),
-        serde_json::json!(SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs_f64())
-            .unwrap_or(0.0)),
-    );
-    if let Ok(serialized) = serde_json::to_string_pretty(&obj) {
-        let _ = std::fs::write(&path, serialized);
+    if ext == "wav" {
+        match wav_to_meeting_track(src, dir) {
+            Ok(path) => return Ok(path),
+            Err(e) => {
+                crate::log(&format!("[Meeting] import: WAV kept as it is ({e})"));
+                for leftover in ["audio.ogg", "audio.wav"] {
+                    let _ = std::fs::remove_file(dir.join(leftover));
+                }
+            }
+        }
     }
+    let name = if ext.is_empty() {
+        "audio".to_string()
+    } else {
+        format!("audio.{ext}")
+    };
+    let dest = dir.join(name);
+    std::fs::copy(src, &dest).map_err(|e| format!("copy: {e}"))?;
+    Ok(dest)
+}
+
+/// Mono, at the WAV's own rate, through `TrackSink` (Ogg/Vorbis, or WAV
+/// when the encoder cannot start). Streams in blocks: the whole file is
+/// never in memory.
+fn wav_to_meeting_track(src: &std::path::Path, dir: &std::path::Path) -> Result<PathBuf, String> {
+    let mut reader = hound::WavReader::open(src).map_err(|e| format!("open: {e}"))?;
+    let spec = reader.spec();
+    let channels = spec.channels as usize;
+    if channels == 0 || spec.sample_rate == 0 {
+        return Err(format!(
+            "bad header: {channels} ch, {} Hz",
+            spec.sample_rate
+        ));
+    }
+    let samples: Box<dyn Iterator<Item = Result<f32, hound::Error>>> = match spec.sample_format {
+        hound::SampleFormat::Float => Box::new(reader.samples::<f32>()),
+        hound::SampleFormat::Int => {
+            if !(1..=32).contains(&spec.bits_per_sample) {
+                return Err(format!("{} bits", spec.bits_per_sample));
+            }
+            let scale = 1.0 / (1u64 << (spec.bits_per_sample - 1)) as f32;
+            Box::new(
+                reader
+                    .samples::<i32>()
+                    .map(move |s| s.map(|v| v as f32 * scale)),
+            )
+        }
+    };
+    let mut sink = TrackSink::create(dir, "audio", spec.sample_rate)?;
+    let mut block: Vec<f32> = Vec::with_capacity(4096);
+    let mut frame_sum = 0.0f32;
+    let mut in_frame = 0usize;
+    let mut frames = 0u64;
+    for s in samples {
+        let s = s.map_err(|e| format!("read: {e}"))?;
+        frame_sum += if s.is_finite() { s } else { 0.0 };
+        in_frame += 1;
+        if in_frame == channels {
+            block.push((frame_sum / channels as f32).clamp(-1.0, 1.0));
+            frame_sum = 0.0;
+            in_frame = 0;
+            frames += 1;
+            if block.len() == block.capacity() {
+                sink.write(&block);
+                block.clear();
+            }
+        }
+    }
+    sink.write(&block);
+    if frames == 0 {
+        let _ = sink.finalize();
+        return Err("no samples".into());
+    }
+    sink.finalize()?;
+    let path = crate::ffi::resolve_meeting_track(dir, "audio")
+        .map(PathBuf::from)
+        .ok_or("the encoded track is missing")?;
+    assert!(path.is_file(), "import track {path:?}");
+    Ok(path)
+}
+
+/// A meeting made from an audio file (a loaded file, a Telegram voice
+/// note): its folder, transcript and `meta.json` in the same shape a live
+/// meeting has. The hosts used to write all three themselves, with their own
+/// folder names and `started_at` as a local-time string where every other
+/// meeting has Unix seconds. `duration_secs` comes from the host, which
+/// probes the file without decoding it. The audio copy is best-effort, as it
+/// was: the transcript is what the recap needs.
+pub fn import_from_file(
+    meetings_root: &std::path::Path,
+    source: Option<&std::path::Path>,
+    transcript: &str,
+    duration_secs: f64,
+) -> Result<std::path::PathBuf, String> {
+    let transcript = transcript.trim();
+    assert!(!transcript.is_empty(), "an import needs a transcript");
+    assert!(
+        duration_secs.is_finite() && duration_secs >= 0.0,
+        "duration {duration_secs}"
+    );
+    let id = uuid_v4_simple();
+    let dir = meetings_root.join(&id);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {e}"))?;
+    let line = format!("[{}] [file] {}\n", format_elapsed(0), transcript);
+    crate::write_atomic(&dir.join("transcripts.txt"), line.as_bytes())
+        .map_err(|e| format!("transcripts.txt: {e}"))?;
+    if let Some(src) = source.filter(|s| s.is_file()) {
+        if let Err(e) = import_audio(src, &dir) {
+            crate::log(&format!("[Meeting] import: audio copy failed: {e}"));
+        }
+    }
+    let stem = source
+        .and_then(|s| s.file_stem())
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("Imported audio");
+    let now = unix_now_secs();
+    update_meta(&dir, |obj| {
+        obj.insert("id".into(), serde_json::Value::String(id.clone()));
+        obj.insert("origin".into(), "file-load".into());
+        obj.insert(
+            "title".into(),
+            serde_json::Value::String(format!("File: {stem}")),
+        );
+        obj.insert("started_at".into(), serde_json::json!(now));
+        obj.insert("ended_at".into(), serde_json::json!(now));
+        obj.insert("duration_secs".into(), serde_json::json!(duration_secs));
+        obj.insert("chunk_count".into(), serde_json::json!(1));
+        obj.insert("stage".into(), "stopped".into());
+        obj.insert(
+            "transcript".into(),
+            serde_json::json!({ "status": "ok", "engine": "file-load" }),
+        );
+    });
+    assert!(dir.join("meta.json").is_file(), "import wrote no meta.json");
+    Ok(dir)
+}
+
+/// What became of a meeting's recap, besides `saved` (written by
+/// [`save_post_process`] with the recap itself).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecapOutcome {
+    /// The LLM call is running. A crash leaves it here, which is the truth.
+    Pending,
+    /// The call ended without a recap; `reason` says why.
+    Failed,
+}
+
+/// Record a recap that is running or that failed. Only the transcript and
+/// the audio were ever written for those, so the Done view could not tell
+/// "no recap yet" from "the recap failed" from "recap turned off".
+pub fn record_recap(meeting_dir: &std::path::Path, outcome: RecapOutcome, reason: &str) {
+    // Error bodies never carry more than 200 chars (keys, PII).
+    let reason: String = reason.trim().chars().take(200).collect();
+    update_meta(meeting_dir, |obj| {
+        let value = match outcome {
+            RecapOutcome::Pending => {
+                serde_json::json!({ "status": "pending", "at": unix_now_secs() })
+            }
+            RecapOutcome::Failed => serde_json::json!({
+                "status": "failed",
+                "at": unix_now_secs(),
+                "reason": reason,
+            }),
+        };
+        obj.insert("recap".into(), value);
+    });
+}
+
+/// Record the Notion page a recap went to. A second send used to make a
+/// second page with nothing to say the first existed: the hosts read this
+/// to skip the automatic send and to name the page on a manual one.
+pub fn record_notion_page(meeting_dir: &std::path::Path, page_id: &str, page_url: &str) {
+    assert!(!page_id.is_empty(), "a sent page has an id");
+    update_meta(meeting_dir, |obj| {
+        obj.insert(
+            "notion".into(),
+            serde_json::json!({ "page_id": page_id, "page_url": page_url, "at": unix_now_secs() }),
+        );
+    });
+}
+
+/// After "Regenerate transcript": the counts and the status describe the
+/// new transcript, not the one recorded live (a meeting whose live
+/// transcriber failed kept saying "failed" over a good regenerated text).
+pub fn record_retranscribed(meeting_dir: &std::path::Path, lines: usize, engine: &str) {
+    assert!(lines > 0, "an empty regenerate writes nothing");
+    update_meta(meeting_dir, |obj| {
+        obj.insert("chunk_count".into(), serde_json::json!(lines));
+        obj.insert(
+            "transcript".into(),
+            serde_json::json!({
+                "status": "ok",
+                "engine": engine,
+                "regenerated_at": unix_now_secs(),
+            }),
+        );
+    });
 }
 
 /// Lazy backfill: if `meta.json` has no `title` but `recap.md` exists
@@ -3106,6 +3581,101 @@ pub fn list_orphans() -> Vec<serde_json::Value> {
         }));
     }
     out
+}
+
+/// Meetings a crash or a forced quit left with the `.recording` marker: their
+/// audio is on disk up to the last page written, and nothing ever offered it
+/// back (`list_orphans` had no caller). Marks each `interrupted` in
+/// meta.json, with a transcript status of `unknown` unless the stop got as
+/// far as writing one, and removes the marker so it is reported once.
+/// `live` is the meeting recording now, whose marker is real.
+pub fn recover_interrupted(live: Option<&std::path::Path>) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    for orphan in list_orphans() {
+        let Some(dir) = orphan["dir"].as_str().map(std::path::PathBuf::from) else {
+            continue;
+        };
+        if live.is_some_and(|l| l == dir.as_path()) {
+            continue;
+        }
+        let marker = dir.join(".recording");
+        let ended = std::fs::metadata(&marker)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_secs_f64());
+        update_meta(&dir, |obj| {
+            obj.insert("stage".into(), "interrupted".into());
+            obj.entry("transcript")
+                .or_insert_with(|| serde_json::json!({ "status": "unknown" }));
+            if let Some(ended) = ended {
+                obj.entry("ended_at").or_insert(serde_json::json!(ended));
+            }
+        });
+        if let Err(e) = std::fs::remove_file(&marker) {
+            crate::log(&format!("[Meeting] interrupted marker not removed: {e}"));
+            continue;
+        }
+        crate::log(&format!(
+            "[Meeting] interrupted meeting recovered ({} bytes of transcript)",
+            orphan["transcript_size_bytes"].as_u64().unwrap_or(0)
+        ));
+        out.push(serde_json::json!({
+            "id": orphan["id"],
+            "dir": orphan["dir"],
+            "transcript_size_bytes": orphan["transcript_size_bytes"],
+        }));
+    }
+    out
+}
+
+#[cfg(test)]
+mod meta_schema {
+    use super::*;
+
+    fn tmp_meeting() -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("dimmy-meta-{}", uuid_v4_simple()));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn read(d: &std::path::Path) -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(d.join("meta.json")).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn every_core_write_stamps_the_schema_and_keeps_other_fields() {
+        let d = tmp_meeting();
+        std::fs::write(d.join("meta.json"), r#"{"started_at": 12.5, "title": "x"}"#).unwrap();
+        update_meta(&d, |o| {
+            o.insert("stage".into(), "stopped".into());
+        });
+        let v = read(&d);
+        assert_eq!(v["schema"], META_SCHEMA);
+        assert_eq!(v["started_at"], 12.5);
+        assert_eq!(v["title"], "x");
+        assert_eq!(v["stage"], "stopped");
+        // No temp file left behind by the atomic write.
+        let left: Vec<_> = std::fs::read_dir(&d)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(left.is_empty());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_saved_recap_is_recorded_not_guessed_from_files() {
+        let d = tmp_meeting();
+        std::fs::write(d.join("meta.json"), r#"{"started_at": 1.0}"#).unwrap();
+        save_post_process(&d, "# Weekly sync\n\nText", "", None, None).unwrap();
+        let v = read(&d);
+        assert_eq!(v["stage"], "recapped");
+        assert_eq!(v["recap"]["status"], "saved");
+        assert_eq!(v["title"], "Weekly sync");
+        let _ = std::fs::remove_dir_all(&d);
+    }
 }
 
 #[cfg(test)]
@@ -3542,6 +4112,78 @@ mod a_slow_mic_never_throttles_the_recording {
         out
     }
 
+    /// 2026-11-09: a meeting whose transcriber never produced text left a
+    /// folder identical to a silent one, and the host blamed the VAD. A
+    /// failing engine must now say so, live and in meta.json.
+    #[test]
+    #[serial]
+    fn a_failing_transcriber_is_announced_and_recorded_as_failed_not_silent() {
+        crate::ffi::tests::ensure_test_state();
+        crate::ffi::tests::reset_event_capture();
+        let stt = SttSnapshot {
+            mode: "cloud".to_string(),
+            api_url: "https://test.invalid/".to_string(),
+            api_model: "x".to_string(),
+            api_key: Some("x".to_string()),
+            prompt: String::new(),
+            local_model: String::new(),
+            local_backend: "whisper".to_string(),
+            language: "en".to_string(),
+            chunk_secs: Some(5.0),
+            preprocessing_enabled: false,
+            speaker_labels: false,
+        };
+        let primary: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+        let secondary: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+        let session = MeetingSession::start(
+            primary.clone(),
+            secondary.clone(),
+            RATE as u32,
+            RATE as u32,
+            crate::audio::AudioSource::Mix,
+            stt,
+        )
+        .expect("meeting start");
+        // Two full windows of speech-loud tone, delivered in real time.
+        let block = RATE / 100;
+        let t0 = Instant::now();
+        let mut sent: u64 = 0;
+        let mut phase = 0usize;
+        while t0.elapsed().as_secs_f64() < 11.0 {
+            let due = Duration::from_millis(sent * 10);
+            let now = t0.elapsed();
+            if now < due {
+                thread::sleep(due - now);
+                continue;
+            }
+            let tone: Vec<f32> = (phase..phase + block)
+                .map(|i| (i as f32 * 0.0575).sin() * 0.3)
+                .collect();
+            phase += block;
+            primary.lock().unwrap().extend_from_slice(&tone);
+            secondary.lock().unwrap().extend_from_slice(&tone);
+            sent += 1;
+        }
+        let result = session.stop();
+        let events = crate::ffi::tests::drain_event_capture();
+
+        let meta: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(result.dir.join("meta.json")).unwrap())
+                .unwrap();
+        let _ = std::fs::remove_dir_all(&result.dir);
+        assert_eq!(meta["transcript"]["status"], "failed", "meta: {meta}");
+        assert_eq!(meta["transcript"]["reason"], "network", "meta: {meta}");
+        assert_eq!(meta["transcript"]["windows_text"], 0);
+        assert_eq!(meta["transcript"]["engine"], "cloud");
+        let unavailable: Vec<_> = events
+            .iter()
+            .filter(|e| e.contains("\"event\":\"meeting_transcription_unavailable\""))
+            .collect();
+        assert_eq!(unavailable.len(), 1, "told once: {events:?}");
+        assert!(unavailable[0].contains("\"reason\":\"network\""));
+        assert!(unavailable[0].contains("\"engine\":\"cloud\""));
+    }
+
     #[test]
     #[serial]
     fn a_muted_mic_at_a_quarter_of_real_time_still_records_the_whole_call() {
@@ -3620,6 +4262,27 @@ mod audio_never_blocked {
             !src[start..end].contains("update_stats("),
             "the capture loop writes config.json again"
         );
+    }
+
+    /// `emit_event` runs the host's callback under a mutex and
+    /// `telemetry::track` takes locks and may queue I/O: either can wait,
+    /// so neither may run inside the capture loop.
+    #[test]
+    fn the_capture_loop_never_calls_the_host_or_telemetry() {
+        let src = include_str!("meeting.rs");
+        let start = src.find("fn worker_loop(").expect("worker_loop");
+        let end = start + src[start..].find("ORDER MATTERS").expect("end of the loop");
+        for call in [
+            "emit_event(",
+            "telemetry::track(",
+            "telemetry::report(",
+            "report_chunk_error(",
+        ] {
+            assert!(
+                !src[start..end].contains(call),
+                "the capture loop calls {call} again"
+            );
+        }
     }
 
     #[test]
@@ -3969,7 +4632,7 @@ mod tests {
         )
         .unwrap();
 
-        finalize_meeting_meta(&tmp, "abc", 42.0, 7);
+        finalize_meeting_meta(&tmp, "abc", 42.0, 7, serde_json::json!({ "status": "ok" }));
 
         let v: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(tmp.join("meta.json")).unwrap()).unwrap();
@@ -4374,6 +5037,187 @@ mod transcript_time_order {
         assert_eq!(
             in_time_order("[00:00:02] [mic] b\n[00:00:01] [mic] a"),
             "[00:00:01] [mic] a\n[00:00:02] [mic] b\n"
+        );
+    }
+}
+
+#[cfg(test)]
+mod meta_records {
+    use super::*;
+
+    struct TempDir(std::path::PathBuf);
+    impl TempDir {
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    fn tempdir() -> TempDir {
+        let d = std::env::temp_dir().join(format!("dimmy-meta-rec-{}", uuid_v4_simple()));
+        std::fs::create_dir_all(&d).unwrap();
+        TempDir(d)
+    }
+
+    fn meta(dir: &std::path::Path) -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(dir.join("meta.json")).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn an_import_has_the_shape_of_a_live_meeting() {
+        let root = tempdir();
+        let src = root.path().join("Voice memo.M4A");
+        std::fs::write(&src, b"not really audio").unwrap();
+        let dir = import_from_file(root.path(), Some(&src), "  ciao a tutti  ", 12.5).unwrap();
+        let m = meta(&dir);
+        assert_eq!(m["schema"], META_SCHEMA);
+        assert_eq!(m["stage"], "stopped");
+        assert_eq!(m["origin"], "file-load");
+        assert_eq!(m["title"], "File: Voice memo");
+        assert!(
+            m["started_at"].is_f64(),
+            "Unix seconds, like a live meeting: {m}"
+        );
+        assert_eq!(m["duration_secs"], 12.5);
+        assert_eq!(m["transcript"]["status"], "ok");
+        assert_eq!(m["id"], dir.file_name().unwrap().to_str().unwrap());
+        assert_eq!(
+            std::fs::read_to_string(dir.join("transcripts.txt")).unwrap(),
+            "[00:00:00] [file] ciao a tutti\n"
+        );
+        assert!(dir.join("audio.m4a").is_file(), "keeps its own container");
+    }
+
+    #[test]
+    fn an_import_without_a_file_still_has_a_title() {
+        let root = tempdir();
+        let dir = import_from_file(root.path(), None, "x", 0.0).unwrap();
+        assert_eq!(meta(&dir)["title"], "File: Imported audio");
+    }
+
+    // A Telegram voice note is Opus. It used to be copied under the name
+    // audio.wav, so the player opened Opus bytes as a WAV and played nothing.
+    #[test]
+    fn an_import_keeps_any_other_container_byte_for_byte_under_its_own_extension() {
+        let root = tempdir();
+        for name in ["note.opus", "voice.OGA", "clip.webm", "memo.m4a"] {
+            let src = root.path().join(name);
+            std::fs::write(&src, b"opus bytes, not a wav").unwrap();
+            let dir = import_from_file(root.path(), Some(&src), "x", 1.0).unwrap();
+            let ext = name.rsplit('.').next().unwrap().to_ascii_lowercase();
+            let copy = dir.join(format!("audio.{ext}"));
+            assert_eq!(
+                std::fs::read(&copy).unwrap(),
+                b"opus bytes, not a wav",
+                "{name}"
+            );
+            assert!(!dir.join("audio.wav").exists(), "{name}");
+            assert_eq!(
+                crate::ffi::resolve_meeting_track(&dir, "audio").as_deref(),
+                Some(copy.to_str().unwrap()),
+                "the core finds {name} again"
+            );
+        }
+    }
+
+    // A WAV is ten times the Ogg the meeting sink writes: an import is
+    // re-encoded, like a live meeting's audio.
+    #[test]
+    fn an_imported_wav_is_saved_as_ogg_with_the_same_length() {
+        let root = tempdir();
+        let src = root.path().join("call.wav");
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: 44_100,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(&src, spec).unwrap();
+        for i in 0..44_100 * 2 {
+            let s = ((i as f32 * 0.05).sin() * 8000.0) as i16;
+            w.write_sample(s).unwrap();
+            w.write_sample(s).unwrap();
+        }
+        w.finalize().unwrap();
+        let dir = import_from_file(root.path(), Some(&src), "x", 2.0).unwrap();
+        // Linux meetings still record WAV (TrackSink::create), so there the
+        // import is the same mono track as a WAV.
+        let ogg_here = cfg!(any(target_os = "windows", target_os = "macos"));
+        let ogg = dir.join(if ogg_here { "audio.ogg" } else { "audio.wav" });
+        assert!(ogg.is_file(), "re-encoded with the meeting sink");
+        if ogg_here {
+            assert!(!dir.join("audio.wav").exists());
+            let wav_len = std::fs::metadata(&src).unwrap().len();
+            let ogg_len = std::fs::metadata(&ogg).unwrap().len();
+            assert!(ogg_len * 4 < wav_len, "compressed: {ogg_len} vs {wav_len}");
+        }
+        let (samples, rate) = crate::ffi::decode_audio_any(ogg.to_str().unwrap()).unwrap();
+        assert_eq!(rate, 44_100);
+        let secs = samples.len() as f64 / rate as f64;
+        assert!((secs - 2.0).abs() < 0.05, "mono, same length: {secs} s");
+        assert!(samples.iter().all(|s| s.is_finite()));
+    }
+
+    #[test]
+    fn a_wav_that_cannot_be_read_is_kept_as_it_is() {
+        let root = tempdir();
+        let src = root.path().join("broken.wav");
+        std::fs::write(&src, b"RIFF but not really").unwrap();
+        let dir = import_from_file(root.path(), Some(&src), "x", 1.0).unwrap();
+        assert_eq!(
+            std::fs::read(dir.join("audio.wav")).unwrap(),
+            b"RIFF but not really"
+        );
+        assert!(!dir.join("audio.ogg").exists(), "no half-written Ogg left");
+    }
+
+    #[test]
+    fn a_failed_recap_says_why_and_keeps_the_rest() {
+        let dir = tempdir();
+        update_meta(dir.path(), |o| {
+            o.insert("started_at".into(), serde_json::json!(1.0));
+        });
+        record_recap(dir.path(), RecapOutcome::Pending, "");
+        assert_eq!(meta(dir.path())["recap"]["status"], "pending");
+        let long = "x".repeat(500);
+        record_recap(dir.path(), RecapOutcome::Failed, &long);
+        let m = meta(dir.path());
+        assert_eq!(m["recap"]["status"], "failed");
+        assert_eq!(m["recap"]["reason"].as_str().unwrap().len(), 200);
+        assert_eq!(m["started_at"], 1.0);
+    }
+
+    #[test]
+    fn a_saved_recap_replaces_a_failed_one() {
+        let dir = tempdir();
+        record_recap(dir.path(), RecapOutcome::Failed, "HTTP 401");
+        save_post_process(dir.path(), "# Title\n\nBody", "", None, None).unwrap();
+        assert_eq!(meta(dir.path())["recap"]["status"], "saved");
+    }
+
+    #[test]
+    fn the_notion_page_and_a_regenerated_transcript_are_recorded() {
+        let dir = tempdir();
+        update_meta(dir.path(), |o| {
+            o.insert("chunk_count".into(), serde_json::json!(0));
+            o.insert(
+                "transcript".into(),
+                serde_json::json!({ "status": "failed", "reason": "network" }),
+            );
+        });
+        record_notion_page(dir.path(), "abc", "https://www.notion.so/abc");
+        record_retranscribed(dir.path(), 42, "parakeet");
+        let m = meta(dir.path());
+        assert_eq!(m["notion"]["page_id"], "abc");
+        assert_eq!(m["chunk_count"], 42);
+        assert_eq!(m["transcript"]["status"], "ok");
+        assert_eq!(m["transcript"]["engine"], "parakeet");
+        assert!(
+            m["transcript"]["reason"].is_null(),
+            "the old failure is gone: {m}"
         );
     }
 }

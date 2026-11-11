@@ -39,6 +39,7 @@ enum SelfTests {
         testWaveformStyleMapping()
         testTimeSavedFormula()
         testRecordingStateAnimationIds()
+        testPillErrorRoute()
         testSttProviderFromUrl()
         testHotkeyStatusCases()
         testPillDockRule()
@@ -257,10 +258,22 @@ enum SelfTests {
 
     // MARK: - Recording state animation IDs (must be unique)
 
+    private static func testPillErrorRoute() {
+        typealias R = AppState.ErrorRoute
+        let route = AppState.errorRoute
+        assert(route(.recording(.toggle), false) == R.besideRecording, "error during a dictation stays beside it")
+        assert(route(.idle, true) == R.besideRecording, "error during a meeting stays beside it")
+        assert(route(.transcribing, false) == R.afterDictation, "error while transcribing waits for the end")
+        assert(route(.processing, false) == R.afterDictation, "error while processing waits for the end")
+        assert(route(.idle, false) == R.pill, "error at rest takes the pill")
+        assert(route(.completing, false) == R.pill, "error over the checkmark takes the pill")
+        assert(route(.error("a"), false) == R.pill, "a newer error replaces the shown one")
+    }
+
     private static func testRecordingStateAnimationIds() {
         let states: [RecordingState] = [
             .idle, .recording(.pushToTalk), .recording(.toggle),
-            .transcribing, .processing, .completing
+            .transcribing, .processing, .completing, .error("x")
         ]
         let ids = states.map(\.animationId)
         assert(Set(ids).count == ids.count, "Animation IDs must be unique, got \(ids)")
@@ -452,6 +465,16 @@ enum SelfTests {
         // vendor, different auth path.
         assert(ProviderTagging.providerTag(forUrl: "claude-code://default") == "anthropic",
                "claude-code:// → 'anthropic'")
+
+        // Kimi Code membership endpoint, both regions, and its catalog ids.
+        assert(ProviderTagging.providerTag(forUrl: "https://api.kimi.ai/coding/v1/chat/completions") == "kimi",
+               "api.kimi.ai → 'kimi'")
+        assert(ProviderTagging.providerTag(forUrl: "https://api.kimi.com/coding/v1/chat/completions") == "kimi",
+               "api.kimi.com → 'kimi'")
+        for id in ModelCatalog.byId("kimi")?.models.map(\.id) ?? [] {
+            assert(ProviderTagging.providerTag(forRecapModel: id) == "kimi",
+                   "Kimi catalog model '\(id)' must tag as 'kimi' for the recap gate")
+        }
 
         // Unknown / custom → empty.
         assert(ProviderTagging.providerTag(forUrl: "") == "",

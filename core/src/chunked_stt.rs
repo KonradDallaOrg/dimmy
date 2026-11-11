@@ -156,12 +156,17 @@ impl ChunkedTranscriber {
 
     /// Signal the worker to drain the trailing audio + exit. Joins
     /// the worker thread and returns the final cumulative transcript.
-    /// Bounded by the time of one last `parakeet::transcribe` call
-    /// on the residual audio (typically <1 s for a few-second tail).
+    /// Takes the time of one last `parakeet::transcribe` call on the
+    /// residual audio (typically <1 s for a few-second tail), and never
+    /// more than [`crate::stream_bounds::LOCAL_STOP_JOIN_TIMEOUT`].
     pub fn stop(mut self) -> String {
         self.cancel.store(true, Ordering::SeqCst);
         if let Some(h) = self.handle.take() {
-            let _ = h.join();
+            crate::stream_bounds::join_worker(
+                h,
+                crate::stream_bounds::LOCAL_STOP_JOIN_TIMEOUT,
+                "chunked-stt",
+            );
         }
         self.final_text
             .lock()

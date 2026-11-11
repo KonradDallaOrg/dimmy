@@ -268,7 +268,7 @@ fn a_meeting_that_lost_the_buffers_never_touches_them_again() {
     let _g = FFI_LOCK.lock().unwrap();
     isolate();
     use dimmy_lib::audio::AudioSource;
-    use dimmy_lib::meeting::{claim_capture_buffers, MeetingSession, SttSnapshot};
+    use dimmy_lib::meeting::{MeetingSession, SttSnapshot};
     use std::sync::Arc;
 
     let stt = SttSnapshot {
@@ -310,7 +310,10 @@ fn a_meeting_that_lost_the_buffers_never_touches_them_again() {
     // worker still acting on it would cut a 15 s window and then drain the
     // buffer (10 s threshold), and a system track short enough that it
     // would be zero-padded up to the mic.
-    claim_capture_buffers();
+    // As `dimmy_meeting_stop` + `dimmy_meeting_start` do: the first is
+    // stopping, the next claims the capture.
+    dimmy_lib::capture::meeting_stopping(session.claim());
+    let next = dimmy_lib::capture::claim_meeting().expect("a draining meeting yields");
     let next_mic = 48_000 * 22;
     let next_system = 48_000;
     {
@@ -328,6 +331,7 @@ fn a_meeting_that_lost_the_buffers_never_touches_them_again() {
     let mic_len = primary.lock().unwrap().len();
     let system_len = secondary.lock().unwrap().len();
     let _ = session.stop();
+    dimmy_lib::capture::meeting_released(next, &[]);
     assert_eq!(
         mic_len, next_mic,
         "the previous meeting drained audio that belongs to the next one"

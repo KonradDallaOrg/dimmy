@@ -1281,6 +1281,8 @@ mod llm_cache {
         let mut n_generated: u32 = 0;
         let mut next_pos = tokens.len() as i32;
         let mut filter = super::PieceFilter::default();
+        // Ends the stream on every exit, the decode errors' `?` included.
+        let end = stream.then(crate::llm::StreamEnd::begin);
 
         loop {
             if n_generated >= max_tokens {
@@ -1364,11 +1366,8 @@ mod llm_cache {
                 .map_err(|e| crate::error::LlmError::LocalModel(format!("decode failed: {}", e)))?;
         }
 
-        // After the loop, so it fires on every exit: EOS, the token budget,
-        // a turn marker, or nothing generated at all.
-        if stream {
-            crate::llm::emit_recap_stream_event("end", "");
-        }
+        // EOS, the token budget, a turn marker, or nothing generated at all.
+        drop(end);
 
         // Prefill and decode cost different things and are fixed by different
         // settings, and a recap's total time alone cannot say which one it was:
