@@ -3056,6 +3056,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn save_config_no_panic_with_none_device() {
         let mut cfg = AppConfig::default();
         cfg.selected_device = None;
@@ -3063,6 +3064,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn save_config_no_panic_with_some_device() {
         let mut cfg = AppConfig::default();
         cfg.selected_device = Some("Mic".to_string());
@@ -3211,6 +3213,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn save_config_creates_valid_json() {
         let mut cfg = AppConfig::default();
         cfg.api_url = "https://test.local/v1".to_string();
@@ -3498,6 +3501,7 @@ mod tests {
     /// the start of every meeting. It is a saved preference now, and a
     /// preference nobody can save is worse than no preference at all.
     #[test]
+    #[serial_test::serial]
     fn meeting_generate_recap_survives_a_save_and_load() {
         assert!(
             AppConfig::default().meeting_generate_recap,
@@ -3523,6 +3527,7 @@ mod tests {
     /// outlives the app: it is what stops the first-run checkbox and the
     /// launch dialog from asking again.
     #[test]
+    #[serial_test::serial]
     fn terms_acceptance_is_empty_by_default_and_survives_a_save_and_load() {
         assert!(AppConfig::default().terms_accepted_version.is_empty());
         assert!(
@@ -3557,6 +3562,7 @@ mod tests {
     /// A config written before this field existed must read as "on", not as
     /// a silent "off" that stops producing recaps after an update.
     #[test]
+    #[serial_test::serial]
     fn a_config_without_the_field_keeps_recapping() {
         let path = config_path().expect("config path");
         if let Some(dir) = path.parent() {
@@ -3599,6 +3605,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[should_panic(expected = "input_gain must be in [0.0, 2.0]")]
     fn save_config_rejects_input_gain_above_max() {
         let mut cfg = AppConfig::default();
@@ -3607,6 +3614,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     #[should_panic(expected = "input_gain must be in [0.0, 2.0]")]
     fn save_config_rejects_negative_input_gain() {
         let mut cfg = AppConfig::default();
