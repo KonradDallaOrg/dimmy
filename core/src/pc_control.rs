@@ -417,6 +417,7 @@ pub fn name_score(spoken: &str, name: &str, title: &str) -> f32 {
     0.0
 }
 
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn best<'a, T>(spoken: &str, items: &'a [T], key: impl Fn(&T) -> (&str, &str)) -> Option<&'a T> {
     items
         .iter()
@@ -731,6 +732,7 @@ pub fn last_site() -> String {
     context().site.clone()
 }
 
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn own_tab() -> bool {
     context().own_tab
 }

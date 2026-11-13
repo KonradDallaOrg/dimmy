@@ -24,6 +24,7 @@ pub struct AppCommand {
     target: Target,
 }
 
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 #[derive(Clone, Debug, PartialEq)]
 enum Target {
     Menu {
@@ -38,6 +39,7 @@ enum Target {
     },
 }
 
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 struct Snapshot {
     hwnd: isize,
     /// The app as a person names it ("Notepad++", "Word").
@@ -345,6 +347,7 @@ pub fn score(spoken: &str, name: &str) -> f32 {
     f1(&s, &n).max(f1(uncarried(&s), &n))
 }
 
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 #[derive(Debug, PartialEq)]
 enum Freshness {
     Use,
@@ -355,6 +358,7 @@ enum Freshness {
 /// May the snapshot answer for the window in front? Dimmy's own windows (the
 /// pill, the help) do not count as "in front": the commands are for the app
 /// behind them.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn freshness(snapshot_hwnd: Option<isize>, front: isize, front_is_dimmy: bool) -> Freshness {
     if front == 0 {
         Freshness::Nothing
@@ -579,8 +583,10 @@ pub fn find(label: &str) -> Option<AppCommand> {
 }
 
 /// Longest text of an error or a log line that came from outside.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 const TEXT_MAX: usize = 200;
 
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn split_label(raw: &str) -> (String, String) {
     let mut it = raw.splitn(2, '\t');
     let name = it.next().unwrap_or("").replace('&', "").trim().to_string();
