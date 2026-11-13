@@ -96,6 +96,18 @@ public sealed class UiPreferences
     /// Win-only UI knob, hence here and not in config.json.</summary>
     public string CommandHotkey { get; set; } = "";
 
+    /// <summary>EXPERIMENT (exp/pc-actions): the shortcut that sends the spoken
+    /// words to the PC-actions engine (open, place, tile, find files).</summary>
+    public string ExecuteHotkey { get; set; } = "ctrl+alt+x";
+
+    /// <summary>EXPERIMENT (exp/pc-actions): voice PC commands are off until
+    /// the user turns them on; off, the execute shortcut is not bound.</summary>
+    public bool PcCommandsEnabled { get; set; }
+
+    /// <summary>EXPERIMENT: the local router's encoder: "e5-small" (fast,
+    /// 130 MB), "e5-base" (280 MB), "bge-m3" (precise, 560 MB).</summary>
+    public string PcRouterModel { get; set; } = "e5-small";
+
     /// <summary>Global shortcut that toggles a MEETING recording (start ↔
     /// stop). Default Ctrl+Alt+M. NOT Ctrl+Shift+M — that's Microsoft Teams'
     /// mute toggle (a hard collision for an app used during calls). Toggle-only.

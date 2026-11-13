@@ -174,6 +174,9 @@ local-stt-vulkan = ["local-stt", "whisper-rs/vulkan"]
 # at first use into the dimmy config dir. CPU by default; CUDA on Win
 # and CoreML on Mac when the matching feature is enabled (build-time).
 local-stt-parakeet      = ["dep:ort", "dep:ndarray"]
+# EXPERIMENT (exp/pc-actions): local intent router for PC commands,
+# multilingual-e5-small int8 on ONNX Runtime + nearest examples.
+pc-router = ["dep:ort", "dep:ndarray", "dep:tokenizers"]
 local-stt-parakeet-cuda = ["local-stt-parakeet", "ort/cuda"]
 local-stt-parakeet-coreml = ["local-stt-parakeet", "ort/coreml"]
 # Parakeet via FluidInference's CoreML bundle, Apple-Silicon-only.
@@ -367,6 +370,9 @@ ort = { version = "=2.0.0-rc.10", optional = true, features = ["ndarray", "load-
 # so making it direct pulls nothing new.
 realfft = { version = "3.5", optional = true }
 ndarray = { version = "0.16", optional = true }
+# EXPERIMENT (exp/pc-actions): the XLM-R SentencePiece tokenizer of
+# multilingual-e5-small, pure Rust (no onig).
+tokenizers = { version = "0.21", optional = true, default-features = false, features = ["fancy-regex"] }
 anyhow = { version = "1", optional = true }
 # Upstream instead of our fork: the fork exists ONLY to patch the fused
 # Gated Delta Net asserts for Gemma 4, and upstream implements GDN natively
@@ -453,6 +459,9 @@ windows = { version = "0.62", features = [
     "Win32_System_Kernel",
     "Win32_Storage_FileSystem",
     "Win32_System_Memory",
+    # EXPERIMENT (exp/pc-actions): read and invoke the controls of the app in front.
+    "Win32_UI_Accessibility",
+    "Win32_System_Ole",
 ] }
 
 # statvfs / sysctl / sysinfo for `dimmy-setup check` (free disk, RAM).

@@ -110,6 +110,50 @@ impl ChunkedTranscriber {
         }
     }
 
+    /// Like `start`, but the audio is cut where the speaker pauses and each
+    /// utterance is transcribed whole, as soon as it ends. For a session of
+    /// spoken commands: a fixed window (5 s Parakeet, 15 s Whisper) hands
+    /// over a command long after it was said, so the user had to stop the
+    /// recording after each one (2026-11-10). `on_speech` fires when an
+    /// utterance starts.
+    pub fn start_utterances(
+        audio_buffer: Arc<Mutex<Vec<f32>>>,
+        device_sample_rate: u32,
+        vad_trim: bool,
+        transcribe_fn: Arc<TranscribeFn>,
+        on_speech: Arc<dyn Fn() + Send + Sync>,
+        on_chunk: Arc<ChunkCallback>,
+    ) -> Self {
+        assert!(
+            device_sample_rate >= 8_000,
+            "device_sample_rate too low for 20 ms frames"
+        );
+        let cancel = Arc::new(AtomicBool::new(false));
+        let final_text = Arc::new(Mutex::new(String::new()));
+        let cancel_w = cancel.clone();
+        let final_w = final_text.clone();
+        let handle = thread::Builder::new()
+            .name("utterance-stt".into())
+            .spawn(move || {
+                utterance_loop(
+                    audio_buffer,
+                    device_sample_rate,
+                    vad_trim,
+                    cancel_w,
+                    final_w,
+                    transcribe_fn,
+                    on_speech,
+                    on_chunk,
+                );
+            })
+            .expect("spawn utterance-stt thread");
+        Self {
+            cancel,
+            final_text,
+            handle: Some(handle),
+        }
+    }
+
     /// Signal the worker to drain the trailing audio + exit. Joins
     /// the worker thread and returns the final cumulative transcript.
     /// Takes the time of one last `parakeet::transcribe` call on the
@@ -272,6 +316,209 @@ fn worker_loop(
         on_chunk("", &cumulative, true);
     }
 
+    if let Ok(mut s) = final_text.lock() {
+        *s = cumulative;
+    }
+}
+
+// -- Utterances: cut where the speaker pauses --------------------------------
+
+const FRAME_MS: usize = 20;
+/// Silence that ends an utterance. Shorter cuts "apri ... il browser" in
+/// two; longer is the wait before every command runs.
+const END_SILENCE_FRAMES: usize = 550 / FRAME_MS;
+/// Voiced frames in a row that open an utterance.
+const START_FRAMES: usize = 3;
+/// Fewer voiced frames than this is a click or a cough, not words.
+const MIN_VOICED_FRAMES: usize = 8;
+const PRE_ROLL_FRAMES: usize = 240 / FRAME_MS;
+const POST_ROLL_FRAMES: usize = 160 / FRAME_MS;
+const MAX_FRAMES: usize = 15_000 / FRAME_MS;
+const FLOOR_MIN: f32 = 0.0002;
+const FLOOR_MAX: f32 = 0.02;
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Edge {
+    /// An utterance opened.
+    Start,
+    /// An utterance ended: frames `first..end`.
+    End(usize, usize),
+}
+
+/// Finds where an utterance starts and ends from the loudness of 20 ms
+/// frames, against a noise floor that follows the room: it drops at once
+/// and climbs slowly, so a quiet moment sets it and speech barely moves it.
+/// A wrong start costs little: the window still goes through the VAD gate
+/// before the model sees it.
+pub(crate) struct Endpointer {
+    floor: f32,
+    index: usize,
+    run: usize,
+    start: Option<usize>,
+    voiced: usize,
+    quiet: usize,
+}
+
+impl Endpointer {
+    pub(crate) fn new() -> Self {
+        Self {
+            floor: 0.001,
+            index: 0,
+            run: 0,
+            start: None,
+            voiced: 0,
+            quiet: 0,
+        }
+    }
+
+    /// One frame's RMS level, in sample units.
+    pub(crate) fn push(&mut self, level: f32) -> Option<Edge> {
+        let level = if level.is_finite() {
+            level.max(0.0)
+        } else {
+            0.0
+        };
+        self.floor = if level < self.floor {
+            level.max(FLOOR_MIN)
+        } else {
+            (self.floor * 1.003).min(FLOOR_MAX)
+        };
+        let voiced = level > self.floor * 3.5 && level > 0.0015;
+        let i = self.index;
+        self.index += 1;
+        if voiced {
+            self.run += 1;
+            self.quiet = 0;
+        } else {
+            self.run = 0;
+            self.quiet += 1;
+        }
+        let Some(first) = self.start else {
+            if self.run >= START_FRAMES {
+                self.start = Some((i + 1).saturating_sub(START_FRAMES + PRE_ROLL_FRAMES));
+                self.voiced = self.run;
+                return Some(Edge::Start);
+            }
+            return None;
+        };
+        if voiced {
+            self.voiced += 1;
+        }
+        let long = i + 1 - first >= MAX_FRAMES;
+        if self.quiet < END_SILENCE_FRAMES && !long {
+            return None;
+        }
+        let end = if long {
+            i + 1
+        } else {
+            i + 1 - self.quiet + POST_ROLL_FRAMES
+        };
+        assert!(first < end && end <= i + 1, "an utterance has frames");
+        let words = self.voiced >= MIN_VOICED_FRAMES;
+        self.start = None;
+        self.voiced = 0;
+        self.run = 0;
+        words.then_some(Edge::End(first, end))
+    }
+}
+
+/// Transcribe one stretch of audio and add its words to `cumulative`.
+/// Returns the words added: none for silence or a failed call.
+fn transcribe_into(
+    pcm: Vec<f32>,
+    rate: u32,
+    vad_trim: bool,
+    transcribe_fn: &TranscribeFn,
+    cumulative: &mut String,
+) -> String {
+    let secs = pcm.len() as f32 / rate as f32;
+    let t0 = Instant::now();
+    let window = maybe_vad_trim(pcm, rate, vad_trim);
+    if window.is_empty() {
+        crate::log(&format!("[utterance] {secs:.1} s without speech, skipped"));
+        return String::new();
+    }
+    let text = match transcribe_fn(&downsample_if_needed(&window, rate)) {
+        Ok(t) => t.trim().to_string(),
+        Err(e) => {
+            crate::log(&format!("[utterance] transcribe failed: {e}"));
+            return String::new();
+        }
+    };
+    crate::log(&format!(
+        "[utterance] {secs:.1} s -> {} chars in {} ms",
+        text.len(),
+        t0.elapsed().as_millis()
+    ));
+    if !text.is_empty() {
+        if !cumulative.is_empty() {
+            cumulative.push(' ');
+        }
+        cumulative.push_str(&text);
+    }
+    text
+}
+
+#[allow(clippy::too_many_arguments)]
+fn utterance_loop(
+    audio_buffer: Arc<Mutex<Vec<f32>>>,
+    rate: u32,
+    vad_trim: bool,
+    cancel: Arc<AtomicBool>,
+    final_text: Arc<Mutex<String>>,
+    transcribe_fn: Arc<TranscribeFn>,
+    on_speech: Arc<dyn Fn() + Send + Sync>,
+    on_chunk: Arc<ChunkCallback>,
+) {
+    let frame = rate as usize * FRAME_MS / 1000;
+    assert!(frame > 0, "a frame has samples");
+    let mut ends = Endpointer::new();
+    // Samples the endpointer has seen, and samples already transcribed or
+    // dropped: an utterance never reaches back before `done`.
+    let (mut scanned, mut done) = (0usize, 0usize);
+    let mut cumulative = String::new();
+    while !cancel.load(Ordering::SeqCst) {
+        thread::sleep(Duration::from_millis(40));
+        let fresh: Vec<f32> = match audio_buffer.lock() {
+            Ok(b) => {
+                let n = b.len().saturating_sub(scanned) / frame * frame;
+                b[scanned.min(b.len())..scanned.min(b.len()) + n].to_vec()
+            }
+            Err(_) => continue,
+        };
+        for f in fresh.chunks_exact(frame) {
+            let rms = (f.iter().map(|x| x * x).sum::<f32>() / frame as f32).sqrt();
+            scanned += frame;
+            match ends.push(rms) {
+                Some(Edge::Start) => on_speech(),
+                Some(Edge::End(first, end)) => {
+                    let (a, b) = ((first * frame).max(done), (end * frame).min(scanned));
+                    done = b;
+                    let pcm: Vec<f32> = match audio_buffer.lock() {
+                        Ok(buf) if a < b && b <= buf.len() => buf[a..b].to_vec(),
+                        _ => continue,
+                    };
+                    let delta =
+                        transcribe_into(pcm, rate, vad_trim, &*transcribe_fn, &mut cumulative);
+                    if !delta.is_empty() {
+                        on_chunk(&delta, &cumulative, false);
+                    }
+                }
+                None => {}
+            }
+        }
+    }
+    // The stop came in the middle of an utterance, or right after one.
+    let trailing: Vec<f32> = match audio_buffer.lock() {
+        Ok(b) if b.len() > done => b[done..].to_vec(),
+        _ => Vec::new(),
+    };
+    let delta = if trailing.is_empty() {
+        String::new()
+    } else {
+        transcribe_into(trailing, rate, vad_trim, &*transcribe_fn, &mut cumulative)
+    };
+    on_chunk(&delta, &cumulative, true);
     if let Ok(mut s) = final_text.lock() {
         *s = cumulative;
     }
@@ -649,5 +896,151 @@ mod tests {
     fn dedup_three_word_repeat_full_chunk_eaten() {
         let out = dedup_last_3_words("uno due tre", "uno due tre");
         assert_eq!(out, "");
+    }
+
+    /// Frames of one level, pushed in order; returns every edge with the
+    /// index of the frame that produced it.
+    fn feed(e: &mut Endpointer, at: &mut usize, level: f32, frames: usize) -> Vec<(usize, Edge)> {
+        let mut out = Vec::new();
+        for _ in 0..frames {
+            if let Some(edge) = e.push(level) {
+                out.push((*at, edge));
+            }
+            *at += 1;
+        }
+        out
+    }
+
+    // Burned 2026-11-10: with Parakeet a command reached the router only at
+    // the stop, so the shortcut had to be pressed after every command.
+    #[test]
+    fn an_utterance_ends_at_the_pause_after_it() {
+        let (mut e, mut at) = (Endpointer::new(), 0);
+        assert!(feed(&mut e, &mut at, 0.0005, 50).is_empty(), "room noise");
+        let speech = feed(&mut e, &mut at, 0.05, 60);
+        assert_eq!(
+            speech,
+            vec![(52, Edge::Start)],
+            "three voiced frames open it"
+        );
+        let pause = feed(&mut e, &mut at, 0.0005, 40);
+        // Opened 15 frames before the third voiced one (pre-roll), closed 8
+        // frames after the last voiced one, once 27 silent frames passed.
+        assert_eq!(pause, vec![(110 + 26, Edge::End(38, 118))]);
+        // A second command needs no key press: it opens and closes again.
+        let again = feed(&mut e, &mut at, 0.05, 30);
+        assert_eq!(again.len(), 1);
+        assert!(matches!(again[0].1, Edge::Start));
+        let closed = feed(&mut e, &mut at, 0.0005, 30);
+        assert!(matches!(closed.as_slice(), [(_, Edge::End(_, _))]));
+    }
+
+    #[test]
+    fn a_click_is_not_an_utterance_and_a_monologue_is_cut() {
+        let (mut e, mut at) = (Endpointer::new(), 0);
+        feed(&mut e, &mut at, 0.0005, 50);
+        let click = feed(&mut e, &mut at, 0.2, 4);
+        assert_eq!(click.len(), 1, "it opens");
+        let after = feed(&mut e, &mut at, 0.0005, 40);
+        assert!(
+            after.is_empty(),
+            "too few voiced frames: dropped, {after:?}"
+        );
+        // 15 s of speech with no pause is handed over anyway.
+        let long = feed(&mut e, &mut at, 0.05, MAX_FRAMES + 20);
+        assert!(long.iter().any(|(_, edge)| matches!(edge, Edge::End(_, _))));
+        // Bad samples are silence, not a panic.
+        for bad in [f32::NAN, f32::INFINITY, -1.0] {
+            let _ = e.push(bad);
+        }
+    }
+
+    #[test]
+    fn the_floor_follows_a_noisy_room() {
+        let (mut e, mut at) = (Endpointer::new(), 0);
+        // A fan at 0.004: above the starting threshold, so it opens once,
+        // then the floor reaches it and the noise is silence again.
+        let fan = feed(&mut e, &mut at, 0.004, 1500);
+        let opened = fan.iter().filter(|(_, x)| *x == Edge::Start).count();
+        assert!(opened <= 1, "{opened} utterances out of steady noise");
+        let quiet_tail = feed(&mut e, &mut at, 0.004, 200);
+        assert!(quiet_tail.is_empty(), "{quiet_tail:?}");
+        // Speech over the fan is still found.
+        let speech = feed(&mut e, &mut at, 0.06, 40);
+        assert!(speech.iter().any(|(_, x)| *x == Edge::Start));
+    }
+
+    #[test]
+    fn utterances_reach_the_callback_one_by_one_without_a_stop() {
+        let rate = 16_000u32;
+        let buffer: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+        let heard: Arc<Mutex<Vec<(String, String, bool)>>> = Arc::new(Mutex::new(Vec::new()));
+        let starts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let n = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (heard_w, starts_w, n_w) = (heard.clone(), starts.clone(), n.clone());
+        let t = ChunkedTranscriber::start_utterances(
+            buffer.clone(),
+            rate,
+            false,
+            Arc::new(move |_pcm: &[f32]| {
+                let k = n_w.fetch_add(1, Ordering::SeqCst);
+                Ok::<String, crate::error::TranscribeError>(
+                    ["apri chrome", "apri chrome", "chiudi"][k.min(2)].to_string(),
+                )
+            }),
+            Arc::new(move || {
+                starts_w.fetch_add(1, Ordering::SeqCst);
+            }),
+            Arc::new(move |delta: &str, cumulative: &str, is_final: bool| {
+                heard_w
+                    .lock()
+                    .unwrap()
+                    .push((delta.into(), cumulative.into(), is_final));
+            }),
+        );
+        let tone = |secs: f32, level: f32| {
+            (0..(secs * rate as f32) as usize)
+                .map(|i| if i % 2 == 0 { level } else { -level })
+                .collect::<Vec<f32>>()
+        };
+        let say = |secs: f32, level: f32| buffer.lock().unwrap().extend(tone(secs, level));
+        let wait = |want: usize| {
+            for _ in 0..100 {
+                if heard.lock().unwrap().len() >= want {
+                    return;
+                }
+                thread::sleep(Duration::from_millis(30));
+            }
+        };
+        say(0.5, 0.0003);
+        say(0.8, 0.05);
+        say(0.9, 0.0003);
+        wait(1);
+        // The same words twice are two commands: nothing is deduplicated.
+        say(0.8, 0.05);
+        say(0.9, 0.0003);
+        wait(2);
+        say(0.6, 0.05);
+        thread::sleep(Duration::from_millis(200));
+        let total = t.stop();
+        let got = heard.lock().unwrap().clone();
+        assert_eq!(
+            got,
+            vec![
+                ("apri chrome".into(), "apri chrome".into(), false),
+                (
+                    "apri chrome".into(),
+                    "apri chrome apri chrome".into(),
+                    false
+                ),
+                (
+                    "chiudi".into(),
+                    "apri chrome apri chrome chiudi".into(),
+                    true
+                ),
+            ]
+        );
+        assert_eq!(total, "apri chrome apri chrome chiudi");
+        assert!(starts.load(Ordering::SeqCst) >= 2);
     }
 }

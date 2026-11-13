@@ -46,13 +46,16 @@ pub enum Target {
     Command,
     Meeting,
     Dictionary,
+    /// EXPERIMENT (exp/pc-actions): the shortcut that drives the PC.
+    Execute,
 }
 
-const TARGETS: [Target; 4] = [
+const TARGETS: [Target; 5] = [
     Target::Dictation,
     Target::Command,
     Target::Meeting,
     Target::Dictionary,
+    Target::Execute,
 ];
 
 impl Target {
@@ -66,6 +69,7 @@ impl Target {
             Target::Command => "command",
             Target::Meeting => "meeting",
             Target::Dictionary => "dictionary",
+            Target::Execute => "execute",
         }
     }
 
@@ -75,6 +79,7 @@ impl Target {
             Target::Command => "the command shortcut",
             Target::Meeting => "the meeting shortcut",
             Target::Dictionary => "the add-to-dictionary shortcut",
+            Target::Execute => "the execute shortcut",
         }
     }
 
@@ -90,7 +95,7 @@ impl Target {
 /// (`"win+alt"`, `"ctrl+shift+d"`, `""` = not set).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Current {
-    combos: [String; 4],
+    combos: [String; 5],
 }
 
 impl Current {
@@ -1077,6 +1082,29 @@ mod tests {
         let v = evaluate(Target::Dictation, &fn_key, &Current::default(), none_taken);
         assert!(!v.can_save);
         assert!(v.error.starts_with("Fn works only"), "{}", v.error);
+    }
+
+    #[test]
+    fn the_execute_shortcut_takes_part_in_conflicts_both_ways() {
+        const X: u32 = 0x58;
+        let cur = Current::from_json(
+            r#"{"dictation":"win+alt","command":"ctrl+alt+x","execute":"ctrl+shift+d"}"#,
+        )
+        .unwrap();
+        let v = evaluate(
+            Target::Execute,
+            &held(false, true, true, false, X),
+            &cur,
+            none_taken,
+        );
+        assert_eq!(v.error, "Already used by the command shortcut.");
+        let v = evaluate(
+            Target::Dictionary,
+            &held(false, true, false, true, D),
+            &cur,
+            none_taken,
+        );
+        assert_eq!(v.error, "Already used by the execute shortcut.");
     }
 
     #[test]

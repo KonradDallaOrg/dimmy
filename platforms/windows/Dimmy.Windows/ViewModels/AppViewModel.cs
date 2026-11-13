@@ -209,6 +209,11 @@ public partial class AppViewModel : ObservableObject
     /// flipping the persistent menu toggle.</summary>
     [ObservableProperty] private bool _commandOneShot;
 
+    /// <summary>EXPERIMENT (exp/pc-actions): set while a recording started by
+    /// the execute shortcut is in flight; the stop routes the spoken words to
+    /// the PC-actions engine instead of typing them.</summary>
+    [ObservableProperty] private bool _executeOneShot;
+
     /// <summary>If true, pressing the global hotkey while the pill is
     /// hidden re-shows it. If false, the pill stays hidden — recording
     /// status is shown only via the taskbar overlay icon. Default true
@@ -409,6 +414,11 @@ public partial class AppViewModel : ObservableObject
     /// (cumulative_text, is_final). App.xaml.cs uses this to show /
     /// hide the CaptionWindow and to keep its text in sync.
     public event Action<string, bool>? SttChunkReceived;
+
+    /// <summary>EXPERIMENT (exp/pc-actions): the local router's reading of a
+    /// live partial during an execute session.</summary>
+    public event Action<System.Text.Json.JsonElement>? PcLiveReceived;
+    public event Action<System.Text.Json.JsonElement>? PcLiveFired;
 
     /// Raised when a realtime streaming dictation session (Deepgram) emits
     /// a STABLE finalised segment that is safe to inject at the cursor.
@@ -666,7 +676,10 @@ public partial class AppViewModel : ObservableObject
                         // stop. That is exactly how the OpenAI engine shipped
                         // broken on 2026-08-05 — the core was working and the
                         // text had nowhere to go.
-                        if (engine == "deepgram" || engine == "openai" || engine == "local-stream")
+                        // An execute session (PC command) is never typed: the
+                        // words are an instruction, not text for the document.
+                        if ((engine == "deepgram" || engine == "openai" || engine == "local-stream")
+                            && !ExecuteOneShot)
                         {
                             StreamingDictationActive = true;
                             var backspace = payload.TryGetProperty("backspace", out var bs) ? bs.GetInt32() : 0;
@@ -687,6 +700,12 @@ public partial class AppViewModel : ObservableObject
                         if (payload.TryGetProperty("stage", out var st) && st.GetString() is { } stage)
                             MeetingRetranscribeProgress?.Invoke(percent, stage);
                     }
+                    break;
+                case "pc_live":
+                    PcLiveReceived?.Invoke(payload.Clone());
+                    break;
+                case "pc_live_fired":
+                    PcLiveFired?.Invoke(payload.Clone());
                     break;
                 case "recording_started":
                     // New session — clear the streaming flag so a prior

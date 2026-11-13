@@ -128,6 +128,16 @@ public static class ProviderCatalog
                     $"Nemotron 3.5 F32, full precision (GPU) · {Interop.DimmyNative.dimmy_nemotron_full_size_mb()} MB", true, false, false, "nemotron-f32"));
         }
         catch { }
+        // EXPERIMENT (exp/pc-actions): the PC-command router's encoders, only
+        // in a build that has the local router.
+        try
+        {
+            if (Interop.DimmyNative.dimmy_pc_router_status() >= 0)
+                foreach (var (id, label) in new[] { ("e5-small", "e5-small"), ("e5-base", "e5-base"), ("bge-m3", "BGE-M3") })
+                    list.Add(new ProviderModel(
+                        $"PC commands (experimental) · {label} · {Interop.DimmyNative.dimmy_pc_router_size_mb(id)} MB", false, false, false, "pc-router:" + id));
+        }
+        catch { }
         list.AddRange(ParseLocalModels(SafeFfi(Interop.DimmyNative.ListLocalLlmModels), stt: false));
         return list;
     }

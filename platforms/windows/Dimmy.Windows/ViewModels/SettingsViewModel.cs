@@ -138,6 +138,12 @@ public partial class SettingsViewModel : ObservableObject
     /// <summary>Optional meeting start/stop hotkey (toggle). EMPTY = disabled.
     /// Persisted to UiPreferences.MeetingHotkey (Win-only UI knob).</summary>
     [ObservableProperty] private string _meetingHotkey = "";
+
+    /// <summary>EXPERIMENT (exp/pc-actions): the execute shortcut. Persisted
+    /// to UiPreferences.ExecuteHotkey.</summary>
+    [ObservableProperty] private string _executeHotkey = "";
+    [ObservableProperty] private bool _pcCommandsEnabled;
+    [ObservableProperty] private string _pcRouterModel = "e5-small";
     [ObservableProperty] private string _shortcut = "Win+Alt";
     [ObservableProperty] private string _shortcutMode = "toggle";
     [ObservableProperty] private string? _selectedDevice;

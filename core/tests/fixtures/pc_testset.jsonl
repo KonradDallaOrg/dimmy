@@ -1,0 +1,326 @@
+{"text": "puoi aprirmi Spotify", "intent": "open", "lang": "it", "kind": "colloquial", "slots": {"app": "Spotify"}}
+{"text": "mi apri Telegram per favore", "intent": "open", "lang": "it", "kind": "colloquial", "slots": {"app": "Telegram"}}
+{"text": "ehm allora apri OneNote", "intent": "open", "lang": "it", "kind": "colloquial", "slots": {"app": "OneNote"}}
+{"text": "apri Visual Studio Code", "intent": "open", "lang": "it", "kind": "plain", "slots": {"app": "Visual Studio Code"}}
+{"text": "apri Notepad++", "intent": "open", "lang": "it", "kind": "plain", "slots": {"app": "Notepad++"}}
+{"text": "avvia Zoom", "intent": "open", "lang": "it", "kind": "plain", "slots": {"app": "Zoom"}}
+{"text": "apri Paint", "intent": "open", "lang": "it", "kind": "plain", "slots": {"app": "Paint"}}
+{"text": "apri Edge", "intent": "open", "lang": "it", "kind": "plain", "slots": {"app": "Edge"}}
+{"text": "lancia Firefox", "intent": "open", "lang": "it", "kind": "plain", "slots": {"app": "Firefox"}}
+{"text": "apri nodpad", "intent": "open", "lang": "it", "kind": "stt_error", "slots": {"app": "nodpad"}}
+{"text": "apri crome", "intent": "open", "lang": "it", "kind": "stt_error", "slots": {"app": "crome"}}
+{"text": "apri aotlook", "intent": "open", "lang": "it", "kind": "stt_error", "slots": {"app": "aotlook"}}
+{"text": "apri tims", "intent": "open", "lang": "it", "kind": "stt_error", "slots": {"app": "tims"}}
+{"text": "apri power point", "intent": "open", "lang": "it", "kind": "stt_error", "slots": {"app": "power point"}}
+{"text": "apri visual studio cod", "intent": "open", "lang": "it", "kind": "stt_error", "slots": {"app": "visual studio cod"}}
+{"text": "apri Esplora file", "intent": "open", "lang": "it", "kind": "plain", "slots": {"app": "Esplora file"}}
+{"text": "dai apri WhatsApp", "intent": "open", "lang": "it", "kind": "colloquial", "slots": {"app": "WhatsApp"}}
+{"text": "mi serve Word", "intent": "open", "lang": "it", "kind": "colloquial", "slots": {"app": "Word"}}
+{"text": "metti su Spotify", "intent": "open", "lang": "it", "kind": "colloquial", "slots": {"app": "Spotify"}}
+{"text": "portami in primo piano Outlook", "intent": "open", "lang": "it", "kind": "plain", "slots": {"app": "Outlook"}}
+{"text": "open Excel", "intent": "open", "lang": "en", "kind": "plain", "slots": {"app": "Excel"}}
+{"text": "can you open Slack for me", "intent": "open", "lang": "en", "kind": "colloquial", "slots": {"app": "Slack"}}
+{"text": "start Firefox", "intent": "open", "lang": "en", "kind": "plain", "slots": {"app": "Firefox"}}
+{"text": "please open PowerPoint", "intent": "open", "lang": "en", "kind": "plain", "slots": {"app": "PowerPoint"}}
+{"text": "open File Explorer", "intent": "open", "lang": "en", "kind": "plain", "slots": {"app": "File Explorer"}}
+{"text": "pull up Zoom", "intent": "open", "lang": "en", "kind": "colloquial", "slots": {"app": "Zoom"}}
+{"text": "open note pad plus plus", "intent": "open", "lang": "en", "kind": "stt_error", "slots": {"app": "note pad plus plus"}}
+{"text": "apri Teams e mettilo a sinistra", "intent": "open", "lang": "it", "kind": "compound", "slots": {"app": "Teams", "second_intent": "move"}}
+{"text": "open Spotify and mute it", "intent": "open", "lang": "en", "kind": "compound", "slots": {"app": "Spotify", "second_intent": "media"}}
+{"text": "apri Chrome e vai su YouTube", "intent": "open", "lang": "it", "kind": "compound", "slots": {"app": "Chrome", "second_intent": "web"}}
+{"text": "apri Word e poi nascondi Outlook", "intent": "open", "lang": "it", "kind": "compound", "slots": {"app": "Word", "second_intent": "minimize"}}
+{"text": "metti Word e Excel uno accanto all'altro", "intent": "tile", "lang": "it", "kind": "plain", "slots": {"left": "Word", "right": "Excel"}}
+{"text": "voglio Chrome a sinistra e Teams a destra", "intent": "tile", "lang": "it", "kind": "plain", "slots": {"left": "Chrome", "right": "Teams"}}
+{"text": "mi metti Slack e Visual Studio Code fianco a fianco", "intent": "tile", "lang": "it", "kind": "colloquial", "slots": {"left": "Slack", "right": "Visual Studio Code"}}
+{"text": "Outlook sulla sinistra e OneNote sulla destra", "intent": "tile", "lang": "it", "kind": "plain", "slots": {"left": "Outlook", "right": "OneNote"}}
+{"text": "affianca le finestre", "intent": "tile", "lang": "it", "kind": "plain", "slots": {"left": "", "right": ""}}
+{"text": "dividi lo schermo tra Zoom e Notepad", "intent": "tile", "lang": "it", "kind": "plain", "slots": {"left": "Zoom", "right": "Notepad"}}
+{"text": "puoi mettere le finestre una di fianco all'altra", "intent": "tile", "lang": "it", "kind": "colloquial", "slots": {"left": "", "right": ""}}
+{"text": "ehm allora metti Edge e Calcolatrice affiancati", "intent": "tile", "lang": "it", "kind": "colloquial", "slots": {"left": "Edge", "right": "Calcolatrice"}}
+{"text": "affianca tims e aotlook", "intent": "tile", "lang": "it", "kind": "stt_error", "slots": {"left": "tims", "right": "aotlook"}}
+{"text": "metti crome e wurd vicini", "intent": "tile", "lang": "it", "kind": "stt_error", "slots": {"left": "crome", "right": "wurd"}}
+{"text": "affiancaword e excel", "intent": "tile", "lang": "it", "kind": "stt_error", "slots": {"left": "word", "right": "excel"}}
+{"text": "Spotify e Telegram uno a fianco all'altro", "intent": "tile", "lang": "it", "kind": "colloquial", "slots": {"left": "Spotify", "right": "Telegram"}}
+{"text": "mettimi PowerPoint a sinistra e Excel a destra", "intent": "tile", "lang": "it", "kind": "colloquial", "slots": {"left": "PowerPoint", "right": "Excel"}}
+{"text": "put Chrome and Slack side by side", "intent": "tile", "lang": "en", "kind": "plain", "slots": {"left": "Chrome", "right": "Slack"}}
+{"text": "split the screen between Word and Excel", "intent": "tile", "lang": "en", "kind": "plain", "slots": {"left": "Word", "right": "Excel"}}
+{"text": "I want Teams on the left and Outlook on the right", "intent": "tile", "lang": "en", "kind": "plain", "slots": {"left": "Teams", "right": "Outlook"}}
+{"text": "arrange my windows next to each other", "intent": "tile", "lang": "en", "kind": "plain", "slots": {"left": "", "right": ""}}
+{"text": "can you put Zoom and OneNote next to each other", "intent": "tile", "lang": "en", "kind": "colloquial", "slots": {"left": "Zoom", "right": "OneNote"}}
+{"text": "tile Firefox with Notepad", "intent": "tile", "lang": "en", "kind": "plain", "slots": {"left": "Firefox", "right": "Notepad"}}
+{"text": "affianca Word e Excel e poi apri Spotify", "intent": "tile", "lang": "it", "kind": "compound", "slots": {"left": "Word", "right": "Excel", "second_intent": "open"}}
+{"text": "put Chrome and Teams side by side then mute", "intent": "tile", "lang": "en", "kind": "compound", "slots": {"left": "Chrome", "right": "Teams", "second_intent": "media"}}
+{"text": "sposta Outlook a destra", "intent": "move", "lang": "it", "kind": "plain", "slots": {"app": "Outlook", "side": "right"}}
+{"text": "metti Excel sulla metà sinistra", "intent": "move", "lang": "it", "kind": "plain", "slots": {"app": "Excel", "side": "left"}}
+{"text": "Chrome a tutto schermo", "intent": "move", "lang": "it", "kind": "plain", "slots": {"app": "Chrome", "side": "full"}}
+{"text": "massimizza Word", "intent": "move", "lang": "it", "kind": "plain", "slots": {"app": "Word", "side": "full"}}
+{"text": "manda Teams sull'altro monitor", "intent": "move", "lang": "it", "kind": "plain", "slots": {"app": "Teams", "side": "other_monitor"}}
+{"text": "porta questa finestra sull'altro schermo", "intent": "move", "lang": "it", "kind": "plain", "slots": {"app": "", "side": "other_monitor"}}
+{"text": "mettimi questa a sinistra", "intent": "move", "lang": "it", "kind": "colloquial", "slots": {"app": "", "side": "left"}}
+{"text": "dai metti Spotify a destra", "intent": "move", "lang": "it", "kind": "colloquial", "slots": {"app": "Spotify", "side": "right"}}
+{"text": "ingrandisci questa finestra", "intent": "move", "lang": "it", "kind": "plain", "slots": {"app": "", "side": "full"}}
+{"text": "fammi vedere Slack a schermo intero", "intent": "move", "lang": "it", "kind": "colloquial", "slots": {"app": "Slack", "side": "full"}}
+{"text": "sposta Zoom sul monitor esterno", "intent": "move", "lang": "it", "kind": "plain", "slots": {"app": "Zoom", "side": "other_monitor"}}
+{"text": "mandala sul secondo monitor", "intent": "move", "lang": "it", "kind": "colloquial", "slots": {"app": "", "side": "other_monitor"}}
+{"text": "porta Chrome sull'altro monitor", "intent": "move", "lang": "it", "kind": "plain", "slots": {"app": "Chrome", "side": "other_monitor"}}
+{"text": "sposta tims a sinistra", "intent": "move", "lang": "it", "kind": "stt_error", "slots": {"app": "tims", "side": "left"}}
+{"text": "metti crome a tutto scermo", "intent": "move", "lang": "it", "kind": "stt_error", "slots": {"app": "crome", "side": "full"}}
+{"text": "massimizza ecxel", "intent": "move", "lang": "it", "kind": "stt_error", "slots": {"app": "ecxel", "side": "full"}}
+{"text": "puoi mettere Paint sulla destra dello schermo", "intent": "move", "lang": "it", "kind": "colloquial", "slots": {"app": "Paint", "side": "right"}}
+{"text": "move this window to the right", "intent": "move", "lang": "en", "kind": "plain", "slots": {"app": "", "side": "right"}}
+{"text": "make Word full screen", "intent": "move", "lang": "en", "kind": "plain", "slots": {"app": "Word", "side": "full"}}
+{"text": "send Chrome to the other monitor", "intent": "move", "lang": "en", "kind": "plain", "slots": {"app": "Chrome", "side": "other_monitor"}}
+{"text": "put Slack on the left half", "intent": "move", "lang": "en", "kind": "plain", "slots": {"app": "Slack", "side": "left"}}
+{"text": "snap Teams to the right", "intent": "move", "lang": "en", "kind": "plain", "slots": {"app": "Teams", "side": "right"}}
+{"text": "maximize this window", "intent": "move", "lang": "en", "kind": "plain", "slots": {"app": "", "side": "full"}}
+{"text": "can you put Notepad on the right side", "intent": "move", "lang": "en", "kind": "colloquial", "slots": {"app": "Notepad", "side": "right"}}
+{"text": "full screen Spotify", "intent": "move", "lang": "en", "kind": "plain", "slots": {"app": "Spotify", "side": "full"}}
+{"text": "sposta Word a sinistra e apri Excel", "intent": "move", "lang": "it", "kind": "compound", "slots": {"app": "Word", "side": "left", "second_intent": "open"}}
+{"text": "metti Chrome a destra e poi abbassa Teams", "intent": "move", "lang": "it", "kind": "compound", "slots": {"app": "Chrome", "side": "right", "second_intent": "minimize"}}
+{"text": "move Excel to the left and open Calculator", "intent": "move", "lang": "en", "kind": "compound", "slots": {"app": "Excel", "side": "left", "second_intent": "open"}}
+{"text": "abbassa Spotify", "intent": "minimize", "lang": "it", "kind": "plain", "slots": {"app": "Spotify"}}
+{"text": "nascondi Slack", "intent": "minimize", "lang": "it", "kind": "plain", "slots": {"app": "Slack"}}
+{"text": "puoi abbassarmi Zoom", "intent": "minimize", "lang": "it", "kind": "colloquial", "slots": {"app": "Zoom"}}
+{"text": "mi togli dalla vista Telegram", "intent": "minimize", "lang": "it", "kind": "colloquial", "slots": {"app": "Telegram"}}
+{"text": "metti WhatsApp nella barra delle applicazioni", "intent": "minimize", "lang": "it", "kind": "plain", "slots": {"app": "WhatsApp"}}
+{"text": "riduci Paint", "intent": "minimize", "lang": "it", "kind": "plain", "slots": {"app": "Paint"}}
+{"text": "minimizza Excel", "intent": "minimize", "lang": "it", "kind": "plain", "slots": {"app": "Excel"}}
+{"text": "ehm nascondi la finestra di Teams", "intent": "minimize", "lang": "it", "kind": "colloquial", "slots": {"app": "Teams"}}
+{"text": "togli Firefox dallo schermo", "intent": "minimize", "lang": "it", "kind": "colloquial", "slots": {"app": "Firefox"}}
+{"text": "abbassa questa finestra", "intent": "minimize", "lang": "it", "kind": "plain", "slots": {"app": ""}}
+{"text": "nascondi aotlook", "intent": "minimize", "lang": "it", "kind": "stt_error", "slots": {"app": "aotlook"}}
+{"text": "abbassa tims", "intent": "minimize", "lang": "it", "kind": "stt_error", "slots": {"app": "tims"}}
+{"text": "minimizza crome", "intent": "minimize", "lang": "it", "kind": "stt_error", "slots": {"app": "crome"}}
+{"text": "riduci a icona wurd", "intent": "minimize", "lang": "it", "kind": "stt_error", "slots": {"app": "wurd"}}
+{"text": "dai nascondimi OneNote che c'è gente", "intent": "minimize", "lang": "it", "kind": "colloquial", "slots": {"app": "OneNote"}}
+{"text": "minimize Zoom", "intent": "minimize", "lang": "en", "kind": "plain", "slots": {"app": "Zoom"}}
+{"text": "hide Spotify", "intent": "minimize", "lang": "en", "kind": "plain", "slots": {"app": "Spotify"}}
+{"text": "send Outlook to the taskbar", "intent": "minimize", "lang": "en", "kind": "plain", "slots": {"app": "Outlook"}}
+{"text": "get Chrome out of the way", "intent": "minimize", "lang": "en", "kind": "colloquial", "slots": {"app": "Chrome"}}
+{"text": "minimise this window", "intent": "minimize", "lang": "en", "kind": "plain", "slots": {"app": ""}}
+{"text": "hide Telegram for now", "intent": "minimize", "lang": "en", "kind": "colloquial", "slots": {"app": "Telegram"}}
+{"text": "put Word down on the taskbar", "intent": "minimize", "lang": "en", "kind": "plain", "slots": {"app": "Word"}}
+{"text": "minimizza Teams e apri Word", "intent": "minimize", "lang": "it", "kind": "compound", "slots": {"app": "Teams", "second_intent": "open"}}
+{"text": "hide Slack and pause the music", "intent": "minimize", "lang": "en", "kind": "compound", "slots": {"app": "Slack", "second_intent": "media"}}
+{"text": "cerca il preventivo della settimana scorsa", "intent": "find_files", "lang": "it", "kind": "plain", "slots": {"query": "preventivo", "when": "last_week"}}
+{"text": "trova i pdf di questa settimana", "intent": "find_files", "lang": "it", "kind": "plain", "slots": {"query": "pdf", "when": "this_week"}}
+{"text": "dov'è la presentazione per Rossi", "intent": "find_files", "lang": "it", "kind": "plain", "slots": {"query": "presentazione Rossi", "when": "any"}}
+{"text": "mi trovi la fattura di ieri", "intent": "find_files", "lang": "it", "kind": "colloquial", "slots": {"query": "fattura", "when": "yesterday"}}
+{"text": "ehm cerca i file di oggi", "intent": "find_files", "lang": "it", "kind": "colloquial", "slots": {"query": "", "when": "today"}}
+{"text": "cerca nel computer il contratto di affitto", "intent": "find_files", "lang": "it", "kind": "plain", "slots": {"query": "contratto di affitto", "when": "any"}}
+{"text": "trovami il foglio con i prezzi dei fornitori", "intent": "find_files", "lang": "it", "kind": "colloquial", "slots": {"query": "prezzi fornitori", "when": "any"}}
+{"text": "fammi vedere i file di ieri", "intent": "find_files", "lang": "it", "kind": "colloquial", "slots": {"query": "", "when": "yesterday"}}
+{"text": "cerca un file che parla di budget 2026", "intent": "find_files", "lang": "it", "kind": "plain", "slots": {"query": "budget 2026", "when": "any"}}
+{"text": "dove ho messo la tesi", "intent": "find_files", "lang": "it", "kind": "colloquial", "slots": {"query": "tesi", "when": "any"}}
+{"text": "cerca i documenti modificati questa settimana", "intent": "find_files", "lang": "it", "kind": "plain", "slots": {"query": "", "when": "this_week"}}
+{"text": "trova il fiel delle spese di marzo", "intent": "find_files", "lang": "it", "kind": "stt_error", "slots": {"query": "spese di marzo", "when": "any"}}
+{"text": "cercami il verbale della riunione della settimana scorsa", "intent": "find_files", "lang": "it", "kind": "colloquial", "slots": {"query": "verbale riunione", "when": "last_week"}}
+{"text": "cerca i file di oggi che parlano di Bianchi", "intent": "find_files", "lang": "it", "kind": "plain", "slots": {"query": "Bianchi", "when": "today"}}
+{"text": "dove sta quel documento sulla privacy", "intent": "find_files", "lang": "it", "kind": "colloquial", "slots": {"query": "privacy", "when": "any"}}
+{"text": "trova lo scontrino di ieri sera", "intent": "find_files", "lang": "it", "kind": "plain", "slots": {"query": "scontrino", "when": "yesterday"}}
+{"text": "cerca file sul bilancio trimestrale", "intent": "find_files", "lang": "it", "kind": "plain", "slots": {"query": "bilancio trimestrale", "when": "any"}}
+{"text": "cercam i file di ieri sula fattura", "intent": "find_files", "lang": "it", "kind": "stt_error", "slots": {"query": "fattura", "when": "yesterday"}}
+{"text": "mi ritrovi il curriculum", "intent": "find_files", "lang": "it", "kind": "colloquial", "slots": {"query": "curriculum", "when": "any"}}
+{"text": "find the presentation from last week", "intent": "find_files", "lang": "en", "kind": "plain", "slots": {"query": "presentation", "when": "last_week"}}
+{"text": "search for files about the budget", "intent": "find_files", "lang": "en", "kind": "plain", "slots": {"query": "budget", "when": "any"}}
+{"text": "where is my resume", "intent": "find_files", "lang": "en", "kind": "colloquial", "slots": {"query": "resume", "when": "any"}}
+{"text": "find files I edited today", "intent": "find_files", "lang": "en", "kind": "plain", "slots": {"query": "", "when": "today"}}
+{"text": "look for the lease agreement on my computer", "intent": "find_files", "lang": "en", "kind": "plain", "slots": {"query": "lease agreement", "when": "any"}}
+{"text": "show me last week's spreadsheets", "intent": "find_files", "lang": "en", "kind": "plain", "slots": {"query": "spreadsheets", "when": "last_week"}}
+{"text": "locate the Marco contract", "intent": "find_files", "lang": "en", "kind": "plain", "slots": {"query": "Marco contract", "when": "any"}}
+{"text": "find the budget file and open Excel", "intent": "find_files", "lang": "en", "kind": "compound", "slots": {"query": "budget", "when": "any", "second_intent": "open"}}
+{"text": "cerca i file di ieri e apri Esplora file", "intent": "find_files", "lang": "it", "kind": "compound", "slots": {"query": "", "when": "yesterday", "second_intent": "open"}}
+{"text": "cerca su Maps un ristorante vicino a me", "intent": "web", "lang": "it", "kind": "plain", "slots": {"site": "maps", "query": "ristorante vicino a me"}}
+{"text": "portami su Google Maps", "intent": "web", "lang": "it", "kind": "plain", "slots": {"site": "maps", "query": ""}}
+{"text": "vai su Wikipedia", "intent": "web", "lang": "it", "kind": "plain", "slots": {"site": "wikipedia", "query": ""}}
+{"text": "cerca su Amazon una tastiera meccanica", "intent": "web", "lang": "it", "kind": "plain", "slots": {"site": "amazon", "query": "tastiera meccanica"}}
+{"text": "apri YouTube", "intent": "web", "lang": "it", "kind": "plain", "slots": {"site": "youtube", "query": ""}}
+{"text": "metti su YouTube un video di cucina", "intent": "web", "lang": "it", "kind": "colloquial", "slots": {"site": "youtube", "query": "video di cucina"}}
+{"text": "mi cerchi su Google come si cambia una gomma", "intent": "web", "lang": "it", "kind": "colloquial", "slots": {"site": "google", "query": "come si cambia una gomma"}}
+{"text": "cerca su Google quanto costa un biglietto per Roma", "intent": "web", "lang": "it", "kind": "plain", "slots": {"site": "google", "query": "quanto costa un biglietto per Roma"}}
+{"text": "indicazioni per Milano su Maps", "intent": "web", "lang": "it", "kind": "plain", "slots": {"site": "maps", "query": "Milano"}}
+{"text": "controlla la posta su Gmail", "intent": "web", "lang": "it", "kind": "colloquial", "slots": {"site": "gmail", "query": ""}}
+{"text": "Navika su YouTube", "intent": "web", "lang": "it", "kind": "stt_error", "slots": {"site": "youtube", "query": "Navika"}}
+{"text": "cerca su iutube i Maneskin", "intent": "web", "lang": "it", "kind": "stt_error", "slots": {"site": "youtube", "query": "Maneskin"}}
+{"text": "vai su amazon punto it", "intent": "web", "lang": "it", "kind": "stt_error", "slots": {"site": "amazon", "query": ""}}
+{"text": "cerca su gugol la ricetta della carbonara", "intent": "web", "lang": "it", "kind": "stt_error", "slots": {"site": "google", "query": "ricetta della carbonara"}}
+{"text": "cerca su vichipedia Garibaldi", "intent": "web", "lang": "it", "kind": "stt_error", "slots": {"site": "wikipedia", "query": "Garibaldi"}}
+{"text": "dai cercami su Amazon delle cuffie wireless", "intent": "web", "lang": "it", "kind": "colloquial", "slots": {"site": "amazon", "query": "cuffie wireless"}}
+{"text": "fammi vedere su YouTube i trailer di Dune", "intent": "web", "lang": "it", "kind": "colloquial", "slots": {"site": "youtube", "query": "trailer di Dune"}}
+{"text": "apri Maps", "intent": "web", "lang": "it", "kind": "plain", "slots": {"site": "maps", "query": ""}}
+{"text": "search Google for best pizza in Rome", "intent": "web", "lang": "en", "kind": "plain", "slots": {"site": "google", "query": "best pizza in Rome"}}
+{"text": "open YouTube", "intent": "web", "lang": "en", "kind": "plain", "slots": {"site": "youtube", "query": ""}}
+{"text": "look up Napoleon on Wikipedia", "intent": "web", "lang": "en", "kind": "plain", "slots": {"site": "wikipedia", "query": "Napoleon"}}
+{"text": "search Amazon for a USB hub", "intent": "web", "lang": "en", "kind": "plain", "slots": {"site": "amazon", "query": "USB hub"}}
+{"text": "show me Maps directions to the airport", "intent": "web", "lang": "en", "kind": "colloquial", "slots": {"site": "maps", "query": "airport"}}
+{"text": "go to Gmail", "intent": "web", "lang": "en", "kind": "plain", "slots": {"site": "gmail", "query": ""}}
+{"text": "youtube how to tie a tie", "intent": "web", "lang": "en", "kind": "colloquial", "slots": {"site": "youtube", "query": "how to tie a tie"}}
+{"text": "cerca su Google il meteo e apri Spotify", "intent": "web", "lang": "it", "kind": "compound", "slots": {"site": "google", "query": "meteo", "second_intent": "open"}}
+{"text": "open Gmail and then new tab", "intent": "web", "lang": "en", "kind": "compound", "slots": {"site": "gmail", "query": "", "second_intent": "browser"}}
+{"text": "apri un'altra scheda", "intent": "browser", "lang": "it", "kind": "plain", "slots": {"action": "new_tab"}}
+{"text": "chiudi la tab", "intent": "browser", "lang": "it", "kind": "plain", "slots": {"action": "close_tab"}}
+{"text": "chiudi la scheda corrente", "intent": "browser", "lang": "it", "kind": "plain", "slots": {"action": "close_tab"}}
+{"text": "indietro di una pagina", "intent": "browser", "lang": "it", "kind": "plain", "slots": {"action": "back"}}
+{"text": "vai alla pagina successiva", "intent": "browser", "lang": "it", "kind": "plain", "slots": {"action": "forward"}}
+{"text": "aggiorna la pagina", "intent": "browser", "lang": "it", "kind": "plain", "slots": {"action": "reload"}}
+{"text": "dai ricarica un attimo", "intent": "browser", "lang": "it", "kind": "colloquial", "slots": {"action": "reload"}}
+{"text": "mi riapri la scheda che ho chiuso", "intent": "browser", "lang": "it", "kind": "colloquial", "slots": {"action": "reopen_tab"}}
+{"text": "passa alla scheda dopo", "intent": "browser", "lang": "it", "kind": "plain", "slots": {"action": "next_tab"}}
+{"text": "scheda precedente", "intent": "browser", "lang": "it", "kind": "plain", "slots": {"action": "previous_tab"}}
+{"text": "vai alla tab a sinistra", "intent": "browser", "lang": "it", "kind": "colloquial", "slots": {"action": "previous_tab"}}
+{"text": "fammi tornare alla pagina di prima", "intent": "browser", "lang": "it", "kind": "colloquial", "slots": {"action": "back"}}
+{"text": "apri una nuova schedda", "intent": "browser", "lang": "it", "kind": "stt_error", "slots": {"action": "new_tab"}}
+{"text": "ricarica la pajina", "intent": "browser", "lang": "it", "kind": "stt_error", "slots": {"action": "reload"}}
+{"text": "torna indientro", "intent": "browser", "lang": "it", "kind": "stt_error", "slots": {"action": "back"}}
+{"text": "riapri l'ultima scheda chiusa", "intent": "browser", "lang": "it", "kind": "plain", "slots": {"action": "reopen_tab"}}
+{"text": "allora chiudi questa scheda che non serve", "intent": "browser", "lang": "it", "kind": "colloquial", "slots": {"action": "close_tab"}}
+{"text": "open another tab please", "intent": "browser", "lang": "en", "kind": "colloquial", "slots": {"action": "new_tab"}}
+{"text": "close the tab", "intent": "browser", "lang": "en", "kind": "plain", "slots": {"action": "close_tab"}}
+{"text": "reopen the closed tab", "intent": "browser", "lang": "en", "kind": "plain", "slots": {"action": "reopen_tab"}}
+{"text": "go forward", "intent": "browser", "lang": "en", "kind": "plain", "slots": {"action": "forward"}}
+{"text": "hit refresh", "intent": "browser", "lang": "en", "kind": "colloquial", "slots": {"action": "reload"}}
+{"text": "next tab", "intent": "browser", "lang": "en", "kind": "plain", "slots": {"action": "next_tab"}}
+{"text": "switch to the previous tab", "intent": "browser", "lang": "en", "kind": "plain", "slots": {"action": "previous_tab"}}
+{"text": "take me back a page", "intent": "browser", "lang": "en", "kind": "colloquial", "slots": {"action": "back"}}
+{"text": "chiudi la scheda e apri Excel", "intent": "browser", "lang": "it", "kind": "compound", "slots": {"action": "close_tab", "second_intent": "open"}}
+{"text": "reload the page and go to YouTube", "intent": "browser", "lang": "en", "kind": "compound", "slots": {"action": "reload", "second_intent": "web"}}
+{"text": "metti in play", "intent": "media", "lang": "it", "kind": "colloquial", "slots": {"action": "play_pause"}}
+{"text": "stop alla musica", "intent": "media", "lang": "it", "kind": "colloquial", "slots": {"action": "play_pause"}}
+{"text": "salta questa canzone", "intent": "media", "lang": "it", "kind": "colloquial", "slots": {"action": "next"}}
+{"text": "passa alla prossima", "intent": "media", "lang": "it", "kind": "colloquial", "slots": {"action": "next"}}
+{"text": "brano precedente", "intent": "media", "lang": "it", "kind": "plain", "slots": {"action": "previous"}}
+{"text": "volume più alto", "intent": "media", "lang": "it", "kind": "plain", "slots": {"action": "volume_up"}}
+{"text": "dai alza un po' il volume", "intent": "media", "lang": "it", "kind": "colloquial", "slots": {"action": "volume_up"}}
+{"text": "abbassa un po' la musica", "intent": "media", "lang": "it", "kind": "colloquial", "slots": {"action": "volume_down"}}
+{"text": "metti il volume più basso", "intent": "media", "lang": "it", "kind": "plain", "slots": {"action": "volume_down"}}
+{"text": "silenzio", "intent": "media", "lang": "it", "kind": "colloquial", "slots": {"action": "mute"}}
+{"text": "muta tutto", "intent": "media", "lang": "it", "kind": "colloquial", "slots": {"action": "mute"}}
+{"text": "togli il volume", "intent": "media", "lang": "it", "kind": "colloquial", "slots": {"action": "mute"}}
+{"text": "metti pausa alla canzone", "intent": "media", "lang": "it", "kind": "plain", "slots": {"action": "play_pause"}}
+{"text": "alza il volumme", "intent": "media", "lang": "it", "kind": "stt_error", "slots": {"action": "volume_up"}}
+{"text": "canzone sucessiva", "intent": "media", "lang": "it", "kind": "stt_error", "slots": {"action": "next"}}
+{"text": "metti in puasa", "intent": "media", "lang": "it", "kind": "stt_error", "slots": {"action": "play_pause"}}
+{"text": "fai ripartire la musica", "intent": "media", "lang": "it", "kind": "colloquial", "slots": {"action": "play_pause"}}
+{"text": "torna al brano di prima", "intent": "media", "lang": "it", "kind": "colloquial", "slots": {"action": "previous"}}
+{"text": "resume playback", "intent": "media", "lang": "en", "kind": "plain", "slots": {"action": "play_pause"}}
+{"text": "skip this track", "intent": "media", "lang": "en", "kind": "plain", "slots": {"action": "next"}}
+{"text": "previous track", "intent": "media", "lang": "en", "kind": "plain", "slots": {"action": "previous"}}
+{"text": "turn it up", "intent": "media", "lang": "en", "kind": "colloquial", "slots": {"action": "volume_up"}}
+{"text": "mute the sound", "intent": "media", "lang": "en", "kind": "plain", "slots": {"action": "mute"}}
+{"text": "lower the volume a bit", "intent": "media", "lang": "en", "kind": "colloquial", "slots": {"action": "volume_down"}}
+{"text": "louder please", "intent": "media", "lang": "en", "kind": "colloquial", "slots": {"action": "volume_up"}}
+{"text": "metti in pausa e apri Outlook", "intent": "media", "lang": "it", "kind": "compound", "slots": {"action": "play_pause", "second_intent": "open"}}
+{"text": "mute and open Teams", "intent": "media", "lang": "en", "kind": "compound", "slots": {"action": "mute", "second_intent": "open"}}
+{"text": "apri download", "intent": "folder", "lang": "it", "kind": "plain", "slots": {"folder": "downloads"}}
+{"text": "mostrami la cartella documenti", "intent": "folder", "lang": "it", "kind": "plain", "slots": {"folder": "documents"}}
+{"text": "portami sul desktop", "intent": "folder", "lang": "it", "kind": "colloquial", "slots": {"folder": "desktop"}}
+{"text": "aprimi la cartella delle foto", "intent": "folder", "lang": "it", "kind": "colloquial", "slots": {"folder": "pictures"}}
+{"text": "apri la cartella musica", "intent": "folder", "lang": "it", "kind": "plain", "slots": {"folder": "music"}}
+{"text": "apri la cartella dei video", "intent": "folder", "lang": "it", "kind": "plain", "slots": {"folder": "videos"}}
+{"text": "fammi vedere quello che ho scaricato per ultimo", "intent": "folder", "lang": "it", "kind": "colloquial", "slots": {"folder": "latest_download"}}
+{"text": "apri l'ultimo download", "intent": "folder", "lang": "it", "kind": "plain", "slots": {"folder": "latest_download"}}
+{"text": "mi apri i download", "intent": "folder", "lang": "it", "kind": "colloquial", "slots": {"folder": "downloads"}}
+{"text": "apri la cartella scrivania", "intent": "folder", "lang": "it", "kind": "plain", "slots": {"folder": "desktop"}}
+{"text": "apri la cartela dei documenti", "intent": "folder", "lang": "it", "kind": "stt_error", "slots": {"folder": "documents"}}
+{"text": "apri i dauload", "intent": "folder", "lang": "it", "kind": "stt_error", "slots": {"folder": "downloads"}}
+{"text": "ehm apri la cartella video", "intent": "folder", "lang": "it", "kind": "colloquial", "slots": {"folder": "videos"}}
+{"text": "dove sono le immagini, aprimi la cartella", "intent": "folder", "lang": "it", "kind": "colloquial", "slots": {"folder": "pictures"}}
+{"text": "open my documents", "intent": "folder", "lang": "en", "kind": "plain", "slots": {"folder": "documents"}}
+{"text": "open the desktop folder", "intent": "folder", "lang": "en", "kind": "plain", "slots": {"folder": "desktop"}}
+{"text": "show my pictures folder", "intent": "folder", "lang": "en", "kind": "plain", "slots": {"folder": "pictures"}}
+{"text": "open the music folder", "intent": "folder", "lang": "en", "kind": "plain", "slots": {"folder": "music"}}
+{"text": "open my videos folder", "intent": "folder", "lang": "en", "kind": "plain", "slots": {"folder": "videos"}}
+{"text": "open the latest download", "intent": "folder", "lang": "en", "kind": "plain", "slots": {"folder": "latest_download"}}
+{"text": "open downloads", "intent": "folder", "lang": "en", "kind": "plain", "slots": {"folder": "downloads"}}
+{"text": "apri download e cerca la fattura", "intent": "folder", "lang": "it", "kind": "compound", "slots": {"folder": "downloads", "second_intent": "find_files"}}
+{"text": "open documents and then Notepad", "intent": "folder", "lang": "en", "kind": "compound", "slots": {"folder": "documents", "second_intent": "open"}}
+{"text": "apri le impostazioni delle notifiche", "intent": "settings", "lang": "it", "kind": "plain", "slots": {"page": "notifications"}}
+{"text": "impostazioni notifiche", "intent": "settings", "lang": "it", "kind": "plain", "slots": {"page": "notifications"}}
+{"text": "mi apri le impostazioni del bluetooth", "intent": "settings", "lang": "it", "kind": "colloquial", "slots": {"page": "bluetooth"}}
+{"text": "voglio cambiare la rete wifi", "intent": "settings", "lang": "it", "kind": "colloquial", "slots": {"page": "wifi"}}
+{"text": "impostazioni del suono", "intent": "settings", "lang": "it", "kind": "plain", "slots": {"page": "sound"}}
+{"text": "apri le impostazioni del display", "intent": "settings", "lang": "it", "kind": "plain", "slots": {"page": "display"}}
+{"text": "risoluzione dello schermo", "intent": "settings", "lang": "it", "kind": "colloquial", "slots": {"page": "display"}}
+{"text": "devo collegare le cuffie bluetooth", "intent": "settings", "lang": "it", "kind": "colloquial", "slots": {"page": "bluetooth"}}
+{"text": "impostazioni blututh", "intent": "settings", "lang": "it", "kind": "stt_error", "slots": {"page": "bluetooth"}}
+{"text": "impostazioni uaifai", "intent": "settings", "lang": "it", "kind": "stt_error", "slots": {"page": "wifi"}}
+{"text": "apri impostazioni di rete wi-fi", "intent": "settings", "lang": "it", "kind": "plain", "slots": {"page": "wifi"}}
+{"text": "dai fammi vedere le impostazioni dell'audio", "intent": "settings", "lang": "it", "kind": "colloquial", "slots": {"page": "sound"}}
+{"text": "vorrei sistemare le notifiche di Windows", "intent": "settings", "lang": "it", "kind": "colloquial", "slots": {"page": "notifications"}}
+{"text": "impostazioni schermo", "intent": "settings", "lang": "it", "kind": "plain", "slots": {"page": "display"}}
+{"text": "open wifi settings", "intent": "settings", "lang": "en", "kind": "plain", "slots": {"page": "wifi"}}
+{"text": "notification settings", "intent": "settings", "lang": "en", "kind": "plain", "slots": {"page": "notifications"}}
+{"text": "display settings", "intent": "settings", "lang": "en", "kind": "plain", "slots": {"page": "display"}}
+{"text": "take me to the sound settings", "intent": "settings", "lang": "en", "kind": "colloquial", "slots": {"page": "sound"}}
+{"text": "bluetooth settings please", "intent": "settings", "lang": "en", "kind": "plain", "slots": {"page": "bluetooth"}}
+{"text": "I need to change my monitor settings", "intent": "settings", "lang": "en", "kind": "colloquial", "slots": {"page": "display"}}
+{"text": "apri le impostazioni wifi e poi apri Chrome", "intent": "settings", "lang": "it", "kind": "compound", "slots": {"page": "wifi", "second_intent": "open"}}
+{"text": "open sound settings and mute", "intent": "settings", "lang": "en", "kind": "compound", "slots": {"page": "sound", "second_intent": "media"}}
+{"text": "manda una mail a Marco", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "che ore sono", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "spegni il computer", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "cancella il file", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "ok grazie", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "apri la", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "allora", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "ehm", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "riavvia il pc", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "scrivi a Giulia su WhatsApp che arrivo tardi", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "quanto fa venticinque per quattro", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "che tempo fa domani a Torino", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "chiama Paolo", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "imposta una sveglia alle sette", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "oggi sono stato in riunione tutto il giorno", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "ricordami di comprare il latte", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "traduci questo testo in inglese", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "metti il pc in standby", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "formatta il disco", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "crea una nuova cartella", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "copia questo file sul desktop", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "stampa il documento", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "ieri ho aperto il documento e non funzionava niente", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "chi ha vinto la partita", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "dimmi una barzelletta", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "scrivi un riassunto di questo articolo", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "metti Teams a", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "vai su", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "apri la cartella", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "e poi", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "la scheda", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "ieri ho chiuso Chrome per sbaglio e ho perso tutto", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "domani devo ricordarmi di cercare quel file importante", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "secondo me Spotify è meglio di YouTube", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "Teams oggi è lentissimo", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "installa Photoshop", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "disinstalla Zoom", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "aggiorna Windows", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "fai uno screenshot", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "blocca lo schermo", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "fammi un caffè", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "leggi l'ultima mail", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "rispondi a questa mail dicendo di sì", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "salva il documento", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "elimina la cartella download", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "chiudi Word", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "chiudi tutte le finestre", "intent": "none", "lang": "it", "kind": "out_of_scope", "slots": {}}
+{"text": "send an email to Sarah", "intent": "none", "lang": "en", "kind": "out_of_scope", "slots": {}}
+{"text": "what time is it", "intent": "none", "lang": "en", "kind": "out_of_scope", "slots": {}}
+{"text": "shut down the computer", "intent": "none", "lang": "en", "kind": "out_of_scope", "slots": {}}
+{"text": "delete the file", "intent": "none", "lang": "en", "kind": "out_of_scope", "slots": {}}
+{"text": "okay thanks", "intent": "none", "lang": "en", "kind": "out_of_scope", "slots": {}}
+{"text": "open the", "intent": "none", "lang": "en", "kind": "out_of_scope", "slots": {}}
+{"text": "what's the weather like today", "intent": "none", "lang": "en", "kind": "out_of_scope", "slots": {}}
+{"text": "remind me to call Dad", "intent": "none", "lang": "en", "kind": "out_of_scope", "slots": {}}
+{"text": "I was just thinking about the meeting", "intent": "none", "lang": "en", "kind": "out_of_scope", "slots": {}}
+{"text": "write a poem about the sea", "intent": "none", "lang": "en", "kind": "out_of_scope", "slots": {}}
+{"text": "restart my laptop", "intent": "none", "lang": "en", "kind": "out_of_scope", "slots": {}}
+{"text": "take a screenshot", "intent": "none", "lang": "en", "kind": "out_of_scope", "slots": {}}
+{"text": "close Word", "intent": "none", "lang": "en", "kind": "out_of_scope", "slots": {}}
+{"text": "uninstall Zoom", "intent": "none", "lang": "en", "kind": "out_of_scope", "slots": {}}
+{"text": "tell me a joke", "intent": "none", "lang": "en", "kind": "out_of_scope", "slots": {}}
+{"text": "lock the screen", "intent": "none", "lang": "en", "kind": "out_of_scope", "slots": {}}
+{"text": "set a timer for ten minutes", "intent": "none", "lang": "en", "kind": "out_of_scope", "slots": {}}
+{"text": "um", "intent": "none", "lang": "en", "kind": "out_of_scope", "slots": {}}
+{"text": "go to", "intent": "none", "lang": "en", "kind": "out_of_scope", "slots": {}}
+{"text": "and then", "intent": "none", "lang": "en", "kind": "out_of_scope", "slots": {}}
+{"text": "I always forget to close the tab when I leave", "intent": "none", "lang": "en", "kind": "out_of_scope", "slots": {}}

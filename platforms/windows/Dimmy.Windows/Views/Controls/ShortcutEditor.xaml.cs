@@ -178,6 +178,7 @@ public sealed partial class ShortcutEditor : UserControl
             ["command"] = prefs.CommandHotkey ?? "",
             ["meeting"] = prefs.MeetingHotkey ?? "",
             ["dictionary"] = string.IsNullOrEmpty(prefs.DictHotkey) ? "ctrl+shift+d" : prefs.DictHotkey,
+            ["execute"] = prefs.ExecuteHotkey ?? "",
         };
     }
 
@@ -186,6 +187,7 @@ public sealed partial class ShortcutEditor : UserControl
         "command" => "Command shortcut",
         "meeting" => "Meeting shortcut",
         "dictionary" => "Add-to-dictionary shortcut",
+        "execute" => "PC commands shortcut",
         _ => "Dictation shortcut",
     };
 

@@ -649,6 +649,8 @@ public partial class App : Application
             // events from the Rust core; we route them through the
             // shared AppViewModel.SttChunkReceived hook.
             _appViewModel.SttChunkReceived += OnSttChunkReceived;
+            _appViewModel.PcLiveReceived += OnPcLive;
+            _appViewModel.PcLiveFired += OnPcLiveFired;
 
             // 2c. Realtime streaming dictation (Deepgram): each finalised
             // segment is typed at the cursor as the user speaks. The final
@@ -786,11 +788,19 @@ public partial class App : Application
         _hotkeyService.HotkeyReleased += OnHotkeyReleased;
         _hotkeyService.CommandHotkeyPressed += OnCommandHotkeyPressed;
         _hotkeyService.CommandHotkeyReleased += OnCommandHotkeyReleased;
+        _hotkeyService.ExecuteHotkeyPressed += OnExecuteHotkeyPressed;
+        _hotkeyService.ExecuteHotkeyReleased += OnExecuteHotkeyReleased;
         _hotkeyService.MeetingHotkeyPressed += OnMeetingHotkeyPressed;
         _hotkeyService.Register(_appViewModel.Shortcut);
         // Optional dedicated command-mode hotkey (empty = disabled). Runs on
         // the same hook, so it inherits toggle/PTT + every combo.
         _hotkeyService.SetCommandShortcut(_uiPrefs.CommandHotkey);
+        // EXPERIMENT (exp/pc-actions): the execute shortcut, Ctrl+Alt+X by default.
+        _hotkeyService.SetExecuteShortcut(_uiPrefs.PcCommandsEnabled ? _uiPrefs.ExecuteHotkey : "");
+        // The local router takes a few seconds to load: do it now, not on the first command.
+        DimmyNative.dimmy_pc_router_select(PcRouterModelId);
+        Services.ModelDownloadCenter.Instance.Changed += OnPcRouterDownloadChanged;
+        if (_uiPrefs.PcCommandsEnabled) EnsurePcRouter(announce: false);
         // Optional meeting start/stop hotkey (empty = disabled). Toggle-only.
         _hotkeyService.SetMeetingShortcut(_uiPrefs.MeetingHotkey);
     }
@@ -1053,6 +1063,71 @@ public partial class App : Application
     /// (HotkeyService asks HotkeyEdgePolicy with the live mode).</summary>
     private void OnCommandHotkeyReleased() =>
         _dispatcherQueue?.TryEnqueue(async () => await DictationInputAsync(DictationInputKind.Release, Services.SessionKind.Command));
+
+    /// <summary>EXPERIMENT: execute shortcut edges, same session rules as the
+    /// command shortcut.</summary>
+    private void OnExecuteHotkeyPressed() =>
+        _dispatcherQueue?.TryEnqueue(async () => await DictationInputAsync(DictationInputKind.Press, Services.SessionKind.Execute));
+
+    private void OnExecuteHotkeyReleased() =>
+        _dispatcherQueue?.TryEnqueue(async () => await DictationInputAsync(DictationInputKind.Release, Services.SessionKind.Execute));
+
+    /// <summary>EXPERIMENT: turn voice PC commands on or off. On: bind the
+    /// shortcut and make sure the local router model is there (Claude decides
+    /// alone until it is). Off: unbind the shortcut.</summary>
+    public void SetPcCommandsEnabled(bool on, string combo)
+    {
+        ReregisterExecuteHotkey(on ? combo : "");
+        if (on) EnsurePcRouter(announce: true);
+    }
+
+    /// <summary>EXPERIMENT: switch the local router's encoder; fetch it if it is
+    /// missing, then load it in the background.</summary>
+    public void SetPcRouterModel(string id, bool enabled)
+    {
+        DimmyNative.dimmy_pc_router_select(id);
+        if (enabled) EnsurePcRouter(announce: true);
+    }
+
+    private string PcRouterModelId =>
+        string.IsNullOrEmpty(_uiPrefs.PcRouterModel) ? "e5-small" : _uiPrefs.PcRouterModel;
+
+    /// <summary>Load the selected encoder, or queue its download in the download
+    /// center (Providers → On-device shows it, resumes it, deletes it).
+    /// OnPcRouterDownloadChanged loads it when the download is done.</summary>
+    private void EnsurePcRouter(bool announce)
+    {
+        var id = PcRouterModelId;
+        if (DimmyNative.dimmy_pc_router_model_present(id) == 1)
+        {
+            DimmyNative.dimmy_pc_router_warm();
+            return;
+        }
+        if (DimmyNative.dimmy_model_download_enqueue("pc-router:" + id) < 0) return;
+        if (announce)
+            Services.DictNotificationService.ShowPcAction("Comandi vocali per il PC",
+                "Scarico il modello locale (Providers → On-device). Nel frattempo i comandi li decide Claude.");
+    }
+
+    private void OnPcRouterDownloadChanged(Services.ModelDownloadJob job)
+    {
+        if (!_uiPrefs.PcCommandsEnabled || job.Id != "pc-router:" + PcRouterModelId) return;
+        if (job.State == "done")
+        {
+            DimmyNative.dimmy_pc_router_warm();
+            Services.DictNotificationService.ShowPcAction("Comandi vocali per il PC", "Modello locale pronto: i comandi semplici partono subito.");
+        }
+        else if (job.State == "failed")
+        {
+            Services.DictNotificationService.ShowPcAction("Comandi vocali per il PC", "Download del modello non riuscito: riprova da Providers → On-device.");
+        }
+    }
+
+    public void ReregisterExecuteHotkey(string combo)
+    {
+        try { _hotkeyService?.SetExecuteShortcut(combo); }
+        catch (Exception ex) { Log($"ReregisterExecuteHotkey exc: {ex.Message}", "Hotkey"); }
+    }
 
     /// <summary>Add-to-dictionary handler — fires on the DictHotkey
     /// pump thread, marshals to UI thread to read clipboard and call
@@ -1645,6 +1720,94 @@ public partial class App : Application
         }
     }
 
+    /// <summary>EXPERIMENT (exp/pc-actions): show, at the bottom of the screen,
+    /// what the local router makes of the words so far and whether a live
+    /// rule would act now. Nothing is executed from here.</summary>
+    private void OnPcLive(System.Text.Json.JsonElement p)
+    {
+        if (!_appViewModel.ExecuteOneShot) return;
+        RestartPcSessionTimeout();
+        string S(string n) => p.TryGetProperty(n, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String ? v.GetString() ?? "" : "";
+        bool B(string n) => p.TryGetProperty(n, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.True;
+        var detail = S("detail");
+        var intent = detail.StartsWith("intent=") ? detail.Substring(7).Split(' ')[0] : "?";
+        var margin = p.TryGetProperty("margin", out var m) && m.ValueKind == System.Text.Json.JsonValueKind.Number ? m.GetDouble() : 0;
+        var say = S("say");
+        var threshold = p.TryGetProperty("threshold", out var th) && th.ValueKind == System.Text.Json.JsonValueKind.Number ? th.GetDouble() : 0.035;
+        var guess = intent switch
+        {
+            "Open" => "aprire un'app",
+            "Tile" => "affiancare due finestre",
+            "Move" => "spostare una finestra",
+            "FindFiles" => "cercare dei file",
+            "Minimize" => "ridurre a icona una finestra",
+            "Web" => "aprire o cercare un sito",
+            "Browser" => "un comando del browser",
+            "Media" => "musica o volume",
+            "Folder" => "aprire una cartella",
+            "Settings" => "aprire le impostazioni",
+            _ => "",
+        };
+        var sureness = threshold > 0 ? margin / threshold : 0;
+        Views.PcLiveWindow.Update(S("text"), say, guess, sureness, B("sure") && !B("live_safe"));
+    }
+
+    /// <summary>EXPERIMENT (exp/pc-actions): the core ran one command of the
+    /// open session (or dropped words it did not understand). The recording
+    /// goes on: the next command is said without pressing the key again.
+    /// Pressing it closes the session.</summary>
+    private async void OnPcLiveFired(System.Text.Json.JsonElement p)
+    {
+        string S(string n) => p.TryGetProperty(n, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String ? v.GetString() ?? "" : "";
+        var ok = p.TryGetProperty("ok", out var o) && o.ValueKind == System.Text.Json.JsonValueKind.True;
+        PttLog($"Execute LIVE: \"{S("text")}\" -> {S("said")} ok={ok} {S("error")}");
+        RestartPcSessionTimeout();
+        var help = S("help");
+        if (help.Length > 0)
+        {
+            Views.PcLiveWindow.ShowHelp(help, sessionOpen: true);
+            return;
+        }
+        const string next = "Dimmi il prossimo comando, o premi il tasto per chiudere";
+        Views.PcLiveWindow.Finish(S("said"), ok ? $"✓ Fatto. {next}" : $"Non fatto: {S("error")}. {next}");
+        Services.DictNotificationService.ShowPcAction(ok ? S("said") : "Non fatto", ok ? S("text") : S("error"));
+        var paste = S("paste");
+        if (ok && paste.Length > 0)
+        {
+            await Task.Delay(150);
+            await TextInjectionService.PasteText(paste, _appViewModel.KeepInClipboard);
+        }
+    }
+
+    /// <summary>An open command session with nothing said for this long closes
+    /// itself, so the microphone is not left on. Restarted by every partial
+    /// and every command: a timeout, not a poll.</summary>
+    private static readonly TimeSpan PcSessionIdle = TimeSpan.FromSeconds(60);
+    private DispatcherTimer? _pcSessionTimer;
+
+    private void RestartPcSessionTimeout()
+    {
+        if (_pcSessionTimer == null)
+        {
+            _pcSessionTimer = new DispatcherTimer { Interval = PcSessionIdle };
+            _pcSessionTimer.Tick += (_, _) =>
+            {
+                _pcSessionTimer.Stop();
+                if (!_appViewModel.ExecuteOneShot || !Services.DictationSession.IsRecording) return;
+                PttLog("Execute: session idle for 60 s, closing it");
+                _appViewModel.SuppressRecordingStarted = true;
+                DimmyNative.dimmy_cancel_recording();
+                Services.DictationSession.Cancel();
+                _appViewModel.ExecuteOneShot = false;
+                _targetContext = null;
+                _appViewModel.SetState(AppState.Idle);
+                Views.PcLiveWindow.Finish("", "Sessione chiusa: nessun comando da un minuto");
+            };
+        }
+        _pcSessionTimer.Stop();
+        _pcSessionTimer.Start();
+    }
+
     /// <summary>Type one finalised streaming-dictation segment at the
     /// cursor. Runs on the UI thread (HandleEvent is dispatched there).
     /// Uses Unicode SendInput rather than clipboard paste so repeated
@@ -1907,6 +2070,12 @@ public partial class App : Application
             BeginCommandSelectionCapture();
             _appViewModel.CommandOneShot = true;
         }
+        if (kind == Services.SessionKind.Execute)
+        {
+            _appViewModel.ExecuteOneShot = true;
+            DimmyNative.dimmy_pc_prepare();
+            RestartPcSessionTimeout();
+        }
         _appViewModel.SuppressRecordingStarted = false;
         var result = DimmyNative.dimmy_start_recording();
         if (result >= 0)
@@ -1927,6 +2096,7 @@ public partial class App : Application
         }
         Services.DictationSession.StartFailed();
         if (kind == Services.SessionKind.Command) _appViewModel.CommandOneShot = false;
+        if (kind == Services.SessionKind.Execute) _appViewModel.ExecuteOneShot = false;
         if (result == -1)
             _appViewModel.SetError("No API key configured");
         else if (result == -7)
@@ -1948,6 +2118,7 @@ public partial class App : Application
             _appViewModel.CommandOneShot = false;
             _pendingCommandSelection = null;
         }
+        _appViewModel.ExecuteOneShot = false;
         _appViewModel.SetState(AppState.Idle);
         PttLog($"{kind}: tap too short to be speech — recording discarded");
     }
@@ -1973,6 +2144,11 @@ public partial class App : Application
             // insert when nothing is selected). Two ways in: the sticky
             // pill-menu toggle (CommandMode) OR a one-shot fired by the
             // dedicated command hotkey (CommandOneShot).
+            if (_appViewModel.ExecuteOneShot)
+            {
+                await StopAndExecute();
+                return;
+            }
             if (_appViewModel.CommandMode || _appViewModel.CommandOneShot)
             {
                 await StopAndCommandTransform();
@@ -2173,6 +2349,76 @@ public partial class App : Application
             // output afterwards. The sticky menu toggle (CommandMode) is
             // left untouched, so it stays on across commands as intended.
             _appViewModel.CommandOneShot = false;
+        }
+    }
+
+    /// <summary>EXPERIMENT (exp/pc-actions): the spoken words drive the PC.
+    /// The core plans and acts (open, place, tile, find files); a
+    /// `type_at_end` step hands back text, which is pasted here with the same
+    /// primitive as dictation, into the window the core just brought forward.</summary>
+    private async Task StopAndExecute()
+    {
+        try
+        {
+            var (spoken, json) = await Services.TranscriptionService.StopAndExecuteAsync();
+            if (spoken == null)
+            {
+                PttLog("Execute: empty transcript");
+                Views.PcLiveWindow.Finish("", "Non ho sentito niente");
+                if (_appViewModel.CurrentState != AppState.Error)
+                    _appViewModel.SetState(AppState.Idle);
+                return;
+            }
+            PttLog($"Execute: \"{spoken}\" -> {json}");
+            using var doc = System.Text.Json.JsonDocument.Parse(string.IsNullOrEmpty(json) ? "{}" : json);
+            var root = doc.RootElement;
+            string? Str(string name) =>
+                root.TryGetProperty(name, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String ? v.GetString() : null;
+            var said = Str("said") ?? "";
+            var error = Str("error");
+            var paste = Str("paste");
+            var engineUsed = Str("engine") ?? "";
+            var help = Str("help");
+            if (!string.IsNullOrEmpty(help))
+            {
+                Views.PcLiveWindow.ShowHelp(help, sessionOpen: false);
+                _appViewModel.SetState(AppState.Idle);
+                return;
+            }
+            _pcSessionTimer?.Stop();
+            if (engineUsed == "live")
+                Views.PcLiveWindow.Finish("", said);
+            else
+                Views.PcLiveWindow.Finish(said, error == null
+                    ? (engineUsed == "e5" ? "✓ Fatto (ho capito da solo)"
+                        : engineUsed == "app" ? "✓ Fatto (comando dell'app)"
+                        : engineUsed == "screen" ? "✓ Fatto (l'ho visto a schermo)"
+                        : engineUsed == "fast" ? "✓ Fatto (ho chiesto al modello veloce)"
+                        : "✓ Fatto (ho chiesto a Claude)")
+                    : $"Non ci sono riuscito: {error}");
+            if (!string.IsNullOrEmpty(paste))
+            {
+                await Task.Delay(150);
+                await TextInjectionService.PasteText(paste, _appViewModel.KeepInClipboard);
+            }
+            if (error != null)
+            {
+                Services.DictNotificationService.ShowPcAction("Non fatto", string.IsNullOrEmpty(said) ? error : $"{said} ({error})");
+                _appViewModel.SetError(error);
+                return;
+            }
+            Services.DictNotificationService.ShowPcAction(string.IsNullOrEmpty(said) ? "Fatto" : said, spoken);
+            _appViewModel.SetState(AppState.Completing);
+        }
+        catch (Exception ex)
+        {
+            PttLog($"Execute: EXCEPTION {ex.GetType().Name}: {ex.Message}");
+            _appViewModel.SetError(ex.Message);
+        }
+        finally
+        {
+            _appViewModel.ExecuteOneShot = false;
+            _targetContext = null;
         }
     }
 

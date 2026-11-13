@@ -90,6 +90,12 @@ pub mod parakeet;
 /// itself compiles only on macOS arm64.
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub mod parakeet_fluid;
+pub mod pc_appcmds;
+pub mod pc_control;
+pub mod pc_help;
+#[cfg(feature = "pc-router")]
+pub mod pc_router;
+pub mod pc_screen;
 pub mod preprocess;
 pub mod provider;
 pub mod qwen_asr;

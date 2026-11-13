@@ -1553,6 +1553,14 @@ fn run_stream(
             let t = transcript.apply(&u);
             if !t.delta.is_empty() || t.backspace > 0 || u.is_final {
                 on_chunk(t.backspace, &t.delta, &t.cumulative, u.is_final);
+            } else {
+                // The last word is held back while it grows, so the host
+                // gets nothing to type. A PC-command session still has to
+                // see it: it runs a command when the words stop changing,
+                // and "questa sche" on its way to "questa scheda" looked
+                // like a pause (2026-11-08).
+                #[cfg(feature = "pc-router")]
+                crate::pc_router::shadow_observe(&t.cumulative);
             }
         }
     };

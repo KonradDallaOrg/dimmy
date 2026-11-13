@@ -812,6 +812,39 @@ public static class DimmyNative
     public static extern void dimmy_hotkey_set_command(
         [MarshalAs(UnmanagedType.LPUTF8Str)] string combo);
 
+    // EXPERIMENT (exp/pc-actions): the "execute" shortcut sends the spoken
+    // words to the PC-actions engine. Empty combo disables it.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void dimmy_hotkey_set_execute(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string combo);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void dimmy_pc_prepare();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_pc_router_status();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void dimmy_pc_router_warm();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_pc_router_select(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string id);
+
+    /// 1 on disk, 0 not, -1 no local router in this build. Downloads go
+    /// through dimmy_model_download_enqueue("pc-router:" + id).
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_pc_router_model_present(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string id);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_pc_router_size_mb(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string id);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_pc_execute(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string text, byte[] outBuf, int bufLen);
+
     // Optional meeting start/stop hotkey on the same Rust hook. Empty combo
     // disables it. Its event is a TOGGLE (pressed = start/stop).
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]

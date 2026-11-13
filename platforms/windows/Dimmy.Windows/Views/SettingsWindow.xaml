@@ -774,6 +774,30 @@
                 <controls:ShortcutEditor x:Name="MeetingShortcutEditor" Target="meeting" AllowClear="True"
                                          Shortcut="{Binding MeetingHotkey, Mode=TwoWay}" />
               </controls:SettingCard>
+              <controls:SettingCard Glyph="&#xE7C4;"
+                                    Label="Voice PC commands (experimental)"
+                                    InfoTip="Experimental, Windows only. Turn it on to control the PC by voice with its own shortcut: open apps, place windows, search the web, browser and media keys, folders, settings. A small local model (about 130 MB, downloaded once) handles the simple commands while you talk; Claude handles the rest. Nothing is deleted, sent or bought.">
+                <ToggleSwitch IsOn="{Binding PcCommandsEnabled, Mode=TwoWay}"
+                              Style="{StaticResource CompactToggleSwitch}" />
+              </controls:SettingCard>
+              <controls:SettingCard Glyph="&#xE950;"
+                                    IsEnabled="{Binding PcCommandsEnabled}"
+                                    Label="Local command model (experimental)"
+                                    InfoTip="Which small local model understands your PC commands. Fast: smallest download, decides fewer commands on its own. Precise: decides about twice as many commands while you talk, at about 20 ms each, and downloads 560 MB once. Claude handles whatever the local model is not sure about.">
+                <ComboBox SelectedValuePath="Tag" MinWidth="220"
+                          SelectedValue="{Binding PcRouterModel, Mode=TwoWay}">
+                  <ComboBoxItem Content="Fast (e5-small, 130 MB)" Tag="e5-small" />
+                  <ComboBoxItem Content="Balanced (e5-base, 280 MB)" Tag="e5-base" />
+                  <ComboBoxItem Content="Precise (BGE-M3, 560 MB)" Tag="bge-m3" />
+                </ComboBox>
+              </controls:SettingCard>
+              <controls:SettingCard Glyph="&#xE7C4;"
+                                    IsEnabled="{Binding PcCommandsEnabled}"
+                                    Label="PC commands shortcut (experimental)"
+                                    InfoTip="Experimental. Say what the PC should do instead of dictating: open an app, put a window on the left or right, side by side or full screen, move it to the other monitor, find yesterday's files, write something at the end of a document. Nothing is deleted or sent. Follows the same Push-to-Talk or Toggle mode as your dictation shortcut.">
+                <controls:ShortcutEditor x:Name="ExecuteShortcutEditor" Target="execute" AllowClear="True"
+                                         Shortcut="{Binding ExecuteHotkey, Mode=TwoWay}" />
+              </controls:SettingCard>
 
               <TextBlock Text="Dictionary"
                          Style="{StaticResource DimmySection}" />

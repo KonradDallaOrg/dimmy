@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  EXPERIMENT (exp/pc-actions): the live card for PC commands. While the user
+  talks it says, in plain words, what it heard, what it is going to do, how
+  sure it is and what happens next. Same chrome as DictToastWindow.
+-->
+<Window
+    x:Class="Dimmy.Windows.Views.PcLiveWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <Grid x:Name="Root" Padding="16,12,16,14" Background="Transparent" RowSpacing="8">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+    <Grid.ColumnDefinitions>
+      <ColumnDefinition Width="76" />
+      <ColumnDefinition Width="*" />
+    </Grid.ColumnDefinitions>
+
+    <StackPanel Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="8">
+      <Image Source="ms-appx:///Assets/dimmy-logo.png" Width="16" Height="16" />
+      <TextBlock Text="Dimmy · Comando vocale" Style="{StaticResource DimmyCaption}" VerticalAlignment="Center" />
+    </StackPanel>
+
+    <ScrollViewer Grid.Row="1" Grid.RowSpan="3" Grid.ColumnSpan="2" x:Name="HelpScroll" Visibility="Collapsed"
+                  VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+      <TextBlock x:Name="HelpText" Style="{StaticResource DimmyBody}" TextWrapping="Wrap" IsTextSelectionEnabled="False" />
+    </ScrollViewer>
+
+    <TextBlock Grid.Row="1" x:Name="HeardLabel" Text="Hai detto" Style="{StaticResource DimmySecondary}" />
+    <TextBlock Grid.Row="1" Grid.Column="1" x:Name="HeardText" Style="{StaticResource DimmyBody}"
+               TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" />
+
+    <TextBlock Grid.Row="2" x:Name="PlanLabel" Text="Farò" Style="{StaticResource DimmySecondary}" />
+    <TextBlock Grid.Row="2" Grid.Column="1" x:Name="PlanText" Style="{StaticResource DimmyBody}"
+               TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" />
+
+    <TextBlock Grid.Row="3" x:Name="SureLabel" Text="Sicurezza" Style="{StaticResource DimmySecondary}" VerticalAlignment="Center" />
+    <Grid Grid.Row="3" x:Name="SureRow" Grid.Column="1" ColumnSpacing="10">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*" />
+        <ColumnDefinition Width="52" />
+      </Grid.ColumnDefinitions>
+      <ProgressBar x:Name="SureBar" Minimum="0" Maximum="100" Value="0" VerticalAlignment="Center" />
+      <TextBlock Grid.Column="1" x:Name="SureText" Style="{StaticResource DimmyBody}" />
+    </Grid>
+
+    <TextBlock Grid.Row="4" Grid.ColumnSpan="2" x:Name="NextText" Style="{StaticResource DimmyCardTitle}"
+               TextWrapping="Wrap" MaxLines="2" Margin="0,4,0,0" />
+  </Grid>
+</Window>

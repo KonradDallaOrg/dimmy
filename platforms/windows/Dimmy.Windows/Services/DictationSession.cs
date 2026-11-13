@@ -3,7 +3,7 @@ using Dimmy.Windows.Interop;
 
 namespace Dimmy.Windows.Services;
 
-public enum SessionKind { Dictation = 0, Command = 1 }
+public enum SessionKind { Dictation = 0, Command = 1, Execute = 2 }
 
 public enum SessionAction { None = 0, Start = 1, Finish = 2, Discard = 3, Busy = 4 }
 

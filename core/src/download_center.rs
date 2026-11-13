@@ -7,7 +7,8 @@
 //! reads where things stand once from the snapshot.
 //!
 //! Job ids are the ones the On-device rows already carry: a whisper `.bin`,
-//! an LLM `.gguf`, `parakeet:fp32`, `whistle`, or `qwen:<file>.gguf`. One worker thread
+//! an LLM `.gguf`, `parakeet:fp32`, `whistle`, `qwen:<file>.gguf`, or
+//! `pc-router:<encoder>` (the experimental PC-command router). One worker thread
 //! runs one job at a time — several multi-gigabyte downloads in parallel only
 //! make each of them slower — and exits when the queue is empty.
 //!
@@ -367,12 +368,15 @@ enum Kind<'a> {
     Whistle,
     Nemotron,
     NemotronFull,
+    #[cfg(feature = "pc-router")]
+    PcRouter(&'static crate::pc_router::ModelSpec),
 }
 
 pub const PARAKEET_ID: &str = "parakeet:fp32";
 pub const WHISTLE_ID: &str = "whistle";
 pub const NEMOTRON_ID: &str = "nemotron";
 pub const NEMOTRON_F32_ID: &str = "nemotron-f32";
+pub const PC_ROUTER_PREFIX: &str = "pc-router:";
 
 /// Only ids of models Dimmy ships: the id becomes a path under the model
 /// directory, so anything outside the catalogs is refused.
@@ -388,6 +392,10 @@ fn parse(id: &str) -> Option<Kind<'_>> {
     }
     if id == NEMOTRON_F32_ID {
         return crate::nemotron::full_precision_available().then_some(Kind::NemotronFull);
+    }
+    #[cfg(feature = "pc-router")]
+    if let Some(enc) = id.strip_prefix(PC_ROUTER_PREFIX) {
+        return crate::pc_router::find(enc).map(Kind::PcRouter);
     }
     if let Some(file) = id.strip_prefix("qwen:") {
         return crate::qwen_asr::find(file).map(|_| Kind::Qwen(file));
@@ -431,6 +439,8 @@ fn present(kind: Kind<'_>) -> bool {
         Kind::Whistle => crate::whistle::bundle_present(),
         Kind::Nemotron => crate::nemotron::bundle_present(),
         Kind::NemotronFull => crate::nemotron::full_precision_present(),
+        #[cfg(feature = "pc-router")]
+        Kind::PcRouter(spec) => crate::pc_router::spec_present(spec),
     }
 }
 
@@ -495,6 +505,11 @@ fn real_fetch(
                     crate::nemotron::download_full_precision(progress)
                         .await
                         .map_err(|e| e.to_string()),
+                ),
+                #[cfg(feature = "pc-router")]
+                Kind::PcRouter(spec) => (
+                    "pc-router",
+                    crate::pc_router::download(spec, progress).await,
                 ),
             }
         };
@@ -596,6 +611,13 @@ fn real_remove(id: &str) -> Result<bool, String> {
                 paths.extend(with_partials(file));
             }
         }
+        #[cfg(feature = "pc-router")]
+        Kind::PcRouter(spec) => {
+            crate::pc_router::unload(spec);
+            for file in crate::pc_router::spec_files(spec) {
+                paths.extend(with_partials(file));
+            }
+        }
     }
 
     let mut removed = false;
@@ -637,6 +659,18 @@ mod tests {
     use super::*;
     use std::sync::mpsc;
     use std::time::Instant;
+
+    #[cfg(feature = "pc-router")]
+    #[test]
+    fn the_pc_router_encoders_are_models_like_the_others() {
+        for enc in ["e5-small", "e5-base", "bge-m3"] {
+            let id = format!("{PC_ROUTER_PREFIX}{enc}");
+            assert!(is_known_id(&id), "{id}");
+            assert!(is_deletable_id(&id), "{id}");
+        }
+        assert!(!is_known_id("pc-router:nope"));
+        assert!(!is_known_id("pc-router:../e5-small"));
+    }
 
     type Events = Arc<Mutex<Vec<serde_json::Value>>>;
 
