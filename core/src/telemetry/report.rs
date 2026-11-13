@@ -210,8 +210,15 @@ pub fn report(subsystem: Subsystem, kind: &str, engine: &str, detail: &str) {
 /// These events already reach PostHog as counts. Sentry is where an agent
 /// looks for something to fix, and until this mirror none of them were
 /// there: a licence refresh that failed for every user, a download that
-/// never finished, a CLI that exited non-zero. `TranscriptionFailed` and
-/// `LlmFailed` are left out: their call sites report with more detail.
+/// never finished.
+///
+/// Left out because their call sites in `ffi.rs` already report the same
+/// failure with more detail, and a second report is a second issue:
+/// `TranscriptionFailed`, `LlmFailed`, `MeetingRecapCompleted` and the four
+/// CLI invocation events (dictation, command and recap all reach a call-site
+/// report). One Claude CLI exit in a recap was three issues (RUST-1F/1G/1H).
+/// What only these events saw (a recap with no key or no local model, a
+/// wizard ping) stays in PostHog.
 pub fn failure_of(event: &super::Event) -> Option<(Subsystem, String, &'static str)> {
     use super::Event as E;
     let r = |s: Subsystem, kind: &str, engine: &'static str| Some((s, kind.to_string(), engine));
@@ -243,42 +250,9 @@ pub fn failure_of(event: &super::Event) -> Option<(Subsystem, String, &'static s
         E::LoopbackRateMismatch { measured, .. } => {
             r(Subsystem::Audio, "loopback_rate_mismatch", measured)
         }
-        E::MeetingRecapCompleted {
-            success: false,
-            error_category,
-            provider,
-            ..
-        } => {
-            let kind = if error_category.is_empty() {
-                "unknown"
-            } else {
-                error_category.as_str()
-            };
-            r(Subsystem::Recap, kind, provider)
-        }
         E::FileLoadCompleted { success: false, .. } => r(Subsystem::FileLoad, "failed", ""),
         E::NotionRecapSent { ok: false, .. } => r(Subsystem::Integration, "send_failed", "notion"),
         E::ErrorGpuCrash { backend, .. } => r(Subsystem::LocalEngine, "gpu_crash", backend),
-        E::ClaudeCodeInvocation {
-            success: false,
-            error_category,
-            ..
-        } => r(Subsystem::Llm, error_category, "claude_code"),
-        E::CodexInvocation {
-            success: false,
-            error_category,
-            ..
-        } => r(Subsystem::Llm, error_category, "codex"),
-        E::KimiCliInvocation {
-            success: false,
-            error_category,
-            ..
-        } => r(Subsystem::Llm, error_category, "kimi_cli"),
-        E::GeminiCliInvocation {
-            success: false,
-            error_category,
-            ..
-        } => r(Subsystem::Llm, error_category, "gemini_cli"),
         _ => None,
     }
 }
@@ -387,17 +361,24 @@ mod tests {
     }
 
     #[test]
-    fn a_recap_failure_without_a_category_still_has_a_kind() {
-        let e = Event::MeetingRecapCompleted {
+    fn a_recap_failure_is_one_issue_not_three() {
+        // One Claude CLI exit during a recap was three issues (RUST-1F,
+        // 1G, 1H): the call site in `dimmy_llm_call_raw`, this mirror of the
+        // CLI event and this mirror of the host's recap event.
+        let recap = Event::MeetingRecapCompleted {
             provider: "anthropic",
             recap_model_bucket: "opus",
             processing_ms_bucket: "lt_500",
             success: false,
             error_category: String::new(),
         };
-        assert_eq!(
-            failure_of(&e),
-            Some((Subsystem::Recap, "unknown".to_string(), "anthropic"))
-        );
+        assert_eq!(failure_of(&recap), None);
+        let cli = Event::ClaudeCodeInvocation {
+            kind: "recap",
+            processing_ms_bucket: "lt_500",
+            success: false,
+            error_category: "exit_nonzero",
+        };
+        assert_eq!(failure_of(&cli), None);
     }
 }

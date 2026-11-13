@@ -187,9 +187,12 @@ below runs before `apply_consent` turns the pipeline on.
   `model.download_completed{success:false}`, `license.activation_failed`,
   `license.refresh_failed`, `meeting.stop_timeout`,
   `meeting.transcription_behind`, `meeting.transcription_unavailable`, low capture ratios, `loopback_rate_mismatch`,
-  failed recap / file load / Notion send, `error.gpu_crash`, failed Claude Code /
-  Codex / Gemini CLI / Kimi CLI invocations. `transcription.failed` / `llm.failed` are not
-  mirrored: their call sites report with the message.
+  failed file load / Notion send, `error.gpu_crash`. Not mirrored, because
+  their call sites in `ffi.rs` already report the same failure and a second
+  report is a second issue: `transcription.failed`, `llm.failed`,
+  `meeting.recap_completed{success:false}` and the four CLI invocation events
+  (Claude Code / Codex / Gemini CLI / Kimi CLI). One CLI exit in a recap was
+  three issues until 2026-11-13.
 - **Host exceptions — `dimmy_telemetry_capture_host_exception(host, source, type, frames, fatal)`**.
   Windows: `Helpers/CrashReporter.cs` (AppDomain + XAML unhandled = fatal,
   `TaskScheduler.UnobservedTaskException`, update check / apply, meeting recap,

@@ -750,10 +750,11 @@ pub fn arch_name() -> &'static str {
 mod tests {
     use super::*;
 
-    /// The Kimi events carry categories only, and a failed call reaches
-    /// Sentry like the other three CLI backends.
+    /// The Kimi events carry categories only. A failed call reaches Sentry
+    /// from its call site in `ffi.rs`, not from this event, like the other
+    /// three CLI backends: two reports would be two issues.
     #[test]
-    fn kimi_cli_events_are_categorical_and_failures_are_mirrored() {
+    fn kimi_cli_events_are_categorical_and_not_mirrored() {
         let e = Event::KimiCliInvocation {
             kind: "recap",
             processing_ms_bucket: "2000_10000",
@@ -765,9 +766,7 @@ mod tests {
         assert_eq!(p["kind"], "recap");
         assert_eq!(p["error_category"], "reported");
         assert_eq!(p.as_object().map(|m| m.len()), Some(4), "{p}");
-        let (_, category, backend) =
-            crate::telemetry::report::failure_of(&e).expect("a failed call is mirrored");
-        assert_eq!((category.as_str(), backend), ("reported", "kimi_cli"));
+        assert!(crate::telemetry::report::failure_of(&e).is_none());
 
         let ok = Event::KimiCliInvocation {
             kind: "rewrite",
