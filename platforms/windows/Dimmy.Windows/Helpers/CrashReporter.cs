@@ -84,7 +84,9 @@ public static class CrashReporter
                 reported = false;
                 continue;
             }
-            ui.TryEnqueue(DispatcherQueuePriority.Low,
+            // Normal, as on Mac: Low runs only when the queue has nothing
+            // else, so a busy but responsive UI thread read as a hang.
+            ui.TryEnqueue(DispatcherQueuePriority.Normal,
                 () => Interlocked.Exchange(ref lastPong, Environment.TickCount64));
             var silent = Environment.TickCount64 - Interlocked.Read(ref lastPong);
             if (silent < HangThreshold.TotalMilliseconds)
