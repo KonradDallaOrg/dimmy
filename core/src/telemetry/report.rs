@@ -210,8 +210,14 @@ pub fn report(subsystem: Subsystem, kind: &str, engine: &str, detail: &str) {
 /// These events already reach PostHog as counts. Sentry is where an agent
 /// looks for something to fix, and until this mirror none of them were
 /// there: a licence refresh that failed for every user, a download that
-/// never finished, a CLI that exited non-zero. `TranscriptionFailed` and
-/// `LlmFailed` are left out: their call sites report with more detail.
+/// never finished, a CLI that exited non-zero (the call site sees only
+/// "request failed", so the CLI event is the one that names the engine).
+///
+/// Left out because their call sites in `ffi.rs` already report the same
+/// failure with more detail, and a second report is a second issue:
+/// `TranscriptionFailed`, `LlmFailed` and `MeetingRecapCompleted` (the host
+/// sends it after `dimmy_llm_call_raw` reported; it was RUST-1H). What only
+/// the recap event saw (no key, no local model) stays in PostHog.
 pub fn failure_of(event: &super::Event) -> Option<(Subsystem, String, &'static str)> {
     use super::Event as E;
     let r = |s: Subsystem, kind: &str, engine: &'static str| Some((s, kind.to_string(), engine));
@@ -236,25 +242,13 @@ pub fn failure_of(event: &super::Event) -> Option<(Subsystem, String, &'static s
         E::MeetingCaptureRatio { ratio_bucket } if *ratio_bucket != "ge_95" => {
             r(Subsystem::Meeting, "capture_ratio_low", ratio_bucket)
         }
-        E::DictationCaptureRatio {
-            ratio_bucket,
-            source,
-        } if *ratio_bucket != "ge_95" => r(Subsystem::Audio, "capture_ratio_low", source),
+        // Dictation records the mic only, so the bucket, not the source, is
+        // what tells two of these apart (as in the meeting arm above).
+        E::DictationCaptureRatio { ratio_bucket, .. } if *ratio_bucket != "ge_95" => {
+            r(Subsystem::Audio, "capture_ratio_low", ratio_bucket)
+        }
         E::LoopbackRateMismatch { measured, .. } => {
             r(Subsystem::Audio, "loopback_rate_mismatch", measured)
-        }
-        E::MeetingRecapCompleted {
-            success: false,
-            error_category,
-            provider,
-            ..
-        } => {
-            let kind = if error_category.is_empty() {
-                "unknown"
-            } else {
-                error_category.as_str()
-            };
-            r(Subsystem::Recap, kind, provider)
         }
         E::FileLoadCompleted { success: false, .. } => r(Subsystem::FileLoad, "failed", ""),
         E::NotionRecapSent { ok: false, .. } => r(Subsystem::Integration, "send_failed", "notion"),
@@ -387,17 +381,30 @@ mod tests {
     }
 
     #[test]
-    fn a_recap_failure_without_a_category_still_has_a_kind() {
-        let e = Event::MeetingRecapCompleted {
+    fn a_low_dictation_capture_says_how_low() {
+        // RUST-17 could not tell a 90 % capture from a 40 % one. Same shape
+        // as the meeting report: the bucket is the third part.
+        let e = Event::DictationCaptureRatio {
+            ratio_bucket: "50_85",
+            source: "mic",
+        };
+        assert_eq!(
+            failure_of(&e),
+            Some((Subsystem::Audio, "capture_ratio_low".to_string(), "50_85"))
+        );
+    }
+
+    #[test]
+    fn the_host_recap_event_is_not_a_second_report() {
+        // `dimmy_llm_call_raw` already reported the failure; mirroring the
+        // host's event made a second issue with kind "unknown" (RUST-1H).
+        let recap = Event::MeetingRecapCompleted {
             provider: "anthropic",
             recap_model_bucket: "opus",
             processing_ms_bucket: "lt_500",
             success: false,
             error_category: String::new(),
         };
-        assert_eq!(
-            failure_of(&e),
-            Some((Subsystem::Recap, "unknown".to_string(), "anthropic"))
-        );
+        assert_eq!(failure_of(&recap), None);
     }
 }
