@@ -7239,12 +7239,18 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
     out_buf: *mut c_char,
     buf_len: c_int,
 ) -> c_int {
+    // -1 and -3 are bugs, not setup: they are reported here because the
+    // host's `meeting.recap_completed` is no longer mirrored to Sentry.
     if prompt_ptr.is_null() || out_buf.is_null() || buf_len <= 0 {
+        crate::telemetry::report(crate::telemetry::Subsystem::Recap, "invalid_args", "", "");
         return -1;
     }
     let prompt = match CStr::from_ptr(prompt_ptr).to_str() {
         Ok(s) if !s.is_empty() => s.to_string(),
-        _ => return -1,
+        _ => {
+            crate::telemetry::report(crate::telemetry::Subsystem::Recap, "invalid_args", "", "");
+            return -1;
+        }
     };
     let _purpose = crate::llm::StreamPurpose::Recap.mark();
     let model_override = if model_override_ptr.is_null() {
@@ -7576,6 +7582,12 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
         Ok(r) => r,
         Err(e) => {
             log(&format!("[LlmRaw] tokio runtime: {}", e));
+            crate::telemetry::report(
+                crate::telemetry::Subsystem::Recap,
+                "runtime",
+                "",
+                &e.to_string(),
+            );
             return -3;
         }
     };
