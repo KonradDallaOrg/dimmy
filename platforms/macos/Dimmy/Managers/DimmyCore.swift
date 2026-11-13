@@ -127,6 +127,12 @@ final class DimmyCore {
             print("[DimmyCore] initialized successfully")
         } else {
             print("[DimmyCore] ERROR: init failed with code \(result)")
+            Task { @MainActor in
+                DictToastWindow.show(
+                    kind: .error,
+                    title: "Dimmy could not start",
+                    body: "The engine failed to start (code \(result)). Quit and reopen Dimmy.")
+            }
         }
         return result == 0
     }
@@ -1390,7 +1396,11 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
 
     case "error":
         if let message = payload["message"] as? String {
-            appState.showError(message)
+            // The four sources below bring their own banner; every other
+            // error gets the one `showError` builds from the message.
+            let ownBanner = ["stt", "llm", "recap", "capture"]
+                .contains(payload["source"] as? String ?? "")
+            appState.showError(message, toast: !ownBanner)
             print("[DimmyCore] error event: \(message)")
             // Structured failures (payload carries `source`) also get a
             // toast. The transient error state alone proved invisible
@@ -1467,6 +1477,11 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
         // advice mid-meeting-wrap-up (defense in depth, 2026-07-03).
         guard appState.isRecording && !appState.meetingActive else { break }
         appState.lastError = "You have been dictating for a while. For long recordings, Meeting mode is the better tool."
+        // Win parity: DictNotificationService.ShowLongDictationWarning.
+        DictToastWindow.show(
+            kind: .workflowHint,
+            title: "Long dictation",
+            body: "You have been dictating for a while. For long recordings, Meeting mode is the better tool.")
 
     case "dictation.max_duration":
         // Core hit the 10 min hard cap. Stop it like a normal hotkey stop
@@ -1478,6 +1493,11 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
         DispatchQueue.main.async {
             HotkeyManager.shared.stopToggleRecording()
             appState.lastError = "Dictation stopped at 10 min. Dimmy transcribed what you said. For long recordings, use Meeting mode."
+            // Win parity: DictNotificationService.ShowLongDictationCapped.
+            DictToastWindow.show(
+                kind: .workflowHint,
+                title: "Dictation stopped at 10 min",
+                body: "Dimmy stopped and transcribed what you said. For long recordings, use Meeting mode.")
         }
 
     case "hotkey_recorder":
@@ -1563,6 +1583,9 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
         let message = payload["message"] as? String ?? "Telegram error"
         appState.telegramError = message
         print("[DimmyCore] telegram_error: \(message)")
+        // The inline text lives in Settings; a download that fails or a
+        // session Telegram closed arrives while Settings is shut.
+        DictToastWindow.show(kind: .error, title: "Telegram", body: message)
 
     case "coreml_prepare":
         if let file = payload["filename"] as? String,
@@ -1772,6 +1795,15 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
             kind: .alreadyPresent,
             title: TranscriptHealthText.recoveredTitle,
             body: TranscriptHealthText.recoveredBody)
+
+    case "nemotron_gpu_limited":
+        // Win parity: DictNotificationService.ShowGpuLimited.
+        NSLog("[DimmyCore] the GPU is held back by a power limit")
+        DictToastWindow.show(
+            kind: .error,
+            title: "The GPU is held back by a power limit",
+            body: "The live transcript may fall behind. Your recording is safe. "
+                + "Check that the charger is connected.")
 
     case "nemotron_cpu_fallback":
         NSLog("[DimmyCore] Nemotron fell back to the CPU engine")

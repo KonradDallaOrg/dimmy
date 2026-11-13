@@ -215,7 +215,13 @@ enum MeetingPostProcessService {
                     notionOk = true
                     NSLog("[Dimmy] Notion auto-send ok url=\(dict["page_url"] as? String ?? "")")
                 } else {
-                    NSLog("[Dimmy] Notion auto-send failed (silent fallback to manual button)")
+                    NSLog("[Dimmy] Notion auto-send failed (manual button still works)")
+                    Task { @MainActor in
+                        DictToastWindow.show(
+                            kind: .error,
+                            title: "Recap not sent to Notion",
+                            body: "The recap is saved. Send it again from the meeting window with Send to Notion.")
+                    }
                 }
                 DimmyCore.shared.trackEvent("notion.recap_sent", [
                     "auto": true,
@@ -373,6 +379,13 @@ enum MeetingPostProcessService {
             NSLog("[Dimmy] recap exported to \(dest.path)")
         } catch {
             NSLog("[Dimmy] recap export failed: \(error.localizedDescription)")
+            let reason = error.localizedDescription
+            Task { @MainActor in
+                DictToastWindow.show(
+                    kind: .error,
+                    title: "Recap not copied to the export folder",
+                    body: "\(reason) The recap itself is saved in Dimmy.")
+            }
         }
     }
 

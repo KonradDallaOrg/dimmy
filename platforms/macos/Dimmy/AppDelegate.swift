@@ -619,6 +619,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     // On failure the License page may already be visible — let
                     // it refresh so the error surfaces.
                     NotificationCenter.default.post(name: .dimmyLicenseChanged, object: nil)
+                    // ...and say it where it is seen when that page is closed.
+                    DictToastWindow.show(
+                        kind: .error,
+                        title: "License not activated",
+                        body: result.error ?? "The activation link did not work. Open it again from the email.")
                 }
             }
         }

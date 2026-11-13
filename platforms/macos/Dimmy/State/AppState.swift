@@ -1077,16 +1077,42 @@ final class AppState: ObservableObject {
     /// AppViewModel.SetError. While something records, the pill keeps its
     /// recording look and the error is said beside it; while a dictation is
     /// still transcribing it waits for `endDictation`.
-    func showError(_ message: String) {
+    ///
+    /// The pill is small and can sit in a corner, so the error is also said
+    /// in a banner. A caller that shows a more specific banner of its own
+    /// passes `toast: false`.
+    func showError(_ message: String, toast: Bool = true) {
         let text = String(message.prefix(200))
         lastError = text
-        switch Self.errorRoute(state: recordingState, meetingActive: meetingActive) {
+        let route = Self.errorRoute(state: recordingState, meetingActive: meetingActive)
+        switch route {
         case .besideRecording:
             DictToastWindow.show(kind: .error, title: "Still recording", body: text)
         case .afterDictation:
             pendingError = text
         case .pill:
             enterError(text)
+        }
+        if toast && route != .besideRecording {
+            let banner = Self.errorToast(for: text)
+            DictToastWindow.show(kind: .error, title: banner.title, body: banner.body)
+        }
+    }
+
+    /// Title and text of the banner for an error that arrives as a bare
+    /// message. The messages the core sends most get a next step; the rest
+    /// are shown as they are.
+    nonisolated static func errorToast(for message: String) -> (title: String, body: String) {
+        switch message {
+        case "No speech detected":
+            return (message, "Dimmy heard nothing to transcribe, so nothing was pasted. "
+                + "Check the microphone and try again.")
+        case "No API key configured", "No LLM API key configured":
+            return (message, "Add a key in Settings, Providers and keys.")
+        case "Finish the dictation first":
+            return (message, "A meeting cannot start while a dictation is running.")
+        default:
+            return ("Dimmy ran into a problem", message)
         }
     }
 
@@ -1103,11 +1129,15 @@ final class AppState: ObservableObject {
 
     /// The dictation pipeline is over without a paste: the pill shows the
     /// error it ran into, or goes to rest.
-    func endDictation() {
+    ///
+    /// `orError` is for a stop that failed without the core saying why: it
+    /// is shown only when no error is already waiting.
+    func endDictation(orError fallback: String? = nil) {
         if let text = pendingError {
             enterError(text)
         } else {
             recordingState = .idle
+            if let fallback { showError(fallback) }
         }
     }
 

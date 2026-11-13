@@ -40,6 +40,7 @@ enum SelfTests {
         testTimeSavedFormula()
         testRecordingStateAnimationIds()
         testPillErrorRoute()
+        testErrorToastText()
         testSttProviderFromUrl()
         testHotkeyStatusCases()
         testPillDockRule()
@@ -268,6 +269,13 @@ enum SelfTests {
         assert(route(.idle, false) == R.pill, "error at rest takes the pill")
         assert(route(.completing, false) == R.pill, "error over the checkmark takes the pill")
         assert(route(.error("a"), false) == R.pill, "a newer error replaces the shown one")
+    }
+
+    private static func testErrorToastText() {
+        let known = AppState.errorToast(for: "No speech detected")
+        assert(known.title == "No speech detected" && !known.body.isEmpty, "a known error keeps its name and gains a next step")
+        let other = AppState.errorToast(for: "HTTP 500 from the model mirror")
+        assert(other.body == "HTTP 500 from the model mirror" && !other.title.isEmpty, "an unknown error is shown as it is, under a title")
     }
 
     private static func testRecordingStateAnimationIds() {
