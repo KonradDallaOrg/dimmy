@@ -536,7 +536,7 @@ final class HotkeyManager {
             case .failed(let code):
                 print("[HotkeyManager] stop failed rc=\(code)")
                 DispatchQueue.main.async { [weak self] in
-                    self?.appState?.endDictation()
+                    self?.appState?.endDictation(orError: "The dictation could not be transcribed (code \(code))")
                 }
                 return
             case .transcript(let t):
@@ -1306,6 +1306,13 @@ enum MeetingShortcut {
             Task {
                 if await SystemAudioCaptureService.shared.start() == false {
                     dimmyHostLog("[SystemAudio] background meeting: capture unavailable (permission?) — recording mic-only")
+                    await MainActor.run {
+                        DictToastWindow.show(
+                            kind: .error,
+                            title: "Recording the microphone only",
+                            body: "Dimmy could not capture the system audio, so the other side of the call "
+                                + "is not recorded. Allow it in System Settings, Privacy and Security.")
+                    }
                 }
             }
         }

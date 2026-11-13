@@ -219,6 +219,13 @@ final class DictHotkeyManager {
         )
         guard regStatus == noErr, let ref = ref else {
             NSLog("[Dict/Carbon] RegisterEventHotKey failed with status \(regStatus) — combo may collide with system shortcut")
+            // Win parity: DictNotificationService.ShowHotkeyConflict.
+            Task { @MainActor in
+                DictToastWindow.show(
+                    kind: .error,
+                    title: "Dictionary shortcut not available",
+                    body: "macOS or another app already uses this combination. Pick another one in Settings.")
+            }
             return
         }
         self.carbonHotKeyRef = ref
@@ -420,6 +427,10 @@ enum AddToDictionaryFlow {
             NSLog("[Dict] AppState.userDictWords count unchanged (\(AppState.shared.userDictWords.count)) — word was already present in core")
         case .error:
             NSLog("[Dict] add returned error rc")
+            DictToastWindow.show(
+                kind: .error,
+                title: "Could not add to dictionary",
+                body: "“\(text)” was not saved. Try again.")
         }
     }
 
