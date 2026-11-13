@@ -11,25 +11,30 @@ The Windows native UI. WinUI 3 + C# / .NET 8, calling the Rust core via P/Invoke
 ```
 Dimmy.Windows/                   Main app
 ├── App.xaml, App.xaml.cs        WinUI App shell + jump-list arg parsing.
-│                                Polls dimmy_meeting_is_active / _is_paused (500 ms)
-│                                so the pill auto-shows the recording bar when a
-│                                meeting starts from any surface. Stop on the pill
-│                                routes to the meeting recap pipeline when active.
+│                                No polling: the core's `meeting_state` event
+│                                (handled in AppViewModel) makes the pill show
+│                                the recording bar when a meeting starts from any
+│                                surface. Stop on the pill routes to the meeting
+│                                recap pipeline when active.
 ├── Program.cs                   Entry point
 ├── Views/
 │   ├── PillWindow.xaml(.cs)        Floating overlay (recording UI). Stop branches
 │   │                                on dimmy_meeting_is_active.
 │   ├── MeetingWindow.xaml(.cs)     Long-form meeting UI: idle / recording (timer +
 │   │                                Pause + Stop + Back-to-live) / processing /
-│   │                                done (7 recap cards + transcript playhead).
+│   │                                done (11 recap section cards + transcript playhead).
 │   │                                Lifecycle decoupled from FFI — closing the
 │   │                                window does NOT stop the recording.
-│   ├── SettingsWindow.xaml(.cs)    Settings + recap-model picker + history detail
+│   ├── SettingsWindow.xaml(.cs)    Settings (13 NavigationView pages; page map in
+│   │                                docs/dev/settings-map.md) + recap-model picker +
+│   │                                history detail. Providers page is built in
+│   │                                SettingsWindow.Providers.cs.
 │   ├── OnboardingWindow.xaml(.cs)  Welcome flow
 │   └── TaskbarAnchorWindow.xaml    Invisible 1×1 anchor — owns the taskbar entry
 │       └─ click → TogglePill, right-click → jump list
 ├── ViewModels/                  MVVM layer (AppViewModel, SettingsViewModel,
-│                                AppRuleViewModel, HistoryItemViewModel)
+│                                AppRuleViewModel, HistoryItemViewModel,
+│                                OnboardingViewModel)
 ├── Services/
 │   ├── TrayService.cs              System-tray icon (small, near clock)
 │   ├── TaskbarService.cs           Taskbar overlay icon + amplitude bar (ITaskbarList3).
@@ -39,13 +44,15 @@ Dimmy.Windows/                   Main app
 │   ├── CommandPipeServer.cs        Named-pipe IPC for jump-list commands
 │   ├── MeetingPostProcessService.cs Recap pipeline orchestration. Reads
 │   │                                transcripts.txt, calls dimmy_llm_call_raw with
-│   │                                the 11-section structured prompt (recap_model_
-│   │                                override → URL heuristic), writes recap.md +
+│   │                                the 11-section structured prompt (model from
+│   │                                recap_model_override, else the best connected
+│   │                                provider, else llm_api_model), writes recap.md +
 │   │                                actions.json, raises App.NotifyMeetingRecapSaved
 │   │                                so MeetingWindow can refresh + auto-select.
 │   ├── UiPreferences.cs            Win-only UI prefs (ui_prefs.json)
-│   ├── HotkeyService.cs            Low-level keyboard hook → AppViewModel
-│   ├── TextInjectionService.cs     Cmd+V via SendInput (wScan + wVk for Electron / IME)
+│   ├── HotkeyService.cs            Wraps the core's low-level keyboard hook; key events
+│   │                                arrive through HotkeyEvents (core event callback)
+│   ├── TextInjectionService.cs     Ctrl+V via SendInput (wScan + wVk for Electron / IME)
 │   └── TranscriptionService.cs     FFI orchestration around dimmy_*
 ├── Interop/
 │   └── DimmyNative.cs           P/Invoke declarations → dimmy_lib.dll
@@ -67,11 +74,10 @@ Dimmy.Windows/                   Main app
 ├── Dimmy.Windows.csproj         The project file
 └── NuGet.config                 Feed config
 
-Dimmy.Windows.Tests/             ~100 xUnit Fact/Theory tests (incl. 13 added by
-                                 the system-audio-capture branch for
-                                 RecapModelOverride round-trip + AudioSource
-                                 backward-compat)
-Dimmy.Windows.UiTests/           FlaUI UIA3 smoke tests
+Dimmy.Windows.Tests/             xUnit tests (about 410 [Fact]/[Theory] attributes);
+                                 links pure source files, no WinUI reference
+Dimmy.Windows.UiTests/           FlaUI UIA3 smoke tests (OnboardingSmokeTests,
+                                 LegalDialogTests)
 installer.nsi                    NSIS installer config (legacy — Velopack is now canonical)
 verify-self-contained.ps1        CI gate: asserts the publish folder contains only what it should
 test-in-sandbox.ps1              Local clean-install smoke test (Windows Sandbox)
@@ -83,21 +89,22 @@ The **build script at the repo root** — `build-windows.ps1` — is the one-sho
 ## Runtime facts
 
 - **DLL entry point:** `dimmy_lib.dll` is loaded via `DimmyNative.cs` P/Invoke. Dropped next to `Dimmy.Windows.exe` in the publish folder.
-- **Single-instance guard:** `Global\DimmySingleInstance` mutex. A second launch normally exits silently — exception: jump-list shortcuts re-launch the EXE with `--command <name>`, which is forwarded to the running instance via named pipe BEFORE the mutex check (see [Jump list + IPC](#jump-list--ipc-named-pipe)).
+- **Single-instance guard:** `Global\DimmySingleInstance` mutex (`Global\DimmySingleInstance.Staging` in the staging flavor, `BuildInfo.SingleInstanceMutexName`). A second launch normally exits silently — exception: jump-list shortcuts re-launch the EXE with `--command <name>`, which is forwarded to the running instance via named pipe BEFORE the mutex check (see [Jump list + IPC](#jump-list--ipc-named-pipe)).
 - **AppUserModelID:** `Dimmy` (set process-wide via `SetCurrentProcessExplicitAppUserModelID` and per-window via `SHGetPropertyStoreForWindow` — both required on Windows 11 unpackaged for the jump list to bind to our taskbar entry).
 - **Configuration:** `%APPDATA%\dimmy\config.json`. **The Rust core is the only writer.** UI calls `dimmy_set_config_json()` and re-reads.
-- **Win-only UI prefs:** `%APPDATA%\dimmy\ui_prefs.json` — small JSON store for the pill-visibility toggles (`PillShowOnStartup`, `PillShowOnHotkey`). Kept out of `config.json` because they're not cross-platform settings.
+- **Win-only UI prefs:** `%APPDATA%\dimmy\ui_prefs.json` (the folder name comes from `BuildInfo.ConfigDirName`, so staging uses `dimmy-staging`) — small JSON store for UI-only state: the pill-visibility toggles (`PillShowOnStartup`, `PillShowOnHotkey`, `ShowTaskbarIcon`), `Theme`, `UpdateChannel`, the meeting-window sidebar and waveform state (`UiPreferences.cs`). Kept out of `config.json` because they're not cross-platform settings.
 - **Keys:** `%APPDATA%\dimmy\keys.enc` (AES-256-CTR + HMAC-SHA256). Managed entirely by the Rust keystore.
-- **Logs:** `%LOCALAPPDATA%\dimmy\logs\dimmy.log`, `crash.log`, `ptt.log`. Plus diagnostic `%TEMP%\dimmy_jumplist.log` and `%TEMP%\dimmy_startup.log` for boot-time issues.
-- **Installer:** Velopack (`--framework vcredist143-x64`, `--packId Dimmy` — the AUMI must match the packId, otherwise the jump list won't appear). VC Redist goes to System32; the app folder stays lean. See I4 and I10 in [`windows-ci.md`](../../docs/dev/windows-ci.md).
+- **Logs:** `%APPDATA%\dimmy\dimmy.log`, `crash.log`, `ptt.log` (all in the config dir, `BuildInfo.ConfigDirPath`). Plus diagnostic `%TEMP%\dimmy_jumplist.log` and `%TEMP%\dimmy_startup.log` for boot-time issues.
+- **Installer:** Velopack (`--framework vcredist143-x64`, `--packId Dimmy` in `release.yml`; the staging workflows use packId `Dimmy-Staging`. The AUMI (`JumpListService.AumiId`, `Dimmy`) must match the packId, otherwise the jump list won't appear). VC Redist goes to System32; the app folder stays lean. See I4 and I10 in [`windows-ci.md`](../../docs/dev/windows-ci.md).
 
 ## Quick dev loop
 
 ```powershell
 # From this directory
-dotnet build Dimmy.Windows\Dimmy.Windows.csproj -c Debug
-# Run from VS or:
-dotnet run --project Dimmy.Windows\Dimmy.Windows.csproj -c Debug
+dotnet build Dimmy.Windows\Dimmy.Windows.csproj -c Debug -p:Platform=x64
+# Output: Dimmy.Windows\bin\x64\Debug\net8.0-windows10.0.19041.0\win-x64\Dimmy.Windows.exe
+# Without -p:Platform=x64 the build lands in bin\Debug\... and the .exe you launch
+# keeps loading the previous Dimmy.Windows.dll. Run from VS or launch that .exe.
 ```
 
 Tests:
@@ -124,7 +131,8 @@ The Windows taskbar button carries the recording-pipeline state visually, mirror
 Right-click on the taskbar icon shows a custom jump list — the Windows analogue of the macOS Dock context menu.
 
 **Categories:**
-- **Tasks**: Toggle pill (no icon), Open Settings… (•••), Quit Dimmy (✕)
+- **Recording**: Start / stop dictation, Command (next dictation), Start / stop meeting
+- **Tasks**: Toggle pill (no icon), Meetings, Open Settings… (•••), Quit Dimmy (✕)
 - **Style**: Off / Correct / Elaborate / Summarize / Professional, each with its color dot
 - **Translate to**: No translation (grey) / English (USA composite) / Italiano / Français / Deutsch / Español, with vertical-stripe flag icons
 
@@ -150,12 +158,13 @@ Stored in `%APPDATA%\dimmy\ui_prefs.json` (small JSON; persistence happens in `A
 
 ## Tray + pill right-click menus
 
-Both the tray icon (small, near the clock) and right-click on the pill itself show a `MenuFlyout` with:
+Right-click on the pill shows a `MenuFlyout` (`PillWindow.xaml.cs`). Right-click on the tray icon (small, near the clock) shows the same `MenuFlyout` while the pill is visible. When the pill is hidden, the tray falls back to a native Win32 popup menu (`TrayService.ShowWin32ContextMenu`) with only status, Show Pill, Open Meeting…, Settings…, Command and Quit (no submenus). The `MenuFlyout` has:
 
-- Status row + read-only Native (STT input lang) + Shortcut
+- Status row + read-only Native (STT input lang)
 - **Translate to →** submenu with all 7 targets, current value checkmarked (`ToggleMenuFlyoutItem`)
 - **Style →** submenu with all 13 styles, current value checkmarked
-- Show/Hide Pill, Settings…, Quit
+- Start/Stop Dictation, Command (next dictation), Start/Stop Meeting
+- Show/Hide Pill, Open Meeting…, Settings…, Quit
 
 The submenu items write via `dimmy_set_config_json()` and locally update `_vm.LlmTranslateTo` / `_vm.LlmStyle` so the pill reflects the change immediately without round-tripping through the config event loop.
 
@@ -163,7 +172,7 @@ The submenu items write via `dimmy_set_config_json()` and locally update `_vm.Ll
 
 - **Pill transparency.** Uses `WS_POPUP` style, `DWMWCP_DONOTROUND`, `DWMWA_COLOR_NONE`. Do NOT use `DwmExtendFrameIntoClientArea` with negative margins — adds glass effect. See `known-bugs.md` WIN-001.
 - **Glow effect.** Single `Composition.DropShadow` — not stacked borders. GPU-accelerated.
-- **Hotkey bridge.** Low-level keyboard hook (`SetWindowsHookEx`) with 7 FFI functions. Supports any combo.
+- **Hotkey bridge.** Low-level keyboard hook (`SetWindowsHookEx`) lives in the Rust core (`core/src/hotkey.rs`) and is driven through the `dimmy_hotkey_*` FFI functions (`install`, `set`, `set_command`, `set_meeting`, `combos_conflict`, and the shortcut recorder). Supports any combo.
 - **PRI generation.** `dotnet publish` needs the UWP/AppxPackage workloads from VS 2022 (not VS 2026 BuildTools). If `resources.pri` is missing from the app dir, WinUI throws `XamlParseException` at `InitializeComponent()` and the app is headless. See I2.
 - **DPI.** PerMonitorV2 awareness in `app.manifest`. Windows are sized in DIPs; multiply by monitor scale for pixel values.
 
@@ -171,9 +180,9 @@ The submenu items write via `dimmy_set_config_json()` and locally update `_vm.Ll
 
 If a user reports "installer runs but app doesn't launch":
 
-1. Ask for `%LOCALAPPDATA%\dimmy\logs\dimmy_startup.log` and `crash.log`.
+1. Ask for `%TEMP%\dimmy_startup.log` and `%APPDATA%\dimmy\crash.log`.
 2. Check for `XamlParseException` → PRI regression (I2).
-3. Check for `create_state` / `ggml-vulkan` crash → GPU backend issue. Sticky known-bad marker should have kicked in; if not, verify `%LOCALAPPDATA%\dimmy\known_bad_gpu.marker` was written.
+3. Check for `create_state` / `ggml-vulkan` crash → GPU backend issue. Sticky known-bad marker should have kicked in; if not, verify `%APPDATA%\dimmy\.gpu_known_bad` was written (`core/src/gpu_health.rs`).
 4. Check linker version of the shipped `dimmy_lib.dll`:
    ```powershell
    & "C:\Path\To\dumpbin.exe" /headers "C:\Path\To\dimmy_lib.dll" | Select-String "linker version"

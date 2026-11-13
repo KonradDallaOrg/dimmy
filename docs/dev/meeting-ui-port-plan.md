@@ -1,5 +1,31 @@
 # Meeting UI port plan — standalone HTML → MeetingWindow
 
+> **Status, checked against the code on 2026-11-11:** this plan is mostly
+> done and no longer a to-do list. Read it as history, not as current work.
+> - Exists in `platforms/windows/Dimmy.Windows/Views/MeetingWindow.xaml(.cs)`:
+>   the four-state machine (`MeetingState { Idle, Recording, Processing, Done }`
+>   with `IdlePanel`, `RecordingPanel`, `ProcessingPanel`, `DonePanel`), the live
+>   waveform, the audio waveform card (`Helpers/WavPeaks.cs`), the foreground-app
+>   chip (`AppContextName`, `Helpers/AppContextCapture.cs`), a sidebar history
+>   list (`HistoryList`) with a search box, a Recap / Transcript / Notes tab strip
+>   in the Done state and a Live transcript / Notes tab strip while recording.
+> - The structured recap prompt exists, but with 11 sections, not 7:
+>   CONTEXT, TLDR, HIGHLIGHTS, NARRATIVE, KEY_DECISIONS, TOPICS, ACTIONS,
+>   OPEN_QUESTIONS, RISKS, NEXT_STEPS, FOLLOWUPS. The prompt builder is
+>   `MeetingRecapHelpers.BuildStructuredRecapPrompt` and the parser is
+>   `MeetingRecapHelpers.ParseStructuredRecap` in
+>   `Helpers/MeetingRecapHelpers.cs`. `ParsePostProcessResponse` does not exist.
+> - Does NOT exist: bookmarks during recording (no `bookmarks.json`, no UI, not
+>   even a disabled shell) and the Q&A panel (no UI, no FFI). Both were skipped
+>   and no "Coming soon" shell was built.
+> - Differs from the plan: the "Tabs (current / history)" idea became a
+>   collapsible sidebar (`SidebarPane`); history search filters by title,
+>   subtitle and folder name only; action items render as text in
+>   `ActionsText` (a `RichTextBlock`), not as a checkable list; the live
+>   transcript is event-driven (`meeting_chunk` event, `OnMeetingChunkReceived`),
+>   not polled.
+> - The macOS mirror exists under `platforms/macos/Dimmy/Views/Meeting/`.
+
 > **Source:** `docs/dev/refs/meeting-standalone.html` (1.6 MB Figma Make
 > bundle). The actual rendered UI is React+JSX inside; the file is
 > committed unbuilt as a visual reference for the port.
@@ -41,12 +67,12 @@ State machine driven by `_meetingState ∈ {Idle, Recording, Processing, Done}`.
 ## What we already have (current `MeetingWindow.xaml`)
 
 - Stop/Start buttons → `dimmy_meeting_start/_stop`
-- Live transcript polling → `transcripts.txt` every 2 s with `_lastTranscriptLen` cache + `FileShare.ReadWrite`
+- Live transcript driven by the `meeting_chunk` event (`OnMeetingChunkReceived`); the old 2 s `transcripts.txt` poll was removed
 - Generate-recap-on-stop checkbox
 - Recap + Actions panels (collapsed → expanded after stop)
 - Open-folder button
 - Status dot (idle / recording / done) + timer
-- LLM raw call via `dimmy_llm_call_raw` + `PickRecapModel` (Anthropic→Opus, Gemini→Pro, else user choice)
+- LLM raw call via `dimmy_llm_call_raw` + `PickRecapModel` (explicit `recap_model_override` first; "Auto" then picks the best model among the providers that have a key: Anthropic Opus, then OpenAI GPT-5, then Gemini Pro; else Rust falls back to `llm_api_model`)
 - `dimmy_meeting_save_post_process` to persist recap.md / actions.json
 
 ## Gap matrix — what we port, what we skip

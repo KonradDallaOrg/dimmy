@@ -1,6 +1,15 @@
 # Kimi integration: feasibility and plan (2026-11-09)
 
-Status: **built (Phases 1-3, Win + Mac); live check on a real account still open. See [`kimi-backend.md`](kimi-backend.md) and the handoff `docs/superpowers/handoffs/2026-11-09-kimi-integration.md`.** Phase 0 questions 1-4, 6, 7 and 9 were answered from the Kimi CLI source instead of a live account (transport = `kimi acp`); the live check is still open. Branch `feat/kimi-subscription`, cut from
+**Status, checked against the code on 2026-11-11:**
+
+- This file is the plan. What the code does is in [`kimi-backend.md`](kimi-backend.md). Where the two differ, the code follows the backend doc.
+- **Phase 1 shipped, narrower than planned.** The provider is `Provider::Kimi` (tag `kimi`), not `Provider::Moonshot`, and matches `api.kimi.ai` and `api.kimi.com` only (`provider.rs`). The Moonshot Platform hosts (`api.moonshot.ai` / `.cn`) were not added. The catalogue has a `kimi` provider with `k3.1-pro`, `k3`, `kimi-for-coding`, `kimi-for-coding-highspeed`. Both LLM HTTP clients send `User-Agent: Dimmy/<version>` (`llm.rs`).
+- **Phase 2 shipped with a different transport.** `kimi_cli.rs` runs `kimi acp` (ACP over stdio), not `kimi -p --output-format stream-json --agent-file`. There is no agent file and no `KIMI_MODEL_THINKING_EFFORT`: tools are refused by answering every permission request `cancelled`, and thinking is switched through the ACP `thinking` option when `quick`. The model goes through the ACP `model` option, and one the tier does not offer is dropped. Sign-in is `kimi login --region global`. FFI as built: `dimmy_kimi_status / _recheck / _binary_path / _diagnostics / _install_command / _git_bash_present / _spawn_login / _ping / _models_json`. Git Bash is a separate check (`git_bash_present`), not a `NoGitBash` status.
+- **Phase 3 shipped as `kimi_mcp.rs`** (not `kimi_desktop.rs`), with `dimmy_kimi_mcp_status / _install / _uninstall`. It also registers a personal plugin for Kimi Work, which this plan does not mention; the Integrations card is for Kimi Work.
+- **Not built:** the `CallOrigin { User, Background }` guard (Phase 2, item 6; no such type in `core/src`), a prewarmed process (Phase 0, question 9), an on/off config switch for the Kimi CLI (there is `gemini_cli_enabled`, nothing for Kimi), and any Qwen or GLM subscription backend.
+- **Still open:** the Phase 0 live check on a real Kimi account. Questions 1-4, 6, 7 and 9 were answered from the CLI source only; 5 (latency) and 8 (Kimi Code Desktop lists the Dimmy tools) have no recorded answer. `kimi-backend.md` still lists the live check as open.
+
+Status as written on 2026-11-09: **built (Phases 1-3, Win + Mac); live check on a real account still open. See [`kimi-backend.md`](kimi-backend.md) and the handoff `docs/superpowers/handoffs/2026-11-09-kimi-integration.md`.** Phase 0 questions 1-4, 6, 7 and 9 were answered from the Kimi CLI source instead of a live account (transport = `kimi acp`); the live check is still open. Branch `feat/kimi-subscription`, cut from
 `origin/staging` @ `0d456207`. Everything below was checked against
 Moonshot's own docs on 2026-11-09. Items marked **SPIKE** still need a run
 on a real Kimi account before any code is written.
@@ -13,6 +22,13 @@ recap, plus a Kimi Desktop integration like the Claude Desktop one. Also look
 at Qwen and GLM.
 
 ## What Kimi offers (official sources)
+
+Read from Moonshot's documentation on 2026-11-09, before any code. Two of
+these did not survive the reading of the CLI source (see the header of
+`core/src/kimi_cli.rs`): in `@moonshot-ai/kimi-code` 2.5.2 `-p` takes the
+prompt from argv only, not stdin; and the installer Dimmy offers is the one
+on `code.kimi.ai`, because the `code.kimi.com` one writes region
+`mainland-cn` (`kimi_cli::install_command`).
 
 | Surface | Facts that matter to Dimmy |
 |---|---|
@@ -44,6 +60,8 @@ How Dimmy's flows read against that rule:
 
 So the subscription path is feasible. It needs one structural guard: the
 dispatcher must know whether a call is user-initiated (see Phase 2, item 6).
+(That guard was not built. `process_raw_prompt` has no call-origin
+parameter; the rule is kept by convention, see "Terms" in `kimi-backend.md`.)
 
 ## Qwen and GLM: verdict
 
@@ -60,6 +78,9 @@ access already works through the catalog. A direct DashScope or Z.ai
 provider adds nothing until someone asks for it.
 
 ## Plan
+
+The plan as written on 2026-11-09. It is kept as the record of what was
+intended; the Status block at the top says what each phase became.
 
 ### Phase 0: SPIKE on a real Kimi account (~1 h, needs the user's login)
 

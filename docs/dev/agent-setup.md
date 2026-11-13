@@ -1,5 +1,25 @@
 # Agent setup: `dimmy-setup`
 
+**Status, checked against the code on 2026-11-11:**
+
+- The commands in `setup_cli.rs::dispatch` today: `info`, `schema`, `check`,
+  `config get|set`, `profile apply`, `models list|download|prepare`,
+  `login status|start|test`, `key status|test`, `test stt|recap`,
+  `onboarding status|done`, `last`, `perm status|open|guide`, `diag`,
+  `app status|start|quit`, `help`. The v2 rows of the table (`key ask`,
+  `test mic`, `test meeting`) are not implemented.
+- `login` and `check` cover four CLIs: `claude`, `codex`, `gemini`, `kimi`
+  (`setup_cli.rs::login`, `cli_states`).
+- `profile apply --recap` takes `claude-sub | codex-sub | kimi-sub | api |
+  local | off`.
+- Exit codes are `EXIT_OK = 0`, `EXIT_FAILED = 1`, `EXIT_USAGE = 2`,
+  `EXIT_APP_RUNNING = 3`. Exit 3 comes from `write_lock()`, taken by
+  `config set` and `profile apply` (unless `--dry-run`), `models download`,
+  `models prepare` and `onboarding done`.
+- Entry points: `core/src/bin/dimmy_setup.rs` (Windows and Linux launcher,
+  cargo feature `setup-launcher`) and `Dimmy --setup` in
+  `platforms/macos/Dimmy/DimmyApp.swift`; both call `ffi.rs::dimmy_setup_cli`.
+
 Lets an AI agent the user already trusts (Claude Code, Codex, Gemini CLI)
 install, configure and test Dimmy from a terminal, end to end, by following
 `https://dimmy.app/install.md`. The agent asks the user what they want; the
@@ -58,13 +78,13 @@ Two thin entry points, so the installers carry no second copy of the core:
 |---|---|---|
 | `info` | version, flavor, platform, config dir, app installed/running | 1 |
 | `schema` | every user setting: type, allowed values, default, one plain sentence; `stored_by: "app"` for the ones the app keeps outside `config.json` (see below) | 1 |
-| `check` | OS, CPU arch, RAM, free disk, GPU fitness + known-bad, mics, Claude/Codex/Gemini CLI state, which keys exist (booleans), license, onboarding done, **recommended profile**, `warnings` (`no_microphone` when no input device is found; always present, may be empty) | 1 |
+| `check` | OS, CPU arch, RAM, free disk, GPU fitness + known-bad, mics, the local STT engines this build has (`local_stt_backends`), Claude/Codex/Gemini/Kimi CLI state, which keys exist (booleans), license, onboarding done, **recommended profile**, `warnings` (`no_microphone` when no input device is found; always present, may be empty) | 1 |
 | `config get` | current settings, no secrets | 1 |
 | `config set k=v ...` / `--json` | strict-validated patch, `--dry-run` shows the diff | 1 |
 | `profile apply --use meeting\|dictation\|both --lang ... --stt local\|cloud ... --recap ...` | one consistent set of settings from a few answers, `--dry-run` | 1 |
 | `models list` / `models download <id>` | catalog with sizes and presence; download checks free space first, streams progress. On a Mac `parakeet:fp32` is the FluidAudio Core ML bundle (466 MB), the one the app runs; `coreml:<whisper file>` rows are whisper's optional Neural Engine encoder | 1 |
 | `models prepare [<id>]` | runs the one-time Core ML compile now (default: the configured engine's model), so the first meeting does not pay it. `needed:false` where nothing compiles (Windows, Linux, whisper without an encoder) | 1 |
-| `login status\|start\|test <claude\|codex\|gemini>` | `test` is a real round trip, not "credentials exist" | 1 |
+| `login status\|start\|test <claude\|codex\|gemini\|kimi>` | `test` is a real round trip, not "credentials exist" (30 s limit for claude and codex, 60 s for gemini and kimi) | 1 |
 | `key status` | which providers have a key, per scope | 1 |
 | `key test <provider>` | real round trip with the stored key | 1 (LLM), 2 (STT) |
 | `key ask <provider>` | opens Dimmy's key window | 2 |

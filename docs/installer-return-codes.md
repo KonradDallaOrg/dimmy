@@ -23,6 +23,12 @@ to the Velopack log.
 | Silent uninstall | `%LocalAppData%\Dimmy\Update.exe uninstall -s`     |
 | Log file         | `%LocalAppData%\Dimmy\Velopack.log` (or `--log`)   |
 
-The installer is fully offline (the application is bundled inside
-`Setup.exe`) and installs per-user to `%LocalAppData%\Dimmy`. It does not
-install any drivers or NT services.
+The application is bundled inside `Setup.exe`, and it installs per-user to
+`%LocalAppData%\Dimmy`. It does not install any drivers or NT services. The
+release workflows pack it with `--framework vcredist143-x64`, so Velopack Setup
+also installs the Microsoft VC++ Redistributable (into System32) at setup time
+(see `dev/windows-ci.md` I10).
+
+The staging builds use a different package id. Their installer matches
+`Dimmy-Staging-*Setup.exe` and installs to `%LocalAppData%\Dimmy-Staging`, so
+the paths above use `Dimmy-Staging` instead of `Dimmy` for those builds.

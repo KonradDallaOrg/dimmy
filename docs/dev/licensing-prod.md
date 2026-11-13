@@ -2,6 +2,8 @@
 
 > **Status (2026-05-01):** PoC validated end-to-end (`feat/licensing-poc` → PR #43). Cloudflare Worker + Stripe webhook + Resend integration built (this PR). Migration to production needs the manual ops steps below.
 
+> **Status, checked against the code on 2026-11-11:** The server half (Worker, D1, Stripe webhook, Resend) is not in this repo (it is in the private `dimmy-backend` repo) and was not checked. The app half was: `core/src/license.rs` and `core/src/ffi.rs` know four tiers (`trial`, `monthly`, `annual`, `lifetime`; there is no `3year`) and call `/api/trial/start`, `/api/activate`, `/api/refresh`, `/api/checkout/create`, `/api/billing-portal`, `/api/plan-change`, `/api/devices/list`, `/api/devices/deactivate`, `/api/config` and `/api/lead`. Nothing in this repo calls `/api/account/delete`. `release.yml` already injects the production public key and server URL. The Rust licensing server (`licensing_server`, feature `licensing-server`) no longer exists here. The sections below are corrected where they said otherwise.
+
 ## What's in scope of this runbook
 
 Going from "PoC running on localhost" to "production licensing live at `license.dimmy.app`, Stripe processing real payments, Resend sending real emails".
@@ -26,8 +28,12 @@ Going from "PoC running on localhost" to "production licensing live at `license.
                             │  (D1 / SQLite)      │
                             └─────────────────────┘
 
-Dimmy app  ──── /api/activate, /api/refresh, /api/account/delete ─────► Worker
+Dimmy app  ──── /api/trial/start, /api/activate, /api/refresh, /api/checkout/create,
+                /api/billing-portal, /api/plan-change, /api/devices/list,
+                /api/devices/deactivate, /api/config, /api/lead ─────► Worker
 ```
+
+The app starts a purchase through `/api/checkout/create` (the server returns the Stripe Checkout URL; `license::create_checkout`), not only through Payment Links on the marketing site. While `/api/config` reports `sales_open: false` (or fails) the app shows "I'd buy this" (`/api/lead`) instead of Buy. No code in this repo calls `/api/account/delete`.
 
 Code lives in the **private** repo [`KonradDallaOrg/dimmy-backend`](https://github.com/KonradDallaOrg/dimmy-backend) (moved out of this public repo on 2026-05-17 to keep handler logic + Stripe wire shapes private). Clone it as a sibling of this repo (`~/code/dimmy-backend/`) and see its `README.md` for the per-file map. Production secrets stay in Cloudflare Worker Secrets + 1Password, never in either repo.
 
@@ -39,31 +45,10 @@ The numbered items must be done by you — they require login credentials, payme
 
 This is the **most important** step. Anyone with the private key can mint valid Dimmy licenses, so it never leaves the Cloudflare Worker secrets store.
 
-```bash
-# From core/ — boot the licensing server with a one-time data dir,
-# copy the keys, then delete the dir.
-cd core
-DIMMY_LICENSING_DATA=/tmp/dimmy-prod-keygen \
-  cargo run --bin licensing_server --features licensing-server \
-  &
-sleep 3
-# Server prints:
-#   DIMMY_LICENSE_PUBKEY=<base64url-pub-32-bytes>
-# Find the priv:
-xxd -p -c 32 /tmp/dimmy-prod-keygen/keys.bin | python3 -c \
-  'import sys,base64; print(base64.urlsafe_b64encode(bytes.fromhex(sys.stdin.read().strip())).rstrip(b"=").decode())'
-# That printed the priv as base64url-no-pad. Copy it.
-
-# Stop server.
-kill %1
-
-# Remove keys from disk — never to be seen again.
-shred -u /tmp/dimmy-prod-keygen/keys.bin
-rm -rf /tmp/dimmy-prod-keygen
-```
+The Rust `licensing_server` binary that this step used to boot is gone: there is no `core/src/bin/licensing_server.rs`, no `core/src/license_server.rs` and no `licensing-server` cargo feature, and `core/Cargo.toml` says server-side signing is done in the Cloudflare Worker (TypeScript). Generate the keypair the way `LICENSING_TODO.md` step 1 does, with Node's `crypto.generateKeyPairSync("ed25519")`: the JWK `x` is the public key and `d` the private key, both base64url. The public key must be 43 characters (`core/build.rs` warns otherwise). Print the pair once, copy it to the secret manager, and keep nothing on disk.
 
 Now you have:
-- **Public key** (printed by server) → goes to GitHub Secret `DIMMY_LICENSE_PUBKEY` for release.yml AND to Worker secret `DIMMY_LICENSE_PUBKEY` for refresh-time verify.
+- **Public key** → goes to GitHub Secret `DIMMY_LICENSE_PUBKEY` for release.yml AND to Worker secret `DIMMY_LICENSE_PUBKEY` for refresh-time verify. (Staging has its own pair: GitHub Secret `DIMMY_LICENSE_PUBKEY_STAGING` for `staging-tester.yml` and `agent-preview.yml`; `staging-auto-update.yml` hardcodes the staging public key inline.)
 - **Private key** (extracted via xxd) → ONLY to Worker secret `DIMMY_LICENSE_PRIVKEY`. NEVER commit, NEVER paste in chat, NEVER store outside the secret manager.
 
 **Backup**: 1Password / Bitwarden vault entry "Dimmy License Privkey (rotate-only)". Encrypted with master password. The point is so that if Cloudflare ever loses the secret, you can restore it without invalidating every existing license. Without backup → all users must reactivate.
@@ -71,7 +56,7 @@ Now you have:
 ### 2. Cloudflare setup (10 min)
 
 ```bash
-cd backend
+cd ~/code/dimmy-backend    # private repo, sibling of this one; there is no backend/ here
 npm install
 npx wrangler login
 npx wrangler d1 create dimmy-licensing
@@ -95,12 +80,10 @@ npx wrangler deploy
 
 In Stripe Dashboard:
 
-1. **Products → New product**:
-   - Name: "Dimmy — Annual License"
-   - Price: €19 EUR, one-time
-   - → copy the `price_…` ID
+1. **Products → New product**, one per paid tier the app can request (`core/src/license.rs::Tier`): `monthly` (recurring), `annual` (recurring), `lifetime` (one-time; its token is valid 1095 days). The 2026-05-01 text of this step listed "Annual License" at €19 one-time and "3-Year License" at €39 one-time. The code has no `3year` tier and documents Monthly and Annual as recurring subscriptions; the amounts cannot be checked from this repo.
+   - → copy each `price_…` ID
 
-2. Repeat for "Dimmy — 3-Year License", €39, one-time → copy the price ID.
+2. (Merged into step 1: the app sends `tier` = `monthly`, `annual` or `lifetime` to `/api/checkout/create`.)
 
 3. **Tax settings**:
    - Enable Stripe Tax (€0.50/transaction or 0.5% minimum, whichever higher).
@@ -114,7 +97,7 @@ In Stripe Dashboard:
 
 5. **Webhooks → Add endpoint**:
    - URL: `https://license.dimmy.app/api/stripe/webhook`
-   - Events to send: `checkout.session.completed`, `charge.refunded`
+   - Events to send: `checkout.session.completed`, `charge.refunded` (older list; `license.rs` says `valid_until` is bumped on each `invoice.paid` webhook, and the live-mode section below says 6 events. The handler list lives in the private repo and was not checked)
    - → copy the signing secret (`whsec_…`)
 
 6. Update Cloudflare:
@@ -156,7 +139,7 @@ gh secret set DIMMY_LICENSE_PUBKEY --body "<base64url-pub-from-step-1>"
 
 Or via web: Settings → Secrets and variables → Actions → New repository secret.
 
-The release.yml change to inject this is in [`pr-licensing-prod-migration`](TODO link) — review + merge separately.
+`release.yml` already injects it: `DIMMY_LICENSE_PUBKEY` from this secret plus `DIMMY_LICENSE_SERVER_URL=https://license.dimmy.app`, with the `license-client` feature on. `core/build.rs` aborts a release build when `license-client` is on and the key is empty, and when the key is set without a server URL.
 
 ### 6. VAT-OSS registration (one-time, ~30 min)
 
@@ -203,7 +186,7 @@ Do them in this order so each step is independently testable:
 3. **CLI E2E against the Worker** — same 7 scenarios from the PoC, but pointing the CLI at `--server https://license.dimmy.app`. Should pass identically.
 4. **Stripe in test mode** — use Stripe test cards (`4242 4242 4242 4242`), test the full checkout → webhook → license issuance → magic link → activation flow. Switch to live mode only when the test mode flow is bulletproof.
 5. **Resend with verified domain** — send a real activation email to your own address. Click the link. Should activate.
-6. **GitHub Actions release** — push a no-op tag (e.g. v0.6.27-rc1), verify the release-build embeds the pubkey (`Get-Content` the EXE strings | grep for the pubkey prefix).
+6. **GitHub Actions release** — push a no-op release-candidate tag (shape `vX.Y.Z-rc.N`, with the dot; `scripts/check-release-tag.sh` enforces it), verify the release build embeds the pubkey. The key is compiled into `dimmy_lib.dll`, not the EXE (`Get-Content` / `strings` the DLL for the pubkey prefix); `build.rs` also prints "DIMMY_LICENSE_PUBKEY embedded ok (43 chars, prefix=…)" in the build log.
 7. **Soft launch** — enable purchase on the marketing site. Watch Stripe + Worker logs for the first 24h.
 
 ## From test mode to live mode (when you're ready to take real money)
@@ -218,7 +201,7 @@ In Stripe Dashboard, top-right toggle "Test mode" → OFF (= live).
 The 3 test products + Payment Links you already have don't carry
 over automatically. Two options:
 
-- **Manual** (3 min): repeat the F3 step in `LICENSING_TODO.md` from
+- **Manual** (3 min): repeat step 3 (Stripe) of `LICENSING_TODO.md` from
   the live dashboard — same 3 products, same prices, same
   `metadata.tier`. Copy the new `price_…` IDs and Payment Link URLs.
 - **CLI** (5 min): use `stripe-cli` to clone:
@@ -246,7 +229,7 @@ the same 6 events.
 ### 3. Swap Worker secrets
 
 ```bash
-cd backend
+cd ~/code/dimmy-backend    # private repo; there is no backend/ here
 echo "sk_live_…"  | npx wrangler secret put STRIPE_SECRET_KEY
 echo "whsec_…"    | npx wrangler secret put STRIPE_WEBHOOK_SECRET
 ```
@@ -338,6 +321,6 @@ After 1 week without incidents, lift the manual-review on deletes.
 ## Open follow-ups (post-launch, not blockers)
 
 - Replace the activation-email template with a deletion-OTP-specific one (currently reuses the activation template).
-- Add a "device manager" endpoint + UI: list active devices, click to revoke. (Today auto-prune at 60 days handles 95% of cases.)
-- Replace one-shot purchases with subscriptions for the annual tier? Only if revenue ≥ ~€500/mo to justify the extra Stripe complexity.
+- ~~Add a "device manager" endpoint + UI~~ Done in the app: `dimmy_license_devices_list` / `dimmy_license_device_deactivate` (`/api/devices/list`, `/api/devices/deactivate`), used by Settings → License on Windows and macOS. The 60-day auto-prune is server-side and was not checked.
+- ~~Replace one-shot purchases with subscriptions for the annual tier?~~ Done as far as the app is concerned: `license.rs` treats `monthly` and `annual` as recurring subscriptions (plan switch through `/api/plan-change`, `cancels_at` claim) and `lifetime` as the one-time purchase.
 - Migrate audit-log retention to 7 years (legal default for accounting).

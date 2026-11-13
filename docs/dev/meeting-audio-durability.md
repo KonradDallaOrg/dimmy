@@ -61,10 +61,11 @@ called back into the host. Anything slow in any of those stalls all three.
 
 ### Why nothing warned
 
-The capture-ratio guard exists (`ratio < 0.85` → WARN + telemetry) and
+The capture-ratio guard exists (`ratio < 0.85` → WARN; the
+`meeting.capture_ratio` telemetry bucket is sent for every ratio) and
 would have flagged 0.32 — but it only runs at stop, and stop had already
-timed out. In the whole log that line appears twice, both for dictations,
-never for a meeting.
+timed out. In the whole log of 2026-09-02 that line appeared twice, both
+for dictations, never for a meeting.
 
 ## The design
 
@@ -86,19 +87,36 @@ never for a meeting.
    │                                          │
    │  NEVER: a model, the network, the host   │
    └──────────┬───────────────────────────────┘
-              │ sync_channel(STT_QUEUE_DEPTH), try_send
+              │ sync_channel(queue_depth), try_send
               ▼
    ┌──────────────────────────────────────────┐
    │ stt_thread_loop    (transcription)       │
    │  • VAD, downsample, whisper/parakeet/    │
-   │    cloud                                 │
+   │    whistle/nemotron/cloud                │
    │  • transcripts.txt, dedup, accumulators  │
-   │  • emit_event("meeting_chunk") → host    │
+   │  • live speaker labels, usage stats      │
+   │  • every emit_event to the host          │
    │                                          │
    │  May block, wedge or die. Nothing above  │
    │  this line waits for it.                 │
    └──────────────────────────────────────────┘
 ```
+
+`queue_depth` is `STT_QUEUE_DEPTH` (4) for every engine except Nemotron,
+which streams half-second windows (`NEMOTRON_WINDOW_SECS`) and gets
+`NEMOTRON_QUEUE_DEPTH` (120, a minute of backlog). The sinks are Ogg/Vorbis
+on Windows and macOS and fall back to WAV per track when the encoder cannot
+start (`TrackSink::create`); Linux writes WAV.
+
+The events the transcription thread sends are `meeting_chunk`,
+`meeting_partial` (Nemotron), `meeting_transcription_behind`,
+`meeting_transcription_unavailable` / `meeting_transcription_recovered`
+(`announce_health`), `meeting_speakers_deferred` and `nemotron_gpu_limited`.
+
+Two meetings share one pair of capture buffers. Each claims them
+(`crate::capture`), and the worker checks `owns_capture_buffers(claim)` (one
+atomic load) before it touches them: a worker that has lost the claim to a
+newer meeting leaves the loop and goes straight to finalizing its files.
 
 ### The four properties
 
@@ -106,7 +124,7 @@ never for a meeting.
 |---|---|
 | Capture never waits on transcription | `try_send`, never `send` |
 | A slow machine costs transcript, not audio | Full queue → window dropped + user told |
-| A wedged transcriber cannot grow memory | `STT_QUEUE_DEPTH = 4` (~24 MB of PCM) |
+| A wedged transcriber cannot grow memory | `STT_QUEUE_DEPTH = 4` (~24 MB of PCM); Nemotron: `NEMOTRON_QUEUE_DEPTH = 120` (around 90 MB) |
 | A wedged transcriber cannot cost the recording | Sinks are **finalized before** the join |
 
 ### The buffer is reclaimed, not just indexed
@@ -127,7 +145,7 @@ diagnostic:
 Linear at **0.366 MiB/s** end to end (48 kHz × 4 bytes × 2 tracks), i.e.
 1.3 GiB at an hour and **2.6 GiB at two**.
 
-`drainable_samples` now decides how much to remove the leading samples that are both
+`drainable_samples` now decides how much to remove: the leading samples that are both
 written to disk AND behind the next chunk's read window:
 
 ```rust
@@ -156,14 +174,19 @@ buffer stays under 40 MiB.
 ### Stop ordering — the part that matters most
 
 ```rust
-// 1. loop breaks on `cancelled`
+// 1. loop breaks on `cancelled` (or when a newer meeting holds the buffers)
 // 2. writer.finalize() / writer_mic / writer_system   ← audio is now a valid file
-// 3. drop(stt_tx)                                     ← transcriber drains and exits
-// 4. join_bounded(stt_handle, 90 s)                   ← abandoned if wedged
-// 5. read transcripts.txt, build the result
+// 3. capture::meeting_released(claim, ..)             ← buffers handed back and freed
+// 4. drop(stt_tx)                                     ← transcriber drains and exits
+// 5. emit_event("meeting_finishing_transcription")    ← host shows why stop is waiting
+// 6. join_bounded(stt_handle, 90 s)                   ← abandoned if wedged
+// 7. capture-ratio guard, meta.json, read transcripts.txt, build the result
 ```
 
-Step 2 before step 4 is the whole guarantee. The Ogg trailer / WAV header
+All of this is inside `worker_loop`, after its `loop`. `MeetingSession::stop`
+waits for the whole of it with its own `join_bounded(.., 120 s)`.
+
+Step 2 before step 6 is the whole guarantee. The Ogg trailer / WAV header
 rewrite is what makes the recording seekable and complete; doing it first
 means a wedged transcriber costs the tail of the transcript and nothing
 else.
@@ -185,13 +208,26 @@ while it is still running**:
 - telemetry `meeting.transcription_behind { engine, elapsed_bucket }`
 - event `meeting_transcription_behind { engine, elapsed_secs }`
 
-Both hosts turn it into a toast that names the actual choice:
+The capture worker only stores the time of the first dropped window in an
+atomic (`behind_at`). The transcription thread sends both from
+`report_behind`, when it takes its next job from the queue. A transcriber
+that never returns from a call therefore never sends them; the capture
+worker still writes the drop to `dimmy.log`.
+
+`engine` is `whisper`, `parakeet`, `whistle`, `nemotron` or `cloud`
+(`engine_label`). Both hosts turn the event into a toast that names the
+actual choice:
 
 | engine behind | suggestion |
 |---|---|
 | `whisper` | Parakeet, or a smaller model |
 | `parakeet` | a cloud provider |
 | `cloud` | check the connection, or go local |
+| anything else (`whistle`, `nemotron`) | a lighter model |
+
+A `[paused]` marker goes through the same queue. When the queue is full the
+worker keeps it (`pending_pause`) and tries again on every pass, still with
+`try_send`.
 
 The message says the recording is safe and continues, because it is — and
 because the alternative reading ("Dimmy is broken") is what makes people
@@ -200,8 +236,8 @@ stop a meeting that was recording perfectly well.
 Cost model worth knowing: whisper pads any input under 30 s to a full 30 s
 encoder window, so the per-call cost is nearly fixed. A 15 s chunk costs
 about what a 30 s one does, and Mix mode runs two calls per window. On a
-machine where each call takes ~16 s, the worker is already at ~2× realtime
-deficit and only survives on the silence gaps.
+machine where each call takes ~16 s, the transcription thread is already at
+~2× realtime deficit and only survives on the silence gaps.
 
 ## A slow mic must not slow the call (2026-11-05)
 
@@ -247,10 +283,15 @@ real worker and sinks fed at hardware pace: a mic at 25% of real time wrote
 
 ## FREEZE invariants
 
-- `worker_loop` may **not** call a model, the network, or
-  `crate::ffi::emit_event`. If you are adding something to it, the
-  question is not "is this fast?" but "can this ever block?" — anything
-  short of a provable no belongs on the transcription thread.
+- The capture loop of `worker_loop` (everything before the `ORDER MATTERS`
+  comment) may **not** call a model, the network, `crate::ffi::emit_event`,
+  `telemetry::track`, `telemetry::report` or `dimmy_update_stats`. If you
+  are adding something to it, the question is not "is this fast?" but "can
+  this ever block?" — anything short of a provable no belongs on the
+  transcription thread. After the loop, once the sinks are finalized,
+  `worker_loop` does call `telemetry::report`, `dimmy_update_stats` and one
+  `emit_event` (`meeting_finishing_transcription`): by then a call that
+  blocks cannot cost a sample.
 - The handoff stays `try_send` on a **bounded** channel. Switching to
   `send`, or to an unbounded channel, silently restores the coupling
   (the first blocks, the second turns a slow machine into an OOM).
@@ -272,7 +313,8 @@ real worker and sinks fed at hardware pace: a mic at 25% of real time wrote
 
 `core/src/meeting.rs` `mod audio_never_blocked` drives the real primitive
 (`sync_channel` + `try_send`) against a consumer that is slow, wedged, or
-dead:
+dead, and reads the source of `worker_loop` for calls the capture loop may
+not make:
 
 | test | pins |
 |---|---|
@@ -280,7 +322,9 @@ dead:
 | `a_dead_consumer_never_blocks_the_producer` | a panicked transcriber does not stall or kill capture |
 | `a_consumer_that_keeps_up_loses_nothing` | the happy path is unchanged: 200/200 delivered, in order |
 | `dropping_the_sender_ends_the_consumer` | stop's unblock mechanism, independent of the join timeout |
-| `the_queue_is_bounded_and_small` | memory stays bounded under a wedge |
+| `the_queue_is_bounded_and_small` | `STT_QUEUE_DEPTH` is between 1 and 8 (`NEMOTRON_QUEUE_DEPTH` is not checked) |
+| `the_capture_loop_never_persists_the_config` | no `update_stats(` in the source of the capture loop |
+| `the_capture_loop_never_calls_the_host_or_telemetry` | no `emit_event(`, `telemetry::track(`, `telemetry::report(` or `report_chunk_error(` in the source of the capture loop |
 
 ## Still open
 
@@ -293,5 +337,9 @@ dead:
   `audio.rs`). A Bluetooth headset dropping mid-meeting produced the
   recovery path and `primary_len` correctly froze and resumed; the 2 Sept
   case went through a plain Start after the stop had already timed out.
-- Nothing yet re-runs transcription automatically over the audio when
+- Nothing yet re-runs transcription automatically over the audio because
   windows were dropped. Today the user must press Regenerate transcript.
+  The one case that does re-transcribe is a side effect of speaker labels:
+  a dropped window sets `windows_lost`, the live labels are discarded, and
+  with local STT the hosts then run the full speaker pass
+  (`dimmy_meeting_retranscribe`, see [`diarization.md`](diarization.md)).

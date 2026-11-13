@@ -23,28 +23,29 @@
 ```
 
 **Bugs that reached production and are now caught by the test pyramid**:
-- v0.6.10 FFI ABI mismatch (installer crashed on first transcription) — caught at PR time by tier 1.5 ABI snapshot + installer FFI smoke.
+- v0.6.10 FFI ABI mismatch (installer crashed on first transcription) — caught at PR time by the `ffi-smoke` job (tier 1.5 installer FFI smoke). The ABI snapshot catches the same class but runs only locally (no workflow runs it).
 - `set_single_segment(true)` → empty transcript on clips shorter than ~30 s — caught by tier 1 short-clip test.
 - Onboarding Cloud path writing a Groq STT key while pre-existing LLM config pointed to Anthropic with `llm_use_same_key=true` → silent 401 on every dictation — caught by tier 1 provider-mismatch test.
 - AUDIO-001 dictation case (zero-amplitude samples → permanent NaN in dagc AGC) — caught by tier 1.5 preprocess proptest.
 - AUDIO-001 file-load case (97 % of a 95-min WAV destroyed by AGC NaN) — caught by `preprocess::tests::file_load_long_silence_does_not_corrupt_subsequent_audio` + 7 sibling unit tests, plus the diagnostic-style `parakeet_long_file.rs`.
 - AUDIO-003 AEC ref-ring starvation (Mix mode hung on systems with no active loopback) — caught by `aec::tests::worker_processes_mic_when_ref_ring_empty`.
 - LLM-001 Anthropic Opus 4.7+ rejecting `thinking.type=enabled` + `budget_tokens` — caught by the 6 dispatch tests in `llm.rs::tests`.
-- Meeting pause/resume idempotency + stop-while-paused deadlock — caught by `core/tests/meeting_pause_resume.rs` (4 integration tests).
+- Meeting pause/resume idempotency + stop-while-paused deadlock — caught by `core/tests/meeting_pause_resume.rs` (5 integration tests).
 - `dimmy_start_recording` rc=-7 contract drift between Rust and C# / Swift hosts — caught by `ffi::tests::start_recording_blocked_when_meeting_active`.
 
 ## Tier 1 — FFI integration (Rust)
 
 **What it tests.** Pre-recorded PCM fed directly into the audio buffer via a test-only FFI (`dimmy_inject_pcm_for_test`, gated by `--features test-ffi`), then the normal `dimmy_stop_recording` runs the whole pipeline (preprocess → STT → filler → LLM). Cloud HTTP is mocked with `wiremock-rs`.
 
-**Where.** `core/tests/ffi_e2e.rs` — 12 tests, cross-platform. Plus
-`core/tests/meeting_pause_resume.rs` (4 tests, exercises the
+**Where.** `core/tests/ffi_e2e.rs` — 15 tests, cross-platform. Plus
+`core/tests/meeting_pause_resume.rs` (5 tests, exercises the
 `dimmy_meeting_pause/_resume/_is_paused` FFI contract + worker
 behaviour while paused), `core/tests/audio_hardening.rs` (4 tests —
 dictation route-aware preprocess + BUG A/B guardrails, see below) and
-`core/tests/parakeet_long_file.rs` (1 diagnostic test on real long
-WAVs, skips cleanly when fixture unavailable; survives in tree as a
-regression early-warning for future preprocess changes).
+`core/tests/parakeet_long_file.rs` (1 diagnostic test on a real long
+WAV, needs `--features local-stt-parakeet`; skips cleanly when the
+Parakeet bundle or the WAV (`DIMMY_LONG_WAV`) is missing; survives in
+tree as a regression early-warning for future preprocess changes).
 
 **Audio hardening (`core/tests/audio_hardening.rs`)** — regression tests
 for the two silent dictation bugs (known-bugs.md AUDIO-004): the LOCAL
@@ -57,14 +58,16 @@ unit test; the capture-ratio guard is unit-tested in `telemetry::`
 (it's inert in the injection harness — no real capture timing).
 
 Coverage groups:
-- **Local STT**: jfk sample, silent input, short clip (<30s, set_single_segment guard), long clip (>30s, segmentation guard), preprocess pipeline end-to-end.
+- **Local STT**: jfk sample, silent input, short clip (<30s, set_single_segment guard), reused whisper state across calls, concurrent stop (the second caller gets rc -9), long clip (>30s, segmentation guard), preprocess pipeline end-to-end, Opus voice note through `dimmy_transcribe_file` (committed fixture `core/tests/fixtures/jfk_opus_voice_note.ogg`).
 - **Cloud STT**: mocked 200, mocked 401, provider mismatch (Groq STT key + Anthropic LLM URL).
 - **Cloud LLM** (`dimmy_process_with_llm`): mocked 200 rewrite, mocked 401 → original text fallback, mocked 500 → original text fallback.
 - **Config round-trip**: 30-field set/get verification — the contract every native UI relies on.
 
-**Fixtures** (downloaded on first run to `core/target/test-fixtures/`, gitignored, cached in CI):
-- `jfk.wav` — [whisper.cpp/samples](https://github.com/ggerganov/whisper.cpp/raw/master/samples/jfk.wav) (MIT, 11 s English)
+**Fixtures** (downloaded on first run to `core/target/test-fixtures/`, gitignored, cached in CI under the `ffi-fixtures-v1-<os>` key; the model is also copied into `local_stt::model_directory()`):
+- `jfk.wav` — [ggml-org/whisper.cpp samples](https://github.com/ggml-org/whisper.cpp/raw/master/samples/jfk.wav) (MIT, 11 s English)
 - `ggml-tiny.en-q8_0.bin` — [HuggingFace ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en-q8_0.bin) (MIT, ~40 MB)
+
+Small fixtures committed in `core/tests/fixtures/`: `jfk_16k_mono.wav`, `jfk_opus_voice_note.ogg`, `stereo_2s.m4a`, and the ABI golden `abi_exports.txt`.
 
 **Run locally** (Windows — requires the project toolchain: LLVM, Ninja, Vulkan SDK, MSVC env):
 
@@ -89,7 +92,9 @@ Three additional Rust integration suites that run alongside tier 1. They guard r
 
 ### ABI snapshot (`core/tests/abi_snapshot.rs`)
 
-Builds `dimmy_lib` as a cdylib and parses the resulting shared library cross-platform via the `object` crate (PE / ELF / Mach-O). Extracts the sorted set of `dimmy_*` exports and diffs against the golden file at `core/tests/fixtures/abi_exports.txt`. Any silent rename, drop, or accidental mangling fails the PR before the installer ships — the upstream guard for the v0.6.10 ABI-mismatch class.
+Parses the `dimmy_lib` cdylib already in `target/release` (or builds it with `--features local-stt` when it is missing) cross-platform via the `object` crate (PE / ELF / Mach-O). Extracts the sorted set of `dimmy_*` exports and diffs against the golden file at `core/tests/fixtures/abi_exports.txt`. Any silent rename, drop, or accidental mangling fails the test — the upstream guard for the v0.6.10 ABI-mismatch class.
+
+**No workflow runs it.** `e2e-tests.yml` excludes it on purpose: the golden pins the DLL built with the frozen release feature set (vulkan + parakeet + llm), and the CI gate builds a reduced-feature DLL with a different symbol set. Run it locally against a DLL built with the frozen set.
 
 ```bash
 # Run normally
@@ -118,7 +123,7 @@ cargo test --release --test preprocess_properties --features local-stt
 
 A standalone binary that runtime-loads `dimmy_lib.{dll,dylib,so}` via `libloading` and calls every shipping `dimmy_*` export with safe, side-effect-light arguments. Exits 0 if every call returns a sensible code without panicking. Catches the v0.6.10 ABI-mismatch class at PR time without needing a Setup.exe — runs against the freshly-built cdylib in CI.
 
-Gated behind the `smoke-test` feature so default builds don't pull `libloading`.
+Gated behind the `smoke-test` feature (the feature only gates the binary; `libloading` is a regular dependency of the core).
 
 ```bash
 # Build
@@ -128,9 +133,9 @@ cargo build --release --bin dimmy_smoke --features smoke-test
 cd target/release && ./dimmy_smoke
 ```
 
-Ships as a separate `ffi-smoke` job in `e2e-tests.yml`, matrix Win/Mac/Linux, `needs: ffi-integration` for fail-fast ordering.
+Ships as a separate `ffi-smoke` job in `e2e-tests.yml`, matrix Win/Mac/Linux, `needs: ffi-integration` for fail-fast ordering. It runs on pull requests only (`if: github.event_name != 'push'`).
 
-The release-critical `test-install.yml` is intentionally not modified by this gate. A follow-up can extend `dimmy_smoke` to load the *installed* DLL after Setup.exe runs.
+`test-install.yml` does not run `dimmy_smoke`. A follow-up can extend `dimmy_smoke` to load the *installed* DLL after Setup.exe runs.
 
 ## Tier A — live model / LLM tests (manual, `#[ignore]`, NOT CI)
 
@@ -139,22 +144,31 @@ Real network + API keys (repo `.env`). The ONLY reliable way to check model beha
 - **`core/tests/live_models.rs`** — drives `llm::process_raw_prompt` against every cloud model in `assets/model-catalog.json`; catches dead/renamed model ids.
 - **`core/tests/llm_flows.rs`** — the LLM flow matrix + catalog sweep (style · translate · command · security across providers, plus a per-model sweep). Dedicated guide: [`llm-flows-testing.md`](llm-flows-testing.md).
 
+- **`core/tests/live_model_downloads.rs`** — live contract test for the model downloads against Hugging Face (`cargo test --test live_model_downloads -- --ignored --nocapture`).
+
 ```bash
 cargo test --test llm_flows --features local-llm -- --ignored --nocapture --skip flows_local_gguf
 ```
 
-## Other Rust suites (run on plain `cargo test`)
+## Other Rust suites
 
 - **`llm_request_shape.rs`** — asserts the exact JSON body (system prompt, temperature, thinking mode, headers) each provider receives.
-- **`telemetry_coverage.rs`** — hygiene gate: every `Event` variant is emitted somewhere or explicitly reserved.
-- **`v2_ffi.rs` / `v2_followups.rs`** — v2 FFI round-trip (app context, file transcribe, meeting-active, history hooks, raw LLM call) + retention / orphan recovery.
+- **`telemetry_coverage.rs`** — hygiene gate: every `Event` variant is emitted somewhere or explicitly reserved, and listed in `telemetry-implementation.md`. Plain `cargo test --test telemetry_coverage`; no workflow runs it.
+- **`v2_ffi.rs` / `v2_followups.rs`** — v2 FFI round-trip (app context, file transcribe, meeting-active, history hooks, raw LLM call) + retention / orphan recovery. Need `--features local-stt,test-ffi`.
 - **`meeting_pause_resume.rs`** — pause/resume idempotency + stop-while-paused.
 - **`stress_tests.rs`** — offline stress (30 min / 1 h recordings, NaN/Inf audio, memory pressure), no API calls.
-- **`parakeet_long_file.rs`** — diagnostic regression guard for `dimmy_transcribe_file` on >10 min WAVs (AUDIO-001 file-load case).
+- **`parakeet_long_file.rs`** — diagnostic regression guard for `dimmy_transcribe_file` on >10 min WAVs (AUDIO-001 file-load case). Needs `--features local-stt-parakeet` and the Parakeet bundle.
+- **`parakeet_e2e.rs`** — Parakeet TDT v3 end to end; needs `--features local-stt-parakeet`, the bundle in the config dir and a discoverable `onnxruntime`; skips cleanly otherwise.
+- **`call_detect_scenarios.rs`** — whole-lifecycle scenarios for call auto-detect + auto-record.
+- **`setup_cli.rs`** — `dimmy-setup` end to end against a throwaway config dir (`--features local-stt,test-ffi`).
+- **`gtcrn_builder_probe.rs`** (`denoise-gtcrn`) and **`local_llm_thinking.rs`** (`local-llm`, `#[ignore]`, needs a real GGUF) — probes that skip without their model.
+- **`gen_windows_keys.rs`, `import_and_verify.rs`, `migrate_keys.rs`, `repro_peaks_crash.rs`** — one-off key-store and crash-repro helpers, not regression suites.
+
+Which of these run in CI: `ci.yml` runs only `cargo test --lib`; `e2e-tests.yml` runs the integration-suites list in the CI section below. Not in any workflow: `telemetry_coverage`, `call_detect_scenarios`, `parakeet_*`, `setup_cli`, `abi_snapshot`.
 
 ## Tier 2 — Windows UI smoke (FlaUI)
 
-**What it tests.** Launches the built `Dimmy.Windows.exe`, drives the onboarding wizard via UIA3, and asserts on the automation tree. 5 tests, ~41 s locally.
+**What it tests.** Launches the built `Dimmy.Windows.exe`, drives the onboarding wizard via UIA3, and asserts on the automation tree. 7 test cases: 5 in `OnboardingSmokeTests.cs`, plus the 2 `LegalDialogTests.cs` cases (About → licence / notices windows). ~41 s locally (measured when there were 5).
 
 **Where.** `platforms/windows/Dimmy.Windows.UiTests/` — xUnit project, `net8.0-windows`, depends on `FlaUI.Core` + `FlaUI.UIA3`.
 
@@ -178,7 +192,7 @@ cd ../Dimmy.Windows.UiTests
 dotnet test -c Debug --logger "console;verbosity=normal"
 ```
 
-The tests kill any running Dimmy process before each run and delete `%APPDATA%\dimmy\.onboarding_done` to start from the fresh onboarding state. They do NOT complete onboarding (so the marker stays absent; your manual onboarding state is not affected).
+The tests kill any running Dimmy process before each run. `OnboardingSmokeTests` also deletes `%APPDATA%\dimmy\.onboarding_done` to start from the fresh onboarding state. They do NOT complete onboarding (so the marker stays absent). `LegalDialogTests` needs the command pipe, which only starts past onboarding, so it creates the marker when it is absent and deletes it afterwards. All UI tests run without parallelism because each one kills the running Dimmy.
 
 **AutomationIds contract.** Tests find controls via `AutomationProperties.AutomationId`. When you add new UI that needs test coverage, add an ID in XAML:
 
@@ -192,7 +206,7 @@ Existing IDs (keep stable — renaming breaks tests):
 - `OnboardingLocalCard` / `OnboardingCloudCard`
 - `OnboardingGroqKeyBox`
 - `OnboardingChoiceBackButton` / `OnboardingChoiceContinueButton`
-- `AboutLicenseViewButton` / `AboutNoticesViewButton` / `LegalTextBox`
+- `AboutLicenseViewButton` / `AboutNoticesViewButton` (the legal windows they open are found by window title and heading text, not by AutomationId)
 
 **Headless note.** GHA `windows-2025` runners don't reliably render windows to the desktop. Tests that rely on mouse clicks at screen coordinates (e.g. clicking a `Border` which has no `InvokePattern`) may pass locally but fail in CI. Prefer UIA patterns (`AsButton().Invoke()`, `AsTextBox().Enter(...)`) over `element.Click()`.
 
@@ -203,15 +217,16 @@ Not shipped. Would validate the whole stack including WASAPI capture via a virtu
 ## CI workflows
 
 **Production pipeline — do NOT touch** (see [`windows-ci.md`](windows-ci.md) for invariants):
-- `ci.yml` — fast Rust lint/test + Linux GTK4 lint; runs on every push and PR
-- `staging-auto-update.yml` — full installer build on push to `staging`
-- `release.yml` — tagged release builds
-- `test-install.yml` — clean-Windows install test, triggered by release workflows
+- `ci.yml` — Swift string-literal check, Rust fmt + clippy, `cargo test --lib --features local-stt,local-llm`, Linux GTK4 clippy + `cargo test`; runs on push to `main` / `staging` and on PRs to them
+- `staging-auto-update.yml` — full installer build on push to `staging` (ignores docs-only pushes); also runs `dotnet test` for `Dimmy.Windows.Tests`
+- `staging-tester.yml` — signed side-by-side staging build on `v*-staging*` tags
+- `release.yml` — tagged release builds; runs `cargo test --lib`, the `ffi_e2e` whisper gate with `local-stt-vulkan,test-ffi`, `dotnet test` for `Dimmy.Windows.Tests` and `xcodebuild test` for `DimmyTests`
+- `test-install.yml` — clean-Windows install test; called by `staging-auto-update.yml` and `release.yml` (and `workflow_dispatch`)
 
 **Additive testing pipeline**:
-- `e2e-tests.yml` — tier 1 FFI (matrix Win/Mac/Linux) + tier 2 Windows UI smoke + cross-platform FFI smoke + the `integration-suites` job (windows-2025: ffi_e2e, v2_ffi, v2_followups, audio_hardening, meeting_pause_resume, llm_request_shape, stress_tests, abi_snapshot, preprocess_properties in one invocation, `--test-threads=1`). Triggers (since 2026-07-05): `push` to `staging` runs `integration-suites` + Windows UI smoke — the dev flow merges without PRs, so this is the actual gate; `pull_request` additionally runs the 3-OS matrices; plus `workflow_dispatch`. Does not push to releases, does not overlap with production workflows.
+- `e2e-tests.yml` — tier 1 FFI (matrix Win/Mac/Linux) + tier 2 Windows UI smoke + cross-platform FFI smoke + the `integration-suites` job (windows-2025: ffi_e2e, v2_ffi, v2_followups, audio_hardening, meeting_pause_resume, llm_request_shape, stress_tests, preprocess_properties in one invocation, `--features local-stt,test-ffi`, `--test-threads=1`; `abi_snapshot` is deliberately excluded, see above). Triggers (since 2026-07-05): `push` to `staging` runs `integration-suites` + Windows UI smoke — the dev flow merges without PRs, so this is the actual gate; `pull_request` additionally runs the 3-OS matrices; plus `workflow_dispatch`. Does not push to releases, does not overlap with production workflows.
 
-**Fail-fast ordering**: `windows-ui-smoke` and `ffi-smoke` both have `needs: ffi-integration`, so cheap FFI tests run first; UI / smoke jobs skip if tier 1 fails.
+**Fail-fast ordering**: `windows-ui-smoke` has `needs: integration-suites` (the job that always runs, including on staging pushes) and `ffi-smoke` has `needs: ffi-integration` (PR-only), so cheap tests run first; the UI / smoke jobs skip if their predecessor fails.
 
 ## Pre-push checklist
 
@@ -240,7 +255,7 @@ xcodebuild test -project Dimmy.xcodeproj -scheme Dimmy \
   -destination "platform=macOS"
 ```
 
-A CI cycle is 10-20 minutes; this checklist runs in under 5 min locally and catches ~95 % of what CI would fail on. The Mac XCTest target is wired into `Dimmy.xcodeproj` (productType `bundle.unit-test`, ad-hoc signed); it currently runs structured-recap prompt + parser, recap-model picker round-trip, history-row formatting, AppState language/preset round-trip.
+A CI cycle is 10-20 minutes; this checklist runs in under 5 min locally and catches ~95 % of what CI would fail on. `abi_snapshot` compares against a golden pinned to the frozen release DLL, so it fails against a reduced-feature DLL; run it only with a DLL built with the frozen feature set. The Mac XCTest target `DimmyTests` (`platforms/macos/DimmyTests/`, 21 test files: recap-model, AppState, meeting history/speakers/audio, call detection, hotkey tap state, selection capture, update gate and more) is wired into `Dimmy.xcodeproj`; `release.yml` runs it with `xcodebuild build-for-testing` + `test-without-building` and fails if zero tests ran.
 
 ## Hardening pass for `feat/system-audio-capture`
 

@@ -13,24 +13,31 @@ Cargo.toml                       Crate manifest, depends on core/ via path
 assets/                          SVG icons, .desktop file
 src/
 ├── main.rs                      gtk4 App entry
-├── state.rs                     Shared state (wraps core's AppState through FFI-less crate import)
-├── pill_window.rs               The pill overlay (Wayland layer_shell on Wayland; override-redirect on X11)
-├── settings/                    Settings window (libadwaita)
-├── onboarding/                  First-run wizard
-├── tray.rs                      StatusNotifierItem / AppIndicator
-├── hotkey.rs                    X11 and Wayland (portal) hotkey plumbing
-├── text_injector.rs             xdotool on X11, wtype / wl-copy on Wayland
+├── state.rs                     AppEvent enum + async_channel from background threads to the GTK loop
+├── pill_window.rs               The pill overlay (gtk4-layer-shell layer-surface only when built with the
+│                                optional `layer-shell` feature and the compositor supports it; otherwise
+│                                plain GTK window hints)
+├── settings/                    Settings window (AdwPreferencesWindow, 8 pages: general, shortcut,
+│                                output, overlay, permissions, stats, debug, about; stats and debug
+│                                appear with the Advanced toggle)
+├── onboarding/                  First-run wizard (welcome, shortcut, try-it)
+├── terms.rs, telemetry_consent.rs  Terms and statistics-consent dialogs at launch
+├── tray.rs                      StatusNotifierItem via the `ksni` crate
+├── hotkey.rs                    Backend detection only (portal on Wayland, "x11" otherwise). STUB:
+│                                register_hotkey / unregister_hotkey do nothing yet
+├── text_injector.rs             Paste method detection: wtype, then ydotool on Wayland; xdotool on X11;
+│                                clipboard-only (arboard) as last resort
 └── waveform.rs                  GtkDrawingArea-based waveform renderer
 ```
 
-No FFI boundary on Linux — the Linux UI crate imports the Rust core directly as a `path` dependency. This is the simplest of the three platforms.
+No FFI boundary on Linux — the Linux UI crate imports the Rust core directly as a `path` dependency (`dimmy_lib`). The core's own keyboard hook is a no-op on Linux (`core/src/hotkey.rs`), and `main.rs` only calls `detect_hotkey_backend()`, so this UI has no working global hotkey and no meeting window yet. Treat it as an experimental prototype.
 
 ## Runtime facts
 
 - **Configuration:** `~/.config/dimmy/config.json`. Core is the only writer.
 - **Keys:** `~/.config/dimmy/keys.enc` (AES-256-CTR + HMAC-SHA256).
-- **Logs:** `~/.local/share/dimmy/logs/`.
-- **Installer:** AppImage. CPU-only whisper.cpp (`local-stt` default feature, no Vulkan) for portability across distros with varying Vulkan loader availability.
+- **Logs:** `~/.config/dimmy/dimmy.log` (the core writes it into the config dir).
+- **Installer:** AppImage (`release.yml`, job `build-linux`). CPU-only whisper.cpp (`local-stt` default feature of the core, no Vulkan) for portability across distros with varying Vulkan loader availability.
 - **User wanting GPU on Linux** rebuilds from source with `--features local-stt-vulkan`. Documented in BUILD.md.
 
 ## Quick dev loop
@@ -51,12 +58,12 @@ The Rust core is rebuilt automatically as part of this build (path dependency). 
 
 | Feature | X11 | Wayland |
 |---|---|---|
-| Pill overlay | Override-redirect window | `gtk4-layer-shell` layer-surface |
-| Global hotkey | Raw XGrabKey (direct) | Global Shortcuts portal (user approves) |
-| Text injection | `xdotool key` | `wtype` + `wl-copy` fallback |
+| Pill overlay | Plain GTK window (type hints) | `gtk4-layer-shell` layer-surface, only in a `--features layer-shell` build (the AppImage build does not enable it) |
+| Global hotkey | Planned: XGrabKey. Not implemented (stub) | Planned: Global Shortcuts portal (`ashpd` is a dependency). Not implemented (stub) |
+| Text injection | `xdotool key` | `wtype`, then `ydotool`; clipboard-only if neither is installed |
 | Tray | StatusNotifierItem via DBus | Same (DBus protocol, compositor-agnostic) |
 
-On Wayland without Global Shortcuts portal support, the user must approve each hotkey combo via the compositor's prompt. Where the compositor doesn't implement the portal (older GNOME, some Sway setups), the hotkey feature degrades gracefully — the app works, but the hotkey can't be registered.
+The hotkey rows describe the intended design. Today `register_hotkey` only logs and returns Ok, so no global hotkey fires on either display server.
 
 ## Platform-specific gotchas
 

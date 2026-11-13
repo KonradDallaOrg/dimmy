@@ -1,5 +1,27 @@
 # LLM flow testing — the live combination matrix
 
+**Status, checked against the code on 2026-11-11:**
+
+- `core/tests/llm_flows.rs` has ten tests, every one `#[ignore]`, and the
+  file compiles only with `--features local-llm`. No workflow runs it.
+- Cloud targets (`cloud_targets()`): `claude-haiku-4-5-20251001`,
+  `gemini-2.5-flash` (OpenAI-compatible URL), `gpt-5-mini`, Groq
+  `openai/gpt-oss-120b`, Together `Qwen/Qwen2.5-7B-Instruct-Turbo`. Every
+  call passes `auth_method = "api_key"`, so the subscription CLIs (Claude
+  Code, Codex, Gemini, Kimi) are not covered here.
+- `flows_local_gguf` takes the first `.gguf` in
+  `local_llm::llm_model_directory()` and calls `process_text_local`
+  (language `"it"`) and `process_raw_prompt_local` (1024 tokens).
+- The matrix covers dictation enhancement and command mode. It does not
+  build a meeting-recap prompt and does not check the `llm_stream` events.
+- In the product, both `llm::process_text` and `llm::process_raw_prompt` run
+  `strip_output_scaffolding` on the answer and retry once with 4x the token
+  budget when the provider reports truncation (`LlmError::Truncated` if it
+  is cut again).
+- The results and the model guidance below are from the run of 2026-06-19.
+  The local default model is no longer Phi-4 Mini: `local_llm::DEFAULT_LLM_MODEL`
+  is `gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf` since 2026-10-23.
+
 `core/tests/llm_flows.rs` is a Tier-A, `#[ignore]` (manual, never-CI) live test
 that drives Dimmy's **production** LLM functions against **real models** — every
 cloud provider you have a key for, plus the local GGUF already on disk — across
@@ -13,7 +35,7 @@ dictations never catches these; a matrix does.
 ## Run it
 
 ```bash
-# all cloud groups (skips the slow local one):
+# all cloud groups, including the heavy all_catalog_models sweep (skips the slow local one):
 cargo test --test llm_flows --features local-llm -- --ignored --nocapture --skip flows_local_gguf
 
 # one group:
@@ -25,8 +47,9 @@ cargo test --test llm_flows --features local-llm flows_local_gguf -- --ignored -
 
 Keys come from the repo `.env` (`ANTHROPIC_KEY`, `GEMINI_KEY`, `GROQ_KEY`,
 `OPENAI_KEY`, `TOGETHER_API_KEY`). A provider with no key is skipped with a note.
-The local test uses whatever `*.gguf` is in the dimmy config dir — it never
-downloads anything.
+The local test uses the first `*.gguf` it finds in
+`local_llm::llm_model_directory()` (`<data_dir>/<config namespace>/llm-models`)
+— it never downloads anything.
 
 ## What it drives (the three flows)
 
@@ -60,6 +83,9 @@ Local mirrors: `local_llm::process_text_local` / `process_raw_prompt_local`.
   reminder (DE); CASE-B literal content (a dictated list); a dictated **question
   must not be answered** (command mode never converses).
 - **`command_security`** — injection in a command instruction.
+- **`all_catalog_models`** — every LLM-capable model in
+  `assets/model-catalog.json`, top tier first, two probes each (translate
+  it→en, command generate). Heavy.
 - **`flows_local_gguf`** — a compact representative subset on the local model.
 
 ## Pass / fail semantics
@@ -88,12 +114,16 @@ model/combination is weak. Read the printed summary, not just the pass/fail.
    translated fine because the user's spoken instruction was natural language.
    *Fix:* `llm::lang_name(code)` maps the code to the English NAME and the
    directive is now imperative — `"Then translate the ENTIRE result into
-   English. The final output MUST be written in English …"` (cloud
-   `build_system_prompt` + local `build_local_system_prompt`).
+   English. The final output MUST be written in English only …"` in the
+   cloud `build_system_prompt`. The local `build_local_system_prompt` has
+   used a different, single-step wording since 2026-09-05: `"Translate into
+   English while applying this transformation. Your entire answer must be in
+   English, …"`.
 2. **Prompt scaffolding leaked on weak cloud models.** A small model
    (llama-3.1-8b) echoed the `[TRANSCRIPTION]` delimiter into its answer and the
    cloud path didn't strip it (only the local path did). *Fix:*
-   `llm::strip_output_scaffolding` runs on `process_text` output.
+   `llm::strip_output_scaffolding` runs on `process_text` output (and, since
+   then, on `process_raw_prompt` output too).
 3. **OpenAI gpt-5 / o-series returned EMPTY in dictation enhancement.**
    `process_text` correctly switched to the reasoning request shape
    (`max_completion_tokens`, no `temperature`), but sized the budget at
@@ -101,10 +131,13 @@ model/combination is weak. Read the printed summary, not just the pass/fail.
    a reasoning model spends **entirely** on its internal trace, leaving nothing
    for the visible answer → `""`. **Every** gpt-5-mini enhancement returned empty
    while the command path (already generous) worked. *Fix:* floor the reasoning
-   budget at `max_completion_tokens.max(8192)` in `process_text`.
+   budget at `max_tokens.max(8192)`, sent as `max_completion_tokens`, in
+   `llm::send_process_text_request` (the request builder `process_text` calls).
 4. **(local, separate commit)** QAT GGUF leaked `<|im_end|>` and rolled into a
    duplicate turn — stop at the turn-end marker + strip. See the
-   `feat/gemma4-qat-llamacpp-bump` branch.
+   `feat/gemma4-qat-llamacpp-bump` branch. In the code today:
+   `local_llm::PieceFilter::classify` (stop markers) and
+   `local_llm::strip_special_tags`.
 
 5. **Reasoning models leaked their `<think>…</think>` trace into the answer.**
    `qwen3-32b` (via Groq) emitted its full chain-of-thought before the text in the
@@ -122,17 +155,24 @@ model/combination is weak. Read the printed summary, not just the pass/fail.
 - **Small models echo / don't translate** (llama-3.1-8b, local Gemma E2B) — see
   model guidance below.
 
-## Model guidance (observed)
+## Model guidance (observed 2026-06-19)
+
+What the models did in that run. The local findings predate three fixes to
+Dimmy's own local path (repetition penalty 2026-09-04, named language
+2026-09-05, per-model chat format 2026-10-22; see
+`local-llm-quality-2026-09-05.md`) and were not repeated after them.
 
 - **Capable cloud models** (Claude Haiku, Gemini Flash, GPT-5-mini, Llama-3.3-70b,
   Qwen-2.5) handle styles, translation, and command transform/generate correctly.
   Note GPT-5-mini only works in enhancement *after* the `max_completion_tokens`
   floor fix above — without it, the reasoning trace eats the whole budget.
-- **Small models** (llama-3.1-8b, the local Gemma 4 E2B) are unreliable for
-  command mode (echo the instruction) and translation (ignore the directive),
-  and drift into "playful" output on short prompts — which is exactly why
-  `DEFAULT_LLM_MODEL` is Phi-4 Mini, not Gemma E2B. Use them for quick
-  clean-ups, not translation or command mode.
+- **Small models** (llama-3.1-8b, the local Gemma 4 E2B) were unreliable in
+  that run for command mode (echo the instruction) and translation (ignore
+  the directive), and drifted into "playful" output on short prompts — which
+  is why the local default was Phi-4 Mini at the time. That is no longer the
+  default: `local_llm::DEFAULT_LLM_MODEL` is Gemma 4 E2B QAT
+  (`gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf`) since 2026-10-23, after the local
+  fixes named above.
 
 ## Extending
 

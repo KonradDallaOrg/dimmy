@@ -1,8 +1,33 @@
 # Nemotron — the fifth local STT backend (`local_stt_backend = "nemotron"`)
 
+Status, checked against the code on 2026-11-11:
+
+- Five local backends exist: `whisper`, `parakeet`, `qwen`, `whistle`, `nemotron`
+  (allow-list in `dimmy_set_config_json`, `ffi.rs:3193`). The selected one runs;
+  `transcribe::resolve_local_backend` (`transcribe.rs:628`) falls back to whisper only
+  when its files are missing and a whisper model is on disk. Nemotron is opt-in: a
+  fresh install starts on whisper, on Parakeet on macOS (`lib.rs:1170`).
+- Nemotron is the only local backend that streams. A dictation with Realtime typing
+  (`streaming_dictation`) or Accelerate transcription (`chunk_streaming_enabled`) on
+  runs `nemotron::Streamer` in the `STREAMING` slot with 100 ms pushes (`ffi.rs:1347`,
+  `PUSH_INTERVAL`). With both off it is one `Recognizer::transcribe` call at stop
+  (`ffi.rs:2018`). The other four run in fixed chunks of 5 s or 15 s
+  (`chunked_stt::chunk_secs_for_backend`).
+- Meetings: 0.5 s windows into one stream per track (`NEMOTRON_WINDOW_SECS`,
+  `NemoTracks`, `meeting.rs:45` and `:971`). When no track opens, the meeting has no
+  live text and no other engine runs in its place (`meeting.rs:1456`).
+- An empty or `auto` language leaves detection to the model (`nemotron::locale_for`).
+  The custom dictionary is a word boost of 4.0 (`DICTIONARY_BOOST`).
+- Pins (`nemotron.rs:39-150`): engine `engine-nemotron-66d50d9`, Q8_0 model SHA-256
+  `3fc991d3...`, F32 model `2223d6e5...`, diarizer `08456d9e...`.
+- Before a load, `load_into` needs the weights plus 7 GiB (GPU) or 3686 MiB (CPU)
+  plus 256 MiB of free memory. A GPU load that is refused or fails falls back to the
+  CPU engine (`app_recognizer`, event `nemotron_cpu_fallback`).
+
 Code: `core/src/nemotron.rs`, the Nemotron parts of `core/src/meeting.rs`
 (`NemoTracks`, `LineSink`, `NEMOTRON_WINDOW_SECS`) and `core/src/ffi.rs`
-(`ActiveStreamer::Nemotron`, `dimmy_nemotron_status/_size_mb/_download`).
+(`ActiveStreamer::Nemotron`, `dimmy_nemotron_status/_size_mb/_download`, and for F32
+`dimmy_nemotron_full_status/_full_size_mb/_full_download/_restart_needed`).
 Engine build: `.github/workflows/engine-nemotron.yml`.
 All figures below were measured 2026-10-29/30 on an i7-12700H + NVIDIA T600,
 Italian speech.
@@ -35,8 +60,9 @@ on technical terms: not used. All models are OpenMDW-1.1 (credited in
 **F32.** NVIDIA publishes no F32 GGUF and its converter refuses `--outtype f32`
 for ASR, so it is produced with a one-line local patch of `conversion/registry.py`
 and `conversion/asr.py` at the pinned commit, from the same checkpoint revision.
-The file on disk is the setting: download-center id `nemotron-f32`, delete it to
-go back. It runs only on a GPU build, and only with 10.4 GB of commit charge free
+The `nemotron_model` setting chooses it and the file must also be on disk
+(`f32_wanted`; download-center id `nemotron-f32`). It runs only on a GPU build, and
+only with 10.4 GB of commit charge free
 (`pick_model`); otherwise Q8_0 does the job, which is why Q8_0 stays in the bundle.
 
 ## Architecture
@@ -79,9 +105,10 @@ the commit charge left, not free RAM) and returns an error instead, which falls
 back from GPU to CPU. Keep this check in front of any new load.
 
 Q8_0 and F32 are two rows of the model picker (`nemotron_model`: `q8` or `f32`).
-The file on disk no longer decides. A model already on the GPU stays until the
-next launch (`nemotron::restart_needed` tells the host), because it could not be
-freed for the other one. Benchmarks without a config use `DIMMY_NEMOTRON_F32=1`.
+The file on disk alone does not decide: `f32_wanted` needs the F32 row selected and
+the file present. A model already on the GPU stays until the next launch
+(`nemotron::restart_needed` tells the host) or until the idle release below frees it,
+because it could not be freed for the other one while in use. Benchmarks without a config use `DIMMY_NEMOTRON_F32=1`.
 
 `scripts/dev/nemotron-memory-test.ps1` runs a meeting and the pass after it at
 fixed levels of free commit, held by `commit_hog`. Run it after any change to these
@@ -95,9 +122,9 @@ checks, with other programs closed. Results on T600, 45 s meeting, 2026-10-30:
 | 3 GB | none | none, the host is told | none | refused (rc -5) |
 
 Audio was complete in every run. Live peak commit is 7.0 GB at Q8_0 and 8.6 GB at
-F32, which the GPU check covers. The pass adds about 4 GB (11 GB and 14.4 GB) and
-has no check of its own when the recognizer is already loaded, so it is the path
-left where an allocation can still abort.
+F32, which the GPU check covers. The pass adds about 4 GB (11 GB and 14.4 GB). In
+these runs it had no check of its own when the recognizer was already loaded. It has
+one now: `nemotron::pass_fits` (6 GiB free on a GPU, 2500 MiB on a CPU), see below.
 
 A 51-minute GPU meeting (F32, 2026-10-30) held 8.76 GB of commit and 2.9 GB of VRAM
 flat, with 0.5 GB of RAM and the GPU at 30-37%. The pass after it transcribed both
@@ -127,7 +154,9 @@ what leaves it is never freed: clearing it before a refused GPU load made every
 call reload the CPU models and leak the old ones (2026-10-30, a staging install
 with 26 GB already committed by other programs: 15 GB, then the abort above, three
 times in an hour). With no track open at all the core emits
-`meeting_transcription_behind`; the audio is recorded regardless. The engine's
+`meeting_transcription_unavailable` with the reason (`NemoTracks::open` returns
+`Err`, `meeting.rs:1456`; before 2026-11-09 it said `meeting_transcription_behind`);
+the audio is recorded regardless. The engine's
 aborts never reach Sentry, which only sees Rust panics: read the Windows crash
 dumps in `%LOCALAPPDATA%\CrashDumps`.
 
@@ -136,6 +165,11 @@ dumps in `%LOCALAPPDATA%\CrashDumps`.
 `ActiveStreamer::Nemotron` in the `STREAMING` slot (`ffi.rs`), started by
 `nemotron::Streamer::start`. Real streaming, not `chunked_stt.rs`.
 
+- **Only with live output on.** The streamer starts when Realtime typing
+  (`streaming_dictation`) or Accelerate transcription (`chunk_streaming_enabled`) is
+  on (`ffi.rs:1347`). With both off, and when the live text comes back empty, the
+  stop transcribes the whole recording in one call
+  (`transcribe_audio_local_nemotron`, `ffi.rs:2018`).
 - **One stream per dictation, never reset.** A reset lost the first word and the
   detected language.
 - Audio is pushed at the captured 48 kHz (`push_at`), in 100 ms steps; the
@@ -209,6 +243,7 @@ unpublished and offered as nothing.
 
 ## Measurements
 
+Measured 2026-10-29/30, not repeated since.
 A real 4-minute two-track Italian meeting, 0.5 s windows, i7-12700H + T600 (4 GB).
 "Behind" is how far the text trails the voice at the worst moment.
 
@@ -264,13 +299,13 @@ Dictation: 2.6-4.4x realtime on CPU, 6.1x with Q8_0 on the T600.
 
 ## Dev bins (`core/src/bin/`)
 
-- `nemotron_smoke --lib <dll> --model <gguf> [--diar <gguf>] [--gpu N] [--lang it] [--keywords ...] [--oneshot] file.wav`:
+- `nemotron_smoke --lib <dll> --model <gguf> [--diar <gguf>] [--gpu N] [--lang it] [--keywords ...] [--oneshot] [--no-speakers] file.wav`:
   drives the engine in-process as the app would (100 ms pushes); prints deltas,
   final text, speaker turns and the realtime factor.
 - `nemotron_meeting_bench <meeting dir> [--no-speakers] [--mic-speakers] [--parallel] [--adaptive] [--window 0.5] [--seconds N] [--lang it]`:
   replays `audio_mic.ogg` / `audio_system.ogg` in live windows on a simulated clock
   and prints load, lag and lines. Fast, for comparing configurations.
-- `nemotron_meeting_replay <meeting dir> [--no-speakers] [--seconds N]`: the real
+- `nemotron_meeting_replay <meeting dir> [--no-speakers] [--retranscribe] [--download] [--seconds N]`: the real
   `MeetingSession`, capture and transcription threads, events and stop, on a wall
   clock. Takes as long as the meeting. Removes the meeting it creates.
 - `stt_race`: per-window transcription speed across local backends.

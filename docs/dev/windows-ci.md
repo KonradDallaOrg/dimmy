@@ -4,12 +4,13 @@
 >
 > - `.github/workflows/release.yml`
 > - `.github/workflows/staging-auto-update.yml`
-> - `.github/workflows/test-install.yml` (on BOTH `staging` AND `main`)
+> - `.github/workflows/staging-tester.yml` (same Windows steps as the two above; no `test-install` call and no AVX-512 gate)
+> - `.github/workflows/test-install.yml`
 > - `platforms/windows/verify-self-contained.ps1`
 
 The CHANGELOG entries for v0.6.11–v0.6.20 are the per-rule archaeology. Read the block next to each invariant if you need to understand *how* this bug actually manifested.
 
-> **Note on `.github/workflows/e2e-tests.yml`** — this is the additive tier-1/tier-2 testing pipeline (see [`testing.md`](testing.md)). It runs on `pull_request` only, produces no release artifacts, and is NOT one of the four files above. You can edit it freely without triggering the invariants.
+> **Note on `.github/workflows/e2e-tests.yml`** — this is the additive tier-1/tier-2 testing pipeline (see [`testing.md`](testing.md)). It runs on push to `staging`, on `pull_request`, and on manual dispatch, produces no release artifacts, and is NOT one of the files above. You can edit it freely without triggering the invariants.
 
 ---
 
@@ -17,36 +18,36 @@ The CHANGELOG entries for v0.6.11–v0.6.20 are the per-rule archaeology. Read t
 
 **Why.** MSVC 14.44 (the `windows-2025` runner's default VS 2022 toolchain) miscompiles the whisper.cpp `ggml-vulkan` state-init path. The installer crashes silently on the first transcription inside `whisper_backend_init_gpu` during `create_state()`. Pre-v0.6.20 releases shipped this bug. Empirical proof: swapping the installer's DLL for a locally-built one (linker 14.50) on the same machine resolved the crash.
 
-**How to check.** Both `release.yml` and `staging-auto-update.yml` must:
-1. Install `visualstudio2026buildtools-preview` via chocolatey with `--pre`
-2. Locate it via `vswhere -version "[18.0,19.0)" -prerelease`
-3. Activate its `vcvars64.bat` inside the Rust build step (shell: cmd)
-4. Gate the built DLL with `dumpbin /headers | findstr "linker version"` and fail on < 14.50
+**How to check.** `release.yml`, `staging-auto-update.yml` and `staging-tester.yml` must, in their `build-windows` job:
+1. Make sure a VS 2026 install exists: locate it via `vswhere -version "[18.0,19.0)" -prerelease`, and only when none is found install `visualstudio2026buildtools-preview` via chocolatey with `--pre`
+2. Pin the MSVC toolset to 14.50 (`VCVARS_VER`), and fail when the toolset found is < 14.50
+3. Activate its `vcvars64.bat` (with `-vcvars_ver=%VCVARS_VER%`) inside the Rust build step (shell: cmd)
+4. Gate the built DLL with `dumpbin /headers` and fail on a linker version < 14.50
 
 Step names to preserve (don't rename, CI logs reference them by name):
 - **"Install VS 2026 BuildTools side-by-side (MSVC 14.50+)"**
-- **"Build Rust DLL (VS 2026 MSVC env)"**
+- **"Build Rust DLL (VS 2026 MSVC env)"** (`staging-tester.yml` calls it "Build Rust DLL (staging flavor, VS 2026 MSVC env)")
 - **"Gate — verify dimmy_lib.dll linker version"**
 
-**The 14.50 pin is a race, not an availability problem.** The runner image ships 14.51 / 14.44 / 14.29, so the step adds 14.50 through `vs_installer modify`, probing component ids because they are not queryable. `vs_installer` **returns before the toolset is on disk**, and until 2026-09-16 the step waited a single 10 seconds before deciding. Measured on two runs of the same commit, two hours apart on the same image: both tried `…VC.14.50.18.4…`, `…18.0…`, `…18.8…`; `v0.7.4` found 14.50 eleven seconds after the third probe and `v0.7.3` did not, and fell back to 14.51 with a warning. So: **when a release fails in a way that smells of the toolchain, check which toolset it actually built with before theorising.** The loop now polls for up to 90 s per probe and tries `18.8` first, which is the id that lands on this image.
+**The 14.50 pin is a race, not an availability problem.** The runner image ships 14.51 / 14.44 / 14.29, so the step adds 14.50 through `vs_installer modify`, probing component ids because they are not queryable. `vs_installer` **returns before the toolset is on disk**, and until 2026-09-16 the step waited a single 10 seconds before deciding. Measured on two runs of the same commit, two hours apart on the same image: both tried `…VC.14.50.18.4…`, `…18.0…`, `…18.8…`; `v0.7.4` found 14.50 eleven seconds after the third probe and `v0.7.3` did not, and fell back to 14.51 with a warning. So: **when a release fails in a way that smells of the toolchain, check which toolset it actually built with before theorising.** In `release.yml` and `staging-auto-update.yml` the loop now polls for up to 90 s per probe and tries `18.8` first, which is the id that lands on this image. `staging-tester.yml` has no `vs_installer modify` step: it pins 14.50 only when the image already has it, otherwise it builds with the newest toolset and fails if that is < 14.50.
 
 Losing the race is a real defect on its own terms — it silently ships the toolchain this invariant exists to avoid. It is **not**, however, what caused the `v0.7.3` gate failure: all three decoders tested render the disputed bytes identically, so the fallback changed which binary got built, not what the gate could see (I11).
 
 ---
 
-## I2. VS 2026 BuildTools is installed side-by-side — VS 2022 is NOT removed
+## I2. The AppxPackage tools come from a full Visual Studio, never from the BuildTools SKU
 
-**Why.** VS 2026 BuildTools SKU lacks the UWP / AppxPackage workloads that `dotnet publish` needs for **MrtCore PRI generation**. Without the app's `resources.pri`, every WinUI window throws `XamlParseException` at `InitializeComponent()` and the app runs headless (no visible window, process alive, user confused). VS 2022 Enterprise on the runner image has those workloads. Keep both.
+**Why.** The VS 2026 BuildTools SKU lacks the UWP / AppxPackage workloads that `dotnet publish` needs for **MrtCore PRI generation**. Without the app's `resources.pri`, every WinUI window throws `XamlParseException` at `InitializeComponent()` and the app runs headless (no visible window, process alive, user confused). A full Visual Studio install on the runner image has those workloads: VS 2022 Enterprise on the old `windows-2025` image, VS 2026 Enterprise on the `windows-2025-vs2026` image the Windows jobs now use (where VS 2022 is gone, per the comment in `release.yml`). The chocolatey BuildTools install in I1 is only for the 14.50 compiler.
 
-**How to check.** The "Locate VS AppxPackage tools" step uses `vswhere -version "[17.0,18.0)"` **explicitly** — not `-latest`. `-latest` returns VS 2026 (newer install date) and the probe for `Microsoft.Build.Packaging.Pri.Tasks.dll` would fail.
+**How to check.** The "Locate VS AppxPackage tools" step (`release.yml`, `staging-auto-update.yml`, `staging-tester.yml`) calls `vswhere -version "[17.0,19.0)" -prerelease` and probes both `...\v17.0\AppxPackage\` and `...\v18.0\AppxPackage\` for `Microsoft.Build.Packaging.Pri.Tasks.dll`. It uses an explicit `-version` range, not `-latest`, and it fails loudly (`throw`) when the DLL is not found.
 
 ---
 
-## I3. VS 2026 activation is scoped to the Rust build step only
+## I3. VS 2026 activation is scoped to the Rust `cmd` steps only
 
 **Why.** `vcvars64.bat` sets `PATH` / `INCLUDE` / `LIB` / `CL` for the subshell. If it leaked to subsequent pwsh steps, `vswhere -latest` and other VS queries would resolve to VS 2026, breaking the UWP/PRI generation chain (I2).
 
-**How to check.** "Build Rust DLL (VS 2026 MSVC env)" uses `shell: cmd` and calls `vcvars64.bat` in-process. Every other Windows step uses `shell: pwsh`. The activation stays in that one cmd subshell.
+**How to check.** "Build Rust DLL (VS 2026 MSVC env)" uses `shell: cmd` and calls `vcvars64.bat` in-process; in `release.yml` the "Gate — whisper transcription smoke test" step does the same, because it recompiles in the same target dir. Those `cmd` steps are the only ones that activate it (plus the small `cmd` step that restores the production DLL, which activates nothing). The other Windows steps use `pwsh` (or `bash` for the DLL-cache and Sentry steps), except the `sign-windows` job, which uses Windows PowerShell on the self-hosted runner. The linker gate does not rely on an activated environment: it locates `dumpbin.exe` under `$env:VS2026_PATH`.
 
 ---
 
@@ -55,17 +56,17 @@ Losing the race is a real defect on its own terms — it silently ships the tool
 **Why.** Velopack's `--framework vcredist143-x64` (in the `vpk pack` call) installs the official Microsoft VC Redist to System32 at setup time. Bundling a second copy next to `dimmy_lib.dll` is at best redundant; historically, it caused the v0.6.10 ABI mismatch crash — Windows' DLL search loaded the co-located older `msvcp140` (14.29.30157 from 2021, picked by `Get-ChildItem | Select -First 1` without a version sort — see I9) before the System32 one, and our DLL was compiled against the newer ABI. System32 alone is the correct path.
 
 **How to check.**
-- `release.yml` + `staging-auto-update.yml` "Prepare distribution" step must NOT copy `vcruntime140.dll` / `msvcp140.dll` into the publish folder
+- `release.yml`, `staging-auto-update.yml` and `staging-tester.yml` "Prepare distribution" step must NOT copy `vcruntime140.dll` / `msvcp140.dll` into the publish folder
 - `verify-self-contained.ps1` must NOT list them in `$requiredFiles`
 - `test-install.yml` must NOT list them in `$critical`
 
 ---
 
-## I5. `test-install.yml` on `main` must match `staging`'s check logic
+## I5. `test-install.yml`'s inputs must match each caller's packId
 
-**Why.** GitHub evaluates `workflow_run` triggers from the **default branch** (`main`), not the branch that produced the upstream workflow. A staging push triggers `Staging Release` on `staging`'s workflow file — but the `Test Install (Clean Windows)` follow-up uses `main`'s `test-install.yml`. If they disagree (e.g. `staging` dropped a check but `main` still has it), the workflow_run shows a red X on every release even though `release.yml`'s inline test-install job passed. Users notice.
+**Why.** `test-install.yml` has no `workflow_run` trigger any more (no workflow has one). It is a reusable workflow: `release.yml` and `staging-auto-update.yml` call it with `uses: ./.github/workflows/test-install.yml`, so a run uses the copy of the file in the commit being built, and the old "`main`'s copy decides" mismatch cannot happen through those callers. What can still go wrong is the packId: the installer name and the install folder under `%LOCALAPPDATA%` both come from it. The defaults (`setup_pattern: Dimmy-win-Setup.exe`, `install_dir: Dimmy`) fit the prod packId; `staging-auto-update.yml` overrides them with `Dimmy-Staging-*Setup.exe` / `Dimmy-Staging`. A mismatch fails the job with "Install dir NOT found" or a failed asset download.
 
-**How to check.** After changing `test-install.yml`'s bundle-integrity assertions on `staging`, cherry-pick or mirror the same change to `main`. Don't let them diverge.
+**How to check.** If you change a caller's `vpk pack --packId`, change that caller's `setup_pattern` and `install_dir` in the same commit. A manual `workflow_dispatch` takes the same three inputs (`tag`, `setup_pattern`, `install_dir`); its defaults are the prod ones.
 
 ---
 
@@ -89,15 +90,15 @@ Losing the race is a real defect on its own terms — it silently ships the tool
 Add-Content -Path $env:GITHUB_ENV -Value "KEY=$value" -Encoding utf8
 ```
 
-**How to check.** Grep workflows for `>> $env:GITHUB_ENV` or `>> $GITHUB_ENV` — there should be none.
+**How to check.** Grep workflows for `>> $env:GITHUB_ENV` — there should be none. (`>> "$GITHUB_ENV"` in a `shell: bash` step is fine: bash writes UTF-8.) This rule is only about `GITHUB_ENV`. The "Install Vulkan SDK" step in `release.yml`, `staging-auto-update.yml` and `staging-tester.yml` still writes `GITHUB_PATH` with `echo "...\Bin" >> $env:GITHUB_PATH` from pwsh; that write is not covered by this rule.
 
 ---
 
-## I8. The `windows-2025` runner label is preserved
+## I8. The `build-windows` runner label is preserved (`windows-2025-vs2026`)
 
-**Why.** `windows-latest` is still `windows-2022` as of 2026-04. `windows-2022` ships MSVC 14.44 — the miscompile is guaranteed. Any CI that uses `windows-latest` for the Rust build is broken by default. Use `windows-2025` for `build-windows` and `test-install` jobs.
+**Why.** `windows-latest` is still `windows-2022` as of 2026-04. `windows-2022` ships MSVC 14.44 — the miscompile is guaranteed. Any CI that uses `windows-latest` for the Rust build is broken by default. The three `build-windows` jobs run on `windows-2025-vs2026` (they ran on `windows-2025` before that image existed).
 
-**How to check.** `runs-on: windows-2025` in both `build-windows` jobs. The `test-install.yml` job may stay on `windows-latest` because it exercises the shipped installer on a clean runner — it is not building.
+**How to check.** `runs-on: windows-2025-vs2026` in the `build-windows` job of `release.yml`, `staging-auto-update.yml` and `staging-tester.yml`. The `test-install.yml` job stays on `windows-latest` because it exercises the shipped installer on a clean runner — it is not building. `e2e-tests.yml` is not a release build: its `integration-suites` job runs on `windows-2025` and its `windows-ui-smoke` job on `windows-2025-vs2026`.
 
 ---
 
@@ -124,7 +125,7 @@ Get-ChildItem ... | Sort-Object { [version]$_.Name } -Descending | Select-Object
 
 **Why.** The `--framework vcredist143-x64` flag is what delegates VC Redist installation to Velopack Setup. Invariant I4 relies on this — System32 is where `msvcp140` / `vcruntime140` live. If someone "cleans this up" because the app seems self-contained, clean-install users will have no VC Redist in System32 and the app will fail to load `dimmy_lib.dll` with a cryptic "missing dependency" error.
 
-**How to check.** `vpk pack ... --framework vcredist143-x64` is present in the "Package with Velopack" step of both `release.yml` and `staging-auto-update.yml`.
+**How to check.** `vpk pack ... --framework vcredist143-x64` is present in the "Package with Velopack" step of `release.yml`, `staging-auto-update.yml` and `staging-tester.yml`, and again in the `vpk pack` re-pack inside the `sign-windows` job of `release.yml` and `staging-tester.yml` (the signed assets replace the unsigned ones, so the flag must survive there too).
 
 ---
 
@@ -132,7 +133,7 @@ Get-ChildItem ... | Sort-Object { [version]$_.Name } -Descending | Select-Object
 
 **Why.** `dumpbin /disasm` is a **linear sweep** over the executable sections: it decodes whatever bytes it finds as instructions, including the data tables the compiler parks inside `.text`. `dimmy_lib.dll` is full of them — measured at `0x180DCD508`: a couple of 32-bit RVAs (`70 D4 DC 00` = `0x00DCD470`) followed by a long run of `08 08 08 …`. Nothing there is code, and the sweep renders it as instructions anyway. On `v0.7.3` one such blob came out as `vcvttph2ibs zmm7{k6},zmm5` and killed the STABLE release; `v0.7.3-rc.4` on the same commit reported 0. A real `-march=native` regression looks nothing like this: v0.6.71-rc10 carried **4820**, spread over hundreds of functions.
 
-**Why rc and stable differ on the same commit.** `core/build.rs` `resolve_build_id()` reads the ambient `GITHUB_REF_NAME` and bakes it in as `DIMMY_BUILD_ID` (`sentry_pipeline.rs:29`). No workflow sets it, which is why it is absent from every printed `env:` block and why "the tag does not enter the Windows build" looks true and is not. `v0.7.3-rc.4` baked an 11-byte string, `v0.7.3` a 6-byte one; different constant, different layout, the sweep desyncs somewhere else. **The build is reproducible per build-id** — which is why re-running `v0.7.3` reproduced the identical hit at the identical address — and changing the tag rolls the dice again.
+**Why rc and stable differ on the same commit.** `core/build.rs` `resolve_build_id()` reads the ambient `GITHUB_REF_NAME` and bakes it in as `DIMMY_BUILD_ID` (`core/src/telemetry/sentry_pipeline.rs:29`). No Windows build workflow sets it (only `agent-preview.yml`, a macOS build, does), which is why it is absent from every printed `env:` block and why "the tag does not enter the Windows build" looks true and is not. `v0.7.3-rc.4` baked an 11-byte string, `v0.7.3` a 6-byte one; different constant, different layout, the sweep desyncs somewhere else. **The build is reproducible per build-id** — which is why re-running `v0.7.3` reproduced the identical hit at the identical address — and changing the tag rolls the dice again.
 
 **What does NOT work. All four were built and measured; do not re-derive them.**
 
@@ -143,7 +144,7 @@ Get-ChildItem ... | Sort-Object { [version]$_.Name } -Descending | Select-Object
 
 **512-bit only, and that is load-bearing — not a gap.** `dimmy_lib.dll` legitimately *contains* AVX-512: the statically linked UCRT carries 10 EVEX instructions in the `snprintf` family (`vpmullq xmm1,xmm0,xmm7`, `vpminuq xmm1,xmm0,xmm2` — EVEX-only, no VEX encoding exists), CPUID-dispatched through `__isa_available` and never executed on a CPU without the feature. Widening the pattern to "any EVEX" or to k-mask forms **fails every build on Microsoft's own runtime**. 512-bit width is exactly what `/arch:AVX512` and `-march=native` emit and what the CRT's dispatched paths never use.
 
-**How it works now.** [`scripts/dev/avx512-gate.ps1`](../../scripts/dev/avx512-gate.ps1), called from the **"Gate — reject AVX-512 in dimmy_lib.dll"** step of `release.yml`. In order: resolve dumpbin (missing toolchain is a hard fail, never a pass); parse image base / base of code / size of code, asserting every field; sweep with `/disasm` (**not** `:nobytes` — the raw encoding is the evidence); **assert the sweep reached >= 90% of the code section**; then count. Any hit aborts, and before aborting it stages the DLL plus `hits-context.txt`, which the next step uploads as an artifact.
+**How it works now.** [`scripts/dev/avx512-gate.ps1`](../../scripts/dev/avx512-gate.ps1), called from the **"Gate — reject AVX-512 in dimmy_lib.dll"** step of `release.yml` (and, for `nemo_speech_asr.dll`, from `engine-nemotron.yml`; `staging-auto-update.yml` and `staging-tester.yml` do not run it). In order: resolve dumpbin (missing toolchain is a hard fail, never a pass); parse image base / base of code / size of code, asserting every field; sweep with `/disasm` (**not** `:nobytes` — the raw encoding is the evidence); **assert the sweep reached >= 90% of the code section**; then count. Any hit aborts, and before aborting it stages the DLL plus `hits-context.txt`, which the next step uploads as an artifact.
 
 That coverage assert closes the oldest hole here, older than any decoder dispute and the only one that could silently ship the crash: **a `dumpbin` that dies mid-file produces zero matches, and every earlier version of this gate read that as "clean".** Fault-injected on the real DLL: the truncated dump stops at `0x1801B73CE` against a required `0x181041B33` and is rejected.
 
@@ -166,16 +167,16 @@ cl /nologo /O2 /arch:AVX512 /LD avx.c && pwsh scripts/dev/avx512-gate.ps1 -Dll a
 
 ## Pre-push checklist (any Windows-CI-touching change)
 
-1. Did you grep for `windows-latest` in `build-windows` jobs? If yes → revert to `windows-2025` (I8).
+1. Did you grep for `windows-latest` in `build-windows` jobs? If yes → revert to `windows-2025-vs2026` (I8).
 2. Did you add or keep `exit 0` at the end of any pwsh step that runs a native installer? (I6)
-3. Did you use `Add-Content -Encoding utf8` for GITHUB_ENV writes, not `>>`? (I7)
-4. Did you use `vswhere -prerelease` for VS 2026 lookups and explicit `-version` ranges for VS 2022? (I1, I2)
-5. If you changed `test-install.yml` bundle checks, did you mirror the change to BOTH branches? (I5)
+3. Did you use `Add-Content -Encoding utf8` for GITHUB_ENV writes in pwsh steps, not `>>`? (I7)
+4. Did you use `vswhere -prerelease` with explicit `-version` ranges (`[18.0,19.0)` for the VS 2026 toolchain, `[17.0,19.0)` for the AppxPackage tools), never a bare `-latest`? (I1, I2)
+5. If you changed a caller's `vpk pack --packId`, did you change that caller's `setup_pattern` / `install_dir` for `test-install.yml` too? (I5)
 6. Did you preserve the `dumpbin /headers` linker-version gate? (I1)
 7. Is VS 2026 activation still scoped via `shell: cmd` + `call vcvars64.bat`, not leaking to other steps? (I3)
 8. Is `--framework vcredist143-x64` still in the `vpk pack` command? (I10)
 9. Did any `Select -First 1` sneak in without a preceding `Sort-Object`? (I9)
-10. Did you keep the AVX-512 gate two-decoder, and resist "just re-run it" when it fires on a handful of hits? (I11)
+10. Did you keep the AVX-512 gate a single `dumpbin /disasm` sweep where any hit aborts (no threshold, no second decoder), and resist "just re-run it" when it fires on a handful of hits? (I11)
 
 Hitting any "no" above = high probability you're reintroducing a shipped bug. The corresponding CHANGELOG entry (v0.6.11–v0.6.20) describes the symptom; this file describes the cure.
 

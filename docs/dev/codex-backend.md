@@ -1,5 +1,28 @@
 # Codex (ChatGPT subscription) LLM backend
 
+**Status, checked against the code on 2026-11-11:**
+
+- Two triggers, in `llm.rs::process_text` and `process_raw_prompt`:
+  `auth_method == "subscription"` with an OpenAI URL (`codex_openai_sub`),
+  or the synthetic `codex://default` URL (`codex::is_codex_url`). The Codex
+  branch runs after the Gemini CLI branch and before the Kimi and Claude ones.
+- One call is `codex::run_blocking(prompt, model, timeout)`:
+  `codex exec --sandbox read-only --skip-git-repo-check [-m <model>] -`,
+  prompt on stdin, working directory = the system temp dir, run through
+  `cli_runner::run`. Timeouts: 60 s rewrite, 600 s recap and command mode,
+  30 s ping (`dimmy_codex_ping`).
+- No streaming, no prewarm, no `quick` flag: the answer is the CLI's stdout
+  after it exits. Those three exist only on the Claude path.
+- `-m` is left out only for an empty model, and the product never sends one:
+  `dimmy_process_with_llm` and `dimmy_command_transform` replace an empty
+  `llm_api_model` with `crate::DEFAULT_LLM_MODEL` (`openai/gpt-oss-120b`),
+  and `dimmy_llm_call_raw` returns -2 without a model. Only the ping and
+  `dimmy-setup login test codex` pass `""`. There is no fallback to the
+  account default when the subscription rejects the picked model.
+- The model table below is one account on 2026-06-20 (codex v0.140.0). The
+  OpenAI picker today comes from `assets/model-catalog.json` and includes
+  `gpt-5.5`.
+
 Sibling of [`claude-code-backend.md`](claude-code-backend.md). When the
 Output -> LLM (or Recap) "Use ChatGPT subscription" toggle is on and the
 provider is OpenAI, Dimmy routes `process_text` / `process_raw_prompt`
@@ -46,21 +69,25 @@ OpenAI **API key** (pay-per-token), not the subscription. The CLI syntax
 to pick a model (`-m` / `--model`) is correct and unchanged; the limit is
 the subscription **entitlement**, not the flag.
 
-### Why command mode can fail with "HTTP 1" / rc -1
+### Why command mode can fail with "HTTP 1" / rc -2
 
 If the user has an OpenAI API model (e.g. gpt-5-mini) selected in the
 Output picker AND flips the subscription toggle, the `codex_openai_sub`
 branch forwards that model to `codex exec -m gpt-5-mini`, codex returns
-400, the CLI exits 1, and Dimmy surfaces "cloud transform failed: HTTP 1".
+400, the CLI exits 1, and Dimmy surfaces "cloud transform failed: HTTP 1"
+(`CodexError::NonZeroExit` becomes `LlmError::Api { status: 1 }`;
+`dimmy_command_transform` logs it and returns -2).
 The audio / selection / prompt are all fine — it is purely the model id
-the subscription won't serve. Picking nothing model-specific (so codex
-uses its default) is the working path.
+the subscription won't serve. The working path is to pick a model the
+account serves (`gpt-5.5` on the tested account). Leaving the model empty
+does not reach codex's own default: the FFI fills in a model first (see
+Status).
 
 ## Contrast: Claude Code subscription is NOT restricted this way
 
 The Anthropic side (`claude_code.rs`, `claude --print --model <m>`) lets a
-subscription pick across the family. Verified same day against a live Max
-account:
+subscription pick across the family. Verified same day (2026-06-20) against
+a live Max account:
 
 | `claude --model <m>` | result |
 |----------------------|--------|
@@ -77,7 +104,7 @@ has the single-model entitlement quirk above.
 
 | Concern                    | File |
 |----------------------------|------|
-| Subprocess + status enum   | `core/src/codex.rs` |
+| Subprocess + status enum   | `core/src/codex.rs` (run through `core/src/cli_runner.rs`) |
 | LLM dispatch short-circuit | `core/src/llm.rs` (`process_text`, `process_raw_prompt`, `codex_openai_sub`) |
 | FFI exports                | `core/src/ffi.rs` (`dimmy_codex_status / _binary_path / _spawn_login / _ping / _recheck / _diagnostics`) |
 | Win UI                     | `platforms/windows/Dimmy.Windows/Views/SettingsWindow.xaml{.cs}` |

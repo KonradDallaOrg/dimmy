@@ -1,5 +1,25 @@
 # STT benchmark live — 2026-05-03
 
+Status, checked against the code on 2026-11-11:
+
+- This file is a benchmark from 2026-05-03 on two Italian clips of about 3.5 s.
+  Its latencies, outputs and prices are kept as measured. They are not today's
+  behaviour, and the "Decisione" and "Scelte" paragraphs are the plan of that day.
+- Parakeet did not replace whisper. Five local backends exist (`whisper`,
+  `parakeet`, `qwen`, `whistle`, `nemotron`; `ffi.rs:3193`). A fresh install starts
+  on whisper on Windows and Linux and on Parakeet on macOS
+  (`default_local_stt_backend`, `lib.rs:1170`).
+- Local Parakeet is the FP32 ONNX bundle through the `ort` crate (feature
+  `local-stt-parakeet`, `parakeet.rs`), and FluidAudio on macOS
+  (`parakeet_fluid.rs`). It is not sherpa-onnx, the ONNX path has no INT8 or fp16
+  option, and there is no `local-stt-onnx` feature.
+- The live 5 s chunks exist: `chunked_stt.rs` runs Parakeet and Whistle in 5 s
+  chunks when text is shown and 15 s chunks when it is not, with 500 ms overlap and
+  dedup (`chunk_secs_for_backend`, `dedup_last_3_words`). Whisper and Qwen use 15 s.
+- Fireworks and Together are full providers (`Provider::Fireworks`,
+  `Provider::Together` in `provider.rs`, entries in `assets/model-catalog.json`),
+  not Custom Provider presets. Google Chirp and AssemblyAI are not in the code.
+
 > Numeri reali misurati su 2 audio italiani (~3.5s). Confronta Groq, Fireworks,
 > Together (Whisper/Parakeet/Voxtral), Deepgram, OpenAI, Parakeet locale via
 > sherpa-onnx INT8 + fp32 onnx-asr. Drives the Fase 1+ decisions for the
@@ -20,6 +40,7 @@ Sample audio usati (entrambi 48kHz mono F32 PCM, già preprocessati da Dimmy):
 | Parakeet INT8 (sherpa-onnx) | 580-683 ms | "Sarebbe..." (perde "Sì") | "**Alcolo**" (perde "C") |
 
 **Decisione**: Parakeet fp32 è il chiaro winner per local-stt. Sostituisce Whisper distil nel path `local-stt`. Modello 2.5 GB. Latenza sub-second su CPU.
+(Decision of 2026-05-03. In the code Parakeet did not replace anything: the `local-stt` feature is still whisper.cpp and Parakeet is a second backend behind `local-stt-parakeet`.)
 
 **Canary skip**: ASR+translate dual-mode, default traduce in EN. Senza flag `task=transcribe` esposto a livello onnx-asr non utilizzabile.
 
@@ -42,10 +63,13 @@ Test su 176s di audio italiano reale, dividendo in chunk fissi e processando uno
 **Insight chiave**: con chunking 5s real-time, la latenza percepita post-stop diventa ~900ms anche per audio di 3 minuti, perché il processing è avvenuto in parallelo alla registrazione. Pareggia Groq cloud anche sui long recording (1.4s).
 
 **Esperienza UX premium**: testo che appare durante la registrazione, ogni 5s una porzione si materializza con <1s di delay. Non è quello che Dimmy fa oggi.
+("Oggi" is 2026-05-03. The product now does this: Realtime typing and live captions, `chunked_stt.rs`.)
 
 **Implementazione (Fase 4)**: aggiungere un thread/task lato Rust che ogni 5s di accumulato nel ring buffer manda il chunk al backend ONNX. Word boundaries: overlap 300-500ms tra chunk con dedup, oppure VAD-driven chunking (Dimmy ha già VAD nel pipeline). Concatenazione lato client con normalizzazione capitalizzazione.
+(Built as `chunked_stt::ChunkedTranscriber`: fixed chunks, 500 ms overlap, `dedup_last_3_words`, and a VAD gate per chunk on the full preprocess route. The cut is not VAD-driven, and the core joins the text, not the client.)
 
 **Whisper.cpp NON dismesso**: resta come opzione di backend per chi ha disco limitato o vuole modelli piccoli (tiny/base 75-244 MB). Parakeet diventa il default high-quality.
+(In the code whisper is the default local backend on Windows and Linux. Parakeet is the default on macOS only, `default_local_stt_backend`.)
 
 ## Classifica unificata
 
@@ -72,6 +96,11 @@ Test su 176s di audio italiano reale, dividendo in chunk fissi e processando uno
 7. **OpenAI/Fireworks Whisper-large** non producono punteggiatura senza prompt esplicito. Output peggiore di Whisper-turbo.
 
 ## Scelte per la Fase 1+ del branch `feat/stt-providers-expansion`
+
+Plan of 2026-05-03. What the code has today: item 1 shipped as two full providers
+(Together and Fireworks, with these STT URLs in `assets/model-catalog.json`). Item 2
+shipped differently: the `ort` crate, feature `local-stt-parakeet`, in
+`core/src/parakeet.rs`, FP32 only. Items 3 and 4 are not in the code.
 
 Priorità ROI:
 
