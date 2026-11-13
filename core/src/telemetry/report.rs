@@ -242,10 +242,11 @@ pub fn failure_of(event: &super::Event) -> Option<(Subsystem, String, &'static s
         E::MeetingCaptureRatio { ratio_bucket } if *ratio_bucket != "ge_95" => {
             r(Subsystem::Meeting, "capture_ratio_low", ratio_bucket)
         }
-        E::DictationCaptureRatio {
-            ratio_bucket,
-            source,
-        } if *ratio_bucket != "ge_95" => r(Subsystem::Audio, "capture_ratio_low", source),
+        // Dictation records the mic only, so the bucket, not the source, is
+        // what tells two of these apart (as in the meeting arm above).
+        E::DictationCaptureRatio { ratio_bucket, .. } if *ratio_bucket != "ge_95" => {
+            r(Subsystem::Audio, "capture_ratio_low", ratio_bucket)
+        }
         E::LoopbackRateMismatch { measured, .. } => {
             r(Subsystem::Audio, "loopback_rate_mismatch", measured)
         }
@@ -377,6 +378,20 @@ mod tests {
             error_category: "auth",
         };
         assert_eq!(failure_of(&e), None);
+    }
+
+    #[test]
+    fn a_low_dictation_capture_says_how_low() {
+        // RUST-17 could not tell a 90 % capture from a 40 % one. Same shape
+        // as the meeting report: the bucket is the third part.
+        let e = Event::DictationCaptureRatio {
+            ratio_bucket: "50_85",
+            source: "mic",
+        };
+        assert_eq!(
+            failure_of(&e),
+            Some((Subsystem::Audio, "capture_ratio_low".to_string(), "50_85"))
+        );
     }
 
     #[test]
