@@ -1,5 +1,31 @@
 # Why the recap now names the language — measured 2026-09-07
 
+**Status, checked against the code on 2026-11-11:**
+
+- The language is named only for a LOCAL recap model. Windows:
+  `MeetingPostProcessService.DetectSpokenLanguageAsync` (used by the shared
+  service and by the Regenerate path in `MeetingWindow.xaml.cs`). Mac:
+  `MeetingPostProcessService.detectSpokenLanguage`. "Local" means the recap
+  model starts with `local:`, or there is no recap model and
+  `llm_mode == "local"` (`MeetingRecapHelpers.IsLocalRecapModel`). A cloud
+  recap keeps the "Auto-detect from the transcript" wording.
+- Detection is `ffi.rs::dimmy_detect_audio_language` →
+  `lang_detect::detect_from_audio_file`: `ggml-tiny-q8_0.bin`, else
+  `ggml-base-q8_0.bin` (`DETECT_MODELS`); 5 windows of 30 s after a 20 s head
+  skip; a verdict needs 3 agreeing windows at p >= 0.50; audio under 60 s is
+  skipped. It returns the English name (`llm::lang_name`) or nothing, and
+  nothing means the old wording.
+- The sentence goes in the USER prompt built by the host
+  (`MeetingRecapHelpers.BuildStructuredRecapPrompt(…, spokenLanguage)`, Mac
+  `buildStructuredRecapPrompt`): "Write your entire answer in <Language>."
+  plus the marker sentence. The core still sends an empty system prompt
+  (`local_llm::process_raw_prompt_local`).
+- The memory fixes are in `local_llm.rs::llm_cache::generate`:
+  `PROMPT_BATCH = 512`, and a q8_0 KV cache with flash attention, falling
+  back to a plain f16 context.
+- Picking the STT language from the detection is still not done:
+  `detect_from_audio_file` has one caller, the recap FFI above.
+
 Read this before changing anything about the recap's output language, the
 whisper language-ID path, or the local LLM's context sizing. Everything below
 was measured on real meetings from a real install; the numbers are the reason
@@ -20,7 +46,9 @@ Qwen 3 4B did the same on a separate Italian transcript.
 The Rust core made it worse by omission: `process_raw_prompt_local` calls the
 model with an **empty system prompt**, so the only mention of language was the
 one the model was ignoring. Dictation has had a language anchor since
-`local_llm.rs::anchor_text`; the recap never got one.
+`local_llm.rs::anchor_text`; the recap never got one. (The system prompt is
+still empty today. The recap's anchor was added in the host-built user
+prompt, not in the core.)
 
 ## What was tried, and what each attempt showed
 
@@ -29,7 +57,7 @@ instruction moved.
 
 | Instruction | Where | Output language | Section markers |
 |---|---|---|---|
-| none (today) | — | **English** | English |
+| none (the prompt before this change) | — | **English** | English |
 | "Answer in the SAME LANGUAGE as the input text." | system | **English** | English |
 | "Write your entire answer in Italian." | system | Italian | English |
 | "Write your entire answer in Italian." | user prompt | Italian | **`===DECISIONI===`** |
@@ -74,6 +102,10 @@ the same verdicts at 0.66-1.00 — lower margins, never a wrong vote.
 | base (78 MB) | 4 s | identical |
 | tiny (42 MB) | 3 s | identical |
 
+The product uses the small models only: `ggml-tiny-q8_0.bin`, then
+`ggml-base-q8_0.bin` (`lang_detect::DETECT_MODELS`). When neither file is on
+disk the detection is skipped and the prompt keeps the old wording.
+
 Why several windows: one window on a real English meeting scored 0.61 and
 another 0.66 — right, but not by much. More importantly, whisper's own
 detection looks only at the FIRST 30 s, which in our recordings is the consent
@@ -96,10 +128,16 @@ back via `whisper_full_lang_id`) and the dedicated call **on the same 30 s
 slices**, both models, four meetings: **24 windows out of 24 agree with each
 other and with reality.**
 
-What auto mode really does is return **zero segments** — the transcription
-comes back empty, which `local_stt.rs:979` already documented, noting the
-detection itself was confident and correct (p=0.97 Italian). The July
-experiment appears to have read the language through that broken path.
+What auto mode really did on 2026-09-07 was return **zero segments** — the
+transcription came back empty, which a comment in `local_stt.rs` already
+documented (on `single_segment`, then at line 979), noting the detection
+itself was confident and correct (p=0.97 Italian). The July experiment
+appears to have read the language through that broken path.
+
+Narrowed on 2026-09-11 (`local_stt.rs::whisper_language_arg`): the empty
+output comes from `set_detect_language(true)` alone. `set_language(Some("auto"))`
+gives the same detection and the correct text, and it is the only form the
+code calls now. So transcription in auto mode works today.
 
 Consequence: "detect-then-force", rejected in July as costing 2x, costs 3 s.
 It is now the sound way to pick a language, and the same lever is available
@@ -127,7 +165,7 @@ about us asking for too much rather than the GPU being too small:
   meetings in this corpus are English speech transcribed into Italian because
   the pin was wrong. But it belongs in `meeting.rs`, on the transcription
   thread and never the capture loop, with a decision about the first minutes
-  already transcribed. Separate work.
+  already transcribed. Separate work, and still not done on 2026-11-11.
 - **A language selector in the UI.** The whole point is that nobody wants to
   set it per meeting.
 - **Detection for cloud recap models.** They already get the language right;

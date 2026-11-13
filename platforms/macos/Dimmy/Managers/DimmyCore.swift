@@ -1318,7 +1318,7 @@ private func dimmyEventHandler(_ jsonPtr: UnsafePointer<CChar>) {
           let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
           let event = dict["event"] as? String
     else {
-        print("[DimmyCore] WARNING: received unparseable event: \(jsonStr.prefix(200))")
+        print("[DimmyCore] WARNING: received unparseable event (\(jsonStr.count) chars)")
         return
     }
 

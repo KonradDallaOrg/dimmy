@@ -1,6 +1,6 @@
 # Dimmy Privacy Policy
 
-_Last updated: 2026-11-08_
+_Last updated: 2026-11-11_
 
 This policy covers the Dimmy apps (Windows, macOS, Linux), the licence and
 payment service at `license.dimmy.app`, and the forms on `dimmy.app`. It says
@@ -14,9 +14,9 @@ The website at <https://dimmy.app/privacy/> shows the same content.
 - Dimmy can run fully offline when you choose local models. If you choose a
   cloud speech or AI provider, your audio or text goes to that provider, with
   your own key, under that provider's terms.
-- Dictation audio is not kept unless you turn on audio in history. Meeting
-  recordings (`audio.wav`) are always saved on your computer, because that is
-  what a meeting recording is.
+- Dictation audio is not kept unless you turn on audio in history or the
+  audio debug switch. Meeting recordings (`audio.wav`) are always saved on
+  your computer, because that is what a meeting recording is.
 - Usage statistics and crash reports are **off until you say yes**. Two
   separate switches. They never contain your audio, your text or your
   prompts. They are linked to a random installation ID, which is
@@ -54,6 +54,7 @@ In that folder:
 | `keys.enc` | API keys and tokens, encrypted (AES-256-CTR + HMAC-SHA256). The key is derived from your user name and computer name, so the file cannot be read on another computer. It does not protect against malware that runs under your own account. |
 | `history.db` | Dictation history: the raw and the cleaned text, time, the name of the app you dictated into, style and language. |
 | `history_audio/` | Dictation audio, **only if** you turn on audio in history. Off by default. When on, files older than 30 days or beyond 5 GB are deleted (both limits can be changed). |
+| `audio_debug/` | The audio of each dictation as recorded and as prepared for transcription (`raw.wav`, `processed.wav`), **only if** you turn on **Audio debug** in the advanced settings. Off by default; it is there to diagnose audio problems. When on, sessions older than 7 days or beyond 500 MB are deleted. |
 | `meetings/` | One folder per meeting: `audio.wav` and the separate microphone and system tracks, `transcripts.txt`, `recap.md`, `meta.json`, your notes. You can choose another folder in Settings. |
 | `consent.jsonl` | A local log of the recording-consent steps (shown, accepted, announced, …), so you can prove what you did. |
 | `models/` | Speech and language models you downloaded. |

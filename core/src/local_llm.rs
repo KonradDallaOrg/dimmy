@@ -1385,9 +1385,9 @@ mod llm_cache {
         ));
 
         crate::log(&format!(
-            "[LocalLLM] Raw output ({} tokens): {:?}",
+            "[LocalLLM] Raw output: {} tokens, {} chars",
             n_generated,
-            crate::truncate_utf8(&output, 200)
+            output.len()
         ));
 
         // Post-process: strip ALL remaining special tags from output,
@@ -1396,9 +1396,8 @@ mod llm_cache {
         let cleaned = super::strip_leaked_prompt(&super::strip_special_tags(&output));
 
         crate::log(&format!(
-            "[LocalLLM] Cleaned output ({} chars): {:?}",
-            cleaned.len(),
-            crate::truncate_utf8(&cleaned, 200)
+            "[LocalLLM] Cleaned output: {} chars",
+            cleaned.len()
         ));
 
         Ok(cleaned)

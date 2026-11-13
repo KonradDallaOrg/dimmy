@@ -28,9 +28,13 @@ scripts/macos/install-to-applications.sh           # Debug build
 scripts/macos/install-to-applications.sh --release # Release build
 ```
 
-It builds with `xcodebuild`, `rm -rf`'s `/Applications/Dimmy.app`, copies the
-fresh bundle, verifies the code signature (`codesign --verify --deep --strict`),
-and launches the app.
+It builds with `xcodebuild`, bundles the llama/ggml dylibs from
+`core/target/aarch64-apple-darwin/release` into the app's `Contents/Frameworks`
+(skipped when there are none), `rm -rf`'s `/Applications/Dimmy.app`, copies the
+fresh bundle, re-signs it ad hoc (`codesign --force --deep --sign -`), verifies
+the code signature (`codesign --verify --deep --strict`), and launches the app.
+The script does not run the launch-time `SelfTests`; for that use
+`scripts/dev/preflight-mac.sh` (see `CLAUDE.md`).
 
 ## First-run TCC reset
 
@@ -41,14 +45,24 @@ tccutil reset Microphone com.dimmy.app
 tccutil reset Accessibility com.dimmy.app
 tccutil reset ListenEvent com.dimmy.app
 defaults delete com.dimmy.app isOnboardingComplete 2>/dev/null || true
+rm -f "$HOME/Library/Application Support/dimmy/.onboarding_done"
 ```
 
-(Replace `com.dimmy.app` with the actual bundle ID shown in the Diagnostics
-pane if it has diverged.)
+Onboarding completion lives in the core's `.onboarding_done` marker in the
+config dir (`dimmy-staging` instead of `dimmy` for the staging tester build);
+the `isOnboardingComplete` UserDefaults key only records that the wizard ran on
+this Mac. The `rm` line is therefore required for a clean onboarding. The
+legacy Diagnostics pane has a "Reset onboarding" button that does both.
+
+(`com.dimmy.app` is the `PRODUCT_BUNDLE_IDENTIFIER` in `Dimmy.xcodeproj`.)
 
 ## Hotkey diagnostics
 
 - Tail `/tmp/dimmy-hotkey.log` for the event-tap lifecycle and every
   `flagsChanged` event the tap sees.
-- Settings → Advanced → Diagnostics shows live TCC state, hotkey install
-  status, recording state, and quick-action buttons.
+- The Tahoe v3 Settings have no live hotkey/TCC panel in Debug: Settings →
+  Permissions shows the access status and a "Stuck?" help block, and Settings →
+  Debug → Diagnostics only holds the "LLM log enabled" and "Audio debug"
+  toggles. The older Diagnostics pane (`DiagnosticsSettingsView`, shown when
+  `useTahoeSettings` is off) has the "Refresh permissions now", "Open
+  /tmp/dimmy-hotkey.log" and "Reset onboarding" buttons.

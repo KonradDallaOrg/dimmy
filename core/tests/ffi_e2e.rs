@@ -30,7 +30,8 @@ use serial_test::serial;
 
 use dimmy_lib::ffi::{
     dimmy_get_config_json, dimmy_init, dimmy_inject_pcm_for_test, dimmy_process_with_llm,
-    dimmy_set_config_json, dimmy_stop_recording, dimmy_transcribe_file,
+    dimmy_set_config_json, dimmy_stop_recording, dimmy_transcribe_file, dimmy_user_dict_add,
+    dimmy_user_dict_remove,
 };
 
 // ── Fixture URLs ──────────────────────────────────────────────────────
@@ -1007,5 +1008,136 @@ fn llm_cloud_500_falls_back_to_original_text() {
         result, original,
         "5xx must fall back to the original transcript, got: {:?}",
         result
+    );
+}
+
+// ── The log holds no user text ────────────────────────────────────────
+//
+// PRIVACY.md says of `dimmy.log`: "technical messages, not your
+// transcripts". Each test puts words through a path that used to copy them
+// into the log, then reads the log.
+
+fn log_text() -> String {
+    let path = dimmy_lib::log_path().expect("the test config dir holds the log");
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .to_lowercase()
+}
+
+#[test]
+#[serial]
+fn the_log_does_not_hold_what_was_dictated() {
+    ensure_init();
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let server = rt.block_on(async { wiremock::MockServer::start().await });
+
+    rt.block_on(async {
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/audio/transcriptions"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "text": "the quokka signed the zanzibar contract"
+                })),
+            )
+            .mount(&server)
+            .await;
+    });
+
+    set_config(
+        &serde_json::json!({
+            "stt_mode": "cloud",
+            "api_url": format!("{}/audio/transcriptions", server.uri()),
+            "api_model": "whisper-1",
+            "api_key": "test-cloud-key",
+            "language": "en",
+            "preprocessing_enabled": false,
+            "filler_removal_enabled": false,
+            "llm_enabled": false,
+        })
+        .to_string(),
+    );
+
+    let samples: Vec<f32> = (0..16_000)
+        .map(|i| (i as f32 * 0.01).sin() * 0.05)
+        .collect();
+    let transcript = transcribe_pcm(&samples, 16_000);
+    assert!(
+        transcript.to_lowercase().contains("zanzibar"),
+        "the dictation must come back for this test to mean anything, got: {:?}",
+        transcript
+    );
+
+    let log = log_text();
+    assert!(
+        log.contains("[stoprec]"),
+        "the stop pipeline must have logged, or the log is not the one being read"
+    );
+    assert!(
+        !log.contains("quokka") && !log.contains("zanzibar"),
+        "dimmy.log holds words of the dictation"
+    );
+}
+
+#[test]
+#[serial]
+fn the_log_does_not_hold_what_the_llm_read_or_wrote() {
+    ensure_init();
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let server = rt.block_on(async { wiremock::MockServer::start().await });
+
+    rt.block_on(async {
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/v1/chat/completions"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion",
+                    "choices": [{
+                        "index": 0,
+                        "message": { "role": "assistant", "content": "The ornithopter needs marmalade." },
+                        "finish_reason": "stop",
+                    }],
+                })),
+            )
+            .mount(&server)
+            .await;
+    });
+
+    set_config(&cloud_llm_config(&server.uri(), "llm-test-key").to_string());
+
+    let result = process_with_llm("um the xylophone needs uh marmalade");
+    assert_eq!(result, "The ornithopter needs marmalade.");
+
+    let log = log_text();
+    assert!(
+        !log.contains("xylophone") && !log.contains("ornithopter") && !log.contains("marmalade"),
+        "dimmy.log holds words the LLM read or wrote"
+    );
+}
+
+#[test]
+#[serial]
+fn the_log_does_not_hold_a_dictionary_word() {
+    ensure_init();
+
+    let word = CString::new("Quetzalcoatlus").unwrap();
+    assert_eq!(unsafe { dimmy_user_dict_add(word.as_ptr()) }, 0, "added");
+    assert_eq!(unsafe { dimmy_user_dict_add(word.as_ptr()) }, 1, "present");
+    assert_eq!(
+        unsafe { dimmy_user_dict_remove(word.as_ptr()) },
+        1,
+        "removed"
+    );
+
+    let log = log_text();
+    assert!(
+        log.contains("[userdict]"),
+        "the dictionary calls must have logged, or the log is not the one being read"
+    );
+    assert!(
+        !log.contains("quetzalcoatlus"),
+        "dimmy.log holds a word of the custom dictionary"
     );
 }

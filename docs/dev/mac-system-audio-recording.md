@@ -13,13 +13,15 @@
 
 ## The shape in one paragraph
 
-A macOS meeting captures **two independent sources** and writes **three WAVs**.
+A macOS meeting captures **two independent sources** and writes **three tracks**
+(Ogg/Vorbis; a track falls back to WAV only when the Vorbis encoder cannot
+start, `meeting.rs::TrackSink::create`).
 The **mic** is captured by the Rust core via cpal (device-native rate →
 `LinearResampler` → 48 kHz). The **system audio** (the other participants) is
 captured on the Swift side by a CoreAudio **process tap** and pushed into the
 core as loopback frames. Both streams are canonicalised to **48 kHz** and the
-meeting worker writes them in **lockstep** to `audio_mic.wav` (mic),
-`audio_system.wav` (system, Mix mode only) and `audio.wav` (the mixed playback
+meeting worker writes them in **lockstep** to `audio_mic.ogg` (mic),
+`audio_system.ogg` (system, Mix mode only) and `audio.ogg` (the mixed playback
 track). The single thing that makes or breaks this on macOS is that the tap must
 **actually deliver 48 kHz** — Windows gets that for free from WASAPI shared-mode;
 macOS does not, which is the whole story below.
@@ -28,8 +30,11 @@ macOS does not, which is the whole story below.
 
 | Source | Who captures | Path | Rate handling |
 |---|---|---|---|
-| **Mic** | Rust core (cpal) | `core/src/audio.rs` | device-native SR → `LinearResampler` → 48 kHz; a default-input change triggers a heartbeat rebuild at the new rate |
+| **Mic** | Rust core (cpal) | `core/src/audio.rs` | device-native SR → `LinearResampler` → 48 kHz; a default-input or input-rate change wakes the audio thread through CoreAudio property listeners (`core/src/device_events.rs`) and the streams are rebuilt once the change has held for `DEVICE_SETTLE_MS` (900 ms). The 5 s heartbeat (`HEARTBEAT_IDLE`) is the net for a missed event |
 | **System audio** | Swift (CoreAudio tap) | `platforms/macos/Dimmy/Services/SystemAudioProcessTap.swift` | tap → aggregate pinned to 48 kHz → `dimmy_push_loopback_audio` |
+
+When tap creation returns `.failed`, `SystemAudioCaptureService` falls back to
+ScreenCaptureKit and pushes through the same `dimmy_push_loopback_audio`.
 
 Dictation captures **mic only**; meeting captures **Mix** (mic + system). That
 split is deliberate — see AUDIO-004 in `audio-pipeline.md`.
@@ -38,22 +43,23 @@ split is deliberate — see AUDIO-004 in `audio-pipeline.md`.
 
 `SystemAudioProcessTap.start()` (`SystemAudioProcessTap.swift`):
 
-1. Picks a single audio-active process and builds a **process tap**
-   (`AudioHardwareCreateProcessTap`, `~L134-147`). No active process ⇒
-   `.deferred` and the rescan listeners self-promote when audio appears
-   (`~L120-129`).
-2. Reads the tap stream format (`~L150-156`) and creates a **private aggregate
-   device** anchored to the current default output (`~L173-210`). Two invariants,
+1. Picks a single audio-active process (`preferredTarget`: a known call app
+   first, then the process it already taps, then the first one the HAL lists)
+   and builds a **process tap** (`AudioHardwareCreateProcessTap`, `~L402-451`).
+   No active process ⇒ `.deferred` and the rescan listeners self-promote when
+   audio appears (`~L415-424`).
+2. Reads the tap stream format (`~L454-460`) and creates a **private aggregate
+   device** anchored to the current default output (`~L473-514`). Two invariants,
    both paid in blood:
    - `kAudioAggregateDeviceTapAutoStartKey: false` + an explicit `AudioDeviceStart`
-     (`~L188`, `~L272`). On Tahoe (26.x) `TapAutoStart=true` registers the
+     (`~L492`, `~L602`). On Tahoe (26.x) `TapAutoStart=true` registers the
      aggregate but the IO proc **never fires** (`samples=0`). Chromium uses `false`
      for the same reason.
    - Sub-tap **drift compensation** on, anchored to the default output as the clock
-     (`~L188-197`). A tap-only aggregate (empty sub-device list) is created fine
+     (`~L493-504`). A tap-only aggregate (empty sub-device list) is created fine
      but its IO proc never fires.
 3. **Pins the aggregate to 48 kHz** — THE fix for the 3×/chopped bug
-   (`~L212-241`):
+   (`~L516-542`):
    ```
    kAudioDevicePropertyNominalSampleRate = 48_000  on the aggregate
    ```
@@ -67,8 +73,9 @@ split is deliberate — see AUDIO-004 in `audio-pipeline.md`.
    behaviour) rather than abort — a WARN, not a crash.
 4. Publishes the (now canonical) rate to the core with
    `dimmy_set_loopback_sample_rate(sampleRate)` **before** the first buffer
-   (`~L241`), so the meeting worker sizes the `audio_system.wav` header + STT
-   downsample against what we actually deliver.
+   (`~L545`; the tap-format rate is already published once at `~L465`), so the
+   meeting worker sizes the `audio_system` track + STT downsample against what
+   we actually deliver.
 5. **Measures what the tap really delivers** — `LoopbackRateEstimator`, the
    second half of the fix (2026-09-03). The pin above is one argument against
    the HAL with nothing behind it: if it is ever ignored, everything downstream
@@ -87,10 +94,13 @@ split is deliberate — see AUDIO-004 in `audio-pipeline.md`.
    wrong for the most common case on this hardware: a Bluetooth headset keeps
    the **same device UID** while its profile flips A2DP 48 kHz → HFP 16 kHz
    the moment a mic opens. `shouldRebuildForOutputChange` compares UIDs, so
-   **nothing rebuilds** and a frozen verdict would stay wrong for the whole
-   meeting. So a revision needs **2 consecutive full 1 s windows** agreeing on
-   a different standard rate — ~2 s of consistent hardware-clock evidence,
-   which is not "bursty delivery".
+   **that check rebuilds nothing** and a frozen verdict would stay wrong for
+   the whole meeting. So a revision needs **2 consecutive full 1 s windows**
+   agreeing on a different standard rate — ~2 s of consistent hardware-clock
+   evidence, which is not "bursty delivery". (Since the estimator was written
+   the tap also listens to the output device's `NominalSampleRate`,
+   `armDeviceRateListener`, and requests a rebuild when it moves; see "Rebuild
+   on device change" below.)
 
    Each window must also be **internally consistent**: its two halves are
    compared and must snap to the same rate as the whole. Without that, a
@@ -114,86 +124,115 @@ split is deliberate — see AUDIO-004 in `audio-pipeline.md`.
 
 6. IO proc forwards every frame to `onSamples` → `dimmy_push_loopback_audio`
    (the realtime block captures by value, no `self`, no alloc on the mono fast
-   path, `~L245-264`).
+   path, `~L547-594`).
 
-**Rebuild on device change.** The rescan listeners
-(`kAudioProcessPropertyIsRunning` + default-output change, `~L293-355`,
-`~L441-469`) tear down and re-`start()` the tap when the audio-active set or the
-default output flips (headphones plug/unplug). Because the 48 kHz pin lives
-**inside `start()`**, every rebuild **re-pins to 48 kHz** — that is what makes the
-fix survive mid-meeting device juggling. Teardown runs off-thread
-(`teardownQueue`, `~L615-627`) — the MACOS Tahoe HAL-freeze fix (v0.6.66).
+**Rebuild on device change.** The rescan listeners (`startRescan`, `~L766-863`:
+the process list, `kAudioProcessPropertyIsRunning` per process, and the default
+output; `rescanAndRebuildIfNeeded`, `~L1057-1109`) tear down and re-`start()`
+the tap when the process it would tap changes or the default output flips
+(headphones plug/unplug). A 30 s timer runs the same check as a backstop.
+Four more paths rebuild a live tap (`forceRebuild`):
+
+- the output device's nominal sample rate moves (`armDeviceRateListener`);
+- the IO proc stops firing for 4 s (`checkTapLiveness`, at most 8 rebuilds in
+  a row);
+- the IO proc fires but every sample is zero for 25 s (`checkTapAudible`, at
+  most 3 rebuilds in a row);
+- the Mac wakes from sleep (`NSWorkspace.didWakeNotification`).
+
+The change-driven rebuilds (tap target, default output, output rate) go
+through `allowRebuildNow`: at least 2 s between two rebuilds, and after 5 in
+a row the change path stands down for 30 s. The two watchdogs and the wake
+rebuild do not go through it.
+
+Because the 48 kHz pin lives **inside `start()`**, every rebuild **re-pins to
+48 kHz** — that is what makes the fix survive mid-meeting device juggling.
+Teardown runs off-thread (`teardownQueue`, `~L1372-1423`) — the MACOS Tahoe
+HAL-freeze fix (v0.6.66).
 
 ## 3. Rate handoff to the core
 
 - `dimmy_set_loopback_sample_rate(sr)` — the tap's claimed source rate; published
-  once per (re)build.
-- `dimmy_push_loopback_audio(ptr, len)` — f32 PCM frames; each push also carries
-  the current rate (the **rate on the push wins** if it ever differs from the
-  pre-published one).
+  on every (re)build, once with the tap-format rate and again after the pin.
+- `dimmy_push_loopback_audio(ptr, count, rate)` — f32 PCM frames; each push
+  also carries the current rate (the **rate on the push wins** if it ever
+  differs from the pre-published one; a rate of 0 means "use the pre-published
+  one").
 - In `core/src/audio.rs`, `AudioCommand::PushLoopback` handles the frames; the
   loopback stream is canonicalised to `MEETING_CANONICAL_RATE = 48_000`.
 
 ## 4. The meeting worker — lockstep save (`core/src/meeting.rs`)
 
-The worker (`fn run…`, `~L659+`) writes source-rate samples and tracks how far
-each track has been flushed with `samples_written` (`~L662`). Per tick
-(`~L964-999`):
+The worker (`fn worker_loop`, `~L1987+`) writes source-rate samples and tracks
+how far each track has been flushed with `samples_written` (`~L2083`), an index
+into the capture buffer; `total_written` is the running total. Per tick
+(`~L2497-2543`):
 
-- `audio_mic.wav`  = AEC-cleaned mic @ primary device rate — full meeting
-  duration.
-- `audio_system.wav` = raw loopback @ system rate (Mix only) — full duration,
-  **zeros while paused**.
+- `audio_mic.ogg`  = AEC-cleaned mic @ primary device rate — full meeting
+  duration. A mic that trails the system track by more than 2 s is filled
+  with silence (`mic_lag_padding`).
+- `audio_system.ogg` = raw loopback @ system rate (Mix only) — full duration,
+  **zeros while the tap delivers nothing** (`align_secondary` pads the system
+  buffer up to the mic's length on every tick).
 - Both windows are copied with **`slice_or_zeros(buf, samples_written,
-  buf_len_now)`** (`~L515-532`): it copies exactly the `[samples_written,
+  buf_len_now)`** (`~L591-611`): it copies exactly the `[samples_written,
   buf_len_now]` window and **zero-fills only a short tail** if the buffer hasn't
   caught up. Both tracks are the same canonical rate so they stay sample-aligned.
-- `audio.wav` is the mixed playback track.
-- Pause/resume advances `samples_written` past the paused window so the gap
-  doesn't stretch the timeline (`~L261`, `~L899-937`).
+- `audio.ogg` is the mixed playback track.
+- A paused window is in no track: on resume `samples_written` jumps past it,
+  so the gap doesn't stretch the timeline (`~L2395-2437`).
 
 Save layout on disk (one dir per meeting, `<config>/meetings/<id>/`):
 
 ```
-audio.wav          mixed playback track
-audio_mic.wav      mic (post-AEC)
-audio_system.wav   system/participants (Mix only)
-transcripts.txt    [ts ms] [speaker] text   (one line per STT chunk)
+audio.ogg          mixed playback track
+audio_mic.ogg      mic (post-AEC)
+audio_system.ogg   system/participants (Mix only)
+transcripts.txt    [HH:MM:SS] [speaker] text   (one line per STT chunk)
 meta.json          duration, chunk_count, …
 recap.md / actions.json   (post-process output)
 ```
 
-Playback resolution tries `audio*.ogg` then `audio*.wav` for bases
-`audio` / `audio_mic` / `audio_system` — so shipping WAVs is fine; do **not**
-leave a stale `.ogg` next to a corrected `.wav` (the `.ogg` wins).
+A track is `.wav` instead when the Vorbis encoder could not start, and in
+meetings recorded before the Ogg sink.
+
+Playback resolution (`MeetingViewModel.resolveMeetingAudio`) tries `.ogg`
+first, then `.wav`, then `m4a`, `mp3`, `aac`, `flac`, `mp4`, `oga`, `opus`,
+`webm`, for bases `audio` / `audio_mic` / `audio_system` — so a WAV is fine; do
+**not** leave a stale `.ogg` next to a corrected `.wav` (the `.ogg` wins).
 
 ## 5. The two regression alarms (how we catch a silent break)
 
 The mechanism is defended by **measured-vs-claimed** checks that fire in the
 field instead of silently shipping distorted audio:
 
-1. **Meeting capture-ratio guard** — `meeting.rs` `~L1255-1287`, at finalize.
-   Compares audio actually written (`samples_written / rate`) against the **real
-   active recording time** (elapsed − paused). Healthy ≈ 1.0; the HFP 3× bug is
-   ~0.33. `< 0.85` ⇒ `[Meeting] WARN capture ratio …%` + telemetry
-   `Event::MeetingCaptureRatio { ratio_bucket }` (`meeting.capture_ratio`,
-   buckets `lt_50|50_85|85_95|ge_95`). WARN-not-assert: rate drift is
+1. **Meeting capture-ratio guard** — `meeting.rs` `~L2844-2864`, at stop, after
+   the sinks are finalized. Compares audio actually written (`total_written /
+   device_sample_rate`) against the **real active recording time** (elapsed −
+   paused). Healthy ≈ 1.0; the HFP 3× bug is ~0.33. `< 0.85` ⇒ `[Meeting] WARN
+   capture ratio …%`. Telemetry `Event::MeetingCaptureRatio { ratio_bucket }`
+   (`meeting.capture_ratio`, buckets `lt_50|50_85|85_95|ge_95`) is sent for
+   every ratio, not only a low one. WARN-not-assert: rate drift is
    device-dependent, not a logic bug, and crashing at stop would lose the whole
    recording. Gated on `> 5 s` active so startup jitter can't mis-bucket.
 
 2. **Loopback-rate mismatch alarm** — `audio.rs` (`reconcile_loopback_rate`,
-   alarm-only). Measures delivered samples vs claimed rate over a window; if they
-   disagree it logs a WARN and emits `Event::LoopbackRateMismatch { claimed,
-   measured }` (`audio.loopback_rate_mismatch`) **once per window**. It does
-   **not** override the rate — the host owns the correction (pin + measure,
-   §3.5). This side sees push *arrival* times, not delivery times, so its wall
-   clock is polluted by queueing; it needs 4 s where the host needs 250 ms.
-   Its job is to catch a host whose own measurement is wrong or unavailable —
-   including Windows, which the Swift estimator does not cover.
+   alarm-only, in the `AudioCommand::PushLoopback` arm). Measures delivered
+   samples vs claimed rate over a window; if they disagree it logs a WARN and
+   emits `Event::LoopbackRateMismatch { claimed, measured }`
+   (`audio.loopback_rate_mismatch`) **once per window** (the window restarts
+   when the claimed rate changes). It does **not** override the rate — the
+   host owns the correction (pin + measure, §2 steps 3 and 5). This side sees
+   push *arrival* times, not delivery times, so its wall clock is polluted by
+   queueing; it needs 4 s where the host needs 250 ms. Its job is to catch a
+   host whose own measurement is wrong or unavailable — including the
+   ScreenCaptureKit fallback, which the Swift estimator does not cover. It
+   does not see the Windows loopback: that one is a cpal stream inside the
+   core and never goes through `PushLoopback`.
 
 **What to watch in the log** after each device change during a meeting:
 `[SystemAudio/tap] aggregate pinned to 48000 Hz` should reappear, and none of
-`[SystemAudio/tap] WARN aggregate DECLARED … but MEASURED …`,
+`[SystemAudio/tap] WARN aggregate DECLARES … but DELIVERS …`,
 `[Audio/loopback] WARN … MEASURED …`, or `[Meeting] WARN capture ratio …`
 should fire. The first of those three is the interesting one: it means the
 48 kHz pin was accepted by the HAL and then ignored, and that the estimator
@@ -210,8 +249,9 @@ caught it — audio is correct, but the pin alone would have shipped it broken.
 - The estimator's damping is load-bearing: **2 consecutive windows** plus the
   **half-window consistency check**. Loosening either reintroduces mid-stream
   flapping (and, without the halves, an averaged rate the hardware never ran
-  at). Tightening it to "never revise" reintroduces the BT profile-flip hole,
-  which no device-change notification covers.
+  at). Tightening it to "never revise" reintroduces the BT profile-flip hole:
+  the UID check does not see it, and the only other cover is the output
+  device's `NominalSampleRate` listener (`armDeviceRateListener`).
 - `TapAutoStart=false` + explicit `AudioDeviceStart` — do not "simplify" to
   auto-start (Tahoe: zero samples).
 - Publish the rate (`dimmy_set_loopback_sample_rate`) **before** the first push,
@@ -223,11 +263,16 @@ caught it — audio is correct, but the pin alone would have shipped it broken.
 
 ## 7. Tests (present + to extend)
 
-Present: `slice_or_zeros` unit tests (`meeting.rs` `~L1588-1614`), the capture-ratio
+Present: `slice_or_zeros` unit tests (`meeting.rs` `~L4490-4520`), the capture-ratio
 bucket + `MeetingCaptureRatio`/`LoopbackRateMismatch` telemetry unit tests
 (`core/src/telemetry/events.rs`), and `reconcile_loopback_rate` pure-fn tests
-(`audio.rs`). The Swift tap itself is not unit-testable off a Mac — its guard is
-`SelfTests.runAtLaunch` + the two runtime alarms above.
+(`audio.rs`, `loopback_rate_reconcile_*`). On the Swift side the pure decisions
+have XCTest coverage in
+`platforms/macos/DimmyTests/SystemAudioProcessTapDecisionTests.swift`:
+`SystemAudioProcessTapDecisionTests` (`shouldRebuildForOutputChange`) and
+`LoopbackRateEstimatorTests`. The HAL calls of the tap have no test, and
+`SelfTests.swift` has no check on the tap — the guard there is the two
+runtime alarms above.
 
 To add later (tracked): a fixture-driven meeting-worker test that feeds a
 16 kHz-labelled-as-48 kHz loopback stream and asserts the capture-ratio guard

@@ -2,7 +2,14 @@
 
 Check this file before touching audio preprocessing, macOS FFI, or Windows transparency code.
 
+> **Checked against the code on 2026-11-11** (`origin/staging` at `ebc0b52f`).
+> Each entry has a **Status** line that says whether the guard or fix is still
+> in the code and whether the named tests exist. Four entries (MACOS-001,
+> MACOS-002, MACOS-003, WIN-001) describe the old Tauri UI; that code is no
+> longer in the repository.
+
 ## AUDIO-001: dagc produces NaN on zero-amplitude input (CRITICAL)
+- **Status (2026-11-11)**: fixed, both guards are in the code. `vad_filter` emits nothing in the grace branch and checks `rms > ENERGY_FLOOR` in the hysteresis branch; file load never runs AGC. All named tests exist. The AGC now runs only on the `Full` route (preprocessing on + local STT), and `preprocessing_enabled` is off by default since 2026-08-31, so a default install does not run dagc at all.
 - **Symptom (dictation)**: Speech after a 5s+ pause is killed — processed audio is -91dB (dead silent) from the pause onward
 - **Symptom (file load, 2026-05-08)**: Long files with stretches of silence (typical meeting recordings) come back almost entirely empty from the STT engine. 97 % of a 95-min WAV became silent zeros; Parakeet emitted empty for 186 of 191 chunks while the first 5 transcribed normally.
 - **Root cause**: `dagc::MonoAgc` produces ALL NaN when fed zero-amplitude (silence) samples. Once corrupted, ALL subsequent output is NaN forever. The NaN gets clamped to 0.0 by our safety net.
@@ -10,13 +17,14 @@ Check this file before touching audio preprocessing, macOS FFI, or Windows trans
 - **How it happened (file load)**: `dimmy_transcribe_file` was using the same `RawAudio::preprocess` pipeline as live dictation. Long silence stretches in the source file went through AGC, which corrupted internal gain state on the first stretch and emitted NaN-then-zero for everything after.
 - **First fix attempt (v0.3.48, FAILED for dictation)**: Reset AGC when grace expires. Didn't work because `process_buffer()` calls `process()` ONCE with all samples. Grace silence and post-silence speech end up in the same output Vec. Fresh AGC processes grace silence first → NaN again.
 - **Correct fix for dictation (v0.3.49)**: Grace period only delays `in_speech→false` — does NOT emit silence frames. Hysteresis branch checks RMS before emitting. AGC NEVER sees zero-energy audio.
-- **Correct fix for file load (commit `0ed682b`, 2026-05-08)**: New `preprocess::process_buffer_for_file_load` — clamp + highpass only, NO VAD, NO AGC. `dimmy_transcribe_file` calls this instead of `RawAudio::preprocess`. File-load doesn't need AGC: the source has whatever gain it has and we'd rather pass it through than risk silence-stretch corruption.
-- **Key rule**: NEVER feed silence/zero samples to dagc. If dagc needs to be replaced, verify the replacement handles zero input gracefully. **For file load: never call the live preprocess pipeline.** Use `process_buffer_for_file_load`.
-- **Files**: `preprocess.rs` (`vad_filter`, `process`, `process_buffer_for_file_load`), `ffi.rs` (`dimmy_transcribe_file` callsite)
+- **Correct fix for file load (commit `0ed682b`, 2026-05-08)**: New `preprocess::process_buffer_for_file_load` — clamp + highpass only, NO VAD, NO AGC — used instead of `RawAudio::preprocess`. File-load doesn't need AGC: the source has whatever gain it has and we'd rather pass it through than risk silence-stretch corruption. Today `dimmy_transcribe_file` streams the file through `file_stream::FileAudioStream`, which applies the same filter block by block (`preprocess::FileLoadHighpass`, sample-for-sample equal to `process_buffer_for_file_load`).
+- **Key rule**: NEVER feed silence/zero samples to dagc. If dagc needs to be replaced, verify the replacement handles zero input gracefully. **For file load: never call the live preprocess pipeline.** Use `FileLoadHighpass` / `process_buffer_for_file_load`.
+- **Files**: `preprocess.rs` (`vad_filter`, `process`, `process_buffer_for_file_load`, `FileLoadHighpass`), `file_stream.rs`, `ffi.rs` (`dimmy_transcribe_file`)
 - **Tests (dictation)**: `dagc_produces_nan_after_silence`, `no_nan_in_output_after_silence_gap`, `output_no_nan_with_multiple_silence_gaps`
-- **Tests (file load)**: `file_load_long_silence_does_not_corrupt_subsequent_audio` + 7 other `file_load_*` tests in `preprocess.rs`. Plus `core/tests/parakeet_long_file.rs` as a diagnostic-style early-warning test on real long WAVs.
+- **Tests (file load)**: `file_load_long_silence_does_not_corrupt_subsequent_audio` + 8 other `file_load_*` tests in `preprocess.rs`. Plus `core/tests/parakeet_long_file.rs` as a diagnostic-style early-warning test on real long WAVs.
 
 ## AUDIO-002: VAD onset not re-triggering after long silence
+- **Status (2026-11-11)**: both mitigations are in `preprocess.rs::vad_filter` (`energy_override`, `effective_onset`). Related tests in `preprocess.rs`: `speech_long_pause_speech_preserves_second_segment`, `energy_floor_prevents_dropping_loud_speech`.
 - **Symptom**: Same as AUDIO-001 — speech after pause not transcribed
 - **Related to**: AUDIO-001. Even if AGC is fixed, the VAD onset mechanism must work correctly after grace period expires.
 - **How onset works**: After grace expires (`in_speech=false`), new speech needs `MIN_SPEECH_FRAMES=3` consecutive frames where `voice_prob > effective_onset || energy_override`. If frames alternate above/below threshold, `speech_frames` resets to 0 and onset never confirms.
@@ -24,6 +32,7 @@ Check this file before touching audio preprocessing, macOS FFI, or Windows trans
 - **Files**: `preprocess.rs` (vad_filter)
 
 ## MACOS-001: objc_msgSend variadic declaration crashes on ARM64
+- **Status (2026-11-11)**: historical (Tauri-era core). The repository has no `objc_msgSend` declaration today, in `hotkey.rs`, `lib.rs` or anywhere else; the macOS host is Swift. The key rule still applies to any new Objective-C FFI.
 - **Symptom**: SIGSEGV with PAC failure on Apple Silicon at runtime. CI builds pass (cross-compile doesn't run binary).
 - **Root cause**: Declaring `objc_msgSend` as variadic (`fn objc_msgSend(...) -> Id`) makes Rust emit stack-based args on ARM64 where the actual ABI uses registers.
 - **Fix**: Declare as `fn objc_msgSend()` (no args), then `std::mem::transmute` to typed function pointers per call signature.
@@ -31,11 +40,13 @@ Check this file before touching audio preprocessing, macOS FFI, or Windows trans
 - **Files**: `hotkey.rs`, `lib.rs` (macOS window setup)
 
 ## MACOS-002: kCFTypeDictionaryKeyCallBacks symbol type
+- **Status (2026-11-11)**: historical. `kCFTypeDictionaryKeyCallBacks` does not occur in the repository today (not in `hotkey.rs`).
 - **Symptom**: Wrong pointer on macOS
 - **Fix**: Must be `static ... : [u8; 0]` not `u8`, use `.as_ptr()` for correct symbol address
 - **Files**: `hotkey.rs`
 
 ## WIN-002: jump-list customisations dropped on Win11 unpackaged without matching Start-menu shortcut + per-window AUMI
+- **Status (2026-11-11)**: fixed, all four layers are in the code: `JumpListService.SetProcessAumi()` (first call in `App.OnLaunched`), `SetWindowAumi`, `EnsureStartMenuShortcut`, `cdl.SetAppID(AumiId)` with `AumiId = "Dimmy"`. No automated test.
 - **Symptom**: `JumpListService.Register()` succeeds (logs `CommitList ok`), but right-clicking the taskbar icon still shows only system defaults (Pin / Close window). No custom Tasks / Style / Translate sections appear.
 - **Root cause**: Windows 11 looks up the running process's AUMI, then matches it against AUMIs on Start-menu shortcuts. If no shortcut with the matching AUMI exists, the OS silently drops any `ICustomDestinationList` registration. Process-wide AUMI alone (`SetCurrentProcessExplicitAppUserModelID`) is necessary but not sufficient on Win11 — Velopack production installs DO have a matching shortcut, but dev builds running the EXE directly don't.
 - **Fixes layered**:
@@ -48,6 +59,7 @@ Check this file before touching audio preprocessing, macOS FFI, or Windows trans
 - **Files**: `JumpListService.cs`, `App.xaml.cs`
 
 ## WIN-001: DwmExtendFrameIntoClientArea makes transparency worse
+- **Status (2026-11-11)**: historical (Tauri-era window setup). `core/src/lib.rs` has no window setup and no DWM call today; the Windows UI is the WinUI 3 host.
 - **Symptom**: Glass blur/shadow added to window borders on Windows 11
 - **Root cause**: Using `DwmExtendFrameIntoClientArea` with margins -1 adds glass effect
 - **Fix**: Use `WS_POPUP` style (removes DWM frame) + `DWMWCP_DONOTROUND` + `DWMWA_COLOR_NONE`
@@ -55,6 +67,7 @@ Check this file before touching audio preprocessing, macOS FFI, or Windows trans
 - **Files**: `lib.rs` (Windows window setup)
 
 ## MACOS-003: tao crashes on macOS 26 Tahoe with transparent: true (tao#1171)
+- **Status (2026-11-11)**: historical (Tauri era). The repository has no `tauri.conf.json` and no tao / Tauri dependency today, so the key rule below has nothing to apply to.
 - **Symptom**: App crashes immediately on launch with SIGABRT. Crash in `tao::platform_impl::platform::app_delegate::did_finish_launching`. `panic_cannot_unwind` → panic inside FFI callback.
 - **Root cause**: tao 0.34.5 has a compatibility issue with macOS 26 (Tahoe). The `transparent: true` config triggers code paths in `did_finish_launching` that panic on macOS 26's changed app lifecycle APIs.
 - **Affects**: macOS 26.1+ on Apple Silicon (confirmed on MacBookPro18,3, macOS 26.2)
@@ -64,12 +77,14 @@ Check this file before touching audio preprocessing, macOS FFI, or Windows trans
 - **Files**: `tauri.conf.json`, `lib.rs` (.setup callback)
 
 ## STT-001: Gemini benchmark ARG_MAX
+- **Status (2026-11-11)**: fixed, the stdin pipe (`base64 … | jq -Rs`) and `curl -d @"$body_file"` are in `tests/test_benchmark.sh`.
 - **Symptom**: Gemini STT benchmark fails on large audio files
 - **Root cause**: base64 data passed as shell argument to `jq -n --arg data "$WAV_DATA"` exceeds ARG_MAX
 - **Fix**: Pipe base64 via stdin: `base64 -w0 file | jq -Rs ...` and `curl -d @"$body_file"`
 - **Files**: `tests/test_benchmark.sh`
 
 ## AUDIO-003: AEC ref-ring starvation hangs Mix-mode capture
+- **Status (2026-11-11)**: fixed, the guard is in `core/src/aec.rs::run` (the worker body that `spawn_aec_thread` starts): the mic frame is processed at once and the reference frame is zero-filled when `ref_have < FRAME_SAMPLES`. All three named tests exist in `aec.rs`. Mix is now the MEETING capture only; dictation is Mic-only (AUDIO-004) and does not use this worker.
 - **Symptom**: User starts a meeting (Mix mode) on a setup with no
   active loopback (no default output device, BT headset routed to
   HFP/SCO, output muted, headset unplugged). The audio buffer never
@@ -79,15 +94,15 @@ Check this file before touching audio preprocessing, macOS FFI, or Windows trans
   in lockstep — it waited until both rings had ≥ 480 samples before
   emitting a frame. If the loopback ring stayed empty, the worker
   blocked forever and never pushed mic samples to `audio_buffer`.
-- **Fix (commit `3eddac3`)**: when the reference ring is empty after
-  the poll interval, zero-pad the ref frame and run AEC anyway. The
+- **Fix (commit `3eddac3`)**: when the reference ring holds less than
+  one frame, zero-pad the ref frame and run AEC anyway (no wait). The
   delay estimator inside `aec3` resyncs once real loopback samples
   start arriving (or stays in the no-echo regime if they never do).
   Mic capture is preserved either way.
 - **Key rule**: in always-mix architectures, the AEC must be tolerant
   of one stream being absent. Lockstep drain is incompatible with the
   "Mix is the default, even on systems without loopback" UX choice.
-- **Files**: `core/src/aec.rs::spawn_aec_thread`
+- **Files**: `core/src/aec.rs` (`run`, started by `spawn_aec_thread`)
 - **Tests**: `worker_processes_mic_when_ref_ring_empty` +
   `worker_processes_mic_with_ref_present` (symmetric) +
   `worker_honours_shutdown_signal` (no hang on terminate).
@@ -98,6 +113,13 @@ Two independent, *silent* dictation-quality bugs found + fixed 2026-07-01
 pinned the invariants — hardened with guardrails + tests so the CLASSES
 can't come back.
 
+- **Status (2026-11-11)**: both fixes and both guardrails are in the code;
+  the named tests exist. Two things changed since: `preprocessing_enabled` is
+  off by default since 2026-08-31 (`AppConfig::default`), so the default
+  dictation route is `Raw` for cloud and local; and the neural denoiser left
+  the AEC worker on 2026-08-10 (it now runs only the `aec3` pipeline: HPF,
+  AEC3, NS, AGC2).
+
 - **BUG A — Mix-mode drops ~60 % of dictation audio.**
   - **Symptom**: A 41 s / 53 s dictation buffered only ~15.6 s / 19.9 s
     (~37 %); Whisper transcribed a truncated fragment. Load/device-dependent
@@ -105,15 +127,18 @@ can't come back.
     not).
   - **Root cause**: pill dictation forced `AudioSource::Mix` (2026-05-08). In
     Mix the mic feeds `aec_mic_ring` (capped `MAX_RING_SAMPLES = 48000` = 1 s)
-    drained by the AEC3+DFN worker. When that worker can't keep realtime the
+    drained by the AEC worker (AEC3 plus, at that time, a neural denoiser).
+    When that worker can't keep realtime the
     ring overflows and drops the oldest samples. Dictation has no loopback
     echo to cancel, so Mix bought nothing and cost the audio.
   - **Fix**: dictation → `AudioSource::Mic` (`ffi.rs::dimmy_start_recording`)
     — mic callback writes straight to `audio_buffer`, no ring, no worker, no
     drop. Meeting keeps Mix (it needs AEC for the loopback far-end ref).
-  - **Guardrail**: capture-ratio invariant at stop — WARN log + telemetry
-    (`dictation.capture_ratio`) if captured/elapsed < 0.85. WARN not
-    `assert!` (device/load-dependent, not a logic bug).
+  - **Guardrail**: capture-ratio invariant at stop (`dimmy_stop_recording`,
+    elapsed > 3 s, no streaming session, no meeting) — bucketed telemetry
+    (`dictation.capture_ratio`) on every such stop, plus a WARN log if
+    captured/elapsed < 0.85. WARN not `assert!` (device/load-dependent, not
+    a logic bug).
 
 - **BUG B — preprocessing HURTS cloud STT.**
   - **Symptom**: on an attenuated mic (`input_gain 0.75`, quiet audio) a full
@@ -126,7 +151,8 @@ can't come back.
   - **Fix**: **route-aware** preprocessing (`preprocess::preprocess_route`) —
     cloud → highpass-only (same safe path as file-load); local → full VAD+AGC
     (whisper hallucinates on silence + wants normalized levels);
-    `preprocessing_enabled=false` → raw passthrough.
+    `preprocessing_enabled=false` (the default since 2026-08-31) → raw
+    passthrough.
   - **Guardrail**: `process_buffer_guarded` (local path) falls back to
     highpass-only if the full pipeline collapses a speech-level input —
     *preprocessing must HELP, never make audio worse than raw*.
@@ -143,6 +169,7 @@ can't come back.
 - **Related**: AUDIO-001 (dagc NaN), AUDIO-003 (Mix ring starvation).
 
 ## LLM-001: Anthropic Opus 4.7+ rejects `thinking.type=enabled` + `budget_tokens`
+- **Status (2026-11-11)**: fixed, the four helpers and the six named tests are in `core/src/llm.rs`. `anthropic_uses_adaptive_thinking` now matches `opus-4-7`/`opus-4.7`, `opus-4-8`/`opus-4.8`, `opus-5`, `opus-6`, `sonnet-5`, `sonnet-6` and `fable`.
 - **Symptom**: Recap pipeline fails on Opus 4.7 / Sonnet 5+ with HTTP 400
   `invalid_request_error: thinking.type.enabled is not supported for
   this model`.
@@ -169,6 +196,7 @@ can't come back.
   `gemini_thinking_dispatch_pro_and_3x`, `case_insensitive_model_matching`.
 
 ## WIN-003: WinUI 3 v3.1.7 ListView drag-reorder hard-crashes the renderer
+- **Status (2026-11-11)**: workaround in the code: the manual pointer drag in `SettingsWindow.xaml.cs` (source opacity 0.45, `EDGE_ZONE = 40`, `SCROLL_PER_TICK = 14`, 40 ms timer), the `E76F` handle in `SettingsWindow.xaml`, and the chrome-only gate in `Win32DropTarget.cs`. The csproj still pins `Microsoft.WindowsAppSDK` 1.7.260224002. No automated test of the drag.
 - **Symptom**: App rules drag-reorder in `SettingsWindow` crashes the
   process mid-drag with `combase.dll +0x37fc4 E_UNEXPECTED` /
   `0xc000027b STOWED_EXCEPTION_NOT_HANDLED`. Faulting module is
@@ -242,6 +270,7 @@ can't come back.
   Tier 3.
 
 ## STT-002: SIGABRT at process exit when Parakeet feature is on (cosmetic)
+- **Status (2026-11-11)**: still applies. `core/Cargo.toml` pins `ort = "=2.0.0-rc.10"` and the `Box::leak` mitigation is in `core/src/parakeet.rs`.
 - **Symptom**: parakeet smoke / e2e test runs print `test result: ok` with all asserts green, then the binary exits with SIGABRT (`libc++abi: terminating due to uncaught exception of type std::__1::system_error: mutex lock failed: Invalid argument`). Cargo surfaces it as `process didn't exit successfully (signal: 6)`.
 - **Root cause**: ort 2.0.0-rc.10's `Session::drop` touches a global onnxruntime mutex during tear-down. By the time atexit fires that mutex has already been destroyed by libonnxruntime's own atexit chain, and the C++ runtime aborts.
 - **Mitigation in place**: `core/src/parakeet.rs` `Box::leak`s the `Mutex<Option<Inner>>` so Rust's static-destructor pass never drops the cached Sessions. Shrinks the surface but doesn't fully suppress the abort because libonnxruntime still has its own globals.
@@ -250,4 +279,4 @@ can't come back.
 - **Followup**: revisit when ort ships 2.0.0 stable.
 
 ## Native UI Era
-No platform-specific bugs filed yet. Report issues at https://github.com/KonradDallaOrg/dimmy/issues
+WIN-002 and WIN-003 above are the native-UI (WinUI 3) entries filed so far. Report issues at https://github.com/KonradDallaOrg/dimmy/issues

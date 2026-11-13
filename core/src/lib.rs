@@ -463,11 +463,6 @@ pub fn log_path() -> Option<std::path::PathBuf> {
     config_dir_path().map(|p| p.join("dimmy.log"))
 }
 
-#[allow(dead_code)]
-fn transcription_debug_log_path() -> Option<std::path::PathBuf> {
-    config_dir_path().map(|p| p.join("transcription_debug.log"))
-}
-
 pub(crate) fn audio_debug_dir() -> Option<std::path::PathBuf> {
     config_dir_path().map(|p| p.join("audio_debug"))
 }
@@ -659,38 +654,6 @@ fn save_debug_metadata(
         &path,
         serde_json::to_string_pretty(&meta).unwrap_or_default(),
     );
-}
-
-/// Append a line to the transcription debug log for chunk vs final comparison.
-#[allow(dead_code)]
-fn debug_transcription(msg: &str) {
-    use std::io::Write;
-    if let Some(path) = transcription_debug_log_path() {
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        // Rotate at 2 MB
-        if let Ok(meta) = std::fs::metadata(&path) {
-            if meta.len() > 2_097_152 {
-                if let Ok(data) = std::fs::read_to_string(&path) {
-                    let half = data.len() / 2;
-                    let cut = data[half..]
-                        .find('\n')
-                        .map(|i| half + i + 1)
-                        .unwrap_or(half);
-                    let _ = std::fs::write(&path, &data[cut..]);
-                }
-            }
-        }
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-        {
-            let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
-            let _ = writeln!(f, "[{}] {}", ts, msg);
-        }
-    }
 }
 
 static LOG_TO_STDERR: AtomicBool = AtomicBool::new(true);
